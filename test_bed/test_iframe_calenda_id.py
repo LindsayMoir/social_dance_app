@@ -2,8 +2,8 @@ import requests
 from datetime import datetime, timedelta, timezone
 
 # Replace with your API key and calendar ID
-API_KEY = "AIzaSyC7cb69hLmBhLp7Fs0BIRXHxLKsE8vSgyo"
-CALENDAR_ID = "victoriawcscollective@gmail.com"
+API_KEY = ''
+CALENDAR_ID = ""
 
 # API endpoint
 url = f"https://www.googleapis.com/calendar/v3/calendars/{CALENDAR_ID}/events"
