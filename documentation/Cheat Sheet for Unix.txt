@@ -1,0 +1,5 @@
+Cheat Sheet for Unix
+
+start from terminal command line: pgadmin4
+
+password is: 5539

@@ -1,0 +1,27 @@
+crawling:
+  max_crawl_trys: 3
+  depth_limit: 2
+  max_urls: 5
+database:
+  host: 'localhost'
+  name: 'social_dance_db'
+  user: 'postgres'
+  password: '5539'
+date_range:
+  months: 3
+  days_ahead: 365
+input:
+  data_urls: 'data/urls.csv'
+  data_keywords: 'data/keywords.csv'
+  keys: '/mnt/d/OneDrive/Security/keys.csv'
+  fb_cookies: 'data/fb_cookies.json'
+llm:
+  url_evaluator: 'o1-mini'
+logging:
+  log_file: 'logs/get_input.log'
+prompts:
+  is_relevant: 'prompts/is_relevant_prompt.txt'
+startup:
+  use_db: False
+update_schedule:
+  true_links_hours: .01
