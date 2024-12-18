@@ -2,6 +2,7 @@ import requests
 from datetime import datetime, timedelta, timezone
 
 # Replace with your API key and calendar ID
+# Removed secrets
 API_KEY = ''
 CALENDAR_ID = ""
 
