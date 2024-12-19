@@ -68,20 +68,22 @@ def url_in_table(url):
     bool: True if the URL is present in the table, False otherwise.
     """
     conn = get_db_connection()
-    if conn:
-        logging.error("Failed to connect to the database while checking URL.")
+
+    if conn is None:
+        logging.error("Failed to connect to the database while checking URL in url_in_table.")
         return False
 
-    query = 'SELECT * FROM urls WHERE links = :url'
-    df = pd.read_sql(query, conn, params={'url': url})
+    query = 'SELECT * FROM urls WHERE links = %s'
+    params = (url,)  # Tuple containing the parameter
+    df = pd.read_sql(query, conn, params=params)
 
     if df.shape[0] > 0:
         return True
     else:
-        False
+        return False
 
 
-def update_url(url, update_other_links, increment_crawl_trys, relevant):
+def update_url(url, update_other_links, relevant, increment_crawl_trys):
         """
         Updates the `relevant` column to True and increments the `crawl_trys` column for a specific URL in the database.
 
@@ -99,6 +101,7 @@ def update_url(url, update_other_links, increment_crawl_trys, relevant):
         """
         # Connect to the database
         conn = get_db_connection()
+
         if conn is None:
             raise ConnectionError("Failed to connect to the database.")
 
@@ -137,52 +140,26 @@ def write_url_to_db(org_names, keywords, url, other_links, relevant, increment_c
         """
         #try:
         conn = get_db_connection()
+
         if conn is None:
-            logging.error("Failed to connect to the database while trying to write {url}")
-            return
+            logging.error("Failed to connect to the database in write_url while trying to write {url}")
 
-        # Prepare the update or insert query
-        metadata = MetaData()
-        metadata.reflect(bind=conn)
-        urls = metadata.tables.get("urls")
-
-        if urls is None:
-            logging.error("Table 'urls' does not exist in the database.")
-            return
-
-        # Check if the URL already exists
-        query = 'SELECT * FROM urls WHERE links = :url'
-        df = pd.to_sql(query, conn, params={'url': url})
-
-        if df.shape[0] > 0:
-
-            # Update the existing entry
-            update_query = urls.update().where(urls.c.links == url).values(
-                other_links=other_links,
-                relevant=relevant,
-                crawl_trys=(df['crawl_trys'].values[0] + increment_crawl_trys)
-            )
-
-            logging.info(f"Updated existing URL entry: {url}")
-
-            conn.execute(update_query)
-        else:
-            # Insert a new entry
-            logging.info(f"Inserting new URL entry: {url}")
-            insert_query = urls.insert().values(
-                time_stamps=datetime.now(),
-                org_names=org_names,
-                keywords=keywords,
-                links=url,
-                other_links=other_links,
-                relevant=relevant,
-                crawl_trys=increment_crawl_trys
-            )
-            conn.execute(insert_query)
-
-            logging.info(f"Successfully wrote URL to urls table: {url}")
-        #except Exception as e:
-            #logging.error(f"Error while writing URL {url} to the database: {e}")
+        try:
+            update_url(url, other_links, relevant, increment_crawl_trys)
+            
+        except Exception as e:
+            logging.info(f"Unable to update {url} \n in write_url. Assume the url or table does not exist: {e}")
+            update_df = pd.DataFrame({
+                                    "time_stamps": [datetime.now()],
+                                    "org_names": [org_names],
+                                    "keywords": [keywords],
+                                    "links": [url],
+                                    "other_links": [other_links],
+                                    "relevant": [relevant],
+                                    "crawl_trys": [increment_crawl_trys]})
+            
+            # If the table exists, this will append it. If the table does not exist, this will create it.
+            update_df.to_sql('urls', conn, if_exists='append', index=False)
 
 
 def write_events_to_db(df, url, keywords, org_name):
@@ -236,7 +213,11 @@ def write_events_to_db(df, url, keywords, org_name):
 
         # Get database connection using SQLAlchemy
         conn = get_db_connection()  # Ensure this returns a SQLAlchemy engine
-        if conn:
+        if conn is None:
+            logging.error("Failed to connect to the database.")
+            return
+        
+        else:
             # Use Pandas to write the DataFrame to the database
             df.to_sql(
                 name='events',
@@ -246,9 +227,6 @@ def write_events_to_db(df, url, keywords, org_name):
                 method='multi'       # Enables efficient bulk inserts
             )
             logging.info(f"Successfully wrote events to the database from URL: {url}")
-
-        else:
-            logging.error("Failed to connect to the database.")
 
 
 def dedup():
@@ -356,7 +334,7 @@ def set_calendar_urls():
                         logging.info(f"URL {row['links']} is already marked as relevant.")
                         continue
                     url = row['links']
-                    update_url(url, update_other_links='No', increment_crawl_trys=0, relevant=True)
+                    update_url(url, update_other_links='No', relevant=True, increment_crawl_trys=0)
                 logging.info(f"{len(urls_df)} calendar URLs marked for crawling again.")
             else:
                 logging.info("No calendar URLs found to mark for crawling in set_calendar().")
@@ -392,8 +370,11 @@ class EventSpider(scrapy.Spider):
         """
         # Connect to the database
         conn = get_db_connection()
-        if conn:
-            raise ConnectionError("Failed to connect to the database.")
+
+        if conn is None:
+            raise ConnectionError("Failed to connect to the databasein start_requests.")
+        else:
+            print("Connected to the database in start_requests", conn)
 
         if config['startup']['use_db']:
             # Read the URLs from the database
@@ -473,15 +454,15 @@ class EventSpider(scrapy.Spider):
                                 update_url(event_link, url, increment_crawl_trys=0, relevant=True)
                             else:
                                 # Mark the event link as irrelevant
-                                update_url(event_link, url, increment_crawl_trys=0, relevant=False)
+                                update_url(event_link, url, relevant=False, increment_crawl_trys=0)
                         else:
                             # Mark the event link as irrelevant
-                            update_url(event_link, url, increment_crawl_trys=0, relevant=False)
+                            update_url(event_link, url, relevant=False, increment_crawl_trys=0)
 
             # Check if the URL contains 'login'
             if 'login' in url or '/groups/' not in url:
                 logging.info(f"URL {url} marked as irrelevant due to Facebook login link.")
-                update_url(url, update_other_links='No', increment_crawl_trys=0, relevant=False)
+                update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
 
             else:
                 # Normal facebook text. I want to process this with playwright but the version that only returns text
@@ -496,14 +477,14 @@ class EventSpider(scrapy.Spider):
 
                     if llm_status:
                         # Mark the event link as relevant
-                        update_url(url, update_other_links='', increment_crawl_trys=0, relevant=True)
+                        update_url(url, update_other_links='', relevant=True, increment_crawl_trys=0)
                     else:
                         # Mark the event link as irrelevant
-                        update_url(url, update_other_links='', increment_crawl_trys=0, relevant=False) 
+                        update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0) 
 
                 else:
                     logging.info(f"URL {url} marked as irrelevant since there are no keywords and/or events in URL.")
-                    update_url(url, update_other_links='No', increment_crawl_trys=0, relevant=False)
+                    update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
 
         # Get all of the subsidiary links on the page   
         else:
@@ -517,7 +498,7 @@ class EventSpider(scrapy.Spider):
         iframe_links = [response.urljoin(link) for link in iframe_links if link.startswith('http')]
 
         if iframe_links:
-            update_url(url, update_other_links='calendar', increment_crawl_trys=0, relevant=True)
+            update_url(url, update_other_links='calendar', relevant=True, increment_crawl_trys=0)
             for calendar_url in iframe_links:
                 if calendar_url not in self.visited_links:
                     self.visited_links.add(calendar_url)  # Mark the iframe URL as visited
@@ -573,7 +554,7 @@ class EventSpider(scrapy.Spider):
         # Check if the URL contains 'login'
         if 'login' in url:
             logging.info(f"URL {url} marked as irrelevant due to Facebook login link.")
-            update_url(url, update_other_links='No', increment_crawl_trys=0, relevant=False)
+            update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
             return False
 
         if '/groups/' in url:
@@ -582,7 +563,7 @@ class EventSpider(scrapy.Spider):
         extracted_text = self.fb_extract_text(url)
         if not extracted_text:
             logging.error(f"Failed to extract text or login to Facebook for URL: {url}")
-            update_url(url, update_other_links='No', increment_crawl_trys=0, relevant=False)
+            update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
             return False
 
         return self.check_keywords_in_text(url, extracted_text)
@@ -616,7 +597,7 @@ class EventSpider(scrapy.Spider):
             return True
 
         logging.info(f"No event links found on Facebook group page: {url}")
-        update_url(url, update_other_links='No', increment_crawl_trys=0, relevant=False)
+        update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
         return False
     
     
@@ -1024,8 +1005,8 @@ class EventSpider(scrapy.Spider):
                 events_df = self.get_events(calendar_id)
                 if not events_df.empty:
                     write_events_to_db(events_df, calendar_url, keywords, org_name)
-                    self.update_url(calendar_url, update_other_links=url, increment_crawl_trys=1, relevant=True)
-                    self.update_url(url, update_other_links=calendar_url, increment_crawl_trys=1, relevant=True)
+                    self.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1, )
+                    self.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
         else:
             start_idx = calendar_url.find("src=") + 4
             end_idx = calendar_url.find("&", start_idx)
@@ -1035,8 +1016,8 @@ class EventSpider(scrapy.Spider):
             events_df = self.get_events(calendar_id)
             if not events_df.empty:
                 write_events_to_db(events_df, calendar_url, keywords, org_name)
-                update_url(calendar_url, update_other_links=url, increment_crawl_trys=1, relevant=True)
-                update_url(url, update_other_links=calendar_url, increment_crawl_trys=1, relevant=True)
+                update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1)
+                update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
 
 
     def get_events(self, calendar_id):
