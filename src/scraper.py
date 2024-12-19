@@ -55,54 +55,30 @@ def get_db_connection():
     except Exception as e:
         logging.error("Database connection failed: %s", e)
         return None
-    
-# Define the table schema
-def create_urls_table():
-    """
-    Create the 'urls' table in the database if it does not exist.
 
-    This function establishes a connection to the database, defines the schema
-    for the 'urls' table, and creates the table if it does not already exist.
-    The 'urls' table contains the following columns:
-        - time_stamps (TIMESTAMP): The timestamp of the entry, cannot be null.
-        - org_names (Text): The name of the organization.
-        - keywords (Text): Keywords associated with the entry.
-        - links (Text): The URL link, serves as the primary key.
-        - other_links (Text): Additional related links.
-        - relevant (Boolean): Indicates if the entry is relevant, defaults to False.
-        - crawl_trys (BigInteger): The number of crawl attempts, defaults to 0.
+
+def url_in_table(url):
+    """
+    Check if a URL is already present in the 'urls' table.
+
+    Parameters:
+    url (str): The URL to check in the 'urls' table.
 
     Returns:
-        tuple: A tuple containing the SQLAlchemy engine and the 'urls' table object.
-
-    Raises:
-        ConnectionError: If the database connection could not be established.
+    bool: True if the URL is present in the table, False otherwise.
     """
-    engine = get_db_connection()
-    if engine is None:
-        raise ConnectionError("Could not establish database connection.")
+    conn = get_db_connection()
+    if conn:
+        logging.error("Failed to connect to the database while checking URL.")
+        return False
 
-    metadata = MetaData()
+    query = 'SELECT * FROM urls WHERE links = :url'
+    df = pd.read_sql(query, conn, params={'url': url})
 
-    urls = Table(
-        "urls",
-        metadata,
-        Column("time_stamps", TIMESTAMP, nullable=False),
-        Column("org_names", Text),
-        Column("keywords", Text),
-        Column("links", Text, primary_key=True),
-        Column("other_links", Text),
-        Column("relevant", Boolean, default=False),
-        Column("crawl_trys", BigInteger, default=0),
-    )
-
-    # Create the table if it doesn't exist
-    try:
-        metadata.create_all(engine)
-        logging.info("Table 'urls' created or already exists.")
-    except SQLAlchemyError as e:
-        logging.error(f"Error creating table: {e}")
-    return engine, urls
+    if df.shape[0] > 0:
+        return True
+    else:
+        False
 
 
 def update_url(url, update_other_links, increment_crawl_trys, relevant):
@@ -148,7 +124,8 @@ def update_url(url, update_other_links, increment_crawl_trys, relevant):
         logging.info(f"Updated URL: {url}")
 
 
-def write_url_to_db(url, relevant=False, other_links=None, increment_crawl_trys=1):
+def write_url_to_db(org_names, keywords, url, other_links, relevant, increment_crawl_trys):
+        
         """
         Write or update a URL entry in the database.
 
@@ -158,48 +135,54 @@ def write_url_to_db(url, relevant=False, other_links=None, increment_crawl_trys=
             other_links (str): Additional links or notes for the URL.
             increment_crawl_trys (int): Number of times the URL has been crawled.
         """
-        try:
-            conn = get_db_connection()
-            if conn is None:
-                logging.error("Failed to connect to the database while trying to write URL.")
-                return
+        #try:
+        conn = get_db_connection()
+        if conn is None:
+            logging.error("Failed to connect to the database while trying to write {url}")
+            return
 
-            # Prepare the update or insert query
-            metadata = MetaData()
-            metadata.reflect(bind=conn)
-            urls = metadata.tables.get("urls")
+        # Prepare the update or insert query
+        metadata = MetaData()
+        metadata.reflect(bind=conn)
+        urls = metadata.tables.get("urls")
 
-            if not urls:
-                logging.error("Table 'urls' does not exist in the database.")
-                return
+        if urls is None:
+            logging.error("Table 'urls' does not exist in the database.")
+            return
 
-            # Check if the URL already exists
-            query = urls.select().where(urls.c.links == url)
-            result = conn.execute(query).fetchone()
+        # Check if the URL already exists
+        query = 'SELECT * FROM urls WHERE links = :url'
+        df = pd.to_sql(query, conn, params={'url': url})
 
-            if result:
-                # Update the existing entry
-                logging.info(f"Updating existing URL entry: {url}")
-                update_query = urls.update().where(urls.c.links == url).values(
-                    relevant=relevant,
-                    other_links=other_links if other_links else result.other_links,
-                    crawl_trys=result.crawl_trys + increment_crawl_trys
-                )
-                conn.execute(update_query)
-            else:
-                # Insert a new entry
-                logging.info(f"Inserting new URL entry: {url}")
-                insert_query = urls.insert().values(
-                    links=url,
-                    relevant=relevant,
-                    other_links=other_links,
-                    crawl_trys=increment_crawl_trys
-                )
-                conn.execute(insert_query)
+        if df.shape[0] > 0:
 
-            logging.info(f"Successfully wrote URL to database: {url}")
-        except Exception as e:
-            logging.error(f"Error while writing URL {url} to the database: {e}")
+            # Update the existing entry
+            update_query = urls.update().where(urls.c.links == url).values(
+                other_links=other_links,
+                relevant=relevant,
+                crawl_trys=(df['crawl_trys'].values[0] + increment_crawl_trys)
+            )
+
+            logging.info(f"Updated existing URL entry: {url}")
+
+            conn.execute(update_query)
+        else:
+            # Insert a new entry
+            logging.info(f"Inserting new URL entry: {url}")
+            insert_query = urls.insert().values(
+                time_stamps=datetime.now(),
+                org_names=org_names,
+                keywords=keywords,
+                links=url,
+                other_links=other_links,
+                relevant=relevant,
+                crawl_trys=increment_crawl_trys
+            )
+            conn.execute(insert_query)
+
+            logging.info(f"Successfully wrote URL to urls table: {url}")
+        #except Exception as e:
+            #logging.error(f"Error while writing URL {url} to the database: {e}")
 
 
 def write_events_to_db(df, url, keywords, org_name):
@@ -262,6 +245,7 @@ def write_events_to_db(df, url, keywords, org_name):
                 index=False,         # Avoids creating a DataFrame index column in the table
                 method='multi'       # Enables efficient bulk inserts
             )
+            logging.info(f"Successfully wrote events to the database from URL: {url}")
 
         else:
             logging.error("Failed to connect to the database.")
@@ -408,7 +392,7 @@ class EventSpider(scrapy.Spider):
         """
         # Connect to the database
         conn = get_db_connection()
-        if conn is None:
+        if conn:
             raise ConnectionError("Failed to connect to the database.")
 
         if config['startup']['use_db']:
@@ -426,6 +410,10 @@ class EventSpider(scrapy.Spider):
 
             if url not in self.visited_links:
                 self.visited_links.add(url)  # Mark the URL as visited
+
+                # We need to write the url to the database, if it is not already there
+                write_url_to_db(org_name, keywords, url, other_links='', relevant=True, increment_crawl_trys=1)
+
                 logging.info(f"Starting crawl for URL: {url}")
                 yield scrapy.Request(url=url, callback=self.parse, cb_kwargs={'keywords': keywords, 
                                                                               'org_name': org_name, 
@@ -447,16 +435,75 @@ class EventSpider(scrapy.Spider):
         It also extracts iframe sources and updates the URL if relevant. 
         The function checks for relevance of the links and continues crawling if they are relevant.
         """
+        # Initialize page_links
+        page_links = []
+
         # Extract links from the main page but handle facebook links differently
         if 'facebook' in url:
+
+            # Process the regular group facebook page
+            # Add the current URL to the visited links
+            self.visited_links.add(url)
+
+            # We want to see if there are any facebook event links in this url
             facebooks_events_links = self.fb_get_event_links(url)
-            page_links = facebooks_events_links + [url]  # Add the current URL to the list
 
             if facebooks_events_links:
-                update_url(url, update_other_links='calendar', increment_crawl_trys=0, relevant=True)
                 for event_link in facebooks_events_links:
                     if event_link not in self.visited_links:
+
+                        # Mark the event link as visited
                         self.visited_links.add(event_link)
+
+                        # Write the event link to the database
+                        write_url_to_db(org_name, keywords, event_link, other_links=url, relevant=True, increment_crawl_trys=1)
+
+                        # Call playwright to extract the event details
+                        extracted_text = self.fb_extract_text(event_link)
+
+                        # Check keywords in the extracted text
+                        keyword_status = self.check_keywords_in_text(event_link, extracted_text, keywords, org_name)
+
+                        if keyword_status:
+                            # Call the llm to process the extracted text
+                            llm_status = self.process_llm_response(event_link, extracted_text, keywords, org_name)
+
+                            if llm_status:
+                                # Mark the event link as relevant
+                                update_url(event_link, url, increment_crawl_trys=0, relevant=True)
+                            else:
+                                # Mark the event link as irrelevant
+                                update_url(event_link, url, increment_crawl_trys=0, relevant=False)
+                        else:
+                            # Mark the event link as irrelevant
+                            update_url(event_link, url, increment_crawl_trys=0, relevant=False)
+
+            # Check if the URL contains 'login'
+            if 'login' in url or '/groups/' not in url:
+                logging.info(f"URL {url} marked as irrelevant due to Facebook login link.")
+                update_url(url, update_other_links='No', increment_crawl_trys=0, relevant=False)
+
+            else:
+                # Normal facebook text. I want to process this with playwright but the version that only returns text
+                extracted_text = self.fb_extract_text(url)
+
+                # Check keywords in the extracted text
+                keyword_status = self.check_keywords_in_text(url, extracted_text, keywords, org_name)
+
+                if keyword_status:
+                    # Call the llm to process the extracted text
+                    llm_status = self.process_llm_response(url, extracted_text, keywords, org_name)
+
+                    if llm_status:
+                        # Mark the event link as relevant
+                        update_url(url, update_other_links='', increment_crawl_trys=0, relevant=True)
+                    else:
+                        # Mark the event link as irrelevant
+                        update_url(url, update_other_links='', increment_crawl_trys=0, relevant=False) 
+
+                else:
+                    logging.info(f"URL {url} marked as irrelevant since there are no keywords and/or events in URL.")
+                    update_url(url, update_other_links='No', increment_crawl_trys=0, relevant=False)
 
         # Get all of the subsidiary links on the page   
         else:
@@ -715,8 +762,10 @@ class EventSpider(scrapy.Spider):
                 write_events_to_db(events_df, url, keywords, org_name)
                 logging.info(f"URL {url} marked as relevant with events written to the database.")
                 return True
-
-        return False
+        
+        else:
+            logging.error(f"Failed to process LLM response for URL: {url}")
+            return False
     
     def generate_prompt(self, url, extracted_text):
         """
