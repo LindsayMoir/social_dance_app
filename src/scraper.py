@@ -421,88 +421,12 @@ class EventSpider(scrapy.Spider):
 
         # Extract links from the main page but handle facebook links differently
         if 'facebook' in url:
-
-            # Process the regular group facebook page
-            # Add the current URL to the visited links
-            self.visited_links.add(url)
-
-            # We want to see if there are any facebook event links in this url
-            facebooks_events_links = self.fb_get_event_links(url)
-
-            if facebooks_events_links:
-                for event_link in facebooks_events_links:
-                    if event_link not in self.visited_links:
-
-                        # Mark the event link as visited
-                        self.visited_links.add(event_link)
-
-                        # Write the event link to the database
-                        write_url_to_db(org_name, keywords, event_link, other_links=url, relevant=True, increment_crawl_trys=1)
-
-                        # Call playwright to extract the event details
-                        extracted_text = self.fb_extract_text(event_link)
-
-                        # Check keywords in the extracted text
-                        keyword_status = self.check_keywords_in_text(event_link, extracted_text, keywords, org_name)
-
-                        if keyword_status:
-                            # Call the llm to process the extracted text
-                            llm_status = self.process_llm_response(event_link, extracted_text, keywords, org_name)
-
-                            if llm_status:
-                                # Mark the event link as relevant
-                                update_url(event_link, url, increment_crawl_trys=0, relevant=True)
-                            else:
-                                # Mark the event link as irrelevant
-                                update_url(event_link, url, relevant=False, increment_crawl_trys=0)
-                        else:
-                            # Mark the event link as irrelevant
-                            update_url(event_link, url, relevant=False, increment_crawl_trys=0)
-
-            # Check if the URL contains 'login'
-            if 'login' in url or '/groups/' not in url:
-                logging.info(f"URL {url} marked as irrelevant due to Facebook login link.")
-                update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
-
-            else:
-                # Normal facebook text. I want to process this with playwright but the version that only returns text
-                extracted_text = self.fb_extract_text(url)
-
-                # Check keywords in the extracted text
-                keyword_status = self.check_keywords_in_text(url, extracted_text, keywords, org_name)
-
-                if keyword_status:
-                    # Call the llm to process the extracted text
-                    llm_status = self.process_llm_response(url, extracted_text, keywords, org_name)
-
-                    if llm_status:
-                        # Mark the event link as relevant
-                        update_url(url, update_other_links='', relevant=True, increment_crawl_trys=0)
-                    else:
-                        # Mark the event link as irrelevant
-                        update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0) 
-
-                else:
-                    logging.info(f"URL {url} marked as irrelevant since there are no keywords and/or events in URL.")
-                    update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
-
-        # Get all of the subsidiary links on the page   
+            self.handle_facebook_links(url, keywords, org_name)
         else:
-            page_links = response.css('a::attr(href)').getall()
-            page_links = [response.urljoin(link) for link in page_links if link.startswith('http')]
-            page_links = page_links[:config['crawling']['max_urls']]  # Limit the number of links
-            page_links = page_links + url  # Add the current URL to the list
+            page_links = self.extract_page_links(response, url)
 
         # Extract iframe sources
-        iframe_links = response.css('iframe::attr(src)').getall()
-        iframe_links = [response.urljoin(link) for link in iframe_links if link.startswith('http')]
-
-        if iframe_links:
-            update_url(url, update_other_links='calendar', relevant=True, increment_crawl_trys=0)
-            for calendar_url in iframe_links:
-                if calendar_url not in self.visited_links:
-                    self.visited_links.add(calendar_url)  # Mark the iframe URL as visited
-                    self.fetch_google_calendar_events(calendar_url, keywords, org_name, url)
+        iframe_links = self.extract_iframe_links(response, url, keywords, org_name)
 
         logging.info(f"Found {len(page_links)} page_links and {len(iframe_links)} iframe_links on {response.url}")
 
@@ -515,6 +439,104 @@ class EventSpider(scrapy.Spider):
                     yield response.follow(url=link, callback=self.parse, cb_kwargs={'keywords': keywords, 
                                                                                     'org_name': org_name, 
                                                                                     'url': link})
+
+    def handle_facebook_links(self, url, keywords, org_name):
+        """
+        Handle Facebook links differently by extracting event links and processing them.
+
+        Args:
+            url (str): The URL of the current page being parsed.
+            keywords (list): A list of keywords to check for relevance.
+            org_name (str): The name of the organization to check for relevance.
+        """
+        # Process the regular group facebook page
+        self.visited_links.add(url)
+
+        # We want to see if there are any facebook event links in this url
+        facebooks_events_links = self.fb_get_event_links(url)
+
+        if facebooks_events_links:
+            for event_link in facebooks_events_links:
+                if event_link not in self.visited_links:
+                    self.visited_links.add(event_link)
+                    write_url_to_db(org_name, keywords, event_link, other_links=url, relevant=True, increment_crawl_trys=1)
+                    extracted_text = self.fb_extract_text(event_link)
+                    self.process_extracted_text(event_link, extracted_text, keywords, org_name, url)
+
+        if 'login' in url or '/groups/' not in url:
+            logging.info(f"URL {url} marked as irrelevant due to Facebook login link.")
+            update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
+        else:
+            extracted_text = self.fb_extract_text(url)
+            self.process_extracted_text(url, extracted_text, keywords, org_name, '')
+
+
+    def process_extracted_text(self, url, extracted_text, keywords, org_name, other_links):
+        """
+        Process the extracted text by checking keywords and calling the LLM.
+
+        Args:
+            url (str): The URL of the current page being parsed.
+            extracted_text (str): The text extracted from the page.
+            keywords (list): A list of keywords to check for relevance.
+            org_name (str): The name of the organization to check for relevance.
+            other_links (str): Other links associated with the URL.
+        """
+        keyword_status = self.check_keywords_in_text(url, extracted_text, keywords, org_name)
+
+        if keyword_status:
+            llm_status = self.process_llm_response(url, extracted_text, keywords, org_name)
+            if llm_status:
+                update_url(url, update_other_links=other_links, relevant=True, increment_crawl_trys=0)
+            else:
+                update_url(url, update_other_links=other_links, relevant=False, increment_crawl_trys=0)
+        else:
+            update_url(url, update_other_links=other_links, relevant=False, increment_crawl_trys=0)
+
+
+    def extract_page_links(self, response, url):
+        """
+        Extract page links from the response.
+
+        Args:
+            response (scrapy.http.Response): The response object to parse.
+            url (str): The URL of the current page being parsed.
+
+        Returns:
+            list: A list of extracted page links.
+        """
+        page_links = response.css('a::attr(href)').getall()
+        page_links = [response.urljoin(link) for link in page_links if link.startswith('http')]
+        page_links = page_links[:config['crawling']['max_urls']]  # Limit the number of links
+        page_links.append(url)  # Add the current URL to the list
+
+        return page_links
+
+
+    def extract_iframe_links(self, response, url, keywords, org_name):
+        """
+        Extract iframe links from the response and process them.
+
+        Args:
+            response (scrapy.http.Response): The response object to parse.
+            url (str): The URL of the current page being parsed.
+            keywords (list): A list of keywords to check for relevance.
+            org_name (str): The name of the organization to check for relevance.
+
+        Returns:
+            list: A list of extracted iframe links.
+        """
+        iframe_links = response.css('iframe::attr(src)').getall()
+        iframe_links = [response.urljoin(link) for link in iframe_links if link.startswith('http')]
+
+        if iframe_links:
+            update_url(url, update_other_links='calendar', relevant=True, increment_crawl_trys=0)
+            for calendar_url in iframe_links:
+                if calendar_url not in self.visited_links:
+                    self.visited_links.add(calendar_url)  # Mark the iframe URL as visited
+                    self.fetch_google_calendar_events(calendar_url, keywords, org_name, url)
+
+        return iframe_links
     
 
     def is_relevant(self, url, keywords, org_name):
@@ -572,13 +594,6 @@ class EventSpider(scrapy.Spider):
     def check_facebook_group(self, url):
         """
         This method checks if it is a group url. 
-            If it is then it asks for the text to be extracted using fb_extract_text(group_url)
-        If the text is extracted then 
-            it checks for keywords in the text using check_keywords_in_text(self, url, extracted_text, keywords, org_name)
-        If the keywords are found then 
-            it passes the extracted text to the LLM for further processing 
-                using process_llm_response(self, url, extracted_text, keywords, org_name)
-        The LLM 
 
         Args:
             url (str): The URL of the Facebook group to check for event links.
