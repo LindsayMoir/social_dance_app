@@ -1,35 +1,42 @@
-When extracting event details:
-•	Use the current date as the reference for determining the correct year.
-•	If the date mentions only the month and day but no year, infer the year based on the following rules:
-    o	If the event's month and day are after today's date, assume the current year.
-    o	If the event's month and day are before today's date, assume the following year.
-Only include events that have:
-•	A valid date (in any standard format).
-•	A clearly defined start time and end time (e.g., HH:MM format).
-•	If an event does NOT have a start time, DO NOT include it, UNLESS it uses the term "All Day" or something similar.
-Additionally, if the event spans multiple dates, include the following fields:
-•	Start_date (the date of the first occurrence).
-•	End_date (the date of the last occurrence).
-•	Day_of_week  (If the event mentions a day of the week please include it. (e.g., "Tuesdays", "Wednesdays". “Thursdays”, etc.)).
-For each Time, assume it is PM UNLESS it specifically says it is AM. When you provide the time below, include AM and PM in the Time.
-Sometimes the event will occur on a regular basis and the actual date will not appear. For example, every Saturday or the 1st, 3rd, and 5th Tuesday of each month. 
-•	In that case, please compute the dates that are being referred to. 
-•	For example, the 1st Tuesday in 2025 is January 7, 2025. Saturdays in February 2025 appear on February 1, 8, 15, and 27.
-Please make sure you get the Price of the event. Typically there will be a $ sign next to the Price.
-There is sometimes an embedded Google calendar link on the page. If you believe there is a calendar on the page, please return the phrase "Google Calendar Likely".
-Please be aware of old or outdated information on the page. Sometimes you will be on an old page that has not been updated and the events are all in the past. In that case, you would ignore all events on the page. 
-
-For each identified event, provide the following details in JSON format:
-1.	URL
-2.	Type_of_Event (social dance, class, workshop, other)
-3.	Name_of_the_Event
-4.	Day_of_Week
-5.	Start_Date
-6.	End_Date
-7.	Start_Time
-8.	End_Time
-9. 	Price
-10.	Location
-11.	Description
-
-If no events are found, respond with: "No events found".
+Instructions for Extracting Event Details
+Context:
+I am building an application to save users time when searching for social dance events. Extract relevant event details from a webpage's text according to the instructions below.
+________________________________________
+1. Date Rules:
+•	Use the current date in the format YYYY-MM-DD and assume the UTC time zone.
+•	If a date mentions only the month and day (no year), infer the year as follows:
+	o	Future Month/Day: Assume the current year.
+	o	Past Month/Day: Assume the next year.
+________________________________________
+2. Event Fields to Extract:
+For each identified event, provide the following details in JSON format.
+You MUST include all of these fields. If you do not have any information for one of the fields, put '' in the field.
+{
+    "URL": "<source webpage link>",
+    "Type_of_Event": "<choose one: social dance, class, workshop, other>",
+    "Name_of_the_Event": "<event name or title>",
+    "Day_of_Week": "<e.g., Monday, Tuesday>",
+    "Start_Date": "<YYYY-MM-DD>",
+    "End_Date": "<YYYY-MM-DD or same as Start_Date if single-day>",
+    "Start_Time": "<HH:MM AM/PM>",
+    "End_Time": "<HH:MM AM/PM or null>",
+    "Price": "<e.g., $15>",
+    "Location": "<venue name and address>",
+    "Description": "<short summary of event details>"
+}
+________________________________________
+3. Recurring Events:
+•	For recurring events (e.g., "every Saturday" or "1st and 3rd Tuesdays"), compute all occurrences within 12 months from today's date unless an end date is explicitly mentioned.
+•	For example:
+o	The 1st Tuesday in 2025 is January 7, 2025.
+o	Saturdays in February 2025 are February 1, 8, 15, and 22.
+________________________________________
+4. Outdated Pages:
+•	Ignore outdated events:
+o	Consider a page outdated if most events occurred more than 6 months ago and no future events are listed.
+•	Exclude events explicitly marked as "canceled" or "postponed."
+________________________________________
+5. Additional Notes:
+•	Exclude broken or inaccessible links.
+•	If no events are found, respond with: "No events found."
+________________________________________

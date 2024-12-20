@@ -78,8 +78,13 @@ def url_in_table(url):
     df = pd.read_sql(query, conn, params=params)
 
     if df.shape[0] > 0:
+        logging.info(f"URL {url} is present in the 'urls' table def url_in_table.")
         return True
     else:
+        logging.info(
+            f"URL {url} is NOT present in the 'urls' table. "
+            "This is highly unlikely and should be looked at"
+        )
         return False
 
 
@@ -115,6 +120,7 @@ def update_url(url, update_other_links, relevant, increment_crawl_trys):
             update(table)
             .where(table.c.links == url)
             .values(
+                time_stamps=datetime.now(),
                 other_links=update_other_links if update_other_links != 'No' else table.c.other_links,
                 crawl_trys=table.c.crawl_trys + increment_crawl_trys,
                 relevant=relevant
@@ -124,7 +130,7 @@ def update_url(url, update_other_links, relevant, increment_crawl_trys):
         # Execute the query
         with conn.begin() as connection:
             connection.execute(query)
-        logging.info(f"Updated URL: {url}")
+        logging.info(f"def updated_url Updated URL: {url}")
 
 
 def write_url_to_db(org_names, keywords, url, other_links, relevant, increment_crawl_trys):
@@ -186,6 +192,8 @@ def write_events_to_db(df, url, keywords, org_name):
         - Logs a warning if the 'Price' column is missing or empty.
         - Logs an error if the database connection fails.
         """
+        df.to_csv('events.csv', index=False)
+
         # Convert date and time fields to the appropriate formats, tolerantly
         for col in ['Start_Date', 'End_Date']:
             df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
@@ -202,13 +210,13 @@ def write_events_to_db(df, url, keywords, org_name):
             df['Price'] = float('nan')  # Add a Price column with NaN if it doesn't exist or is empty
 
         # Add additional columns
-        df['Time_Stamp'] = datetime.now()
-        df['Keyword'] = keywords
-        df['Org_Name'] = org_name
+        df['Time_Stamps'] = datetime.now()
+        df['Keywords'] = keywords
+        df['Org_Names'] = org_name
 
         # Reorder the columns to make 'Org_Name', 'Keyword' columns first and second
-        columns_order = [ 'Org_Name', 'Keyword'] + [
-            col for col in df.columns if col not in ['Org_Name', 'Keyword']]
+        columns_order = [ 'Org_Names', 'Keywords'] + [
+            col for col in df.columns if col not in ['Org_Names', 'Keywords']]
         df = df[columns_order]
 
         # Get database connection using SQLAlchemy
@@ -264,7 +272,7 @@ def dedup():
 
         # Deduplicate the DataFrame based on specified columns and keep the last version
         deduplicated_df = df.drop_duplicates(
-            subset=["Keyword", "Type_of_Event", "Name_of_the_Event", "Day_of_Week", "Start_Date", "End_Date"],
+            subset=["Org_Name", "Keyword", "URL", "Type_of_Event", "Day_of_Week", "Start_Date", "End_Date"],
             keep="last"
         )
         shape_after = deduplicated_df.shape
@@ -325,12 +333,6 @@ def set_calendar_urls():
             if urls_df.shape[0] > 0:
                 for _, row in urls_df.iterrows():
                     if row['relevant'] == False:
-
-                        print("\n**********************if row['relevant'] == False\n, "
-                                f"links: {row['links']}\n"
-                                f"other_links: {row['other_links']}"
-                            )
-
                         logging.info(f"URL {row['links']} is already marked as relevant.")
                         continue
                     url = row['links']
@@ -389,16 +391,13 @@ class EventSpider(scrapy.Spider):
             keywords = row['keywords']
             url = row['links']
 
-            if url not in self.visited_links:
-                self.visited_links.add(url)  # Mark the URL as visited
+            # We need to write the url to the database, if it is not already there
+            write_url_to_db(org_name, keywords, url, other_links='', relevant=True, increment_crawl_trys=1)
 
-                # We need to write the url to the database, if it is not already there
-                write_url_to_db(org_name, keywords, url, other_links='', relevant=True, increment_crawl_trys=1)
-
-                logging.info(f"Starting crawl for URL: {url}")
-                yield scrapy.Request(url=url, callback=self.parse, cb_kwargs={'keywords': keywords, 
-                                                                              'org_name': org_name, 
-                                                                              'url': url})
+            logging.info(f"Starting crawl for URL: {url}")
+            yield scrapy.Request(url=url, callback=self.parse, cb_kwargs={'keywords': keywords, 
+                                                                            'org_name': org_name, 
+                                                                            'url': url})
 
 
     def parse(self, response, keywords, org_name, url):
@@ -418,46 +417,42 @@ class EventSpider(scrapy.Spider):
         """
         # Initialize page_links
         page_links = []
+        facebooks_events_links = []
+        iframe_links = []
 
         # Extract links from the main page but handle facebook links differently
         if 'facebook' in url:
 
             # Process the regular group facebook page
-            # Add the current URL to the visited links
-            self.visited_links.add(url)
 
             # We want to see if there are any facebook event links in this url
             facebooks_events_links = self.fb_get_event_links(url)
 
             if facebooks_events_links:
                 for event_link in facebooks_events_links:
-                    if event_link not in self.visited_links:
 
-                        # Mark the event link as visited
-                        self.visited_links.add(event_link)
+                    # Write the event link to the database
+                    write_url_to_db(org_name, keywords, event_link, other_links=url, relevant=True, increment_crawl_trys=1)
 
-                        # Write the event link to the database
-                        write_url_to_db(org_name, keywords, event_link, other_links=url, relevant=True, increment_crawl_trys=1)
+                    # Call playwright to extract the event details
+                    extracted_text = self.fb_extract_text(event_link)
 
-                        # Call playwright to extract the event details
-                        extracted_text = self.fb_extract_text(event_link)
+                    # Check keywords in the extracted text
+                    keyword_status = self.check_keywords_in_text(event_link, extracted_text, keywords, org_name)
 
-                        # Check keywords in the extracted text
-                        keyword_status = self.check_keywords_in_text(event_link, extracted_text, keywords, org_name)
+                    if keyword_status:
+                        # Call the llm to process the extracted text
+                        llm_status = self.process_llm_response(event_link, extracted_text, keywords, org_name)
 
-                        if keyword_status:
-                            # Call the llm to process the extracted text
-                            llm_status = self.process_llm_response(event_link, extracted_text, keywords, org_name)
-
-                            if llm_status:
-                                # Mark the event link as relevant
-                                update_url(event_link, url, increment_crawl_trys=0, relevant=True)
-                            else:
-                                # Mark the event link as irrelevant
-                                update_url(event_link, url, relevant=False, increment_crawl_trys=0)
+                        if llm_status:
+                            # Mark the event link as relevant
+                            update_url(event_link, url, increment_crawl_trys=0, relevant=True)
                         else:
                             # Mark the event link as irrelevant
                             update_url(event_link, url, relevant=False, increment_crawl_trys=0)
+                    else:
+                        # Mark the event link as irrelevant
+                        update_url(event_link, url, relevant=False, increment_crawl_trys=0)
 
             # Check if the URL contains 'login'
             if 'login' in url or '/groups/' not in url:
@@ -500,14 +495,15 @@ class EventSpider(scrapy.Spider):
         if iframe_links:
             update_url(url, update_other_links='calendar', relevant=True, increment_crawl_trys=0)
             for calendar_url in iframe_links:
-                if calendar_url not in self.visited_links:
-                    self.visited_links.add(calendar_url)  # Mark the iframe URL as visited
-                    self.fetch_google_calendar_events(calendar_url, keywords, org_name, url)
+                self.fetch_google_calendar_events(calendar_url, keywords, org_name, url)
 
         logging.info(f"Found {len(page_links)} page_links and {len(iframe_links)} iframe_links on {response.url}")
 
+        # Put all links together and make sure that they get crawled and their subsequent levels get crawled
+        all_links = set(page_links + iframe_links + facebooks_events_links + [url])
+
         # Check for relevance and crawl further
-        for link in page_links:
+        for link in all_links:
             if link not in self.visited_links:
                 self.visited_links.add(link)  # Mark the page link as visited
                 if self.is_relevant(link, keywords, org_name):
@@ -530,12 +526,12 @@ class EventSpider(scrapy.Spider):
         bool: True if the URL is relevant, False otherwise.
         """
         if 'facebook' in url:
-            return self.handle_facebook_url(url)
+            return self.handle_facebook_url(url, keywords, org_name)
         else:
             return self.handle_non_facebook_url(url, keywords, org_name)
         
 
-    def handle_facebook_url(self, url):
+    def handle_facebook_url(self, url, keywords, org_name):
         """
         This function processes a given Facebook URL to check its relevance based on certain criteria.
         It logs the process and updates the URL status accordingly.
@@ -566,19 +562,12 @@ class EventSpider(scrapy.Spider):
             update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
             return False
 
-        return self.check_keywords_in_text(url, extracted_text)
+        return self.check_keywords_in_text(url, extracted_text, keywords, org_name)
     
 
     def check_facebook_group(self, url):
         """
-        This method checks if it is a group url. 
-            If it is then it asks for the text to be extracted using fb_extract_text(group_url)
-        If the text is extracted then 
-            it checks for keywords in the text using check_keywords_in_text(self, url, extracted_text, keywords, org_name)
-        If the keywords are found then 
-            it passes the extracted text to the LLM for further processing 
-                using process_llm_response(self, url, extracted_text, keywords, org_name)
-        The LLM 
+        Determines whether a Facebook url within a facebook group page is relevant based on the presence of event links.
 
         Args:
             url (str): The URL of the Facebook group to check for event links.
