@@ -210,9 +210,9 @@ def write_events_to_db(df, url, keywords, org_name):
             df['Price'] = float('nan')  # Add a Price column with NaN if it doesn't exist or is empty
 
         # Add additional columns
-        df['Time_Stamps'] = datetime.now()
-        df['Keywords'] = keywords
-        df['Org_Names'] = org_name
+        df['Time_Stamp'] = datetime.now()
+        df['Keyword'] = keywords
+        df['Org_Name'] = org_name
 
         # Reorder the columns to make 'Org_Name', 'Keyword' columns first and second
         columns_order = [ 'Org_Names', 'Keywords'] + [
@@ -456,7 +456,7 @@ class EventSpider(scrapy.Spider):
 
             # Check if the URL contains 'login'
             if 'login' in url or '/groups/' not in url:
-                logging.info(f"URL {url} marked as irrelevant due to Facebook login link.")
+                logging.info(f"def parse(): URL {url} marked as irrelevant due to Facebook login link.")
                 update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
 
             else:
@@ -478,7 +478,7 @@ class EventSpider(scrapy.Spider):
                         update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0) 
 
                 else:
-                    logging.info(f"URL {url} marked as irrelevant since there are no keywords and/or events in URL.")
+                    logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords and/or events in URL.")
                     update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
 
         # Get all of the subsidiary links on the page   
@@ -497,10 +497,9 @@ class EventSpider(scrapy.Spider):
             for calendar_url in iframe_links:
                 self.fetch_google_calendar_events(calendar_url, keywords, org_name, url)
 
-        logging.info(f"Found {len(page_links)} page_links and {len(iframe_links)} iframe_links on {response.url}")
-
         # Put all links together and make sure that they get crawled and their subsequent levels get crawled
         all_links = set(page_links + iframe_links + facebooks_events_links + [url])
+        logging.info(f"in def parse() Found {len(all_links)} links on {response.url}")
 
         # Check for relevance and crawl further
         for link in all_links:
@@ -693,7 +692,7 @@ class EventSpider(scrapy.Spider):
         if keywords:
             keywords_list = [kw.strip().lower() for kw in keywords.split(',')]
             if any(kw in extracted_text.lower() for kw in keywords_list):
-                logging.info(f"Keywords found in extracted text for URL: {url}")
+                logging.info(f"def check_keywords: Keywords found in extracted text for URL: {url}")
                 return self.process_llm_response(url, extracted_text, keywords, org_name)
 
         if 'calendar' in url:
