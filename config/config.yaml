@@ -1,7 +1,7 @@
 crawling:
   max_crawl_trys: 3
   depth_limit: 4
-  max_urls: 10
+  max_urls: 5
 database:
   host: 'localhost'
   name: 'social_dance_db'

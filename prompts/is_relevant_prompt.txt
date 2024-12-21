@@ -1,9 +1,10 @@
+
 Instructions for Extracting Event Details
 Context:
 I am building an application to save users time when searching for social dance events. Extract relevant event details from a webpage's text according to the instructions below.
 ________________________________________
 1. Date Rules:
-•	Use the current date in the format YYYY-MM-DD and assume the UTC time zone.
+•	Use the current date in the format YYYY-MM-DD and assume the NO time zone.
 •	If a date mentions only the month and day (no year), infer the year as follows:
 	o	Future Month/Day: Assume the current year.
 	o	Past Month/Day: Assume the next year.
@@ -37,6 +38,5 @@ o	Consider a page outdated if most events occurred more than 6 months ago and no
 •	Exclude events explicitly marked as "canceled" or "postponed."
 ________________________________________
 5. Additional Notes:
-•	Exclude broken or inaccessible links.
 •	If no events are found, respond with: "No events found."
 ________________________________________

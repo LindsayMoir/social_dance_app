@@ -32,7 +32,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-logging.info("Working directory is: %s", os.getcwd())
+logging.info("global: Working directory is: %s", os.getcwd())
 
 
 # Database connection
@@ -53,7 +53,7 @@ def get_db_connection():
         return conn
     
     except Exception as e:
-        logging.error("Database connection failed: %s", e)
+        logging.error("def get_db_connection(): Database connection failed: %s", e)
         return None
 
 
@@ -70,7 +70,7 @@ def url_in_table(url):
     conn = get_db_connection()
 
     if conn is None:
-        logging.error("Failed to connect to the database while checking URL in url_in_table.")
+        logging.error("def url_in_table(): Failed to connect to the database while checking URL in url_in_table.")
         return False
 
     query = 'SELECT * FROM urls WHERE links = %s'
@@ -78,12 +78,12 @@ def url_in_table(url):
     df = pd.read_sql(query, conn, params=params)
 
     if df.shape[0] > 0:
-        logging.info(f"URL {url} is present in the 'urls' table def url_in_table.")
+        logging.info(f"def url_in_table(): URL {url} is present in the 'urls' table def url_in_table.")
         return True
     else:
         logging.info(
-            f"URL {url} is NOT present in the 'urls' table. "
-            "This is highly unlikely and should be looked at"
+            f"def url_in_table(): URL {url} is NOT present in the 'urls' table."
+            f"This is highly unlikely and should be looked at"
         )
         return False
 
@@ -130,7 +130,7 @@ def update_url(url, update_other_links, relevant, increment_crawl_trys):
         # Execute the query
         with conn.begin() as connection:
             connection.execute(query)
-        logging.info(f"def updated_url Updated URL: {url}")
+        logging.info(f"def updated_url(): Updated URL: {url}")
 
 
 def write_url_to_db(org_names, keywords, url, other_links, relevant, increment_crawl_trys):
@@ -148,13 +148,14 @@ def write_url_to_db(org_names, keywords, url, other_links, relevant, increment_c
         conn = get_db_connection()
 
         if conn is None:
-            logging.error("Failed to connect to the database in write_url while trying to write {url}")
+            logging.error("def write_url_to_db(): Failed to connect to the database in write_url while trying to write {url}")
 
         try:
             update_url(url, other_links, relevant, increment_crawl_trys)
             
         except Exception as e:
-            logging.info(f"Unable to update {url} \n in write_url. Assume the url or table does not exist: {e}")
+            logging.info(f"def write_url_to_db(): Unable to update {url}."
+                         f"Assume the url or table does not exist: {e}")
             update_df = pd.DataFrame({
                                     "time_stamps": [datetime.now()],
                                     "org_names": [org_names],
@@ -206,7 +207,7 @@ def write_events_to_db(df, url, keywords, org_name):
             df['Price'] = df['Price'].replace({'\$': '', '': None}, regex=True)
             df['Price'] = pd.to_numeric(df['Price'], errors='coerce')  # Convert to float, set invalid to NaN
         else:
-            logging.warning("The 'Price' column is missing or empty. Filling with NaN.")
+            logging.warning("def write_events_to_db(): The 'Price' column is missing or empty. Filling with NaN.")
             df['Price'] = float('nan')  # Add a Price column with NaN if it doesn't exist or is empty
 
         # Add additional columns
@@ -222,7 +223,7 @@ def write_events_to_db(df, url, keywords, org_name):
         # Get database connection using SQLAlchemy
         conn = get_db_connection()  # Ensure this returns a SQLAlchemy engine
         if conn is None:
-            logging.error("Failed to connect to the database.")
+            logging.error("def write_events_to_db(): Failed to connect to the database.")
             return
         
         else:
@@ -234,7 +235,7 @@ def write_events_to_db(df, url, keywords, org_name):
                 index=False,         # Avoids creating a DataFrame index column in the table
                 method='multi'       # Enables efficient bulk inserts
             )
-            logging.info(f"Successfully wrote events to the database from URL: {url}")
+            logging.info(f"def write_events_to_db(): Successfully wrote events to the database from URL: {url}")
 
 
 def dedup():
@@ -267,7 +268,7 @@ def dedup():
             df = pd.read_sql('SELECT * FROM events', conn)
             shape_before = df.shape
         except Exception as e:
-            logging.error(f"Failed to read events table: {e}")
+            logging.error(f"def dedup(): Failed to read events table: {e}")
             return
 
         # Deduplicate the DataFrame based on specified columns and keep the last version
@@ -280,7 +281,7 @@ def dedup():
         # This will drop the existing `events` table and replace it
         deduplicated_df.to_sql("events", conn, index=False, if_exists="replace")
 
-        logging.info(f"Before duplicates removed from events table shape was {shape_before} and after {shape_after}.")
+        logging.info(f"def dedup(): Before duplicates removed from events table shape was {shape_before} and after {shape_after}.")
 
         # Read the urls table into a pandas DataFrame
         df = pd.read_sql('SELECT * FROM urls', conn)
@@ -296,7 +297,7 @@ def dedup():
         # This will drop the existing `urls` table and replace it
         deduplicated_df.to_sql("urls", conn, index=False, if_exists="replace")
 
-        logging.info(f"Before duplicates removed from urls table shape was {shape_before} and after {shape_after}.")
+        logging.info(f"def dedup(): Before duplicates removed from urls table shape was {shape_before} and after {shape_after}.")
 
 
 def set_calendar_urls():
@@ -415,78 +416,11 @@ class EventSpider(scrapy.Spider):
         It also extracts iframe sources and updates the URL if relevant. 
         The function checks for relevance of the links and continues crawling if they are relevant.
         """
-        # Initialize page_links
-        page_links = []
-        facebooks_events_links = []
-        iframe_links = []
-
-        # Extract links from the main page but handle facebook links differently
-        if 'facebook' in url:
-
-            # Process the regular group facebook page
-
-            # We want to see if there are any facebook event links in this url
-            facebooks_events_links = self.fb_get_event_links(url)
-
-            if facebooks_events_links:
-                for event_link in facebooks_events_links:
-
-                    # Write the event link to the database
-                    write_url_to_db(org_name, keywords, event_link, other_links=url, relevant=True, increment_crawl_trys=1)
-
-                    # Call playwright to extract the event details
-                    extracted_text = self.fb_extract_text(event_link)
-
-                    # Check keywords in the extracted text
-                    keyword_status = self.check_keywords_in_text(event_link, extracted_text, keywords, org_name)
-
-                    if keyword_status:
-                        # Call the llm to process the extracted text
-                        llm_status = self.process_llm_response(event_link, extracted_text, keywords, org_name)
-
-                        if llm_status:
-                            # Mark the event link as relevant
-                            update_url(event_link, url, increment_crawl_trys=0, relevant=True)
-                        else:
-                            # Mark the event link as irrelevant
-                            update_url(event_link, url, relevant=False, increment_crawl_trys=0)
-                    else:
-                        # Mark the event link as irrelevant
-                        update_url(event_link, url, relevant=False, increment_crawl_trys=0)
-
-            # Check if the URL contains 'login'
-            if 'login' in url or '/groups/' not in url:
-                logging.info(f"def parse(): URL {url} marked as irrelevant due to Facebook login link.")
-                update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
-
-            else:
-                # Normal facebook text. I want to process this with playwright but the version that only returns text
-                extracted_text = self.fb_extract_text(url)
-
-                # Check keywords in the extracted text
-                keyword_status = self.check_keywords_in_text(url, extracted_text, keywords, org_name)
-
-                if keyword_status:
-                    # Call the llm to process the extracted text
-                    llm_status = self.process_llm_response(url, extracted_text, keywords, org_name)
-
-                    if llm_status:
-                        # Mark the event link as relevant
-                        update_url(url, update_other_links='', relevant=True, increment_crawl_trys=0)
-                    else:
-                        # Mark the event link as irrelevant
-                        update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0) 
-
-                else:
-                    logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords and/or events in URL.")
-                    update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
-
         # Get all of the subsidiary links on the page   
-        else:
-            page_links = response.css('a::attr(href)').getall()
-            page_links = [response.urljoin(link) for link in page_links if link.startswith('http')]
-            page_links = page_links[:config['crawling']['max_urls']]  # Limit the number of links
-            page_links = page_links + url  # Add the current URL to the list
+        page_links = response.css('a::attr(href)').getall()
+        page_links = [response.urljoin(link) for link in page_links if link.startswith('http')]
+        page_links = page_links[:config['crawling']['max_urls']]  # Limit the number of links
+        page_links = page_links + [url]  # Add the current URL to the list
 
         # Extract iframe sources
         iframe_links = response.css('iframe::attr(src)').getall()
@@ -498,20 +432,19 @@ class EventSpider(scrapy.Spider):
                 self.fetch_google_calendar_events(calendar_url, keywords, org_name, url)
 
         # Put all links together and make sure that they get crawled and their subsequent levels get crawled
-        all_links = set(page_links + iframe_links + facebooks_events_links + [url])
-        logging.info(f"in def parse() Found {len(all_links)} links on {response.url}")
+        all_links = set(page_links + iframe_links + [url])
+        logging.info(f"def parse() Found {len(all_links)} links on {response.url}")
 
         # Check for relevance and crawl further
         for link in all_links:
             if link not in self.visited_links:
                 self.visited_links.add(link)  # Mark the page link as visited
                 if self.is_relevant(link, keywords, org_name):
-                    logging.info(f"Starting crawl for URL: {link}")
+                    logging.info(f"def parse() Starting crawl for URL: {link}")
+                    self.driver(link, keywords, org_name)
                     yield response.follow(url=link, callback=self.parse, cb_kwargs={'keywords': keywords, 
                                                                                     'org_name': org_name, 
                                                                                     'url': link})
-    
-
     def is_relevant(self, url, keywords, org_name):
         """
         Determine the relevance of a given URL based on its content, keywords, or organization name.
@@ -554,14 +487,6 @@ class EventSpider(scrapy.Spider):
 
         if '/groups/' in url:
             return self.check_facebook_group(url)
-
-        extracted_text = self.fb_extract_text(url)
-        if not extracted_text:
-            logging.error(f"Failed to extract text or login to Facebook for URL: {url}")
-            update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
-            return False
-
-        return self.check_keywords_in_text(url, extracted_text, keywords, org_name)
     
 
     def check_facebook_group(self, url):
@@ -587,6 +512,108 @@ class EventSpider(scrapy.Spider):
         logging.info(f"No event links found on Facebook group page: {url}")
         update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
         return False
+    
+
+    def driver(self, url, keywords, org_name):
+        """
+        Determine the relevance of a given URL based on its content, keywords, or organization name.
+
+        Parameters:
+        url (str): The URL to be evaluated.
+        keywords (list of str): A list of keywords to check within the URL content.
+        org_name (str): The name of the organization to check within the URL content.
+
+        Returns:
+        bool: True if the URL is relevant, False otherwise.
+        """
+
+        # Extract links from the main page but handle facebook links differently
+        if 'facebook' in url:
+
+            # Process the regular group facebook page
+            # We want to see if there are any facebook event links in this url
+            facebooks_events_links = self.fb_get_event_links(url)
+
+            if facebooks_events_links:
+                for event_link in facebooks_events_links:
+
+                    # Write the event link to the database
+                    write_url_to_db(org_name, keywords, event_link, other_links=url, relevant=True, increment_crawl_trys=1)
+
+                    # Call playwright to extract the event details
+                    extracted_text = self.fb_extract_text(event_link)
+
+                    # Check keywords in the extracted text
+                    keyword_status = self.check_keywords_in_text(event_link, extracted_text, keywords, org_name)
+
+                    if keyword_status:
+                        # Call the llm to process the extracted text
+                        llm_status = self.process_llm_response(event_link, extracted_text, keywords, org_name)
+
+                        if llm_status:
+                            # Mark the event link as relevant
+                            update_url(event_link, url, increment_crawl_trys=0, relevant=True)
+                        
+                        else:
+                            # Mark the event link as irrelevant
+                            update_url(event_link, url, relevant=False, increment_crawl_trys=0)
+
+                    else:
+                        # Mark the event link as irrelevant
+                        update_url(event_link, url, relevant=False, increment_crawl_trys=0)
+
+            # Check if the URL contains 'login' or groups not in url
+            # I am pretty sure this is redundant but I will leave it here for now
+            if 'login' in url or '/groups/' not in url:
+                logging.info(f"def parse(): URL {url} marked as irrelevant due to Facebook login link.")
+                update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
+                return False
+
+            else:
+                # Normal facebook text. I want to process this with playwright but the version that only returns text
+                extracted_text = self.fb_extract_text(url)
+
+                # Check keywords in the extracted text
+                keyword_status = self.check_keywords_in_text(url, extracted_text, keywords, org_name)
+
+                if keyword_status:
+                    # Call the llm to process the extracted text
+                    llm_status = self.process_llm_response(url, extracted_text, keywords, org_name)
+
+                    if llm_status:
+                        # Mark the event link as relevant
+                        update_url(url, update_other_links='', relevant=True, increment_crawl_trys=0)
+                    
+                    else:
+                        # Mark the event link as irrelevant
+                        update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0)
+
+                else:
+                    logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords and/or events in URL.")
+                    update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
+
+        else:
+            # Process non-facebook links
+            extracted_text = self.extract_text_with_playwright(url)
+
+            # Check keywords in the extracted text
+            keyword_status = self.check_keywords_in_text(url, extracted_text, keywords, org_name)
+
+            if keyword_status:
+                # Call the llm to process the extracted text
+                llm_status = self.process_llm_response(url, extracted_text, keywords, org_name)
+
+                if llm_status:
+                    # Mark the event link as relevant
+                    update_url(url, update_other_links='', relevant=True, increment_crawl_trys=0)
+
+                else:
+                    # Mark the event link as irrelevant
+                    update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0) 
+
+            else:
+                logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords.")
+                update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
     
     
     def fb_get_event_links(self, group_url):
@@ -645,36 +672,14 @@ class EventSpider(scrapy.Spider):
             page.goto(group_url, timeout=180000)
 
             # Extract event links
-            logging.info("Extracting event links from the group page.")
+            logging.info("def fb_get_event_links(): Extracting event links from the group page.")
             all_links = page.eval_on_selector_all("a", "elements => elements.map(e => e.href || '')")
             event_links = [link for link in all_links if '/events/' in link and 'facebook.com' in link]
-            logging.info(f"Extracted {len(event_links)} event links.")
+            logging.info(f"def fb_get_event_links(): Extracted {len(event_links)} event links.")
             for event_link in event_links:
-                logging.info(f"Event link: {event_link}")
+                logging.info(f"def fb_get_event_links(): Event link: {event_link}")
 
         return event_links
-    
-
-    def handle_non_facebook_url(self, url, keywords, org_name):
-        """
-        This method extracts text from the given URL using Playwright and checks if the extracted text contains 
-        any of the specified keywords. If no text is extracted, it logs an informational message and returns False.
-
-        Args:
-            url (str): The URL to be processed.
-            keywords (list of str): A list of keywords to check for in the extracted text.
-            org_name (str): The name of the organization to check for in the extracted text.
-
-        Returns:
-            bool: True if the extracted text contains any of the specified keywords or the organization name, False otherwise.
-        """
-        # Extract text from the URL
-        extracted_text = self.extract_text_with_playwright(url)
-        if not extracted_text:
-            logging.info(f"No text extracted for URL: {url}")
-            return False
-
-        return self.check_keywords_in_text(url, extracted_text, keywords, org_name)
     
 
     def check_keywords_in_text(self, url, extracted_text, keywords, org_name):
@@ -692,14 +697,14 @@ class EventSpider(scrapy.Spider):
         if keywords:
             keywords_list = [kw.strip().lower() for kw in keywords.split(',')]
             if any(kw in extracted_text.lower() for kw in keywords_list):
-                logging.info(f"def check_keywords: Keywords found in extracted text for URL: {url}")
+                logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
                 return self.process_llm_response(url, extracted_text, keywords, org_name)
 
         if 'calendar' in url:
-            logging.info(f"URL {url} marked as relevant because 'calendar' is in the URL.")
+            logging.info(f"def check_keywords_in_text: URL {url} marked as relevant because 'calendar' is in the URL.")
             return True
 
-        logging.info(f"URL {url} marked as irrelevant since there are no keywords, events, or 'calendar' in URL.")
+        logging.info(f"def check_keywords_in_text: URL {url} marked as irrelevant since there are no keywords, events, or 'calendar' in URL.")
         return False
     
 
@@ -729,11 +734,11 @@ class EventSpider(scrapy.Spider):
             if parsed_result:
                 events_df = pd.DataFrame(parsed_result)
                 write_events_to_db(events_df, url, keywords, org_name)
-                logging.info(f"URL {url} marked as relevant with events written to the database.")
+                logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
                 return True
         
         else:
-            logging.error(f"Failed to process LLM response for URL: {url}")
+            logging.error(f"def process_llm_response: Failed to process LLM response for URL: {url}")
             return False
     
     def generate_prompt(self, url, extracted_text):
@@ -758,7 +763,7 @@ class EventSpider(scrapy.Spider):
 
         # Generate the full prompt
         prompt = (
-            f"The following text was extracted from a webpage {url}:\n\n"
+            f"The following text was extracted from a webpage {url}\n\n"
             f"{extracted_text}\n\n"
             f"Identify any events (social dances, classes, workshops) within the date range "
             f"{start_date} to {end_date}."
@@ -780,6 +785,9 @@ class EventSpider(scrapy.Spider):
             KeyError: If the 'OpenAI' organization key is not found in the keys file.
             Exception: For any other exceptions that may occur during the API call.
         """
+
+        print('\ndef query_llm(): *************prompt************\n', prompt)
+
         # Read the API key from the security file
         keys_df = pd.read_csv(config['input']['keys'])
         api_key = keys_df.loc[keys_df['Organization'] == 'OpenAI', 'Key'].values[0]
@@ -799,8 +807,10 @@ class EventSpider(scrapy.Spider):
             ]
         )
 
+        print('\ndef query_llm(): *****response.choices[0].message.content.strip()*******\n', response.choices[0].message.content.strip())
+
         if response.choices:
-            logging.info(f"LLM response received based on url {url}.")
+            logging.info(f"def query_llm(): LLM response received based on url {url}.")
             return response.choices[0].message.content.strip()
         
         return None
@@ -816,7 +826,7 @@ class EventSpider(scrapy.Spider):
                       otherwise returns None.
         """
         if "No events found" in result:
-            logging.info("No events found in result.")
+            logging.info("def extract_and_parse_json(): No events found in result.")
             return None
         
         # Check if the response contains JSON
@@ -829,15 +839,15 @@ class EventSpider(scrapy.Spider):
 
                 try:
                     # Convert JSON string to Python object
-                    logging.info("JSON found in result.")
+                    logging.info("def extract_and_parse_json(): JSON found in result.")
                     events_json =json.loads(json_string)
                     return events_json
                     
                 except json.JSONDecodeError as e:
-                    logging.error(f"Error parsing JSON: {e}")
+                    logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
                     return None
 
-        logging.info("No JSON found in result.")
+        logging.info("def extract_and_parse_json(): No JSON found in result.")
         
         return None
     
@@ -869,28 +879,28 @@ class EventSpider(scrapy.Spider):
         password = keys_df.loc[keys_df['Organization'] == 'Facebook', 'Key'].values[0]
 
         with sync_playwright() as p:
-            logging.info("Launching browser in headless mode.")
+            logging.info("def fb_extract_text: Launching browser in headless mode.")
             browser = p.chromium.launch(headless=False)
             context = browser.new_context()
 
             # Load cookies if available
             if os.path.exists(cookie_file):
-                logging.info("Loading cookies from file.")
+                logging.info("def fb_extract_text: Loading cookies from file.")
                 with open(cookie_file, "r") as f:
                     cookies = json.load(f)
                     context.add_cookies(cookies)
-                logging.info("Cookies loaded successfully.")
+                logging.info("def fb_extract_text: Cookies loaded successfully.")
 
             page = context.new_page()
 
             # Attempt to navigate directly to the group URL
-            logging.info(f"Attempting direct access to {group_url}")
+            logging.info(f"def fb_extract_text: Attempting direct access to {group_url}")
             page.goto(group_url, timeout=180000)
             logging.info(f"Current page URL after navigation: {page.url}")
 
             # Check if login is needed
             if 'login' in page.url:
-                logging.info("Direct access failed. Performing login...")
+                logging.info("def fb_extract_text: Direct access failed. Performing login...")
                 page.goto("https://www.facebook.com/login", timeout=180000)
                 page.fill("input[name='email']", email)
                 page.fill("input[name='pass']", password)
@@ -899,35 +909,35 @@ class EventSpider(scrapy.Spider):
 
                 # Verify login success
                 if 'login' in page.url or 'recover' in page.url:
-                    logging.error("Login failed. Still on login or reset page.")
+                    logging.error("def fb_extract_text: Login failed. Still on login or reset page.")
                     browser.close()
                     return None
 
-                logging.info("Login successful. Saving cookies for future use.")
+                logging.info("def fb_extract_text: Login successful. Saving cookies for future use.")
                 cookies = context.cookies()
                 with open(cookie_file, "w") as f:
                     json.dump(cookies, f)
 
                 # Navigate back to the group URL
                 page.goto(group_url, timeout=180000)
-                logging.info(f"Re-attempting navigation to group URL: {group_url}")
-                logging.info(f"Current page URL after login: {page.url}")
+                logging.info(f"def fb_extract_text: Re-attempting navigation to group URL: {group_url}")
+                logging.info(f"def fb_extract_text: Current page URL after login: {page.url}")
 
             # Wait for the group content to load
             try:
-                logging.info("Waiting for group page content to load...")
+                logging.info("def fb_extract_text: Waiting for group page content to load...")
                 page.wait_for_selector("div[role='main']", timeout=180000)
                 extracted_text = page.inner_text("div[role='main']")
-                logging.info("Successfully extracted text from the group page.")
+                logging.info("def fb_extract_text: Successfully extracted text from the group page.")
 
             except Exception as e:
-                logging.error(f"Timeout or failure while waiting for selector: {e}")
+                logging.error(f"def fb_extract_text: Timeout or failure while waiting for selector: {e}")
                 # Capture a screenshot for debugging
                 page.screenshot(path="facebook_group_debug.png")
-                logging.info("Saved screenshot to 'facebook_group_debug.png' for debugging.")
+                logging.info("def fb_extract_text: Saved screenshot to 'facebook_group_debug.png' for debugging.")
 
             browser.close()
-            logging.info("Browser closed.")
+            logging.info("def fb_extract_text: Browser closed.")
 
         return extracted_text
 
@@ -961,7 +971,7 @@ class EventSpider(scrapy.Spider):
                 return extracted_text
             
         except Exception as e:
-            logging.error(f"Failed to extract text with Playwright for URL {url}: {e}")
+            logging.error(f"def extract_text_with_playwright(): Failed to extract text with Playwright for URL {url}: {e}")
             return None
 
 
@@ -987,7 +997,7 @@ class EventSpider(scrapy.Spider):
 
         if calendar_ids:
             decoded_calendar_ids = [id.replace('%40', '@') for id in calendar_ids]
-            logging.info(f"Found {len(calendar_ids)} group.calendar.google.com IDs: {decoded_calendar_ids}")
+            logging.info(f"def fetch_google_calendar_events(): Found {len(calendar_ids)} group.calendar.google.com IDs: {decoded_calendar_ids}")
 
             for calendar_id in decoded_calendar_ids:
                 events_df = self.get_events(calendar_id)
@@ -1052,12 +1062,12 @@ class EventSpider(scrapy.Spider):
                     break
                 params["pageToken"] = next_page_token
             else:
-                logging.error(f"Error: {response.status_code} - {response.text}")
+                logging.error(f"def get_events(): Error: {response.status_code} - {response.text}")
                 break
 
         df = pd.json_normalize(all_events)
         if df.empty:
-            logging.info(f"No events found for calendar_id: {calendar_id}")
+            logging.info(f"def get_events(): No events found for calendar_id: {calendar_id}")
             return df
 
         return self.clean_events(df)
@@ -1186,7 +1196,7 @@ if __name__ == "__main__":
 
     # Get the start time
     start_time = datetime.now()
-    logging.info(f"Starting the crawler process at {start_time}")
+    logging.info(f"__main__: Starting the crawler process at {start_time}")
 
     # Run the crawler process
     process = CrawlerProcess(settings={
@@ -1198,7 +1208,7 @@ if __name__ == "__main__":
     # First crawl
     process.crawl(EventSpider)
     process.start()
-    logging.info("Crawler process completed.")
+    logging.info("__main__: Crawler process completed.")
 
     # Run deduplication and set calendar URLs
     dedup()
@@ -1206,8 +1216,8 @@ if __name__ == "__main__":
 
     # Get the end time
     end_time = datetime.now()
-    logging.info(f"Finished the crawler process at {end_time}")
+    logging.info(f"__main__: Finished the crawler process at {end_time}")
 
     # Calculate the total time taken
     total_time = end_time - start_time
-    logging.info(f"Total time taken: {total_time}")
+    logging.info(f"__main__: Total time taken: {total_time}")
