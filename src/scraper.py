@@ -281,7 +281,7 @@ def dedup():
 
         # Deduplicate the DataFrame based on specified columns and keep the last version
         deduplicated_df = df.drop_duplicates(
-            subset=["Org_Name", "Keyword", "URL", "Type_of_Event", "Day_of_Week", "Start_Date", "End_Date"],
+            subset=["Org_Name", "Keyword", "URL", "Type_of_Event", "Location", "Day_of_Week", "Start_Date", "End_Date"],
             keep="last"
         )
         shape_after = deduplicated_df.shape
@@ -506,13 +506,6 @@ class EventSpider(scrapy.Spider):
                         # Mark the event link as irrelevant
                         update_url(event_link, url, relevant=False, increment_crawl_trys=0)
 
-            # Check if the URL contains 'login' or groups not in url
-            # I am pretty sure this is redundant but I will leave it here for now
-            if 'login' in url or '/groups/' not in url:
-                logging.info(f"def parse(): URL {url} marked as irrelevant due to Facebook login link.")
-                update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
-                return False
-
             else:
                 # Normal facebook text. I want to process this with playwright but the version that only returns text
                 extracted_text = self.fb_extract_text(url)
@@ -559,156 +552,121 @@ class EventSpider(scrapy.Spider):
                 logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords.")
                 update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
 
-
+    
     def fb_get_event_links(self, group_url):
         """
-        Use Selenium to extract Facebook event links from a group page.
+        Navigate to a Facebook group URL and extract event links.
+        Args:
+            group_url (str): The URL of the Facebook group from which to extract event links.
+
+        Returns:
+            list: A list of event links extracted from the Facebook group.
+
+        Raises:
+            Exception: If there is an error during the navigation or extraction process.
+
+        Notes:
+            - This function uses Playwright to automate the browser interaction.
+            - If login is required, it will attempt to log in using stored cookies or provided credentials.
+            - Cookies are saved after a successful login to avoid repeated logins in future sessions.
+            - The function extracts all anchor tags from the page and filters those that contain '/events/' in their href attribute.
         """
-        # Set up Selenium options
-        chrome_options = Options()
-        chrome_options.add_argument("--start-maximized")
-        chrome_options.add_argument("--disable-notifications")
-        chrome_options.add_argument("--disable-infobars")
-        chrome_options.add_argument("--disable-popup-blocking")
-        chrome_options.add_argument("--headless=False")  # Set to False for debugging visually.
+        event_links = []
 
-        # Initialize the driver
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=False)  # Set to True if you want to run headless
+            context = browser.new_context()
 
-        try:
-            # Navigate to the group URL
-            driver.get(group_url)
-            logging.info(f"Navigated to {group_url}")
+            # Load cookies if available
+            cookie_file = config['input']['fb_cookies']
+            if os.path.exists(cookie_file):
+                try:
+                    with open(cookie_file, "r") as f:
+                        cookies = json.load(f)
+                        context.add_cookies(cookies)
+                except Exception as e:
+                    logging.warning(f"Failed to load cookies: {e}")
 
-            # Perform login if necessary
-            if "login" in driver.current_url:
-                keys_df = pd.read_csv(config['input']['keys'])
-                email = keys_df.loc[keys_df['Organization'] == 'Facebook', 'App_ID'].values[0]
-                password = keys_df.loc[keys_df['Organization'] == 'Facebook', 'Key'].values[0]
+            page = context.new_page()
 
-                email_input = driver.find_element(By.NAME, "email")
-                password_input = driver.find_element(By.NAME, "pass")
-                email_input.send_keys(email)
-                password_input.send_keys(password)
-                password_input.send_keys(Keys.RETURN)
-                logging.info("Logged into Facebook")
+            try:
+                # Navigate to the group URL with retries
+                retries = 3
+                for attempt in range(retries):
+                    try:
+                        page.goto(group_url, timeout=60000)
+                        logging.info(f"Navigated to {group_url}")
+                        break
+                    except PlaywrightTimeoutError as e:
+                        logging.warning(f"Navigation attempt {attempt + 1} failed: {e}")
+                        if attempt == retries - 1:
+                            raise
 
-                # Wait for redirection back to the group page
-                time.sleep(5)  # Adjust this as needed
+                # Handle login page
+                if "facebook.com/login" in page.url:
+                    logging.warning("Redirected to login page. Performing login...")
+                    keys_df = pd.read_csv(config['input']['keys'])
+                    email = keys_df.loc[keys_df['Organization'] == 'Facebook', 'App_ID'].values[0]
+                    password = keys_df.loc[keys_df['Organization'] == 'Facebook', 'Key'].values[0]
 
-            # Scroll to load all events
-            SCROLL_PAUSE_TIME = 2
-            last_height = driver.execute_script("return document.body.scrollHeight")
+                    try:
+                        page.fill("input[name='email']", email)
+                        page.fill("input[name='pass']", password)
+                        page.click("button[name='login']")
+                        logging.info("Logged into Facebook")
+                        page.wait_for_timeout(5000)
+                        
+                        # Check if redirected to the home page after login
+                        if "facebook.com/home.php" in page.url:
+                            logging.warning("Redirected to the home page after login. Navigating back to the group page.")
+                            page.goto(group_url, timeout=60000)
 
-            while True:
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(SCROLL_PAUSE_TIME)
+                    except Exception as e:
+                        logging.error(f"Login failed: {e}")
+                        raise
 
-                # Check if scrolling is complete
-                new_height = driver.execute_script("return document.body.scrollHeight")
-                if new_height == last_height:
-                    break
-                last_height = new_height
+                # Scroll to load all events
+                SCROLL_PAUSE_TIME = 2000
+                for _ in range(config['crawling']['scroll_depth']):
+                    try:
+                        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                        page.wait_for_timeout(SCROLL_PAUSE_TIME)
+                    except Exception as e:
+                        logging.warning(f"Scrolling failed: {e}")
+                        break
 
-            logging.info("Scrolling complete")
+                logging.info("Scrolling complete")
 
-            # Extract event links
-            links = driver.find_elements(By.TAG_NAME, "a")
-            event_links = [
-                link.get_attribute("href") for link in links
-                if link.get_attribute("href") and "/events/" in link.get_attribute("href")
-            ]
+                # Extract event links
+                try:
+                    all_links = page.eval_on_selector_all("a", "elements => elements.map(e => e.href || '')")
+                    event_links = [
+                        link for link in all_links
+                        if "/events/" in link and "event_action_history" not in link and 'login' not in link
+                    ]
 
-            # Filter out old events containing "event_action_history"
-            event_links = [link for link in event_links if "event_action_history" not in link]
-            logging.info(f"Extracted {len(event_links)} current event links")
-            
-            for event_link in event_links:
-                logging.info(f"Event link: {event_link}")
+                    logging.info(f"Extracted {len(event_links)} event links")
 
-        finally:
-            driver.quit()
+                    for event_link in event_links:
+                        logging.info(f"Event link: {event_link}")
+
+                    # Save cookies after successful login
+                    cookies = context.cookies()
+                    with open(cookie_file, "w") as f:
+                        json.dump(cookies, f)
+
+                except Exception as e:
+                    logging.error(f"Failed to extract event links: {e}")
+
+            except Exception as e:
+                logging.error(f"An error occurred: {e}")
+            finally:
+                try:
+                    browser.close()
+                except Exception as e:
+                    logging.warning(f"Failed to close browser: {e}")
 
         return event_links
-
-    
-    # def fb_get_event_links(self, group_url):
-    #     """
-    #     Navigate to a Facebook group URL and extract event links.
-    #     Args:
-    #         group_url (str): The URL of the Facebook group from which to extract event links.
-
-    #     Returns:
-    #         list: A list of event links extracted from the Facebook group.
-
-    #     Raises:
-    #         Exception: If there is an error during the navigation or extraction process.
-
-    #     Notes:
-    #         - This function uses Playwright to automate the browser interaction.
-    #         - If login is required, it will attempt to log in using stored cookies or provided credentials.
-    #         - Cookies are saved after a successful login to avoid repeated logins in future sessions.
-    #         - The function extracts all anchor tags from the page and filters those that contain '/events/' in their href attribute.
-    #     """
-
-    #     event_links = []
-
-    #     with sync_playwright() as p:
-    #         browser = p.chromium.launch(headless=False)  # Set to True for headless in production
-    #         context = browser.new_context()
-
-    #         # Load cookies if available
-    #         cookie_file = config['input']['fb_cookies']
-    #         if os.path.exists(cookie_file):
-    #             with open(cookie_file, "r") as f:
-    #                 cookies = json.load(f)
-    #                 context.add_cookies(cookies)
-
-    #         page = context.new_page()
-    #         page.goto(group_url, timeout=180000)
-
-    #         # Perform login if necessary
-    #         keys_df = pd.read_csv(config['input']['keys'])
-    #         email = keys_df.loc[keys_df['Organization'] == 'Facebook', 'App_ID'].values[0]
-    #         password = keys_df.loc[keys_df['Organization'] == 'Facebook', 'Key'].values[0]
-
-    #         if 'login' in page.url:
-    #             page.goto("https://www.facebook.com/login", timeout=180000)
-    #             page.fill("input[name='email']", email)
-    #             page.fill("input[name='pass']", password)
-    #             page.click("button[name='login']")
-    #             page.wait_for_selector("div[role='main']", timeout=180000)
-
-    #         # Save cookies
-    #         cookies = context.cookies()
-    #         with open(cookie_file, "w") as f:
-    #             json.dump(cookies, f)
-
-    #         # Navigate back to the group URL
-    #         page.goto(group_url, timeout=180000)
-
-    #         # Scroll to ensure all content is loaded
-    #         logging.info("Scrolling to load all content...")
-    #         for _ in range(config['crawling']['scroll_depth']):  # Adjust range for more scrolling
-    #             page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
-    #             page.wait_for_timeout(2000)
-
-    #         # Extract links and filter current events
-    #         logging.info("Extracting event links...")
-    #         all_links = page.eval_on_selector_all("a", "elements => elements.map(e => e.href || '')")
-    #         for link in all_links:
-    #             if '/events/' in link and 'facebook.com' in link:
-    #                 # Exclude old events with 'event_action_history'
-    #                 if 'event_action_history' not in link:
-    #                     event_links.append(link)
-
-    #         logging.info(f"Extracted {len(event_links)} current event links.")
-    #         for event_link in event_links:
-    #             logging.info(f"Current event link: {event_link}")
-
-    #         browser.close()
-
-    #     return event_links
 
 
     def check_keywords_in_text(self, url, extracted_text, keywords, org_name):
@@ -1230,6 +1188,7 @@ if __name__ == "__main__":
     # Run the crawler process
     process = CrawlerProcess(settings={
         "FEEDS": {"output.json": {"format": "json"}},
+        "LOG_FILE": config['logging']['scrapy_log_file'],
         "LOG_LEVEL": "INFO",
         "DEPTH_LIMIT": config['crawling']['depth_limit'],
     })

@@ -1,6 +1,6 @@
 crawling:
   max_crawl_trys: 3
-  depth_limit: 4
+  depth_limit: 3
   max_urls: 5
   scroll_depth: 5
 database:
@@ -20,6 +20,7 @@ llm:
   url_evaluator: 'o1-mini'
 logging:
   log_file: 'logs/get_input.log'
+  scrapy_log_file: 'logs/scrapy.log'
 prompts:
   is_relevant: 'prompts/is_relevant_prompt.txt'
 startup:
