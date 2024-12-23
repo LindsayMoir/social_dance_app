@@ -1,8 +1,11 @@
+constants:
+  location: '%20victoria%20bc%20canada%20dance%20'
 crawling:
   max_crawl_trys: 3
   depth_limit: 3
   max_urls: 5
   scroll_depth: 5
+  headless: False
 database:
   host: 'localhost'
   name: 'social_dance_db'

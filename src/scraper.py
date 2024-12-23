@@ -20,13 +20,6 @@ import sys
 import time
 import yaml
 
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-
 
 # Load configuration from a YAML file
 with open("config/config.yaml", "r") as file:
