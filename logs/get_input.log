@@ -1,3 +1,6 @@
-2024-12-22 20:41:44,525 - INFO - global: Working directory is: /mnt/d/GitHub/social_dance_app
-2024-12-22 20:41:52,606 - INFO - Login successful. Navigating to the search URL.
-2024-12-22 20:42:18,732 - INFO - Login successful. Navigating to the search URL.
+2024-12-23 15:10:30,152 - INFO - global: Working directory is: /mnt/d/GitHub/social_dance_app
+2024-12-23 15:10:38,876 - INFO - Login successful. Starting event link extraction.
+2024-12-23 15:10:38,876 - INFO - Navigating to search URL: https://www.facebook.com/search/events?q=events" %20victoria%20bc%20canada%20dance%20 swing
+2024-12-23 15:11:59,910 - INFO - Navigating to search URL: https://www.facebook.com/search/events?q=events" %20victoria%20bc%20canada%20dance%20 west coast swing
+2024-12-23 15:12:32,602 - INFO - Extracted 10 unique event links.
+2024-12-23 15:12:32,876 - INFO - Extracted text data written to data/extracted_text.csv

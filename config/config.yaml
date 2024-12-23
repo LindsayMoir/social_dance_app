@@ -1,4 +1,5 @@
 constants:
+  fb_base_url: 'https://www.facebook.com/search/events?q=events"'
   location: '%20victoria%20bc%20canada%20dance%20'
 crawling:
   max_crawl_trys: 3

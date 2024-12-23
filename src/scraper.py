@@ -11,11 +11,10 @@ import random
 import re
 import requests
 import scrapy
+from scrapy.crawler import CrawlerProcess
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import (create_engine, update, Table, Column, 
-                        MetaData, Boolean, BigInteger, Text, TIMESTAMP)
-from scrapy.crawler import CrawlerProcess
+from sqlalchemy import (create_engine, update, MetaData)
 import sys
 import time
 import yaml
