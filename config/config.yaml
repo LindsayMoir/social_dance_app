@@ -6,7 +6,7 @@ crawling:
   depth_limit: 3
   max_urls: 5
   scroll_depth: 5
-  headless: False
+  headless: True
 database:
   host: 'localhost'
   name: 'social_dance_db'
@@ -25,6 +25,7 @@ llm:
 logging:
   log_file: 'logs/get_input.log'
   scrapy_log_file: 'logs/scrapy.log'
+  extracted_text: 'data/extracted_text.csv'
 prompts:
   is_relevant: 'prompts/is_relevant_prompt.txt'
 startup:

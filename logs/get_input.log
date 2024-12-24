@@ -1,6 +1,39 @@
-2024-12-23 15:27:12,532 - INFO - global: Working directory is: /mnt/d/GitHub/social_dance_app
-2024-12-23 15:27:19,961 - INFO - Login successful.
-2024-12-23 15:27:19,961 - INFO - Navigating to search URL: https://www.facebook.com/search/events?q=events" %20victoria%20bc%20canada%20dance%20 swing
-2024-12-23 15:30:05,171 - INFO - Navigating to search URL: https://www.facebook.com/search/events?q=events" %20victoria%20bc%20canada%20dance%20 west coast swing
-2024-12-23 15:30:59,757 - INFO - Extracted 12 unique event links and texts.
-2024-12-23 15:31:00,102 - INFO - Extracted text data written to data/extracted_text.csv
+2024-12-23 17:18:27,831 - INFO - FacebookEventScraper initialized.
+2024-12-23 17:18:28,449 - INFO - def get_credentials(): Retrieved credentials for Facebook.
+2024-12-23 17:18:34,577 - INFO - def login_to_facebook(): Login successful.
+2024-12-23 17:18:52,984 - INFO - def extract_event_links(): Extracted 8 event links from https://www.facebook.com/search/events?q=events" %20victoria%20bc%20canada%20dance%20 salsa.
+2024-12-23 17:18:52,985 - INFO - def scrape_events: Used https://www.facebook.com/search/events?q=events" %20victoria%20bc%20canada%20dance%20 salsa to get events
+2024-12-23 17:19:01,107 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/511256467905073/.
+2024-12-23 17:19:21,230 - INFO - def extract_event_links(): Extracted 7 event links from https://www.facebook.com/events/511256467905073/.
+2024-12-23 17:19:27,838 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/1882677879227993/.
+2024-12-23 17:19:37,466 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/1104131401096497/.
+2024-12-23 17:19:46,280 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/1084627572499830/.
+2024-12-23 17:19:54,585 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/2003640813455204/.
+2024-12-23 17:20:02,293 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/1285959725889538/.
+2024-12-23 17:20:11,031 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/927965242597988/.
+2024-12-23 17:20:23,027 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/938503834853013/.
+2024-12-23 17:20:40,299 - INFO - def extract_event_links(): Extracted 8 event links from https://www.facebook.com/events/938503834853013/.
+2024-12-23 17:20:49,270 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/972148001400691/.
+2024-12-23 17:20:58,335 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/598785942659973/.
+2024-12-23 17:21:06,941 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/553617704224293/.
+2024-12-23 17:21:21,584 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/486013237274309/.
+2024-12-23 17:21:39,642 - INFO - def extract_event_links(): Extracted 7 event links from https://www.facebook.com/events/486013237274309/.
+2024-12-23 17:21:49,522 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/8894340130611033/.
+2024-12-23 17:21:57,568 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/942484921077680/.
+2024-12-23 17:22:18,343 - INFO - def extract_event_links(): Extracted 7 event links from https://www.facebook.com/events/942484921077680/.
+2024-12-23 17:22:27,803 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/503135772136501/.
+2024-12-23 17:22:38,799 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/1520127535401643/.
+2024-12-23 17:22:48,564 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/532826156384604/.
+2024-12-23 17:23:05,745 - INFO - def extract_event_links(): Extracted 7 event links from https://www.facebook.com/events/532826156384604/.
+2024-12-23 17:23:13,489 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/598315296047502/.
+2024-12-23 17:23:22,001 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/1727482081375309/.
+2024-12-23 17:23:40,645 - INFO - def extract_event_links(): Extracted 7 event links from https://www.facebook.com/events/1727482081375309/.
+2024-12-23 17:23:49,397 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/1518115532419756/.
+2024-12-23 17:24:08,189 - INFO - def extract_event_links(): Extracted 7 event links from https://www.facebook.com/events/1518115532419756/.
+2024-12-23 17:24:13,773 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/894629385635483/.
+2024-12-23 17:24:32,436 - INFO - def extract_event_links(): Extracted 8 event links from https://www.facebook.com/events/894629385635483/.
+2024-12-23 17:24:41,730 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/476343571904079/.
+2024-12-23 17:24:49,326 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/841253577786198/.
+2024-12-23 17:24:59,870 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/523733196906704/.
+2024-12-23 17:25:00,033 - INFO - def scrape_events(): Extracted text from 24 events.
+2024-12-23 17:25:00,045 - INFO - def save_to_csv(): Extracted text data written to output/extracted_text.csv

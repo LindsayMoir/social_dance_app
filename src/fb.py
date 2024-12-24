@@ -1,166 +1,189 @@
-from bs4 import BeautifulSoup
 import logging
 import os
 import pandas as pd
+from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 import re
 import yaml
 
-# Load configuration from a YAML file
-with open("config/config.yaml", "r") as file:
-    config = yaml.safe_load(file)
+class FacebookEventScraper:
+    def __init__(self, config_path="config/config.yaml"):
+        # Load configuration from a YAML file
+        with open(config_path, "r") as file:
+            self.config = yaml.safe_load(file)
 
-# Set up logging
-logging.basicConfig(
-    filename=config['logging']['log_file'],
-    filemode='w',
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+        # Set up logging
+        logging.basicConfig(
+            filename=self.config['logging']['log_file'],
+            filemode='w',
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s"
+        )
 
-logging.info("global: Working directory is: %s", os.getcwd())
+        logging.info("FacebookEventScraper initialized.")
 
-print(os.getcwd())
+    def get_credentials(self, organization):
+        """
+        Retrieves credentials for a given organization from the keys file.
 
-def get_credentials(organization):
-    """
-    Retrieves credentials for a given organization from the keys file.
+        Args:
+            organization (str): The organization for which to retrieve credentials.
 
-    Args:
-        organization (str): The organization for which to retrieve credentials.
+        Returns:
+            tuple: appid_uid, key_pw, access_token for the organization.
+        """
+        keys_df = pd.read_csv(self.config['input']['keys'])
+        keys_df = keys_df[keys_df['organization'] == organization]
+        appid_uid, key_pw, access_token = keys_df.iloc[0][['appid_uid', 'key_pw', 'access_token']]
+        logging.info(f"def get_credentials(): Retrieved credentials for {organization}.")
+        return appid_uid, key_pw, access_token
 
-    Returns:
-        tuple: appid_uid, key_pw, access_token for the organization.
-    """
-    keys_df = pd.read_csv(config['input']['keys'])
-    keys_df = keys_df[keys_df['organization'] == organization]
-    appid_uid, key_pw, access_token = keys_df.iloc[0][['appid_uid', 'key_pw', 'access_token']]
+    def login_to_facebook(self, page):
+        """
+        Logs into Facebook using credentials from the configuration.
 
-    return appid_uid, key_pw, access_token
+        Args:
+            page (playwright.sync_api.Page): The Playwright page instance.
 
+        Returns:
+            bool: True if login is successful, False otherwise.
+        """
+        email, password, _ = self.get_credentials('Facebook')
 
-def login_to_facebook(page, email, password):
-    """
-    Logs into Facebook using the provided credentials.
+        page.goto("https://www.facebook.com/login", timeout=60000)
+        page.fill("input[name='email']", email)
+        page.fill("input[name='pass']", password)
+        page.click("button[name='login']")
 
-    Args:
-        page: Playwright page instance.
-        email (str): Facebook login email.
-        password (str): Facebook login password.
+        page.wait_for_timeout(5000)
+        if "login" in page.url:
+            logging.error("Login failed. Please check your credentials.")
+            return False
 
-    Returns:
-        bool: True if login is successful, False otherwise.
-    """
-    page.goto("https://www.facebook.com/login", timeout=60000)
-    page.fill("input[name='email']", email)
-    page.fill("input[name='pass']", password)
-    page.click("button[name='login']")
-    page.wait_for_timeout(5000)
-    if "login" in page.url:
-        logging.error("Login failed. Please check your credentials.")
-        return False
-    logging.info("Login successful.")
+        logging.info("def login_to_facebook(): Login successful.")
+        return True
 
-    return True
+    def extract_event_links(self, page, search_url):
+        """
+        Extracts event links from a search page using Playwright and regex.
 
+        Args:
+            page (playwright.sync_api.Page): The Playwright page instance.
+            search_url (str): The Facebook events search URL.
 
-def extract_links_and_text(page, url):
-    """
-    Extracts event links and visible text from a given page.
+        Returns:
+            set: A set of extracted event links.
+        """
+        page.goto(search_url, timeout=60000)
+        page.wait_for_timeout(5000)
 
-    Args:
-        page: Playwright page instance.
-        url (str): URL to extract data from.
+        for _ in range(self.config['crawling']['scroll_depth']):
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_timeout(2000)
 
-    Returns:
-        tuple: A set of extracted event links and a list of tuples containing URLs and extracted text.
-    """
-    event_links = set()
-    extracted_text_list = []
+        content = page.content()
+        links = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
+        logging.info(f"def extract_event_links(): Extracted {len(links)} event links from {search_url}.")
 
-    page.goto(url, timeout=60000)
-    page.wait_for_timeout(5000)
+        return links
 
-    # Scroll to load more content if needed
-    for _ in range(config['crawling']['scroll_depth']):
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        page.wait_for_timeout(2000)
+    def extract_event_text(self, page, link):
+        """
+        Extracts text from an event page using Playwright and BeautifulSoup.
 
-    # Extract event links using regex
-    content = page.content()
-    links = re.findall(r'https://www\.facebook\.com/events/\d+/', content)
-    event_links.update(links)
+        Args:
+            page (playwright.sync_api.Page): The Playwright page instance.
+            link (str): The event link.
 
-    # Extract visible text
-    soup = BeautifulSoup(content, 'html.parser')
-    extracted_text = ' '.join(soup.stripped_strings)
-    extracted_text_list.append((url, extracted_text))
+        Returns:
+            str: The extracted text content.
+        """
+        page.goto(link, timeout=60000)
+        page.wait_for_timeout(5000)
+        content = page.content()
+        soup = BeautifulSoup(content, 'html.parser')
+        extracted_text = ' '.join(soup.stripped_strings)
+        logging.info(f"def extract_event_text(): Extracted text from {link}.")
 
-    return event_links, extracted_text_list
+        return extracted_text
 
+    def scrape_events(self, keywords):
+        """
+        Logs into Facebook, performs searches for keywords, and extracts event links and text.
 
-def fb_login_and_extract_links(keywords):
-    """
-    Logs into Facebook once and extracts event links and text for all provided keywords.
+        Args:
+            keywords (list): List of keywords to search for.
 
-    Args:
-        keywords (list): List of keywords to search for.
+        Returns:
+            list: A list of tuples containing event links and extracted text.
+        """
+        base_url = self.config['constants']['fb_base_url']
+        location = self.config['constants']['location']
+        extracted_text_list = []
+        urls_visited = set()
 
-    Returns:
-        list: A list of tuples containing URLs and extracted text.
-    """
-    email, password, _ = get_credentials('Facebook')
-    base_url = config['constants']['fb_base_url']
-    location = config['constants']['location']
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=self.config['crawling']['headless'])
+                context = browser.new_context()
+                page = context.new_page()
 
-    event_links = set()
-    extracted_text_list = []
-    urls_visited = set()
+                if not self.login_to_facebook(page):
+                    return []
 
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=config['crawling']['headless'])
-            context = browser.new_context()
-            page = context.new_page()
+                for keyword in keywords:
+                    search_url = f"{base_url} {location} {keyword}"
+                    event_links = self.extract_event_links(page, search_url)
+                    logging.info(f"def scrape_events: Used {search_url} to get events")
 
-            if not login_to_facebook(page, email, password):
-                return []
+                    for link in event_links:
+                        if link in urls_visited:
+                            continue
 
-            for keyword in keywords:
-                search_url = f"{base_url} {location} {keyword}"
-                logging.info(f"Navigating to search URL: {search_url}")
-
-                links, text_list = extract_links_and_text(page, search_url)
-                event_links.update(links)
-                extracted_text_list.extend(text_list)
-
-                for link in links:
-                    if link not in urls_visited:
-                        second_level_links, second_level_text = extract_links_and_text(page, link)
-                        event_links.update(second_level_links)
-                        extracted_text_list.extend(second_level_text)
+                        extracted_text = self.extract_event_text(page, link)
+                        extracted_text_list.append((link, extracted_text))
                         urls_visited.add(link)
 
-            logging.info(f"Extracted {len(extracted_text_list)} unique event links and texts.")
-            browser.close()
+                        # Get second-level links
+                        second_level_links = self.extract_event_links(page, link)
+                        for second_level_link in second_level_links:
+                            if second_level_link in urls_visited:
+                                continue
 
-    except Exception as e:
-        logging.error(f"Failed to extract event links: {e}")
+                            second_level_text = self.extract_event_text(page, second_level_link)
+                            extracted_text_list.append((second_level_link, second_level_text))
+                            urls_visited.add(second_level_link)
 
-    return extracted_text_list
+                browser.close()
+
+        except Exception as e:
+            logging.error(f"Failed to scrape events: {e}")
+
+        logging.info(f"def scrape_events(): Extracted text from {len(extracted_text_list)} events.")
+
+        return extracted_text_list
+    
+
+    def save_to_csv(self, extracted_text_list, output_path):
+        """
+        Saves extracted event links and text to a CSV file.
+
+        Args:
+            extracted_text_list (list): A list of tuples containing event links and extracted text.
+            output_path (str): The file path to save the CSV.
+        """
+        df = pd.DataFrame(extracted_text_list, columns=['url', 'extracted_text'])
+        df.to_csv(output_path, index=False)
+        logging.info(f"def save_to_csv(): Extracted text data written to {output_path}")
 
 
 # Example Usage
 if __name__ == "__main__":
+    scraper = FacebookEventScraper()
+    keywords = ['salsa']
+    extracted_text_list = scraper.scrape_events(keywords)
 
-    keywords = ['swing', 'west coast swing']
-    extracted_text_list = fb_login_and_extract_links(keywords)
+    output_csv_path = 'output/extracted_text.csv'
+    scraper.save_to_csv(extracted_text_list, output_csv_path)
 
-    # Create a DataFrame from the extracted text list
-    ex_text_df = pd.DataFrame(extracted_text_list, columns=['url', 'extracted_text'])
-
-    # Write the DataFrame to a CSV file
-    output_csv_path = 'data/extracted_text.csv'
-    ex_text_df.to_csv(output_csv_path, index=False)
-
-    logging.info(f"Extracted text data written to {output_csv_path}")
+    print(f"Extracted {len(extracted_text_list)} events. Data saved to {output_csv_path}.")
