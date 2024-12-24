@@ -6,6 +6,9 @@ from playwright.sync_api import sync_playwright
 import re
 import yaml
 
+# Import DatabaseHandler class
+from db import DatabaseHandler
+
 class FacebookEventScraper:
     def __init__(self, config_path="config/config.yaml"):
         # Load configuration from a YAML file
@@ -179,11 +182,20 @@ class FacebookEventScraper:
 
 # Example Usage
 if __name__ == "__main__":
+
+    # Initialize scraper and database handler
     scraper = FacebookEventScraper()
-    keywords = ['salsa']
+    db_handler = DatabaseHandler(scraper.config)
+    
+    # Scrape events and save to CSV
+    keywords = ['bachata']
     extracted_text_list = scraper.scrape_events(keywords)
 
     output_csv_path = 'output/extracted_text.csv'
     scraper.save_to_csv(extracted_text_list, output_csv_path)
+
+    # Run deduplication and set calendar URLs
+    db_handler.dedup()
+    db_handler.set_calendar_urls()
 
     print(f"Extracted {len(extracted_text_list)} events. Data saved to {output_csv_path}.")
