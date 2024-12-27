@@ -8,6 +8,7 @@ import yaml
 
 # Import DatabaseHandler class
 from db import DatabaseHandler
+from llm import LLMHandler
 
 class FacebookEventScraper:
     def __init__(self, config_path="config/config.yaml"):
@@ -89,6 +90,7 @@ class FacebookEventScraper:
         logging.info(f"def extract_event_links(): Extracted {len(links)} event links from {search_url}.")
 
         return links
+    
 
     def extract_event_text(self, page, link):
         """
@@ -137,6 +139,7 @@ class FacebookEventScraper:
                 for keyword in keywords:
                     search_url = f"{base_url} {location} {keyword}"
                     event_links = self.extract_event_links(page, search_url)
+
                     logging.info(f"def scrape_events: Used {search_url} to get events")
 
                     for link in event_links:
@@ -164,7 +167,7 @@ class FacebookEventScraper:
 
         logging.info(f"def scrape_events(): Extracted text from {len(extracted_text_list)} events.")
 
-        return extracted_text_list
+        return search_url, extracted_text_list
     
 
     def save_to_csv(self, extracted_text_list, output_path):
@@ -183,16 +186,29 @@ class FacebookEventScraper:
 # Example Usage
 if __name__ == "__main__":
 
-    # Initialize scraper and database handler
+    # Initialize scraper, database handler, and LLM handler
     scraper = FacebookEventScraper()
     db_handler = DatabaseHandler(scraper.config)
+    llm_handler = LLMHandler(config_path="config/config.yaml")
     
-    # Scrape events and save to CSV
-    keywords = ['bachata']
-    extracted_text_list = scraper.scrape_events(keywords)
+    # # Scrape events and save to CSV
+    keywords = ['kizomba']
+    search_term, extracted_text_list = scraper.scrape_events(keywords)
 
+    # # Save extracted text to CSV
+    # # This can be removed once this is running properly as well as the def save_to_csv() function
     output_csv_path = 'output/extracted_text.csv'
     scraper.save_to_csv(extracted_text_list, output_csv_path)
+
+    # Read the extracted text from the CSV. This is a temporary solution until the scraper is running properly.
+    # output_csv_path = 'output/extracted_text.csv'
+    # extracted_text_df = pd.read_csv(output_csv_path)
+    # extracted_text_list = extracted_text_df.values.tolist()
+    search_term = 'https://www.facebook.com/search/top?q=events%20victoria%20bc%20canada%20dance%20kizomba'
+
+    # Give extracted_text_list to the llm_handler
+    for url, extracted_text in extracted_text_list:
+        llm_handler.driver(db_handler, url, search_term, extracted_text, keywords)
 
     # Run deduplication and set calendar URLs
     db_handler.dedup()

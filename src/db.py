@@ -5,7 +5,6 @@ import pandas as pd
 from sqlalchemy import create_engine, update, MetaData
 import yaml
 
-print(os.getcwd())
 
 class DatabaseHandler:
     def __init__(self, config):
@@ -99,27 +98,33 @@ class DatabaseHandler:
         Logs:
         Logs an info message indicating the URL that was updated.
         """
-        metadata = MetaData()
-        metadata.reflect(bind=self.conn)
-        table = metadata.tables['urls']
+        try:
+            metadata = MetaData()
+            metadata.reflect(bind=self.conn)
+            table = metadata.tables['urls']
 
-        query = (
-            update(table)
-            .where(table.c.links == url)
-            .values(
-                time_stamps=datetime.now(),
-                other_links=update_other_links if update_other_links != 'No' else table.c.other_links,
-                crawl_trys=table.c.crawl_trys + increment_crawl_trys,
-                relevant=relevant
+            query = (
+                update(table)
+                .where(table.c.links == url)
+                .values(
+                    time_stamps=datetime.now(),
+                    other_links=update_other_links if update_other_links != 'No' else table.c.other_links,
+                    crawl_trys=table.c.crawl_trys + increment_crawl_trys,
+                    relevant=relevant
+                )
             )
-        )
 
-        with self.conn.begin() as connection:
-            connection.execute(query)
-            self.logger.info(f"def update_url(): Updated URL: {url}")
+            with self.conn.begin() as connection:
+                connection.execute(query)
+                self.logger.info(f"def update_url(): Updated URL: {url}")
+                return True
+            
+        except Exception as e:
+            self.logger.info(f"def update_url(): Failed to update URL: {e}")
+            return False
 
 
-    def write_url_to_db(self, org_names, keywords, url, other_links, relevant, increment_crawl_trys):
+    def write_url_to_db(self, keywords, url, other_links, relevant, increment_crawl_trys):
         """
         Write or update an URL in the 'urls' table. 
         Parameters:
@@ -130,24 +135,141 @@ class DatabaseHandler:
             relevant (bool): Indicates if the URL is relevant.
             increment_crawl_trys (int): The number of times the URL has been crawled.
         """
-        try:
-            self.update_url(url, other_links, relevant, increment_crawl_trys)
-        except Exception as e:
-            self.logger.info(f"write_url_to_db: Unable to update {url}. Inserting new entry: {e}")
-            update_df = pd.DataFrame({
+        if self.update_url(url, other_links, relevant, increment_crawl_trys + 1):
+            self.logger.info(f"def write_url_to_db: URL {url} updated in the 'urls' table.")
+        else:
+            self.logger.info(f"write_url_to_db: Unable to update {url}. Inserting new entry")
+            new_df = pd.DataFrame({
                 "time_stamps": [datetime.now()],
-                "org_names": [org_names],
+                "org_names": ['Faceboook'],
                 "keywords": [keywords],
                 "links": [url],
                 "other_links": [other_links],
                 "relevant": [relevant],
                 "crawl_trys": [increment_crawl_trys]
             })
-            update_df.to_sql('urls', self.conn, if_exists='append', index=False)
+            new_df.to_sql('urls', self.conn, if_exists='append', index=False)
             self.logger.info(f"def write_url_to_db: URL {url} written to the 'urls' table.")
 
+    
+    def clean_events(self, df):
+        """
+        This function performs the following operations:
+        1. Ensures required columns exist in the DataFrame.
+        2. Moves values from 'start.date' and 'end.date' to 'start.dateTime' and 'end.dateTime' if necessary.
+        3. Drops the 'start.date' and 'end.date' columns.
+        4. Subsets the DataFrame to only useful columns.
+        5. Extracts and converts the price from the 'description' column.
+        6. Cleans the 'description' column by removing HTML tags and unnecessary whitespace.
+        7. Splits 'start.dateTime' and 'end.dateTime' into separate date and time columns.
+        8. Renames columns to more descriptive names.
+        9. Adds a 'Type_of_Event' column based on keywords in the 'Description' column.
+        10. Converts 'Start_Date' and 'End_Date' to date format.
+        11. Extracts the day of the week from 'Start_Date' and adds it to the 'Day_of_Week' column.
+        12. Reorders the columns for better readability.
+        13. Sorts the DataFrame by 'Start_Date' and 'Start_Time'.
 
-    def write_events_to_db(self, df, url, keywords, org_name):
+        Parameters:
+        df (pandas.DataFrame): The input DataFrame containing event data.
+
+        Returns:
+        pandas.DataFrame: The cleaned and processed DataFrame with relevant event information.
+        """
+        # Avoid modifying the original DataFrame
+        df = df.copy()
+
+        # Ensure required columns exist
+        required_columns = ['htmlLink', 'summary', 'start.date', 'end.date', 'location', 'start.dateTime', 'end.dateTime', 'description']
+        for col in required_columns:
+            if col not in df.columns:
+                df[col] = ''
+
+        # Move values from 'start.date' and 'end.date' to 'start.dateTime' and 'end.dateTime' if necessary
+        df['start.dateTime'] = df['start.dateTime'].fillna(df['start.date'])
+        df['end.dateTime'] = df['end.dateTime'].fillna(df['end.date'])
+
+        # Drop the 'start.date' and 'end.date' columns
+        df.drop(columns=['start.date', 'end.date'], inplace=True)
+
+        # Subset df to only useful columns 
+        df = df[['htmlLink', 'summary', 'location', 'start.dateTime', 'end.dateTime', 'description']]
+
+        # Extract and convert the price
+        df['Price'] = pd.to_numeric(df['description'].str.extract(r'\$(\d{1,5})')[0], errors='coerce')
+
+        # Clean the description
+        df['description'] = df['description'].apply(
+            lambda x: re.sub(r'\s{2,}', ' ', re.sub(r'<[^>]*>', ' ', str(x) if pd.notnull(x) else '')).strip()
+        ).str.replace('&#39;', "'").str.replace("you're", "you are")
+
+        # Function to split datetime into date and time
+        def split_datetime(datetime_str):
+            if 'T' in datetime_str:
+                date_str, time_str = datetime_str.split('T')
+                time_str = time_str[:8]  # Remove the timezone part
+            else:
+                date_str = datetime_str
+                time_str = None
+            return date_str, time_str
+
+        # Apply the function to extract dates and times
+        df['Start_Date'], df['Start_Time'] = zip(*df['start.dateTime'].apply(lambda x: split_datetime(x) if x else ('', '')))
+        df['End_Date'], df['End_Time'] = zip(*df['end.dateTime'].apply(lambda x: split_datetime(x) if x else ('', '')))
+
+        # Drop columns
+        df.drop(columns=['start.dateTime', 'end.dateTime'], inplace=True)
+
+        # Rename columns
+        df = df.rename(columns={
+            'htmlLink': 'URL',
+            'summary': 'Name_of_the_Event',
+            'location': 'Location',
+            'description': 'Description'
+        })
+
+        # Add 'Type_of_Event' column
+        # Dictionary to map words of interest (woi) to 'Type_of_Event'
+        event_type_map = {
+            'class': 'class',
+            'dance': 'social dance',
+            'dancing': 'social dance',
+            'weekend': 'workshop',
+            'workshop': 'workshop'
+        }
+
+        # Function to determine 'Type_of_Event'
+        def determine_event_type(name):
+            name_lower = name.lower()
+            if 'class' in name_lower and 'dance' in name_lower:
+                return 'social dance'  # Priority rule
+            for woi, event_type in event_type_map.items():
+                if woi in name_lower:
+                    return event_type
+            return 'other'  # Default if no woi match
+
+        # Apply the function to determine 'Type_of_Event'
+        df['Type_of_Event'] = df['Description'].apply(determine_event_type)
+
+        # Convert Start_Date and End_Date to date format
+        df['Start_Date'] = pd.to_datetime(df['Start_Date'], errors='coerce').dt.date
+        df['End_Date'] = pd.to_datetime(df['End_Date'], errors='coerce').dt.date
+
+        # Extract the day of the week from Start_Date and add it to the Day_of_Week column
+        df['Day_of_Week'] = pd.to_datetime(df['Start_Date']).dt.day_name()
+
+        # Reorder the columns
+        df = df[['URL', 'Type_of_Event', 'Name_of_the_Event', 'Day_of_Week', 'Start_Date', 
+                'End_Date', 'Start_Time', 'End_Time', 'Price', 'Location', 'Description']]
+
+        # Sort the DataFrame by Start_Date and Start_Time
+        df = df.sort_values(by=['Start_Date', 'Start_Time']).reset_index(drop=True)
+
+        # Return the collected events as a pandas dataframe
+
+        return df
+
+
+    def write_events_to_db(self, df, url, keywords_list):
         """
         Write events data to the 'events' table in the database.
         Parameters:
@@ -173,24 +295,19 @@ class DatabaseHandler:
         # Save the events data to a CSV file for debugging purposes
         df.to_csv('events.csv', index=False)
 
-        for col in ['Start_Date', 'End_Date']:
+        for col in ['start_date', 'end_date']:
             df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
-        for col in ['Start_Time', 'End_Time']:
+        for col in ['start_time', 'end_time']:
             df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
 
-        if 'Price' in df.columns and not df['Price'].isnull().all():
-            df['Price'] = df['Price'].replace({'\\$': '', '': None}, regex=True)
-            df['Price'] = pd.to_numeric(df['Price'], errors='coerce')
+        if 'price' in df.columns and not df['price'].isnull().all():
+            df['price'] = df['price'].replace({'\\$': '', '': None}, regex=True)
+            df['price'] = pd.to_numeric(df['price'], errors='coerce')
         else:
-            self.logger.warning("write_events_to_db: 'Price' column is missing or empty. Filling with NaN.")
-            df['Price'] = float('nan')
+            self.logger.warning("write_events_to_db: 'price' column is missing or empty. Filling with NaN.")
+            df['price'] = float('nan')
 
-        df['Time_Stamp'] = datetime.now()
-        df['Keyword'] = keywords
-        df['Org_Name'] = org_name
-
-        columns_order = ['Org_Name', 'Keyword'] + [col for col in df.columns if col not in ['Org_Name', 'Keyword']]
-        df = df[columns_order]
+        df['time_stamp'] = datetime.now()
 
         if self.conn is None:
             self.logger.error("write_events_to_db: Database connection is not available.")
@@ -220,7 +337,7 @@ class DatabaseHandler:
             self.logger.info(f"dedup: Deduplicating events table with {shape_before} rows and columns.")
 
             dedup_df = df.drop_duplicates(
-                subset=["Org_Name", "Keyword", "URL", "Type_of_Event", "Location", "Day_of_Week", "Start_Date", "End_Date"],
+                subset=["Org_Name", "Keyword", "Type_of_Event", "Name_of_the_Event", "Location", "Day_of_Week", "Start_Date", "End_Date"],
                 keep="last"
             )
             shape_after = dedup_df.shape
