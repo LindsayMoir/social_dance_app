@@ -9,6 +9,7 @@ import yaml
 # Import DatabaseHandler class
 from db import DatabaseHandler
 from llm import LLMHandler
+from scraper import EventSpider
 
 class FacebookEventScraper:
     def __init__(self, config_path="config/config.yaml"):
@@ -140,6 +141,9 @@ class FacebookEventScraper:
                     search_url = f"{base_url} {location} {keyword}"
                     event_links = self.extract_event_links(page, search_url)
 
+                    print('\n************************************')
+                    print(f"def scrape_events: Used {search_url} to get {len(event_links)} event_links\n")
+
                     logging.info(f"def scrape_events: Used {search_url} to get events")
 
                     for link in event_links:
@@ -154,7 +158,7 @@ class FacebookEventScraper:
                         second_level_links = self.extract_event_links(page, link)
                         for second_level_link in second_level_links:
                             if second_level_link in urls_visited:
-                                continue
+                                continue # Skip the rest of the loop for this link
 
                             second_level_text = self.extract_event_text(page, second_level_link)
                             extracted_text_list.append((second_level_link, second_level_text))
@@ -190,9 +194,10 @@ if __name__ == "__main__":
     scraper = FacebookEventScraper()
     db_handler = DatabaseHandler(scraper.config)
     llm_handler = LLMHandler(config_path="config/config.yaml")
+    event_spider = EventSpider()
     
     # # Scrape events and save to CSV
-    keywords = ['kizomba']
+    keywords = ['tango']
     search_term, extracted_text_list = scraper.scrape_events(keywords)
 
     # # Save extracted text to CSV
@@ -213,5 +218,18 @@ if __name__ == "__main__":
     # Run deduplication and set calendar URLs
     db_handler.dedup()
     db_handler.set_calendar_urls()
+
+    # Go thru each event that does not have an url in its url column and get the url
+    query = "SELECT * FROM events WHERE url IS NULL"
+    events_with_no_urls_df = db_handler.get_event_urls(query)
+
+    for idx, row in events_with_no_urls_df.iterrows():
+
+        # Get the url for the event by doing a google search
+        url = event_spider.get_url(row['name'])
+
+        extracted_text = scraper.extract_text_with_playwright(row['url'])
+        
+
 
     print(f"Extracted {len(extracted_text_list)} events. Data saved to {output_csv_path}.")

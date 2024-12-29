@@ -1,30 +1,10 @@
-2024-12-26 18:02:49,420 - INFO - FacebookEventScraper initialized.
-2024-12-26 18:02:49,420 - INFO - class DatabaseHandler: config initialized.
-2024-12-26 18:02:49,460 - INFO - class DatabaseHandler: Database connection established.
-2024-12-26 18:02:49,472 - INFO - LLMHandler initialized.
-2024-12-26 18:02:51,102 - INFO - def get_credentials(): Retrieved credentials for Facebook.
-2024-12-26 18:02:57,618 - INFO - def login_to_facebook(): Login successful.
-2024-12-26 18:03:13,246 - INFO - def extract_event_links(): Extracted 1 event links from https://www.facebook.com/search/events?q=events" %20victoria%20bc%20canada%20dance%20 kizomba.
-2024-12-26 18:03:13,246 - INFO - def scrape_events: Used https://www.facebook.com/search/events?q=events" %20victoria%20bc%20canada%20dance%20 kizomba to get events
-2024-12-26 18:03:22,238 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/938503834853013/.
-2024-12-26 18:03:40,510 - INFO - def extract_event_links(): Extracted 9 event links from https://www.facebook.com/events/938503834853013/.
-2024-12-26 18:03:47,480 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/2003640813455204/.
-2024-12-26 18:03:54,977 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/1285959725889538/.
-2024-12-26 18:04:04,603 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/553617704224293/.
-2024-12-26 18:04:10,732 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/598785942659973/.
-2024-12-26 18:04:18,956 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/1498388724164352/.
-2024-12-26 18:04:28,837 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/9654683357883212/.
-2024-12-26 18:04:36,319 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/628184969561389/.
-2024-12-26 18:04:42,918 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/927965242597988/.
-2024-12-26 18:04:43,211 - INFO - def scrape_events(): Extracted text from 9 events.
-2024-12-26 18:04:43,221 - INFO - def save_to_csv(): Extracted text data written to output/extracted_text.csv
-2024-12-26 18:04:43,221 - INFO - def check_keywords_in_text: URL https://www.facebook.com/events/938503834853013/ marked as irrelevant since there are no keywords, events, or 'calendar' in URL.
-2024-12-26 18:04:43,308 - INFO - def update_url(): Updated URL: https://www.facebook.com/events/938503834853013/
-2024-12-26 18:04:43,310 - INFO - def write_url_to_db: URL https://www.facebook.com/events/938503834853013/ updated in the 'urls' table.
-2024-12-26 18:04:43,311 - INFO - def check_keywords_in_text: URL https://www.facebook.com/events/2003640813455204/ marked as irrelevant since there are no keywords, events, or 'calendar' in URL.
-2024-12-26 18:04:43,325 - INFO - def update_url(): Updated URL: https://www.facebook.com/events/2003640813455204/
-2024-12-26 18:04:43,326 - INFO - def write_url_to_db: URL https://www.facebook.com/events/2003640813455204/ updated in the 'urls' table.
-2024-12-26 18:04:43,326 - INFO - def check_keywords_in_text: Keywords found in extracted text for URL: https://www.facebook.com/events/1285959725889538/
-2024-12-26 18:05:15,919 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
-2024-12-26 18:05:15,937 - INFO - def query_llm(): LLM response received based on url https://www.facebook.com/events/1285959725889538/.
-2024-12-26 18:05:15,938 - INFO - def extract_and_parse_json(): JSON found in result.
+2024-12-28 13:24:19,689 - INFO - class DatabaseHandler: config initialized.
+2024-12-28 13:24:19,732 - INFO - class DatabaseHandler: Database connection established.
+2024-12-28 13:24:19,773 - INFO - dedup: Deduplicating events table with (173, 14) rows and columns.
+2024-12-28 13:24:19,775 - INFO - dedup: Deduplicated events table to (47, 14) rows and columns.
+2024-12-28 13:24:19,856 - INFO - def dedup(): Deduplicated events table.
+2024-12-28 13:24:19,859 - INFO - dedup: Deduplicating urls table with (1, 7) rows and columns.
+2024-12-28 13:24:19,885 - INFO - dedup: Deduplicated urls table to (1, 7) rows and columns.
+2024-12-28 13:24:19,888 - INFO - set_calendar_urls(): Marked 0 calendar URLs as relevant.
+2024-12-28 13:24:19,889 - INFO - __main__: Finished the process at 2024-12-28 13:24:19.889077
+2024-12-28 13:24:19,889 - INFO - __main__: Total time taken: 0:00:00.208207

@@ -337,7 +337,7 @@ class DatabaseHandler:
             self.logger.info(f"dedup: Deduplicating events table with {shape_before} rows and columns.")
 
             dedup_df = df.drop_duplicates(
-                subset=["Org_Name", "Keyword", "Type_of_Event", "Name_of_the_Event", "Location", "Day_of_Week", "Start_Date", "End_Date"],
+                subset=["event_name", "start_date"],
                 keep="last"
             )
             shape_after = dedup_df.shape
