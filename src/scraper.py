@@ -64,7 +64,7 @@ class EventSpider(scrapy.Spider):
                             arguments including keywords, organization name, and the URL itself.
         """
         # Connect to the database
-        conn = get_db_connection()
+        conn = db_handler.get_db_connection()
 
         if conn is None:
             raise ConnectionError("Failed to connect to the databasein start_requests.")
@@ -85,7 +85,7 @@ class EventSpider(scrapy.Spider):
             url = row['links']
 
             # We need to write the url to the database, if it is not already there
-            write_url_to_db(org_name, keywords, url, other_links='', relevant=True, increment_crawl_trys=1)
+            db_handler.write_url_to_db(org_name, keywords, url, other_links='', relevant=True, increment_crawl_trys=1)
 
             logging.info(f"Starting crawl for URL: {url}")
             yield scrapy.Request(url=url, callback=self.parse, cb_kwargs={'keywords': keywords, 
@@ -119,7 +119,7 @@ class EventSpider(scrapy.Spider):
         iframe_links = [response.urljoin(link) for link in iframe_links if link.startswith('http')]
 
         if iframe_links:
-            update_url(url, update_other_links='calendar', relevant=True, increment_crawl_trys=0)
+            db_handler.update_url(url, update_other_links='calendar', relevant=True, increment_crawl_trys=0)
             for calendar_url in iframe_links:
                 self.fetch_google_calendar_events(calendar_url, keywords, org_name, url)
 
@@ -166,7 +166,7 @@ class EventSpider(scrapy.Spider):
                 for event_link in facebooks_events_links:
 
                     # Write the event link to the database
-                    write_url_to_db(org_name, keywords, event_link, other_links=url, relevant=True, increment_crawl_trys=1)
+                    db_handler.write_url_to_db(org_name, keywords, event_link, other_links=url, relevant=True, increment_crawl_trys=1)
 
                     # Call playwright to extract the event details
                     extracted_text = self.fb_extract_text(event_link)
@@ -180,15 +180,15 @@ class EventSpider(scrapy.Spider):
 
                         if llm_status:
                             # Mark the event link as relevant
-                            update_url(event_link, url, increment_crawl_trys=0, relevant=True)
+                            db_handler.update_url(event_link, url, increment_crawl_trys=0, relevant=True)
                         
                         else:
                             # Mark the event link as irrelevant
-                            update_url(event_link, url, relevant=False, increment_crawl_trys=0)
+                            db_handler.update_url(event_link, url, relevant=False, increment_crawl_trys=0)
 
                     else:
                         # Mark the event link as irrelevant
-                        update_url(event_link, url, relevant=False, increment_crawl_trys=0)
+                        db_handler.update_url(event_link, url, relevant=False, increment_crawl_trys=0)
 
             else:
                 # Normal facebook text. I want to process this with playwright but the version that only returns text
@@ -203,15 +203,15 @@ class EventSpider(scrapy.Spider):
 
                     if llm_status:
                         # Mark the event link as relevant
-                        update_url(url, update_other_links='', relevant=True, increment_crawl_trys=0)
+                        db_handler.update_url(url, update_other_links='', relevant=True, increment_crawl_trys=0)
                     
                     else:
                         # Mark the event link as irrelevant
-                        update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0)
+                        db_handler.update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0)
 
                 else:
                     logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords and/or events in URL.")
-                    update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
+                    db_handler.update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
 
         else:
             # Process non-facebook links
@@ -226,15 +226,15 @@ class EventSpider(scrapy.Spider):
 
                 if llm_status:
                     # Mark the event link as relevant
-                    update_url(url, update_other_links='', relevant=True, increment_crawl_trys=0)
+                    db_handler.update_url(url, update_other_links='', relevant=True, increment_crawl_trys=0)
 
                 else:
                     # Mark the event link as irrelevant
-                    update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0) 
+                    db_handler.db_handler.update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0) 
 
             else:
                 logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords.")
-                update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
+                db_handler.update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
 
 
     def check_keywords_in_text(self, url, extracted_text, keywords, org_name):
@@ -288,7 +288,7 @@ class EventSpider(scrapy.Spider):
             parsed_result = self.extract_and_parse_json(llm_response, url)
             if parsed_result:
                 events_df = pd.DataFrame(parsed_result)
-                write_events_to_db(events_df, url, keywords, org_name)
+                db_handler.write_events_to_db(events_df, url)
                 logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
                 return True
         
@@ -467,9 +467,9 @@ class EventSpider(scrapy.Spider):
             for calendar_id in decoded_calendar_ids:
                 events_df = self.get_events(calendar_id)
                 if not events_df.empty:
-                    write_events_to_db(events_df, calendar_url, keywords, org_name)
-                    self.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1, )
-                    self.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
+                    db_handler.write_events_to_db(events_df, calendar_url, keywords, org_name)
+                    db_handler.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1, )
+                    db_handler.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
         else:
             start_idx = calendar_url.find("src=") + 4
             end_idx = calendar_url.find("&", start_idx)
@@ -478,9 +478,9 @@ class EventSpider(scrapy.Spider):
 
             events_df = self.get_events(calendar_id)
             if not events_df.empty:
-                write_events_to_db(events_df, calendar_url, keywords, org_name)
-                update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1)
-                update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
+                db_handler.write_events_to_db(events_df, calendar_url)
+                db_handler.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1)
+                db_handler.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
 
 
     def get_events(self, calendar_id):

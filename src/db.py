@@ -46,6 +46,7 @@ class DatabaseHandler:
                 f"{self.config['database']['host']}/"
                 f"{self.config['database']['name']}"
             )
+
             # Create and return the SQLAlchemy engine
             conn = create_engine(connection_string)
             return conn
@@ -269,7 +270,7 @@ class DatabaseHandler:
         return df
 
 
-    def write_events_to_db(self, df, url, keywords_list):
+    def write_events_to_db(self, df, url):
         """
         Write events data to the 'events' table in the database.
         Parameters:
@@ -315,6 +316,23 @@ class DatabaseHandler:
 
         df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
         self.logger.info(f"write_events_to_db: Events data written to database for URL: {url}")
+
+    
+    def get_events(self, query):
+        """
+        Extracts events data based on the sql query provided.
+        Parameters:
+            query (str): Properly formatted sql.
+        Returns:
+            pandas.DataFrame: A DataFrame containing the extracted events data.
+        """
+        # Extract events data from the URL
+        events_data = extract_events_data(url)
+
+        # Clean and process the events data
+        cleaned_events_data = clean_events(events_data)
+
+        return cleaned_events_data
 
 
     def dedup(self):

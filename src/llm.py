@@ -1,160 +1,279 @@
-from playwright.sync_api import sync_playwright
-from bs4 import BeautifulSoup
-import re
-import requests
+from datetime import datetime
+import json
+import logging
+from openai import OpenAI
+import os
 import pandas as pd
 import yaml
-import logging
-from llm import LLMHandler
+
 from db import DatabaseHandler
 
-class EventScraper:
+class LLMHandler:
     def __init__(self, config_path="config/config.yaml"):
-        """
-        Initializes the EventScraper class.
-
-        Args:
-            config_path (str): Path to the configuration YAML file.
-        """
         # Load configuration from a YAML file
         with open(config_path, "r") as file:
             self.config = yaml.safe_load(file)
 
-        # Set up logging
-        logging.basicConfig(
-            filename=self.config['logging']['log_file'],
-            filemode='a',
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s - %(message)s"
+        logging.info("LLMHandler initialized.")
+    
+    
+    def driver(self, db_handler, url, search_term, extracted_text, keywords):
+        """
+        Determine the relevance of a given URL based on its content, keywords, or organization name.
+
+        Parameters:
+        url (str): The URL to be evaluated.
+        keywords (list of str): A list of keywords to check within the URL content.
+
+        Returns:
+        bool: True if the URL is relevant, False otherwise.
+        """
+        # Check keywords in the extracted text
+        if 'facebook' in url:
+            logging.info(f"def driver(): URL {url} 'facebook' is in the URL.")
+            keyword_or_fb_status = True
+        else:
+            keyword_or_fb_status = self.check_keywords_in_text(db_handler, url, extracted_text, keywords)
+
+        if keyword_or_fb_status:
+            # Call the llm to process the extracted text
+            llm_status = self.process_llm_response(db_handler, url, extracted_text, keywords)
+
+            if llm_status:
+                # Mark the event link as relevant
+                db_handler.write_url_to_db(keywords, url, search_term, relevant=True, increment_crawl_trys=1)
+            
+            else:
+                # Mark the event link as irrelevant
+                db_handler.write_url_to_db(keywords, url, search_term, relevant=False, increment_crawl_trys=1)
+
+        else:
+            # Mark the event link as irrelevant
+            db_handler.write_url_to_db(keywords, url, search_term, relevant=False, increment_crawl_trys=1)
+
+
+    def check_keywords_in_text(self, db_handler, url, extracted_text, keywords_list):
+        """
+        Parameters:
+        url (str): The URL of the webpage being checked.
+        extracted_text (str): The text extracted from the webpage.
+        keywords (list, optional): A comma-separated list of keywords to check in the extracted text. Defaults to None.
+
+        Returns:
+        bool: True if the text is relevant based on the presence of keywords or 'calendar' in the URL, False otherwise.
+        """
+        # Check for keywords in the extracted text and determine relevance.
+        if keywords_list or 'facebook' in url:
+            if any(kw in extracted_text.lower() for kw in keywords_list):
+                logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
+                return self.process_llm_response(db_handler, url, extracted_text, keywords_list)
+            
+        if 'calendar' in url:
+            logging.info(f"def check_keywords_in_text: URL {url} marked as relevant because 'calendar' is in the URL.")
+            return True
+
+        logging.info(f"def check_keywords_in_text: URL {url} marked as irrelevant since there are no keywords, events, or 'calendar' in URL.")
+        return False
+    
+
+    def process_llm_response(self, db_handler, url, extracted_text, keywords):
+        """
+        Generate a prompt, query a Language Learning Model (LLM), and process the response.
+
+        This method generates a prompt based on the provided URL and extracted text, queries the LLM with the prompt,
+        and processes the LLM's response. If the response is successfully parsed, it converts the parsed result into
+        a DataFrame, writes the events to the database, and logs the relevant information.
+
+        Args:
+            url (str): The URL of the webpage being processed.
+            extracted_text (str): The text extracted from the webpage.
+            keywords (list): A list of keywords relevant to the events.
+
+        Returns:
+            bool: True if the LLM response is successfully processed and events are written to the database, False otherwise.
+        """
+        # Generate prompt, query LLM, and process the response.
+        prompt = self.generate_prompt(url, extracted_text)
+        llm_response = self.query_llm(prompt, url)
+
+        if llm_response:
+            parsed_result = self.extract_and_parse_json(llm_response, url)
+
+            if parsed_result:
+                events_df = pd.DataFrame(parsed_result)
+                db_handler.write_events_to_db(events_df, url)
+                logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
+
+                return True
+        
+        else:
+            logging.error(f"def process_llm_response: Failed to process LLM response for URL: {url}")
+
+            return False
+        
+    
+    def generate_prompt(self, url, extracted_text):
+        """
+        Generate a prompt for a language model using extracted text and configuration details.
+
+        Args:
+            url (str): The URL of the webpage from which the text was extracted.
+            extracted_text (str): The text extracted from the webpage.
+
+        Returns:
+            str: A formatted prompt string for the language model.
+        """
+        # Generate the LLM prompt using the extracted text and configuration details.
+
+        logging.info(f"def generate_prompt(): Generating prompt for URL: {url}")
+
+        if 'facebook' in url:
+            txt_file_path = self.config['prompts']['fb_prompt']
+        else:
+            txt_file_path = self.config['prompts']['is_relevant']
+        with open(txt_file_path, 'r') as file:
+            is_relevant_txt = file.read()
+
+        # Not clear that we want to restrict this here. It may be we want to clean up the db post processing
+        # Define the date range for event identification
+        start_date = datetime.now()
+        end_date = start_date + pd.DateOffset(months=self.config['date_range']['months'])
+
+        # Generate the full prompt
+        prompt = (
+            f"{is_relevant_txt}"
+            f"{extracted_text}\n\n"
+            
         )
 
-        self.db_handler = DatabaseHandler(self.config)
-        self.llm_handler = LLMHandler(config_path)
+        logging.info(f"def generate_prompt(): \n{prompt}")
 
-        logging.info("EventScraper initialized.")
+        return prompt
 
-    def google_search(self, query):
+
+    def query_llm(self, prompt, url):
         """
-        Performs a Google Search using Playwright and extracts the results.
-
         Args:
-            query (str): The search query.
-
+            prompt (str): The prompt to send to the LLM.
+            url (str): The URL associated with the prompt.
         Returns:
-            list: A list of tuples containing the title and URL of the search results.
+            str: The response from the LLM if available, otherwise None.
+        Raises:
+            FileNotFoundError: If the keys file specified in the config is not found.
+            KeyError: If the 'OpenAI' organization key is not found in the keys file.
+            Exception: For any other exceptions that may occur during the API call.
         """
-        search_results = []
+        if not hasattr(self, 'api_key'):
+            # Read the API key from the security file
+            keys_df = pd.read_csv(self.config['input']['keys'])
+            self.api_key = keys_df.loc[keys_df['organization'] == 'OpenAI', 'key_pw'].values[0]
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)  # Set headless=True for silent execution
-            context = browser.new_context()
-            page = context.new_page()
+            # Set the API key as an environment variable
+            os.environ["OPENAI_API_KEY"] = self.api_key
+            self.client = OpenAI()
 
-            # Navigate to Google search
-            search_url = f"https://www.google.com/search?q={query}"
-            page.goto(search_url)
+        # Query the LLM
+        response = self.client.chat.completions.create(
+            model=self.config['llm']['url_evaluator'],
+            messages=[
+            {
+                "role": "user", 
+                "content": prompt
+            }
+            ]
+        )
 
-            # Wait for results to load
-            page.wait_for_selector("h3")
+        logging.debug(f"def query_llm(): LLM response content: \n{response.choices[0].message.content.strip()}\n")
 
-            # Extract titles and URLs from search results
-            results = page.query_selector_all("div.yuRUbf a")
-            for result in results:
-                url = result.get_attribute("href")
-                title_element = result.query_selector("h3")
-                title = title_element.inner_text() if title_element else "No title"
-                search_results.append((title, url))
+        if response.choices:
+            logging.info(f"def query_llm(): LLM response received based on url {url}.")
+            return response.choices[0].message.content.strip()
+        
+        return None
 
-            browser.close()
 
-        logging.info(f"Google search completed for query: {query}. Found {len(search_results)} results.")
-        return search_results
-
-    @staticmethod
-    def convert_facebook_url(original_url):
+    def extract_and_parse_json(self, result, url):
         """
-        Captures the event ID from 'm.facebook.com' URLs and returns
-        'https://www.facebook.com/events/<event_id>/'.
-
-        Args:
-            original_url (str): The original Facebook URL.
-
+        Parameters:
+        result (str): The response string from which JSON needs to be extracted.
+        url (str): The URL from which the response was obtained.
         Returns:
-            str: Converted Facebook URL.
+        list or None: Returns a list of events if JSON is successfully extracted and parsed, 
+                      otherwise returns None.
         """
-        pattern = r'^https://m\.facebook\.com/events/([^/]+)/?.*'
-        replacement = r'https://www.facebook.com/events/\1/'
-
-        return re.sub(pattern, replacement, original_url)
-
-    @staticmethod
-    def extract_text_from_url(url):
-        """
-        Extracts text content from a given URL using requests and BeautifulSoup.
-
-        Args:
-            url (str): The URL of the webpage to scrape.
-
-        Returns:
-            str: Extracted text content from the webpage.
-        """
-        try:
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            text = ' '.join(soup.stripped_strings)
-            return text
-        except Exception as e:
-            logging.error(f"Failed to fetch content from {url}: {e}")
+        if "No events found" in result:
+            logging.info("def extract_and_parse_json(): No events found in result.")
             return None
+        
+        # Check if the response contains JSON
+        if 'json' in result:
+            start_position = result.find('[')
+            end_position = result.find(']') + 1
+            if start_position != -1 and end_position != -1:
+                # Extract JSON part
+                json_string = result[start_position:end_position]
 
-    def process_and_update(self, extracted_text, query, url):
-        """
-        Processes extracted text using LLM and updates the database.
+                try:
+                    # Convert JSON string to Python object
+                    logging.info("def extract_and_parse_json(): JSON found in result.")
+                    events_json = json.loads(json_string)
+                    return events_json
+                    
+                except json.JSONDecodeError as e:
+                    logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
+                    return None
 
-        Args:
-            extracted_text (str): The text extracted from a webpage.
-            query (str): The event name query.
-            url (str): The source URL of the event.
-
-        Returns:
-            None
-        """
-        logging.info(f"Processing extracted text for URL: {url} with query: {query}.")
-        self.llm_handler.driver(self.db_handler, url, query, extracted_text, [query])
-
-    def scrape_and_process(self, query):
-        """
-        Scrapes Google Search results, processes them, and updates the database.
-
-        Args:
-            query (str): The search query.
-
-        Returns:
-            None
-        """
-        logging.info(f"Starting scrape and process for query: {query}.")
-        results = self.google_search(query)
-
-        for title, url in results:
-            if query.lower() in title.lower():
-                logging.info(f"Relevant result found: Title: {title}, URL: {url}.")
-
-                # Convert Facebook URL if applicable
-                if 'facebook' in url:
-                    url = self.convert_facebook_url(url)
-
-                # Scrape text from the non-Facebook URL
-                extracted_text = self.extract_text_from_url(url)
-                if extracted_text:
-                    # Process the extracted text and update the database
-                    self.process_and_update(extracted_text, query, url)
-
+        logging.info("def extract_and_parse_json(): No JSON found in result.")
+        
+        return None
+    
+   
+# Run the LLM
 if __name__ == "__main__":
-    # Replace with actual configuration path
-    config_path = "config/config.yaml"
 
-    scraper = EventScraper(config_path)
-    query = "Sundown Social: Dance with Cupid"
-    scraper.scrape_and_process(query)
+    # Set up logging
+    logging.basicConfig(
+        filename="logs/llm.log",
+        filemode='w',
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+
+    # Get the start time
+    start_time = datetime.now()
+    logging.info(f"__main__: Starting the crawler process at {start_time}")
+
+    # Instantiate the LLM handler
+    llm = LLMHandler(config_path="config/config.yaml")
+
+    # Instantiate the database handler
+    db_handler = DatabaseHandler(llm.config)
+
+    # Get a test file
+    extracted_text_df = pd.read_csv('output/extracted_text.csv')
+
+    # Shrink it down to just the first 5 rows
+    extracted_text_df = extracted_text_df.head(5)
+
+    # Establish the constants
+    keywords = 'bachata'
+    search_term = 'https://facebook.com/search/top?q=events%20victoria%20bc%20canada%20dance%20bachata'
+
+    # Call the driver function
+    results_json_list = []
+    for index, row in extracted_text_df.iterrows():
+        url = row['url']
+        extracted_text = row['extracted_text']
+        llm.driver(db_handler, url, search_term, extracted_text, keywords)
+
+    # Run deduplication and set calendar URLs
+    db_handler.dedup()
+    db_handler.set_calendar_urls()
+
+    # Get the end time
+    end_time = datetime.now()
+    logging.info(f"__main__: Finished the crawler process at {end_time}")
+
+    # Calculate the total time taken
+    total_time = end_time - start_time
+    logging.info(f"__main__: Total time taken: {total_time}")

@@ -5,13 +5,12 @@ import requests
 import pandas as pd
 import yaml
 import logging
-from llm import LLMHandler
 from db import DatabaseHandler
 
-class EventScraper:
+class SearchExtractUpdate:
     def __init__(self, config_path="config/config.yaml"):
         """
-        Initializes the EventScraper class.
+        Initializes the SearchExtractUpdate class.
 
         Args:
             config_path (str): Path to the configuration YAML file.
@@ -29,9 +28,9 @@ class EventScraper:
         )
 
         self.db_handler = DatabaseHandler(self.config)
-        self.llm_handler = LLMHandler(config_path)
 
-        logging.info("EventScraper initialized.")
+        logging.info("SearchExtractUpdate initialized.")
+
 
     def google_search(self, query):
         """
@@ -46,7 +45,7 @@ class EventScraper:
         search_results = []
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)  # Set headless=True for silent execution
+            browser = p.chromium.launch(headless=False)  # Set headless=True for silent execution
             context = browser.new_context()
             page = context.new_page()
 
@@ -69,6 +68,7 @@ class EventScraper:
 
         logging.info(f"Google search completed for query: {query}. Found {len(search_results)} results.")
         return search_results
+    
 
     @staticmethod
     def convert_facebook_url(original_url):
@@ -86,6 +86,7 @@ class EventScraper:
         replacement = r'https://www.facebook.com/events/\1/'
 
         return re.sub(pattern, replacement, original_url)
+
 
     @staticmethod
     def extract_text_from_url(url):
@@ -109,20 +110,6 @@ class EventScraper:
             logging.error(f"Failed to fetch content from {url}: {e}")
             return None
 
-    def process_and_update(self, extracted_text, query, url):
-        """
-        Processes extracted text using LLM and updates the database.
-
-        Args:
-            extracted_text (str): The text extracted from a webpage.
-            query (str): The event name query.
-            url (str): The source URL of the event.
-
-        Returns:
-            None
-        """
-        logging.info(f"Processing extracted text for URL: {url} with query: {query}.")
-        self.llm_handler.driver(self.db_handler, url, query, extracted_text, [query])
 
     def scrape_and_process(self, query):
         """
@@ -143,18 +130,29 @@ class EventScraper:
 
                 # Convert Facebook URL if applicable
                 if 'facebook' in url:
-                    url = self.convert_facebook_url(url)
+                    fb_url = self.convert_facebook_url(url)
 
-                # Scrape text from the non-Facebook URL
-                extracted_text = self.extract_text_from_url(url)
-                if extracted_text:
-                    # Process the extracted text and update the database
-                    self.process_and_update(extracted_text, query, url)
+                else:
+                    # Scrape text from the non-Facebook URL
+                    extracted_text = self.extract_text_from_url(url)
+                    if extracted_text:
+                        logging.info(f"def scrape_and_proce(): Text extracted from {url}.")
+                        return url, extracted_text
+                
+        # We are only going to do this if ALL of the non fb URLs fail. This code is not completed yet.
+        # Try the Facebook URL for text extraction. This is a fallback mechanism in case the non FB URLs fail.
+        logging.info("def scrape_and_process(): The only url that has the correct title is a facebook link.\n%s", fb_url)
+        # We would now go to fb.py and process the url there (probably). We would need another prompt.
+
+        return 'Only fb url'
+
 
 if __name__ == "__main__":
     # Replace with actual configuration path
     config_path = "config/config.yaml"
 
-    scraper = EventScraper(config_path)
+    seu_handler = SearchExtractUpdate(config_path)
     query = "Sundown Social: Dance with Cupid"
-    scraper.scrape_and_process(query)
+    url, extracted_text = seu_handler.scrape_and_process(query)
+
+    logging.info("__main__: extracted_text is:\n%s", extracted_text)

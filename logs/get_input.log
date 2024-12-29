@@ -1,10 +1,13 @@
-2024-12-28 13:24:19,689 - INFO - class DatabaseHandler: config initialized.
-2024-12-28 13:24:19,732 - INFO - class DatabaseHandler: Database connection established.
-2024-12-28 13:24:19,773 - INFO - dedup: Deduplicating events table with (173, 14) rows and columns.
-2024-12-28 13:24:19,775 - INFO - dedup: Deduplicated events table to (47, 14) rows and columns.
-2024-12-28 13:24:19,856 - INFO - def dedup(): Deduplicated events table.
-2024-12-28 13:24:19,859 - INFO - dedup: Deduplicating urls table with (1, 7) rows and columns.
-2024-12-28 13:24:19,885 - INFO - dedup: Deduplicated urls table to (1, 7) rows and columns.
-2024-12-28 13:24:19,888 - INFO - set_calendar_urls(): Marked 0 calendar URLs as relevant.
-2024-12-28 13:24:19,889 - INFO - __main__: Finished the process at 2024-12-28 13:24:19.889077
-2024-12-28 13:24:19,889 - INFO - __main__: Total time taken: 0:00:00.208207
+2024-12-29 12:35:41,623 - INFO - global: Working directory is: /mnt/d/GitHub/social_dance_app
+2024-12-29 12:35:41,639 - INFO - LLMHandler initialized.
+2024-12-29 12:35:41,639 - INFO - class DatabaseHandler: config initialized.
+2024-12-29 12:35:41,653 - INFO - class DatabaseHandler: Database connection established.
+2024-12-29 12:35:41,661 - INFO - FacebookEventScraper initialized.
+2024-12-29 12:35:41,666 - INFO - class DatabaseHandler: config initialized.
+2024-12-29 12:35:41,667 - INFO - class DatabaseHandler: Database connection established.
+2024-12-29 12:35:41,668 - INFO - SearchExtractUpdate initialized.
+2024-12-29 12:35:41,728 - INFO - dedup: Deduplicating events table with (47, 14) rows and columns.
+2024-12-29 12:35:41,729 - INFO - dedup: Deduplicated events table to (47, 14) rows and columns.
+2024-12-29 12:35:41,802 - INFO - def dedup(): Deduplicated events table.
+2024-12-29 12:35:41,805 - INFO - dedup: Deduplicating urls table with (1, 7) rows and columns.
+2024-12-29 12:35:41,832 - INFO - dedup: Deduplicated urls table to (1, 7) rows and columns.

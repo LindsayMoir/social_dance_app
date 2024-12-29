@@ -10,9 +10,11 @@ import yaml
 from db import DatabaseHandler
 from llm import LLMHandler
 from scraper import EventSpider
+from srh_ext_upd import SearchExtractUpdate
 
 class FacebookEventScraper:
     def __init__(self, config_path="config/config.yaml"):
+
         # Load configuration from a YAML file
         with open(config_path, "r") as file:
             self.config = yaml.safe_load(file)
@@ -187,49 +189,58 @@ class FacebookEventScraper:
         logging.info(f"def save_to_csv(): Extracted text data written to {output_path}")
 
 
+    def driver(self):
+        """
+        Queries the database for events without URLs, scrapes the web for URLs and event data, processes the data using an LLM, 
+        and updates the database with the new information.
+
+        Steps:
+        1. Queries the database to get all events that do not have a URL in their 'url' column.
+        2. For each event, performs a Google search using `seu_handler.scrape_and_process(query)` to get the URL and extracted text.
+        3. Generates a prompt and queries the LLM to process the extracted text.
+        4. Parses the LLM response to extract event data.
+        5. Updates the event data with the URL and saves it to the database using `db_handler.write_events_to_db`.
+        6. Deduplicates the data in the database.
+
+        Returns:
+            None
+        """
+        query = "SELECT * FROM events WHERE url IS NULL"
+        no_urls_df = pd.read_sql(query, db_handler.get_db_connection())
+
+        for idx, row in no_urls_df.iterrows():
+            query = row['event_name']
+            url, extracted_text = seu_handler.scrape_and_process(query)
+
+            if url:
+                # Generate prompt, query LLM, and process the response.
+                prompt = self.generate_prompt(url, extracted_text)
+                llm_response = self.query_llm(prompt, url)
+
+                if llm_response:
+                    parsed_result = self.extract_and_parse_json(llm_response, url)
+                    events_df = pd.DataFrame(parsed_result)
+                    events_df['url'].at[idx, 'url'] = url
+                    db_handler.write_events_to_db(events_df, url)
+
+        db_handler.dedup()
+
+
 # Example Usage
 if __name__ == "__main__":
+    # Initialize shared dependencies
+    config_path = "config/config.yaml"
 
-    # Initialize scraper, database handler, and LLM handler
-    scraper = FacebookEventScraper()
-    db_handler = DatabaseHandler(scraper.config)
-    llm_handler = LLMHandler(config_path="config/config.yaml")
+    # Instantiate the LLM handler
+    llm_handler = LLMHandler(config_path=config_path)
+
+    # Instantiate the database handler
+    db_handler = DatabaseHandler(llm_handler.config)
+
+    # Initialize other components
+    fb_scraper = FacebookEventScraper(config_path="config/config.yaml")
     event_spider = EventSpider()
-    
-    # # Scrape events and save to CSV
-    keywords = ['tango']
-    search_term, extracted_text_list = scraper.scrape_events(keywords)
+    seu_handler = SearchExtractUpdate()
 
-    # # Save extracted text to CSV
-    # # This can be removed once this is running properly as well as the def save_to_csv() function
-    output_csv_path = 'output/extracted_text.csv'
-    scraper.save_to_csv(extracted_text_list, output_csv_path)
-
-    # Read the extracted text from the CSV. This is a temporary solution until the scraper is running properly.
-    # output_csv_path = 'output/extracted_text.csv'
-    # extracted_text_df = pd.read_csv(output_csv_path)
-    # extracted_text_list = extracted_text_df.values.tolist()
-    search_term = 'https://www.facebook.com/search/top?q=events%20victoria%20bc%20canada%20dance%20kizomba'
-
-    # Give extracted_text_list to the llm_handler
-    for url, extracted_text in extracted_text_list:
-        llm_handler.driver(db_handler, url, search_term, extracted_text, keywords)
-
-    # Run deduplication and set calendar URLs
-    db_handler.dedup()
-    db_handler.set_calendar_urls()
-
-    # Go thru each event that does not have an url in its url column and get the url
-    query = "SELECT * FROM events WHERE url IS NULL"
-    events_with_no_urls_df = db_handler.get_event_urls(query)
-
-    for idx, row in events_with_no_urls_df.iterrows():
-
-        # Get the url for the event by doing a google search
-        url = event_spider.get_url(row['name'])
-
-        extracted_text = scraper.extract_text_with_playwright(row['url'])
-        
-
-
-    print(f"Extracted {len(extracted_text_list)} events. Data saved to {output_csv_path}.")
+    # Use the scraper
+    fb_scraper.driver()
