@@ -5,7 +5,7 @@ import requests
 import pandas as pd
 import yaml
 import logging
-from db import DatabaseHandler
+
 
 class SearchExtractUpdate:
     def __init__(self, config_path="config/config.yaml"):
@@ -26,8 +26,6 @@ class SearchExtractUpdate:
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s"
         )
-
-        self.db_handler = DatabaseHandler(self.config)
 
         logging.info("SearchExtractUpdate initialized.")
 
@@ -109,7 +107,33 @@ class SearchExtractUpdate:
         except Exception as e:
             logging.error(f"Failed to fetch content from {url}: {e}")
             return None
+    
 
+    def extract_text_from_fb_url(self, url):
+        """
+        Extracts text content from a Facebook event URL using Playwright and BeautifulSoup.
+
+        Args:
+            url (str): The Facebook event URL.
+
+        Returns:
+            str: Extracted text content from the Facebook event page.
+        """
+        from fb import FacebookEventScraper
+        fb_scraper = FacebookEventScraper(config_path="config/config.yaml")
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=self.config['crawling']['headless'])
+            context = browser.new_context()
+            page = context.new_page()
+
+            fb_status = fb_scraper.login_to_facebook(page)
+
+            if fb_status:
+                logging.info("def extract_text_from_fb_url(): Successfully logged into Facebook.")
+                extracted_text = fb_scraper.extract_event_text(page, url)
+
+                return extracted_text
 
     def scrape_and_process(self, query):
         """
@@ -131,20 +155,23 @@ class SearchExtractUpdate:
                 # Convert Facebook URL if applicable
                 if 'facebook' in url:
                     fb_url = self.convert_facebook_url(url)
+                    logging.info(f"def scrape_and_process(): fb_url is: {fb_url}")
 
                 else:
                     # Scrape text from the non-Facebook URL
                     extracted_text = self.extract_text_from_url(url)
-                    if extracted_text:
-                        logging.info(f"def scrape_and_proce(): Text extracted from {url}.")
-                        return url, extracted_text
-                
-        # We are only going to do this if ALL of the non fb URLs fail. This code is not completed yet.
-        # Try the Facebook URL for text extraction. This is a fallback mechanism in case the non FB URLs fail.
-        logging.info("def scrape_and_process(): The only url that has the correct title is a facebook link.\n%s", fb_url)
-        # We would now go to fb.py and process the url there (probably). We would need another prompt.
+                    logging.info(f"def scrape_and_process(): Text extracted from url: {url}.")
+                    break
 
-        return 'Only fb url'
+            else:
+                logging.info(f"def scrape_and_process(): Irrelevant result found: Title: {title}, URL: {url}.")
+                return url, None
+
+        if fb_url and not extracted_text:
+            extracted_text = self.extract_text_from_fb_url(fb_url)
+            logging.info(f"def scrape_and_process(): Text extracted from facebook url: {fb_url}.")
+
+        return url, extracted_text
 
 
 if __name__ == "__main__":

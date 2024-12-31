@@ -1,13 +1,42 @@
-2024-12-29 12:35:41,623 - INFO - global: Working directory is: /mnt/d/GitHub/social_dance_app
-2024-12-29 12:35:41,639 - INFO - LLMHandler initialized.
-2024-12-29 12:35:41,639 - INFO - class DatabaseHandler: config initialized.
-2024-12-29 12:35:41,653 - INFO - class DatabaseHandler: Database connection established.
-2024-12-29 12:35:41,661 - INFO - FacebookEventScraper initialized.
-2024-12-29 12:35:41,666 - INFO - class DatabaseHandler: config initialized.
-2024-12-29 12:35:41,667 - INFO - class DatabaseHandler: Database connection established.
-2024-12-29 12:35:41,668 - INFO - SearchExtractUpdate initialized.
-2024-12-29 12:35:41,728 - INFO - dedup: Deduplicating events table with (47, 14) rows and columns.
-2024-12-29 12:35:41,729 - INFO - dedup: Deduplicated events table to (47, 14) rows and columns.
-2024-12-29 12:35:41,802 - INFO - def dedup(): Deduplicated events table.
-2024-12-29 12:35:41,805 - INFO - dedup: Deduplicating urls table with (1, 7) rows and columns.
-2024-12-29 12:35:41,832 - INFO - dedup: Deduplicated urls table to (1, 7) rows and columns.
+2024-12-30 18:03:32,844 - INFO - global: Working directory is: /mnt/d/GitHub/social_dance_app
+2024-12-30 18:06:11,819 - INFO - SearchExtractUpdate initialized.
+2024-12-30 18:06:42,771 - INFO - SearchExtractUpdate initialized.
+2024-12-30 18:06:42,772 - INFO - Starting scrape and process for query: Sundown Social: Dance with Cupid.
+2024-12-30 18:06:47,670 - INFO - Google search completed for query: Sundown Social: Dance with Cupid. Found 11 results.
+2024-12-30 18:06:47,671 - INFO - Relevant result found: Title: Sunday Sundown Social: Dance with Cupid, URL: https://m.facebook.com/events/1137934924343628/?action_context=%257B%2522action_history%2522%253A%2522%255B%257B%255C%2522surface%255C%2522%253A%255C%2522unknown%255C%2522%252C%255C%2522mechanism%255C%2522%253A%255C%2522unknown%255C%2522%252C%255C%2522extra_data%255C%2522%253A%255B%255D%257D%252C%257B%255C%2522surface%255C%2522%253A%255C%2522permalink%255C%2522%252C%255C%2522mechanism%255C%2522%253A%255C%2522SUGGESTED_EVENTS_HSCROLL%255C%2522%252C%255C%2522extra_data%255C%2522%253A%255B%255D%257D%255D%2522%252C%2522has_source%2522%253Atrue%257D.
+2024-12-30 18:06:47,672 - INFO - def scrape_and_process(): fb_url is: https://www.facebook.com/events/1137934924343628/
+2024-12-30 18:06:47,672 - INFO - Relevant result found: Title: Sunday Sundown Social: Dance with Cupid, URL: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23.
+2024-12-30 18:06:48,646 - INFO - def scrape_and_process(): Irrelevant result found: Title: Cupid Shuffle - Wikipedia, URL: https://en.wikipedia.org/wiki/Cupid_Shuffle#:~:text=%22Cupid%20Shuffle%22%20is%20a%20song,s%20%22Cha%20Cha%20Slide%22..
+2024-12-30 18:06:48,647 - INFO - def scrape_and_process(): Irrelevant result found: Title: CUPID SHUFFLE - OPEN Physical Education Curriculum, URL: https://openphysed.org/wp-content/uploads/2017/11/I-05-03-Dance-Activities-02-CupidShuffle.pdf.
+2024-12-30 18:06:48,648 - INFO - def scrape_and_process(): Irrelevant result found: Title: Cupid (singer) - Wikipedia, URL: https://en.wikipedia.org/wiki/Cupid_(singer)#:~:text=Bryson%20Bernard%20(born%20October%2010,on%20the%20Billboard%20Hot%20100.&text=Lafayette%2C%20Louisiana%2C%20U.S..
+2024-12-30 18:06:48,649 - INFO - def scrape_and_process(): Irrelevant result found: Title: What are the two classification of social dance? - Homework.Study.com, URL: https://homework.study.com/explanation/what-are-the-two-classification-of-social-dance.html#:~:text=Answer%20and%20Explanation%3A,movement%20and%20general%20linear%20progression..
+2024-12-30 18:06:48,649 - INFO - def scrape_and_process(): Irrelevant result found: Title: Victoria Latin Dance Association, URL: https://allevents.in/org/victoria-latin-dance-association/23262763.
+2024-12-30 18:06:48,650 - INFO - def scrape_and_process(): Irrelevant result found: Title: Upcoming Events at Superior In Victoria, URL: https://allevents.in/victoria/superior.
+2024-12-30 18:06:48,650 - INFO - def scrape_and_process(): Irrelevant result found: Title: Cupid the Linedance KING (@officialnewcupid), URL: https://www.instagram.com/officialnewcupid/?hl=en.
+2024-12-30 18:06:48,651 - INFO - def scrape_and_process(): Irrelevant result found: Title: Cupid Dance, URL: https://www.tiktok.com/discover/cupid-dance?lang=en.
+2024-12-30 18:06:48,651 - INFO - def scrape_and_process(): Irrelevant result found: Title: Sundown Swing, URL: https://aprilsdancegroup.com/sundown-swing/.
+2024-12-30 18:06:49,708 - INFO - global: Working directory is: /mnt/d/GitHub/social_dance_app
+2024-12-30 18:06:49,747 - INFO - FacebookEventScraper initialized.
+2024-12-30 18:06:51,027 - INFO - def get_credentials(): Retrieved credentials for Facebook.
+2024-12-30 18:06:57,825 - INFO - def login_to_facebook(): Login successful.
+2024-12-30 18:06:57,826 - INFO - def extract_text_from_fb_url(): Successfully logged into Facebook.
+2024-12-30 18:07:07,228 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/events/1137934924343628/.
+2024-12-30 18:16:51,069 - INFO - SearchExtractUpdate initialized.
+2024-12-30 18:16:51,070 - INFO - Starting scrape and process for query: Sundown Social: Dance with Cupid.
+2024-12-30 18:16:55,803 - INFO - Google search completed for query: Sundown Social: Dance with Cupid. Found 11 results.
+2024-12-30 18:16:55,803 - INFO - Relevant result found: Title: Sunday Sundown Social: Dance with Cupid, URL: https://m.facebook.com/events/1137934924343628/?action_context=%257B%2522action_history%2522%253A%2522%255B%257B%255C%2522surface%255C%2522%253A%255C%2522unknown%255C%2522%252C%255C%2522mechanism%255C%2522%253A%255C%2522unknown%255C%2522%252C%255C%2522extra_data%255C%2522%253A%255B%255D%257D%252C%257B%255C%2522surface%255C%2522%253A%255C%2522permalink%255C%2522%252C%255C%2522mechanism%255C%2522%253A%255C%2522SUGGESTED_EVENTS_HSCROLL%255C%2522%252C%255C%2522extra_data%255C%2522%253A%255B%255D%257D%255D%2522%252C%2522has_source%2522%253Atrue%257D.
+2024-12-30 18:16:55,804 - INFO - def scrape_and_process(): fb_url is: https://www.facebook.com/events/1137934924343628/
+2024-12-30 18:16:55,804 - INFO - Relevant result found: Title: Sunday Sundown Social: Dance with Cupid, URL: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23.
+2024-12-30 18:16:56,545 - INFO - def scrape_and_process(): Text extracted from url: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23.
+2024-12-30 18:16:56,547 - INFO - def scrape_and_process(): Irrelevant result found: Title: Cupid Shuffle - Wikipedia, URL: https://en.wikipedia.org/wiki/Cupid_Shuffle#:~:text=%22Cupid%20Shuffle%22%20is%20a%20song,s%20%22Cha%20Cha%20Slide%22..
+2024-12-30 18:16:56,548 - INFO - __main__: extracted_text is:
+None
+2024-12-30 18:19:38,244 - INFO - SearchExtractUpdate initialized.
+2024-12-30 18:19:38,244 - INFO - Starting scrape and process for query: Sundown Social: Dance with Cupid.
+2024-12-30 18:19:43,051 - INFO - Google search completed for query: Sundown Social: Dance with Cupid. Found 12 results.
+2024-12-30 18:19:43,052 - INFO - Relevant result found: Title: Sunday Sundown Social: Dance with Cupid, URL: https://m.facebook.com/events/1137934924343628/?action_context=%257B%2522action_history%2522%253A%2522%255B%257B%255C%2522surface%255C%2522%253A%255C%2522unknown%255C%2522%252C%255C%2522mechanism%255C%2522%253A%255C%2522unknown%255C%2522%252C%255C%2522extra_data%255C%2522%253A%255B%255D%257D%252C%257B%255C%2522surface%255C%2522%253A%255C%2522permalink%255C%2522%252C%255C%2522mechanism%255C%2522%253A%255C%2522SUGGESTED_EVENTS_HSCROLL%255C%2522%252C%255C%2522extra_data%255C%2522%253A%255B%255D%257D%255D%2522%252C%2522has_source%2522%253Atrue%257D.
+2024-12-30 18:19:43,052 - INFO - def scrape_and_process(): fb_url is: https://www.facebook.com/events/1137934924343628/
+2024-12-30 18:19:43,053 - INFO - Relevant result found: Title: Sunday Sundown Social: Dance with Cupid, URL: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23.
+2024-12-30 18:19:43,622 - INFO - def scrape_and_process(): Text extracted from url: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23.
+2024-12-30 18:19:43,623 - INFO - __main__: extracted_text is:
+Sunday Sundown Social: Dance with Cupid Find parties Add party Language English / English Deutsch / German Nederlands / Dutch Français / French Español / Spanish Sign up Log in Sunday Sundown Social: Dance with Cupid 111 Superior St, Victoria, BC V8V 1T2, Canada,Victoria, British Columbia, Victoria, BC, CA Sunday, February 23 - 16:15 (In a month) Organiser: Victoria Latin Dance Association Salsa Bachata Kizomba Celebrate the season of love with us on Sunday, February 23rd, 2025, for an evening of Latin social dancing with our Valentine’s theme! 💖 As we embrace the spirit of Valentine’s Day, come dressed in red and you’ll be entered into a raffle for a chance to win a special prize. 🕓 Event Schedule: Doors Open: 4:15 PM Beginner Dance Lesson: 4:30 PM - 5:00 PM The dance style varies each month. Social Dancing: 5:00 PM - 8:30 PM Join us in James Bay at 111 Superior Street, where we’ll be heating things up with Salsa, Bachata, Kizomba, and Merengue. Although song requests aren’t taken during the event, you’re welcome to share your favorite love songs in our WhatsApp community group beforehand, and we’ll consider them for our playlist. 🎟 Admission: $15 for General Admission $12 for Students with a valid ID We accept debit, credit, or cash (cash preferred). Please note that a small fee applies for debit or credit transactions. This event is open to everyone—no partner or previous dance experience is required. All ages, bodies, and abilities are warmly welcomed! Whether you’re dancing the night away or simply enjoying the Valentine’s spirit, everyone is invited to be part of this vibrant community event. 💃🕺 💧 Don’t forget to bring a water bottle to stay hydrated throughout the evening. 📅 Monthly Events: This event is part of our ongoing series held on the last Sunday of every month from September to May. Make sure to mark your calendars! As a community collective non-profit association, we truly value your continuous support. All funds are reinvested to improve the quality of our gatherings and to create even more memorable experiences for you. It costs approximately $4,000 to run basic events for the year, covering costs like insurance, permits, equipment, venue rentals, administration, and website maintenance. Disclaimer: Please be aware that videos and photos may be taken during our events and could be posted on social media or online later. We appreciate your understanding! Bookmark Event found via web search, treat this information with caution. Give Feedback © CS SYD
