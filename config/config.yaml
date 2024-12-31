@@ -1,3 +1,6 @@
+clean_up:
+  dedup: True
+  old_events: 7
 constants:
   fb_base_url: 'https://www.facebook.com/search/events?q=events"'
   location: '%20victoria%20bc%20canada%20dance%20'
@@ -35,5 +38,7 @@ prompts:
   single_event: 'prompts/single_event.txt'
 startup:
   use_db: False
+testing:
+  nof_no_url_events: 10
 update_schedule:
   true_links_hours: .01

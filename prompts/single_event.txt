@@ -44,6 +44,7 @@ ________________________________________
 •	Events explicitly marked as "canceled" or "postponed" should have that wording put in their "description" field.
 ________________________________________
 5. Additional Notes:
+•	DO NOT return a list for a field. For example, if you found several "dance_style" (e.g. salsa, bachata, kizomba) put that in the "dance_style" field as "salsa, bachata, kizomba". Not as "[salsa, bachata, kizomba]"
 •	If no events are found, respond with: "No events found."
 
 ________________________________________

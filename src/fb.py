@@ -237,18 +237,22 @@ class FacebookEventScraper:
         logging.info(f"def driver(): Retrieved {len(no_urls_df)} events without URLs.")
 
         # Reduce the number of events to process for testing
-        no_urls_df = no_urls_df.head(3)
+        #no_urls_df = no_urls_df.head(3)
 
         for idx, row in no_urls_df.iterrows():
             query = row['event_name']
             url, extracted_text = seu_handler.scrape_and_process(query)
 
-            if url:
+            if extracted_text:
                 # Generate prompt, query LLM, and process the response.
                 prompt = llm_handler.generate_prompt(url, extracted_text)
                 llm_response = llm_handler.query_llm(prompt, url)
 
-                if llm_response:
+                if "No events found." in llm_response:
+                    # Delete the events and urls from the events and urls tables where appropriate
+                    db_handler.delete_event_and_url(url, row['event_name'], row['start_date'])
+
+                else:
                     parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
                     events_df = pd.DataFrame(parsed_result)
                     if row['url'] == '':

@@ -147,7 +147,9 @@ class SearchExtractUpdate:
                 return url, None
 
         if fb_url and not extracted_text:
+            logging.info(f"def scrape_and_process(): Extracting text from facebook url: {fb_url}.")
             extracted_text = self.extract_text_from_fb_url(fb_url)
+            extracted_text = extracted_text + " " + fb_url # Put it at the end because we do not want to confuse the prompt logic.
             logging.info(f"def scrape_and_process(): Text extracted from facebook url: {fb_url}.")
 
         return url, extracted_text

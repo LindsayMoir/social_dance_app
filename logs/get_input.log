@@ -1,45 +1,73 @@
-2024-12-31 00:05:30,633 - INFO - global: Working directory is: /mnt/d/GitHub/social_dance_app
-2024-12-31 00:05:30,665 - INFO - FacebookEventScraper initialized.
-2024-12-31 00:05:30,665 - INFO - class DatabaseHandler: config initialized.
-2024-12-31 00:05:30,677 - INFO - class DatabaseHandler: Database connection established.
-2024-12-31 00:05:30,686 - INFO - LLMHandler initialized.
-2024-12-31 00:05:30,692 - INFO - SearchExtractUpdate initialized.
-2024-12-31 00:05:30,692 - INFO - def __main__: Starting Facebook event scraping.
-2024-12-31 00:05:30,726 - INFO - def driver(): Retrieved 67 events without URLs.
-2024-12-31 00:05:30,727 - INFO - Starting scrape and process for query: AFTERGLOW: KiNKY CLUB NiGHT.
-2024-12-31 00:05:34,730 - INFO - Google search completed for query: AFTERGLOW: KiNKY CLUB NiGHT. Found 10 results.
-2024-12-31 00:05:34,730 - INFO - Relevant result found: Title: AFTERGLOW: KiNKY CLUB NiGHT <3, URL: https://allevents.in/victoria/afterglow-kinky-club-night-3/200027670214016.
-2024-12-31 00:05:32,519 - INFO - def scrape_and_process(): Text extracted from url: https://allevents.in/victoria/afterglow-kinky-club-night-3/200027670214016.
-2024-12-31 00:05:32,521 - INFO - def generate_prompt(): Generating prompt for URL: https://allevents.in/victoria/afterglow-kinky-club-night-3/200027670214016
-2024-12-31 00:05:32,526 - INFO - def generate_prompt(): 
+2024-12-31 09:19:02,782 - INFO - global: Working directory is: /mnt/d/GitHub/social_dance_app
+2024-12-31 09:19:02,803 - INFO - FacebookEventScraper initialized.
+2024-12-31 09:19:02,803 - INFO - class DatabaseHandler: config initialized.
+2024-12-31 09:19:02,816 - INFO - class DatabaseHandler: Database connection established.
+2024-12-31 09:19:02,823 - INFO - LLMHandler initialized.
+2024-12-31 09:19:02,831 - INFO - SearchExtractUpdate initialized.
+2024-12-31 09:19:02,832 - INFO - def __main__: Starting Facebook event scraping.
+2024-12-31 09:19:02,867 - INFO - def driver(): Retrieved 36 events without URLs.
+2024-12-31 09:19:02,868 - INFO - Starting scrape and process for query: Sundown Social: Dance with Cupid.
+2024-12-31 09:19:07,260 - INFO - Google search completed for query: Sundown Social: Dance with Cupid. Found 10 results.
+2024-12-31 09:19:07,261 - INFO - Relevant result found: Title: Sunday Sundown Social: Dance with Cupid, URL: https://m.facebook.com/events/1137934924343628/?action_context=%257B%2522action_history%2522%253A%2522%255B%257B%255C%2522surface%255C%2522%253A%255C%2522unknown%255C%2522%252C%255C%2522mechanism%255C%2522%253A%255C%2522unknown%255C%2522%252C%255C%2522extra_data%255C%2522%253A%255B%255D%257D%252C%257B%255C%2522surface%255C%2522%253A%255C%2522permalink%255C%2522%252C%255C%2522mechanism%255C%2522%253A%255C%2522SUGGESTED_EVENTS_HSCROLL%255C%2522%252C%255C%2522extra_data%255C%2522%253A%255B%255D%257D%255D%2522%252C%2522has_source%2522%253Atrue%257D.
+2024-12-31 09:19:07,261 - INFO - def scrape_and_process(): fb_url is: https://www.facebook.com/events/1137934924343628/
+2024-12-31 09:19:07,261 - INFO - Relevant result found: Title: Sunday Sundown Social: Dance with Cupid, URL: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23.
+2024-12-31 09:19:07,893 - INFO - def scrape_and_process(): Text extracted from url: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23.
+2024-12-31 09:19:07,894 - INFO - def generate_prompt(): Generating prompt for URL: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23
+2024-12-31 09:19:07,903 - INFO - def generate_prompt(): 
 prompts/single_event.txt
-2024-12-31 00:05:46,036 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
-2024-12-31 00:05:46,050 - INFO - def query_llm(): LLM response received based on url https://allevents.in/victoria/afterglow-kinky-club-night-3/200027670214016.
-2024-12-31 00:05:46,051 - INFO - def extract_and_parse_json(): JSON found in result.
-2024-12-31 00:05:46,118 - INFO - write_events_to_db: Events data written to database for URL: https://allevents.in/victoria/afterglow-kinky-club-night-3/200027670214016
-2024-12-31 00:05:46,118 - INFO - Starting scrape and process for query: Sundown Social: Dance with Cupid.
-2024-12-31 00:05:50,466 - INFO - Google search completed for query: Sundown Social: Dance with Cupid. Found 11 results.
-2024-12-31 00:05:50,466 - INFO - Relevant result found: Title: Sunday Sundown Social: Dance with Cupid, URL: https://m.facebook.com/events/1137934924343628/?action_context=%257B%2522action_history%2522%253A%2522%255B%257B%255C%2522surface%255C%2522%253A%255C%2522unknown%255C%2522%252C%255C%2522mechanism%255C%2522%253A%255C%2522unknown%255C%2522%252C%255C%2522extra_data%255C%2522%253A%255B%255D%257D%252C%257B%255C%2522surface%255C%2522%253A%255C%2522permalink%255C%2522%252C%255C%2522mechanism%255C%2522%253A%255C%2522SUGGESTED_EVENTS_HSCROLL%255C%2522%252C%255C%2522extra_data%255C%2522%253A%255B%255D%257D%255D%2522%252C%2522has_source%2522%253Atrue%257D.
-2024-12-31 00:05:50,467 - INFO - def scrape_and_process(): fb_url is: https://www.facebook.com/events/1137934924343628/
-2024-12-31 00:05:50,467 - INFO - Relevant result found: Title: Sunday Sundown Social: Dance with Cupid, URL: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23.
-2024-12-31 00:05:51,065 - INFO - def scrape_and_process(): Text extracted from url: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23.
-2024-12-31 00:05:51,067 - INFO - def generate_prompt(): Generating prompt for URL: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23
-2024-12-31 00:05:51,078 - INFO - def generate_prompt(): 
+2024-12-31 09:19:20,037 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2024-12-31 09:19:20,047 - INFO - def query_llm(): LLM response content: 
+```json
+[
+    {
+        "org_name": "Victoria Latin Dance Association",
+        "dance_style": "salsa, bachata, kizomba, merengue",
+        "url": "https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23",
+        "event_type": "social dance",
+        "event_name": "Sunday Sundown Social: Dance with Cupid",
+        "day_of_week": "Sunday",
+        "start_date": "2025-02-23",
+        "end_date": "2025-02-23",
+        "start_time": "16:15",
+        "end_time": "20:30",
+        "price": "$15",
+        "location": "111 Superior St, Victoria, BC V8V 1T2, Canada",
+        "description": "Celebrate the season of love with us on Sunday, February 23rd, 2025, for an evening of Latin social dancing with our Valentine’s theme! This event is part of our ongoing series held on the last Sunday of every month from September to May."
+    }
+]
+```
+
+2024-12-31 09:19:20,048 - INFO - def query_llm(): LLM response received based on url https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23.
+2024-12-31 09:19:20,049 - INFO - def extract_and_parse_json(): JSON found in result.
+2024-12-31 09:19:20,098 - INFO - write_events_to_db: Events data written to database for URL: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23
+2024-12-31 09:19:20,098 - INFO - Starting scrape and process for query: Queer Open Stage Downtown.
+2024-12-31 09:19:23,440 - INFO - Google search completed for query: Queer Open Stage Downtown. Found 10 results.
+2024-12-31 09:19:23,440 - INFO - def scrape_and_process(): Irrelevant result found: Title: EVENTS | Victoria Downtown Residents Association, URL: https://www.victoriadra.ca/events#:~:text=Our%20monthly%20Queer%20Open%20Stage,third%20Wednesday%20of%20each%20month%20..
+2024-12-31 09:19:23,441 - INFO - Starting scrape and process for query: the Dock.
+2024-12-31 09:19:27,779 - INFO - Google search completed for query: the Dock. Found 9 results.
+2024-12-31 09:19:27,779 - INFO - Relevant result found: Title: The Dock Victoria, URL: https://www.thedockvictoria.com/.
+2024-12-31 09:19:28,230 - INFO - def scrape_and_process(): Text extracted from url: https://www.thedockvictoria.com/.
+2024-12-31 09:19:28,231 - INFO - def generate_prompt(): Generating prompt for URL: https://www.thedockvictoria.com/
+2024-12-31 09:19:28,235 - INFO - def generate_prompt(): 
 prompts/single_event.txt
-2024-12-31 00:06:13,970 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
-2024-12-31 00:06:13,975 - INFO - def query_llm(): LLM response received based on url https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23.
-2024-12-31 00:06:13,976 - INFO - def extract_and_parse_json(): JSON found in result.
-2024-12-31 00:06:14,022 - INFO - write_events_to_db: Events data written to database for URL: https://social-dance.today/party/sunday-sundown-social-dance-with-cupid-cb/2025-02-23
-2024-12-31 00:06:14,023 - INFO - Starting scrape and process for query: Spring-O-Ween 2025.
-2024-12-31 00:06:18,071 - INFO - Google search completed for query: Spring-O-Ween 2025. Found 11 results.
-2024-12-31 00:06:18,072 - INFO - Relevant result found: Title: Spring-O-Ween 2025, URL: https://www.facebook.com/events/market-square/spring-o-ween-2025/1307526960661031/.
-2024-12-31 00:06:18,072 - INFO - def scrape_and_process(): fb_url is: https://www.facebook.com/events/market-square/spring-o-ween-2025/1307526960661031/
-2024-12-31 00:06:18,072 - INFO - Relevant result found: Title: Spring-O-Ween 2025, URL: https://allevents.in/victoria/spring-o-ween-2025/200027493548752.
-2024-12-31 00:06:18,460 - INFO - def scrape_and_process(): Text extracted from url: https://allevents.in/victoria/spring-o-ween-2025/200027493548752.
-2024-12-31 00:06:18,461 - INFO - def generate_prompt(): Generating prompt for URL: https://allevents.in/victoria/spring-o-ween-2025/200027493548752
-2024-12-31 00:06:18,466 - INFO - def generate_prompt(): 
-prompts/single_event.txt
-2024-12-31 00:06:39,089 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
-2024-12-31 00:06:39,091 - INFO - def query_llm(): LLM response received based on url https://allevents.in/victoria/spring-o-ween-2025/200027493548752.
-2024-12-31 00:06:39,091 - INFO - def extract_and_parse_json(): JSON found in result.
-2024-12-31 00:06:39,118 - INFO - write_events_to_db: Events data written to database for URL: https://allevents.in/victoria/spring-o-ween-2025/200027493548752
+2024-12-31 09:19:35,970 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2024-12-31 09:19:35,973 - INFO - def query_llm(): LLM response content: 
+```json
+"No events found."
+```
+
+2024-12-31 09:19:35,974 - INFO - def query_llm(): LLM response received based on url https://www.thedockvictoria.com/.
+2024-12-31 09:19:35,975 - INFO - delete_event_and_url(): Deleting event with URL: https://www.thedockvictoria.com/, Event Name: the Dock, Start Date: 2025-11-20
+2024-12-31 09:19:35,988 - INFO - delete_event_and_url(): Deleted event and URL from the database.
+2024-12-31 09:19:35,989 - INFO - Starting scrape and process for query: Women Only Strength Training w/ Katie Thacker.
+2024-12-31 09:19:39,875 - INFO - Google search completed for query: Women Only Strength Training w/ Katie Thacker. Found 8 results.
+2024-12-31 09:19:39,875 - INFO - Relevant result found: Title: Women Only Strength Training w/ Katie Thacker, URL: https://m.facebook.com/events/1220265129043230/.
+2024-12-31 09:19:39,876 - INFO - def scrape_and_process(): fb_url is: https://www.facebook.com/events/1220265129043230/
+2024-12-31 09:19:39,876 - INFO - def scrape_and_process(): Irrelevant result found: Title: Katie Thacker | Yoga & Movement, URL: https://www.katiethacker.ca/.
+2024-12-31 09:19:39,876 - INFO - Starting scrape and process for query: Salsa & Cha Cha Cha- Fundamentals- January Series- Follows Needed.
+2024-12-31 09:19:44,888 - INFO - Google search completed for query: Salsa & Cha Cha Cha- Fundamentals- January Series- Follows Needed. Found 13 results.
+2024-12-31 09:19:44,888 - INFO - def scrape_and_process(): Irrelevant result found: Title: Easy Homemade Salsa Recipe, URL: https://www.cookingclassy.com/fresh-homemade-salsa/.
+2024-12-31 09:19:44,889 - INFO - Starting scrape and process for query: Caliente Salsa Saturdays.
+2024-12-31 09:19:48,567 - INFO - Google search completed for query: Caliente Salsa Saturdays. Found 10 results.
+2024-12-31 09:19:48,568 - INFO - def scrape_and_process(): Irrelevant result found: Title: Salsa Caliente, URL: https://calientedance.com/.
+2024-12-31 09:19:48,568 - INFO - Starting scrape and process for query: Amateur Salsa Competition & All Ages Dance.

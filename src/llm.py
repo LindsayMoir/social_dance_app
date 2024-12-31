@@ -185,7 +185,7 @@ class LLMHandler:
             ]
         )
 
-        logging.debug(f"def query_llm(): LLM response content: \n{response.choices[0].message.content.strip()}\n")
+        logging.info(f"def query_llm(): LLM response content: \n{response.choices[0].message.content.strip()}\n")
 
         if response.choices:
             logging.info(f"def query_llm(): LLM response received based on url {url}.")

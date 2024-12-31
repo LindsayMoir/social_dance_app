@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 import pandas as pd
 from sqlalchemy import create_engine, update, MetaData
+from sqlalchemy.sql import text
 import yaml
 
 
@@ -378,6 +379,61 @@ class DatabaseHandler:
             self.logger.error(f"dedup: Failed to deduplicate tables: {e}")
 
 
+    def delete_old_events(self):
+        """
+        Delete events older than config days from the 'events' table in the database.
+
+        This method connects to the database and deletes events older than config days from the 'events' table.
+        If the database connection is not available, an error is logged and the method returns without making any changes.
+
+        Raises:
+            Exception: If there is an error during the deletion process, an error is logged with the exception message.
+        """
+        # Query to delete events older than config days
+        days = int(self.config['clean_up']['old_events'])
+        query = text(f"DELETE FROM events WHERE end_date < current_date - interval '{days} days'")
+        with self.conn.begin() as connection:
+            connection.execute(query)
+        self.logger.info(f"delete_old_events(): Deleted events older than {days} days from the 'events' table.")  
+
+
+    def delete_event_and_url(self, url, event_name, start_date):
+        """
+        Delete an event from the 'events' table and the corresponding URL from the 'urls' table.
+
+        Parameters:
+            url (str): The URL of the event to be deleted.
+            event_name (str): The name of the event to be deleted.
+            start_date (str): The start date of the event to be deleted.
+
+        Returns:
+            None
+
+        Notes:
+            - The function logs an info message indicating the URL, event name, and start date of the event to be deleted.
+            - The function deletes the event from the 'events' table based on the URL, event name, and start date.
+            - The function deletes the corresponding URL from the 'urls' table based on the URL.
+            - If the database connection is not available, an error is logged and the function returns without making any changes.
+        """
+        self.logger.info(f"delete_event_and_url(): Deleting event with URL: {url}, Event Name: {event_name}, Start Date: {start_date}")
+
+        if self.conn is None:
+            self.logger.error("delete_event_and_url(): Database connection is not available.")
+            return
+
+        # Delete the event from the 'events' table
+        query = text("DELETE FROM events WHERE event_name = :event_name AND start_date = :start_date")
+        with self.conn.begin() as connection:
+            connection.execute(query, {'event_name': event_name, 'start_date': start_date})
+
+        # Delete the corresponding URL from the 'urls' table
+        query = text("DELETE FROM urls WHERE links = :url")
+        with self.conn.begin() as connection:
+            connection.execute(query, {'url': url})
+
+        self.logger.info(f"delete_event_and_url(): Deleted event and URL from the database.")
+    
+
     def set_calendar_urls(self):
         """
         Mark URLs containing 'calendar' in 'other_links' as relevant.
@@ -416,6 +472,7 @@ if __name__ == "__main__":
     db_handler = DatabaseHandler(config)
     db_handler.dedup()
     db_handler.set_calendar_urls()
+    db_handler.delete_old_events()
 
     end_time = datetime.now()
     logging.info(f"__main__: Finished the process at {end_time}")

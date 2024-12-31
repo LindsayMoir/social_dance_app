@@ -77,6 +77,7 @@ ________________________________________
 •	If there are events, only produce one JSON output. 
 	o	Everything should be in that one response JSON string. 
 	o	Do NOT create a separate JSON output for recurring JSON events. 
+•	DO NOT return a list for a field. For example, if you found several "dance_style" (e.g. salsa, bachata, kizomba) put that in the "dance_style" field as "salsa, bachata, kizomba". Not as "[salsa, bachata, kizomba]"
 •	If no events are found, respond with: "No events found."
 
 ________________________________________
