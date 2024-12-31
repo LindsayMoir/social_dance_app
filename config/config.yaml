@@ -30,8 +30,9 @@ logging:
   scrapy_log_file: 'logs/scrapy.log'
   extracted_text: 'output/extracted_text.csv'
 prompts:
-  is_relevant: 'prompts/is_relevant_prompt.txt'
-  fb_prompt: 'prompts/fb_prompt.txt'
+  default: 'prompts/is_relevant.txt'
+  fb: 'prompts/fb_prompt.txt'
+  single_event: 'prompts/single_event.txt'
 startup:
   use_db: False
 update_schedule:

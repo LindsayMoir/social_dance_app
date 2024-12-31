@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 import re
 import yaml
+import requests
 
 # Import DatabaseHandler class
 from db import DatabaseHandler
@@ -28,6 +29,7 @@ class FacebookEventScraper:
         )
 
         logging.info("FacebookEventScraper initialized.")
+
 
     def get_credentials(self, organization):
         """
@@ -176,6 +178,30 @@ class FacebookEventScraper:
         return search_url, extracted_text_list
     
 
+    def extract_text_from_fb_url(self, url):
+        """
+        Extracts text content from a Facebook event URL using Playwright and BeautifulSoup.
+
+        Args:
+            url (str): The Facebook event URL.
+
+        Returns:
+            str: Extracted text content from the Facebook event page.
+        """
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=self.config['crawling']['headless'])
+            context = browser.new_context()
+            page = context.new_page()
+
+            fb_status = fb_scraper.login_to_facebook(page)
+
+            if fb_status:
+                logging.info("def extract_text_from_fb_url(): Successfully logged into Facebook.")
+                extracted_text = fb_scraper.extract_event_text(page, url)
+
+                return extracted_text
+            
+
     def save_to_csv(self, extracted_text_list, output_path):
         """
         Saves extracted event links and text to a CSV file.
@@ -205,8 +231,13 @@ class FacebookEventScraper:
         Returns:
             None
         """
-        query = "SELECT * FROM events WHERE url IS NULL"
-        no_urls_df = pd.read_sql(query, db_handler.get_db_connection())
+        query = "SELECT * FROM events WHERE url = %s"
+        params = ('',)
+        no_urls_df = pd.read_sql(query, db_handler.get_db_connection(), params=params)
+        logging.info(f"def driver(): Retrieved {len(no_urls_df)} events without URLs.")
+
+        # Reduce the number of events to process for testing
+        no_urls_df = no_urls_df.head(3)
 
         for idx, row in no_urls_df.iterrows():
             query = row['event_name']
@@ -214,16 +245,17 @@ class FacebookEventScraper:
 
             if url:
                 # Generate prompt, query LLM, and process the response.
-                prompt = self.generate_prompt(url, extracted_text)
-                llm_response = self.query_llm(prompt, url)
+                prompt = llm_handler.generate_prompt(url, extracted_text)
+                llm_response = llm_handler.query_llm(prompt, url)
 
                 if llm_response:
-                    parsed_result = self.extract_and_parse_json(llm_response, url)
+                    parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
                     events_df = pd.DataFrame(parsed_result)
-                    events_df['url'].at[idx, 'url'] = url
+                    if row['url'] == '':
+                        events_df.loc[idx, 'url'] = url
                     db_handler.write_events_to_db(events_df, url)
 
-        db_handler.dedup()
+        #db_handler.dedup()
 
 
 # Example Usage
@@ -231,16 +263,13 @@ if __name__ == "__main__":
     # Initialize shared dependencies
     config_path = "config/config.yaml"
 
-    # Instantiate the LLM handler
+    # Instantiate the class libraries
+    event_spider = EventSpider(config_path=config_path)
+    fb_scraper = FacebookEventScraper(config_path=config_path)
+    db_handler = DatabaseHandler(fb_scraper.config)
     llm_handler = LLMHandler(config_path=config_path)
-
-    # Instantiate the database handler
-    db_handler = DatabaseHandler(llm_handler.config)
-
-    # Initialize other components
-    fb_scraper = FacebookEventScraper(config_path="config/config.yaml")
-    event_spider = EventSpider()
-    seu_handler = SearchExtractUpdate()
+    seu_handler = SearchExtractUpdate(config_path=config_path)
 
     # Use the scraper
+    logging.info(f"def __main__: Starting Facebook event scraping.")
     fb_scraper.driver()

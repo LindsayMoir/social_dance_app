@@ -67,25 +67,7 @@ class SearchExtractUpdate:
         logging.info(f"Google search completed for query: {query}. Found {len(search_results)} results.")
         return search_results
     
-
-    @staticmethod
-    def convert_facebook_url(original_url):
-        """
-        Captures the event ID from 'm.facebook.com' URLs and returns
-        'https://www.facebook.com/events/<event_id>/'.
-
-        Args:
-            original_url (str): The original Facebook URL.
-
-        Returns:
-            str: Converted Facebook URL.
-        """
-        pattern = r'^https://m\.facebook\.com/events/([^/]+)/?.*'
-        replacement = r'https://www.facebook.com/events/\1/'
-
-        return re.sub(pattern, replacement, original_url)
-
-
+    
     @staticmethod
     def extract_text_from_url(url):
         """
@@ -107,33 +89,26 @@ class SearchExtractUpdate:
         except Exception as e:
             logging.error(f"Failed to fetch content from {url}: {e}")
             return None
-    
+        
 
-    def extract_text_from_fb_url(self, url):
+    @staticmethod
+    def convert_facebook_url(original_url):
         """
-        Extracts text content from a Facebook event URL using Playwright and BeautifulSoup.
+        Captures the event ID from 'm.facebook.com' URLs and returns
+        'https://www.facebook.com/events/<event_id>/'.
 
         Args:
-            url (str): The Facebook event URL.
+            original_url (str): The original Facebook URL.
 
         Returns:
-            str: Extracted text content from the Facebook event page.
+            str: Converted Facebook URL.
         """
-        from fb import FacebookEventScraper
-        fb_scraper = FacebookEventScraper(config_path="config/config.yaml")
+        pattern = r'^https://m\.facebook\.com/events/([^/]+)/?.*'
+        replacement = r'https://www.facebook.com/events/\1/'
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=self.config['crawling']['headless'])
-            context = browser.new_context()
-            page = context.new_page()
-
-            fb_status = fb_scraper.login_to_facebook(page)
-
-            if fb_status:
-                logging.info("def extract_text_from_fb_url(): Successfully logged into Facebook.")
-                extracted_text = fb_scraper.extract_event_text(page, url)
-
-                return extracted_text
+        return re.sub(pattern, replacement, original_url)
+    
+    
 
     def scrape_and_process(self, query):
         """
@@ -146,6 +121,8 @@ class SearchExtractUpdate:
             None
         """
         logging.info(f"Starting scrape and process for query: {query}.")
+        fb_url = None
+        extracted_text = None
         results = self.google_search(query)
 
         for title, url in results:
@@ -160,6 +137,8 @@ class SearchExtractUpdate:
                 else:
                     # Scrape text from the non-Facebook URL
                     extracted_text = self.extract_text_from_url(url)
+                    # Add the url into the extracted_text so that we can use the correct prompt
+                    extracted_text = url + " " + extracted_text
                     logging.info(f"def scrape_and_process(): Text extracted from url: {url}.")
                     break
 

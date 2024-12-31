@@ -129,8 +129,10 @@ class LLMHandler:
 
         if 'facebook' in url:
             txt_file_path = self.config['prompts']['fb_prompt']
+        elif extracted_text.startswith('http'):
+            txt_file_path = self.config['prompts']['single_event']
         else:
-            txt_file_path = self.config['prompts']['is_relevant']
+            txt_file_path = self.config['prompts']['default']
         with open(txt_file_path, 'r') as file:
             is_relevant_txt = file.read()
 
@@ -146,7 +148,7 @@ class LLMHandler:
             
         )
 
-        logging.info(f"def generate_prompt(): \n{prompt}")
+        logging.info(f"def generate_prompt(): \n{txt_file_path}")
 
         return prompt
 

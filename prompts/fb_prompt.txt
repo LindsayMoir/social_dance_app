@@ -1,7 +1,9 @@
 ________________________________________
 
 Context:
-I am building an application to save users time when searching for social dance events. Extract relevant event details from the webpage's text (extracted_text) according to the instructions below. Here is the extracted_text:
+I am building an application to save users time when searching for social dance events. 
+Extract relevant event details from the webpage's text (extracted_text) according to the instructions below. 
+The extracted_text is at the bottom of these instructions under the heading extracted_text
 ________________________________________
 
 1. Event Fields to Extract:
@@ -336,4 +338,8 @@ You would create ADDITIONAL JSON entries that looks like this.
     "price": "",
     "location": "Victoria",
     "description": ""
-}] 
+}]
+
+________________________________________
+extracted_text
+

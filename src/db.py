@@ -302,7 +302,7 @@ class DatabaseHandler:
             df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
 
         if 'price' in df.columns and not df['price'].isnull().all():
-            df['price'] = df['price'].replace({'\\$': '', '': None}, regex=True)
+            df['price'] = df['price'].replace({'\\$': '', '': None}, regex=True).infer_objects(copy=False)
             df['price'] = pd.to_numeric(df['price'], errors='coerce')
         else:
             self.logger.warning("write_events_to_db: 'price' column is missing or empty. Filling with NaN.")
