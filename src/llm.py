@@ -128,7 +128,7 @@ class LLMHandler:
         logging.info(f"def generate_prompt(): Generating prompt for URL: {url}")
 
         if 'facebook' in url:
-            txt_file_path = self.config['prompts']['fb_prompt']
+            txt_file_path = self.config['prompts']['fb']
         elif extracted_text.startswith('http'):
             txt_file_path = self.config['prompts']['single_event']
         else:
@@ -215,15 +215,15 @@ class LLMHandler:
                 # Extract JSON part
                 json_string = result[start_position:end_position]
 
-                try:
-                    # Convert JSON string to Python object
-                    logging.info("def extract_and_parse_json(): JSON found in result.")
-                    events_json = json.loads(json_string)
-                    return events_json
+                #try:
+                # Convert JSON string to Python object
+                logging.info("def extract_and_parse_json(): JSON found in result.")
+                events_json = json.loads(json_string)
+                return events_json
                     
-                except json.JSONDecodeError as e:
-                    logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
-                    return None
+                #except json.JSONDecodeError as e:
+                #logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
+                #return None
 
         logging.info("def extract_and_parse_json(): No JSON found in result.")
         

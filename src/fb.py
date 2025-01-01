@@ -1,17 +1,19 @@
+from bs4 import BeautifulSoup
+from fuzzywuzzy import fuzz
+from googleapiclient.discovery import build
 import logging
 import os
 import pandas as pd
-from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 import re
-import yaml
 import requests
+import yaml
 
-# Import DatabaseHandler class
+# Import other classes
 from db import DatabaseHandler
 from llm import LLMHandler
 from scraper import EventSpider
-from srh_ext_upd import SearchExtractUpdate
+
 
 class FacebookEventScraper:
     def __init__(self, config_path="config/config.yaml"):
@@ -43,9 +45,10 @@ class FacebookEventScraper:
         """
         keys_df = pd.read_csv(self.config['input']['keys'])
         keys_df = keys_df[keys_df['organization'] == organization]
-        appid_uid, key_pw, access_token = keys_df.iloc[0][['appid_uid', 'key_pw', 'access_token']]
+        appid_uid, key_pw, cse_id = keys_df.iloc[0][['appid_uid', 'key_pw', 'cse_id']]
         logging.info(f"def get_credentials(): Retrieved credentials for {organization}.")
-        return appid_uid, key_pw, access_token
+        return appid_uid, key_pw, cse_id
+    
 
     def login_to_facebook(self, page):
         """
@@ -71,6 +74,7 @@ class FacebookEventScraper:
 
         logging.info("def login_to_facebook(): Login successful.")
         return True
+    
 
     def extract_event_links(self, page, search_url):
         """
@@ -116,6 +120,7 @@ class FacebookEventScraper:
         logging.info(f"def extract_event_text(): Extracted text from {link}.")
 
         return extracted_text
+    
 
     def scrape_events(self, keywords):
         """
@@ -200,6 +205,136 @@ class FacebookEventScraper:
                 extracted_text = fb_scraper.extract_event_text(page, url)
 
                 return extracted_text
+    
+
+    def google_search(self, query, num_results=10):
+        """
+        Perform a Google search and extract titles and URLs of the results.
+
+        Args:
+            query (str): The search query.
+            api_key (str): Your Google API key.
+            cse_id (str): Your Custom Search Engine ID.
+            num_results (int): The number of search results to fetch (max 10 per request).
+
+        Returns:
+            list: A list of dictionaries containing 'title' and 'url' for each search result.
+        """
+        _, api_key, cse_id = self.get_credentials('Google')
+        service = build("customsearch", "v1", developerKey=api_key)
+        results = []
+        
+        #try:
+        response = service.cse().list(
+            q=query,
+            cx=cse_id,
+            num=num_results  # Fetch up to `num_results` results (max 10 per request).
+        ).execute()
+
+        # Extract titles and links from the response
+        if 'items' in response:
+            for item in response['items']:
+                title = item.get('title')  # Get the title of the search result
+                url = item.get('link')  # Get the URL of the search result
+                results.append((title, url))
+
+        # except Exception as e:
+        #     print(f"An error occurred: {e}")
+
+        return results
+    
+    
+    @staticmethod
+    def extract_text_from_url(url):
+        """
+        Extracts text content from a given URL using requests and BeautifulSoup.
+
+        Args:
+            url (str): The URL of the webpage to scrape.
+
+        Returns:
+            str: Extracted text content from the webpage.
+        """
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            text = ' '.join(soup.stripped_strings)
+            return text
+        except Exception as e:
+            logging.error(f"Failed to fetch content from {url}: {e}")
+            return None
+        
+
+    @staticmethod
+    def convert_facebook_url(original_url):
+        """
+        Captures the event ID from 'm.facebook.com' URLs and returns
+        'https://www.facebook.com/events/<event_id>/'.
+
+        Args:
+            original_url (str): The original Facebook URL.
+
+        Returns:
+            str: Converted Facebook URL.
+        """
+        pattern = r'^https://m\.facebook\.com/events/([^/]+)/?.*'
+        replacement = r'https://www.facebook.com/events/\1/'
+
+        return re.sub(pattern, replacement, original_url)
+    
+
+    def scrape_and_process(self, query):
+        """
+        Scrapes Google Search results, processes them, and updates the database.
+
+        Args:
+            query (str): The search query.
+
+        Returns:
+            None
+        """
+        logging.info(f"Starting scrape and process for query: {query}.")
+        extracted_text = ''
+        results = self.google_search(query, 5)
+
+        for title, url in results:
+            # Check if the query is similar to the title
+            similarity = fuzz.token_set_ratio(query, title)
+            if similarity > self.config['constants']['fuzzywuzzy_threshold'] and 'facebook' not in url:  # 80% threshold
+                logging.info(f"def scrape_and_process(): Relevant result found: Title: {title}, URL: {url}.")
+
+                # Scrape text from the non-Facebook URL
+                extracted_text = self.extract_text_from_url(url)
+                if extracted_text:
+                    # Add the url into the extracted_text so that we can choose the correct prompt
+                    extracted_text = url + " " + extracted_text
+                    logging.info(f"def scrape_and_process(): Text extracted from url: {url}.")
+                    return url, extracted_text
+            
+        # Check if the URL is a Facebook URL
+        # We have to get thru all of them before we know if we need to bail out to Facebook
+        for title, url in results:
+            # Check if the query is similar to the title
+            similarity = fuzz.token_set_ratio(query, title)
+            if similarity > self.config['constants']['fuzzywuzzy_threshold'] and 'facebook' in url:  # 80% threshold
+                logging.info(f"Relevant result found: Title: {title}, URL: {url}.")
+
+                # Convert Facebook URL
+                url = self.convert_facebook_url(url)
+                logging.info(f"def scrape_and_process(): fb_url is: {url}")
+
+                logging.info(f"def scrape_and_process(): Extracting text from facebook url: {url}.")
+                extracted_text = self.extract_text_from_fb_url(url)
+                if extracted_text:
+                    # Put the url at the end because we do not want to confuse the choosing of the correct prompt.
+                    extracted_text = extracted_text + " " + url
+                    logging.info(f"def scrape_and_process(): Text extracted from facebook url: {url}.")
+                    return url, extracted_text
+
+        logging.info(f"def scrape_and_process(): No relevant results found for: query: {query}.")
+        return url, None
             
 
     def save_to_csv(self, extracted_text_list, output_path):
@@ -241,14 +376,14 @@ class FacebookEventScraper:
 
         for idx, row in no_urls_df.iterrows():
             query = row['event_name']
-            url, extracted_text = seu_handler.scrape_and_process(query)
+            url, extracted_text = self.scrape_and_process(query)
 
             if extracted_text:
                 # Generate prompt, query LLM, and process the response.
                 prompt = llm_handler.generate_prompt(url, extracted_text)
                 llm_response = llm_handler.query_llm(prompt, url)
 
-                if "No events found." in llm_response:
+                if "No events found" in llm_response:
                     # Delete the events and urls from the events and urls tables where appropriate
                     db_handler.delete_event_and_url(url, row['event_name'], row['start_date'])
 
@@ -258,8 +393,6 @@ class FacebookEventScraper:
                     if row['url'] == '':
                         events_df.loc[idx, 'url'] = url
                     db_handler.write_events_to_db(events_df, url)
-
-        #db_handler.dedup()
 
 
 # Example Usage
@@ -272,7 +405,6 @@ if __name__ == "__main__":
     fb_scraper = FacebookEventScraper(config_path=config_path)
     db_handler = DatabaseHandler(fb_scraper.config)
     llm_handler = LLMHandler(config_path=config_path)
-    seu_handler = SearchExtractUpdate(config_path=config_path)
 
     # Use the scraper
     logging.info(f"def __main__: Starting Facebook event scraping.")
