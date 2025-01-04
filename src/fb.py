@@ -325,8 +325,6 @@ class FacebookEventScraper:
                 logging.info(f"def scrape_and_process(): Extracting text from facebook url: {url}.")
                 extracted_text = self.extract_text_from_fb_url(url)
                 if extracted_text:
-                    # Put the url at the end because we do not want to confuse the choosing of the correct prompt.
-                    extracted_text = extracted_text + " " + url
                     logging.info(f"def scrape_and_process(): Text extracted from facebook url: {url}.")
                     return url, extracted_text, 'single_event'
 
@@ -371,7 +369,7 @@ class FacebookEventScraper:
         # Reduce the number of events to process for testing
         no_urls_df = no_urls_df.head(20)
 
-        for idx, row in no_urls_df.iterrows():
+        for _, row in no_urls_df.iterrows():
             query = row['event_name']
             url, extracted_text, prompt_type = self.scrape_and_process(query)
 
@@ -387,9 +385,17 @@ class FacebookEventScraper:
                 else:
                     parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
                     events_df = pd.DataFrame(parsed_result)
-                    if row['url'] == '':
-                        events_df.loc[idx, 'url'] = url
+                    logging.info(f"def driver(): URL is: {url}")
+                    events_df.to_csv('before_url_updated.csv', index=False)
+
+                    if events_df['url'].values[0] == '':
+                        events_df.loc[0, 'url'] = url
+
+                        events_df.to_csv('after_url_updated.csv', index=False)
+
                     db_handler.write_events_to_db(events_df, url)
+
+        return None
 
 
 if __name__ == "__main__":
