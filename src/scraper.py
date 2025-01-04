@@ -176,7 +176,7 @@ class EventSpider(scrapy.Spider):
 
                     if keyword_status:
                         # Call the llm to process the extracted text
-                        llm_status = self.process_llm_response(event_link, extracted_text, keywords, org_name)
+                        llm_status = self.process_llm_response(event_link, extracted_text, keywords, org_name, 'fb')
 
                         if llm_status:
                             # Mark the event link as relevant
@@ -199,7 +199,7 @@ class EventSpider(scrapy.Spider):
 
                 if keyword_status:
                     # Call the llm to process the extracted text
-                    llm_status = self.process_llm_response(url, extracted_text, keywords, org_name)
+                    llm_status = self.process_llm_response(url, extracted_text, keywords, org_name, 'fb')
 
                     if llm_status:
                         # Mark the event link as relevant
@@ -222,7 +222,7 @@ class EventSpider(scrapy.Spider):
 
             if keyword_status:
                 # Call the llm to process the extracted text
-                llm_status = self.process_llm_response(url, extracted_text, keywords, org_name)
+                llm_status = self.process_llm_response(url, extracted_text, keywords, org_name, 'default')
 
                 if llm_status:
                     # Mark the event link as relevant
@@ -253,7 +253,7 @@ class EventSpider(scrapy.Spider):
             keywords_list = [kw.strip().lower() for kw in keywords.split(',')]
             if any(kw in extracted_text.lower() for kw in keywords_list):
                 logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
-                return self.process_llm_response(url, extracted_text, keywords, org_name)
+                return self.process_llm_response(url, extracted_text, keywords, org_name, 'default')
 
         if 'calendar' in url:
             logging.info(f"def check_keywords_in_text: URL {url} marked as relevant because 'calendar' is in the URL.")
@@ -263,7 +263,7 @@ class EventSpider(scrapy.Spider):
         return False
     
 
-    def process_llm_response(self, url, extracted_text, keywords, org_name):
+    def process_llm_response(self, url, extracted_text, keywords, org_name, prompt_type):
         """
         Generate a prompt, query a Language Learning Model (LLM), and process the response.
 
@@ -281,7 +281,7 @@ class EventSpider(scrapy.Spider):
             bool: True if the LLM response is successfully processed and events are written to the database, False otherwise.
         """
         # Generate prompt, query LLM, and process the response.
-        prompt = self.generate_prompt(url, extracted_text)
+        prompt = self.generate_prompt(url, extracted_text, prompt_type)
         llm_response = self.query_llm(prompt, url)
 
         if llm_response:
@@ -296,7 +296,7 @@ class EventSpider(scrapy.Spider):
             logging.error(f"def process_llm_response: Failed to process LLM response for URL: {url}")
             return False
     
-    def generate_prompt(self, url, extracted_text):
+    def generate_prompt(self, url, extracted_text, prompt_type):
         """
         Generate a prompt for a language model using extracted text and configuration details.
 
@@ -307,8 +307,8 @@ class EventSpider(scrapy.Spider):
         Returns:
             str: A formatted prompt string for the language model.
         """
-        #Generate the LLM prompt using the extracted text and configuration details.
-        txt_file_path = config['prompts']['is_relevant']
+        # Generate the LLM prompt using the extracted text and configuration details.
+        txt_file_path = config['prompts'][prompt_type]
         with open(txt_file_path, 'r') as file:
             is_relevant_txt = file.read()
 

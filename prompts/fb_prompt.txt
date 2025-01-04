@@ -56,6 +56,7 @@ You MUST include all of these fields. If you do not have any information for one
 },
 ...
 ]
+The JSON must be properly formatted. No comments should be interjected. No "// ... (and an explanation)" be included. JSON should be regular.
 ________________________________________
 2. Date Rules:
 •	Use the current date in the format YYYY-MM-DD and assume NO time zone.

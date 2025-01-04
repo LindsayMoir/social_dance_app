@@ -149,11 +149,7 @@ class FacebookEventScraper:
                 for keyword in keywords:
                     search_url = f"{base_url} {location} {keyword}"
                     event_links = self.extract_event_links(page, search_url)
-
-                    print('\n************************************')
-                    print(f"def scrape_events: Used {search_url} to get {len(event_links)} event_links\n")
-
-                    logging.info(f"def scrape_events: Used {search_url} to get events")
+                    logging.info(f"def scrape_events: Used {search_url} to get {len(event_links)} event_links\n")
 
                     for link in event_links:
                         if link in urls_visited:
@@ -308,10 +304,11 @@ class FacebookEventScraper:
                 # Scrape text from the non-Facebook URL
                 extracted_text = self.extract_text_from_url(url)
                 if extracted_text:
-                    # Add the url into the extracted_text so that we can choose the correct prompt
-                    extracted_text = url + " " + extracted_text
                     logging.info(f"def scrape_and_process(): Text extracted from url: {url}.")
-                    return url, extracted_text
+                    if 'allevents.in' in url:
+                        return url, extracted_text, 'allevents'
+                    else:
+                        return url, extracted_text, 'default'
             
         # Check if the URL is a Facebook URL
         # We have to get thru all of them before we know if we need to bail out to Facebook
@@ -331,10 +328,10 @@ class FacebookEventScraper:
                     # Put the url at the end because we do not want to confuse the choosing of the correct prompt.
                     extracted_text = extracted_text + " " + url
                     logging.info(f"def scrape_and_process(): Text extracted from facebook url: {url}.")
-                    return url, extracted_text
+                    return url, extracted_text, 'single_event'
 
         logging.info(f"def scrape_and_process(): No relevant results found for: query: {query}.")
-        return url, None
+        return url, None, 'default'
             
 
     def save_to_csv(self, extracted_text_list, output_path):
@@ -372,15 +369,15 @@ class FacebookEventScraper:
         logging.info(f"def driver(): Retrieved {len(no_urls_df)} events without URLs.")
 
         # Reduce the number of events to process for testing
-        #no_urls_df = no_urls_df.head(3)
+        no_urls_df = no_urls_df.head(20)
 
         for idx, row in no_urls_df.iterrows():
             query = row['event_name']
-            url, extracted_text = self.scrape_and_process(query)
+            url, extracted_text, prompt_type = self.scrape_and_process(query)
 
             if extracted_text:
                 # Generate prompt, query LLM, and process the response.
-                prompt = llm_handler.generate_prompt(url, extracted_text)
+                prompt = llm_handler.generate_prompt(url, extracted_text, prompt_type)
                 llm_response = llm_handler.query_llm(prompt, url)
 
                 if "No events found" in llm_response:
@@ -395,7 +392,6 @@ class FacebookEventScraper:
                     db_handler.write_events_to_db(events_df, url)
 
 
-# Example Usage
 if __name__ == "__main__":
     # Initialize shared dependencies
     config_path = "config/config.yaml"

@@ -2,14 +2,14 @@ clean_up:
   dedup: True
   old_events: 7
 constants:
-  fb_base_url: 'https://www.facebook.com/search/events?q=events"'
-  location: '%20victoria%20bc%20canada%20dance%20'
+  fb_base_url: 'https://www.facebook.com/search/events?q=events'
+  location: '%20victoria%20bc%20canada%20'
   fuzzywuzzy_threshold: 80
 crawling:
   max_crawl_trys: 3
   depth_limit: 3
   max_urls: 5
-  scroll_depth: 5
+  scroll_depth: 3
   headless: False
 database:
   host: 'localhost'
@@ -30,11 +30,12 @@ location:
 llm:
   url_evaluator: 'o1-mini'
 logging:
-  log_file: 'logs/get_input.log'
+  log_file: 'logs/record.log'
   scrapy_log_file: 'logs/scrapy.log'
   extracted_text: 'output/extracted_text.csv'
 prompts:
-  default: 'prompts/is_relevant.txt'
+  allevents: 'prompts/all_events_in_prompt.txt'
+  default: 'prompts/default.txt'
   fb: 'prompts/fb_prompt.txt'
   single_event: 'prompts/single_event.txt'
 startup:

@@ -93,7 +93,7 @@ class LLMHandler:
             bool: True if the LLM response is successfully processed and events are written to the database, False otherwise.
         """
         # Generate prompt, query LLM, and process the response.
-        prompt = self.generate_prompt(url, extracted_text)
+        prompt = self.generate_prompt(url, extracted_text, 'default')
         llm_response = self.query_llm(prompt, url)
 
         if llm_response:
@@ -112,34 +112,26 @@ class LLMHandler:
             return False
         
     
-    def generate_prompt(self, url, extracted_text):
+    def generate_prompt(self, url, extracted_text, prompt_type):
         """
         Generate a prompt for a language model using extracted text and configuration details.
 
         Args:
             url (str): The URL of the webpage from which the text was extracted.
             extracted_text (str): The text extracted from the webpage.
+            prompt_type (str): Chooses which prompt to use from config
 
         Returns:
             str: A formatted prompt string for the language model.
         """
         # Generate the LLM prompt using the extracted text and configuration details.
-
         logging.info(f"def generate_prompt(): Generating prompt for URL: {url}")
-
-        if 'facebook' in url:
-            txt_file_path = self.config['prompts']['fb']
-        elif extracted_text.startswith('http'):
-            txt_file_path = self.config['prompts']['single_event']
-        else:
-            txt_file_path = self.config['prompts']['default']
+        txt_file_path = self.config['prompts'][prompt_type]
+        logging.info(f"def generate_prompt(): prompt type: {prompt_type}, textt file path: {txt_file_path}")
+        
+        # Get the prompt file
         with open(txt_file_path, 'r') as file:
             is_relevant_txt = file.read()
-
-        # Not clear that we want to restrict this here. It may be we want to clean up the db post processing
-        # Define the date range for event identification
-        start_date = datetime.now()
-        end_date = start_date + pd.DateOffset(months=self.config['date_range']['months'])
 
         # Generate the full prompt
         prompt = (
