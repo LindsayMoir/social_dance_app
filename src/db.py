@@ -2,8 +2,9 @@ import logging
 import os
 from datetime import datetime
 import pandas as pd
-from sqlalchemy import create_engine, update, MetaData
-from sqlalchemy.sql import text
+import re  # Added missing import
+from sqlalchemy import create_engine, update, MetaData, text
+from sqlalchemy.exc import SQLAlchemyError
 import yaml
 
 
@@ -14,30 +15,23 @@ class DatabaseHandler:
 
         Args:
             config (dict): A dictionary containing configuration parameters for the database connection.
-
-        Initializes the database connection and logs the initialization and connection status.
         """
         self.config = config
-        self.logger = logging.getLogger(self.__class__.__name__)  # Use a class-specific logger
-        self.logger.info("class DatabaseHandler: config initialized.")
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.info("DatabaseHandler: Config initialized.")
 
         self.conn = self.get_db_connection()
         if self.conn is None:
-            raise ConnectionError("class DatabaseHandler: Failed to establish a database connection.")
-        self.logger.info("class DatabaseHandler: Database connection established.")
-
+            raise ConnectionError("DatabaseHandler: Failed to establish a database connection.")
+        self.logger.info("DatabaseHandler: Database connection established.")
 
     def get_db_connection(self):
         """
         Establishes and returns a SQLAlchemy engine for connecting to the PostgreSQL database.
-        This method reads the database connection parameters (user, password, host, and database name)
-        from the configuration stored in `self.config` and constructs a connection string. It then
-        creates and returns a SQLAlchemy engine using this connection string.
+
         Returns:
             sqlalchemy.engine.Engine: A SQLAlchemy engine for the PostgreSQL database connection.
-            None: If the connection fails, it logs an error and returns None.
-        Raises:
-            Exception: If there is an error in creating the SQLAlchemy engine, it logs the error.
+            None: If the connection fails.
         """
         try:
             # Read the database connection parameters from the config
@@ -49,133 +43,176 @@ class DatabaseHandler:
             )
 
             # Create and return the SQLAlchemy engine
-            conn = create_engine(connection_string)
-            return conn
-        
+            engine = create_engine(connection_string)
+            return engine
+
         except Exception as e:
-            self.logger.error("Database connection failed: %s", e)
+            self.logger.error("DatabaseHandler: Database connection failed: %s", e)
+            return None
+
+    def execute_query(self, query, params=None):
+        """
+        Executes a given SQL query with optional parameters.
+
+        Args:
+            query (str): The SQL query to execute.
+            params (dict): Optional dictionary of parameters for parameterized queries.
+
+        Returns:
+            result: The result of the executed query, if any.
+        """
+        if self.conn is None:
+            self.logger.error("execute_query: No database connection available.")
+            return None
+
+        try:
+            with self.conn.connect() as connection:
+                result = connection.execute(text(query), params or {})
+                connection.commit()
+                self.logger.info("execute_query: Query executed successfully.")
+                return result
+        except SQLAlchemyError as e:
+            self.logger.error("execute_query: Query execution failed: %s", e)
             return None
         
+    
+    def close_connection(self):
+        """
+        Closes the database connection.
+        """
+        if self.conn:
+            try:
+                self.conn.dispose()
+                self.logger.info("close_connection: Database connection closed successfully.")
+            except Exception as e:
+                self.logger.error("close_connection: Failed to close database connection: %s", e)
+        else:
+            self.logger.warning("close_connection: No database connection to close.")
+
 
     def url_in_table(self, url):
         """
-        Parameters:
-        url (str): The URL to check in the 'urls' table.
+        Checks if a given URL exists in the 'urls' table.
+
+        Args:
+            url (str): The URL to check.
 
         Returns:
-        bool: True if the URL exists in the table, False otherwise.
-
-        Logs:
-        - Info if the URL exists or does not exist in the 'urls' table.
-        - Error if there is an exception during the database query.
+            bool: True if the URL exists, False otherwise.
         """
-        query = 'SELECT * FROM urls WHERE links = %s'
-        params = (url,)
+        query = 'SELECT 1 FROM urls WHERE links = :url LIMIT 1'
+        params = {'url': url}
         try:
-            df = pd.read_sql(query, self.conn, params=params)
-            if df.shape[0] > 0:
-                self.logger.info(f"def url_in_table(): URL {url} exists in the 'urls' table.")
-                return True
+            result = self.execute_query(query, params)
+            exists = result.fetchone() is not None
+            if exists:
+                self.logger.info("url_in_table: URL '%s' exists in the 'urls' table.", url)
             else:
-                self.logger.info(f"def url_in_table(): URL {url} does not exist in the 'urls' table.")
-                return False
+                self.logger.info("url_in_table: URL '%s' does not exist in the 'urls' table.", url)
+            return exists
         except Exception as e:
-            self.logger.error(f"def url_in_table(): Failed to check URL: {e}")
+            self.logger.error("url_in_table: Failed to check URL '%s': %s", url, e)
             return False
-
 
     def update_url(self, url, update_other_links, relevant, increment_crawl_trys):
         """
-        Update an entry in the 'urls' table with the provided URL and other details.
+        Updates an entry in the 'urls' table with the provided URL and other details.
 
-        Parameters:
-        url (str): The URL to be updated in the database.
-        update_other_links (str): The new value for the 'other_links' column. If 'No', the column will not be updated.
-        relevant (bool): The new value for the 'relevant' column.
-        increment_crawl_trys (int): The number to increment the 'crawl_trys' column by.
+        Args:
+            url (str): The URL to be updated.
+            update_other_links (str): The new value for 'other_links'. If 'No', it won't be updated.
+            relevant (bool): The new value for 'relevant'.
+            increment_crawl_trys (int): The number to increment 'crawl_trys' by.
 
-        Raises:
-        ConnectionError: If the database connection is not available.
-
-        Logs:
-        Logs an info message indicating the URL that was updated.
+        Returns:
+            bool: True if update was successful, False otherwise.
         """
         try:
-            metadata = MetaData()
-            metadata.reflect(bind=self.conn)
-            table = metadata.tables['urls']
+            # Prepare the update query with conditional 'other_links'
+            if update_other_links != 'No':
+                query = """
+                    UPDATE urls
+                    SET 
+                        time_stamps = :current_time,
+                        other_links = :other_links,
+                        crawl_trys = crawl_trys + :increment,
+                        relevant = :relevant
+                    WHERE links = :url
+                """
+                params = {
+                    'current_time': datetime.now(),
+                    'other_links': update_other_links,
+                    'increment': increment_crawl_trys,
+                    'relevant': relevant,
+                    'url': url
+                }
+            else:
+                query = """
+                    UPDATE urls
+                    SET 
+                        time_stamps = :current_time,
+                        crawl_trys = crawl_trys + :increment,
+                        relevant = :relevant
+                    WHERE links = :url
+                """
+                params = {
+                    'current_time': datetime.now(),
+                    'increment': increment_crawl_trys,
+                    'relevant': relevant,
+                    'url': url
+                }
 
-            query = (
-                update(table)
-                .where(table.c.links == url)
-                .values(
-                    time_stamps=datetime.now(),
-                    other_links=update_other_links if update_other_links != 'No' else table.c.other_links,
-                    crawl_trys=table.c.crawl_trys + increment_crawl_trys,
-                    relevant=relevant
-                )
-            )
-
-            with self.conn.begin() as connection:
-                connection.execute(query)
-                self.logger.info(f"def update_url(): Updated URL: {url}")
+            result = self.execute_query(query, params)
+            if result and result.rowcount > 0:
+                self.logger.info("update_url: Updated URL '%s' successfully.", url)
                 return True
-            
-        except Exception as e:
-            self.logger.info(f"def update_url(): Failed to update URL: {e}")
-            return False
+            else:
+                self.logger.info("update_url: URL '%s' not found for update.", url)
+                return False
 
+        except Exception as e:
+            self.logger.error("update_url: Failed to update URL '%s': %s", url, e)
+            return False
 
     def write_url_to_db(self, keywords, url, other_links, relevant, increment_crawl_trys):
         """
-        Write or update an URL in the 'urls' table. 
-        Parameters:
-            org_names (str): The name of the organization associated with the URL.
+        Writes or updates a URL in the 'urls' table.
+
+        Args:
             keywords (str): Keywords related to the URL.
-            url (str): The URL to be written or updated in the database.
+            url (str): The URL to be written or updated.
             other_links (str): Other links associated with the URL.
             relevant (bool): Indicates if the URL is relevant.
             increment_crawl_trys (int): The number of times the URL has been crawled.
         """
         if self.update_url(url, other_links, relevant, increment_crawl_trys + 1):
-            self.logger.info(f"def write_url_to_db: URL {url} updated in the 'urls' table.")
+            self.logger.info("write_url_to_db: URL '%s' updated in the 'urls' table.", url)
         else:
-            self.logger.info(f"write_url_to_db: Unable to update {url}. Inserting new entry")
+            self.logger.info("write_url_to_db: Inserting new URL '%s' into the 'urls' table.", url)
             new_df = pd.DataFrame({
                 "time_stamps": [datetime.now()],
-                "org_names": ['Faceboook'],
+                "org_names": ['Facebook'],  # Corrected spelling
                 "keywords": [keywords],
                 "links": [url],
                 "other_links": [other_links],
                 "relevant": [relevant],
                 "crawl_trys": [increment_crawl_trys]
             })
-            new_df.to_sql('urls', self.conn, if_exists='append', index=False)
-            self.logger.info(f"def write_url_to_db: URL {url} written to the 'urls' table.")
+            try:
+                new_df.to_sql('urls', self.conn, if_exists='append', index=False, method='multi')
+                self.logger.info("write_url_to_db: URL '%s' inserted into the 'urls' table.", url)
+            except Exception as e:
+                self.logger.error("write_url_to_db: Failed to insert URL '%s': %s", url, e)
 
-    
     def clean_events(self, df):
         """
-        This function performs the following operations:
-        1. Ensures required columns exist in the DataFrame.
-        2. Moves values from 'start.date' and 'end.date' to 'start.dateTime' and 'end.dateTime' if necessary.
-        3. Drops the 'start.date' and 'end.date' columns.
-        4. Subsets the DataFrame to only useful columns.
-        5. Extracts and converts the price from the 'description' column.
-        6. Cleans the 'description' column by removing HTML tags and unnecessary whitespace.
-        7. Splits 'start.dateTime' and 'end.dateTime' into separate date and time columns.
-        8. Renames columns to more descriptive names.
-        9. Adds a 'Type_of_Event' column based on keywords in the 'Description' column.
-        10. Converts 'Start_Date' and 'End_Date' to date format.
-        11. Extracts the day of the week from 'Start_Date' and adds it to the 'Day_of_Week' column.
-        12. Reorders the columns for better readability.
-        13. Sorts the DataFrame by 'Start_Date' and 'Start_Time'.
+        Cleans and processes the events DataFrame.
 
-        Parameters:
-        df (pandas.DataFrame): The input DataFrame containing event data.
+        Args:
+            df (pandas.DataFrame): The input DataFrame containing event data.
 
         Returns:
-        pandas.DataFrame: The cleaned and processed DataFrame with relevant event information.
+            pandas.DataFrame: The cleaned and processed DataFrame.
         """
         # Avoid modifying the original DataFrame
         df = df.copy()
@@ -257,204 +294,183 @@ class DatabaseHandler:
         df['End_Date'] = pd.to_datetime(df['End_Date'], errors='coerce').dt.date
 
         # Extract the day of the week from Start_Date and add it to the Day_of_Week column
-        df['Day_of_Week'] = pd.to_datetime(df['Start_Date']).dt.day_name()
+        df['Day_of_Week'] = pd.to_datetime(df['Start_Date'], errors='coerce').dt.day_name()
 
         # Reorder the columns
         df = df[['URL', 'Type_of_Event', 'Name_of_the_Event', 'Day_of_Week', 'Start_Date', 
-                'End_Date', 'Start_Time', 'End_Time', 'Price', 'Location', 'Description']]
+                 'End_Date', 'Start_Time', 'End_Time', 'Price', 'Location', 'Description']]
 
         # Sort the DataFrame by Start_Date and Start_Time
         df = df.sort_values(by=['Start_Date', 'Start_Time']).reset_index(drop=True)
 
-        # Return the collected events as a pandas dataframe
-
         return df
-
 
     def write_events_to_db(self, df, url):
         """
-        Write events data to the 'events' table in the database.
-        Parameters:
+        Writes event data to the 'events' table in the database.
+
+        Args:
             df (pandas.DataFrame): DataFrame containing events data.
             url (str): URL from which the events data was sourced.
-            keywords (str): Keywords associated with the events.
-            org_name (str): Name of the organization hosting the events.
 
-            Returns:
-            None
-
-            Notes:
-            - The function converts 'Start_Date' and 'End_Date' columns to date format.
-            - The function converts 'Start_Time' and 'End_Time' columns to time format.
-            - If the 'Price' column exists and is not empty, it is cleaned and converted to numeric format.
-              Otherwise, a warning is logged and the 'Price' column is filled with NaN.
-            - Adds a 'Time_Stamp' column with the current timestamp.
-            - Adds 'Keyword' and 'Org_Name' columns with the provided keywords and organization name.
-            - Reorders columns to place 'Org_Name' and 'Keyword' at the beginning.
-            - Writes the DataFrame to the 'events' table in the database. If the database connection is not available,
-              an error is logged and the function returns without writing to the database.
+        Notes:
+            - The 'event_id' column is auto-generated and should not be included in the DataFrame.
+            - Ensures that only relevant columns are written to the database.
         """
         # Save the events data to a CSV file for debugging purposes
         df.to_csv('events.csv', index=False)
 
-        for col in ['start_date', 'end_date']:
+        # Ensure 'Start_Date' and 'End_Date' are in datetime.date format
+        for col in ['Start_Date', 'End_Date']:
             df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
-        for col in ['start_time', 'end_time']:
+
+        # Ensure 'Start_Time' and 'End_Time' are in datetime.time format
+        for col in ['Start_Time', 'End_Time']:
             df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
 
-        if 'price' in df.columns and not df['price'].isnull().all():
-            df['price'] = df['price'].replace({'\\$': '', '': None}, regex=True).infer_objects(copy=False)
-            df['price'] = pd.to_numeric(df['price'], errors='coerce')
+        # Clean and convert the 'Price' column to numeric format
+        if 'Price' in df.columns and not df['Price'].isnull().all():
+            df['Price'] = pd.to_numeric(df['Price'], errors='coerce')
         else:
-            self.logger.warning("write_events_to_db: 'price' column is missing or empty. Filling with NaN.")
-            df['price'] = float('nan')
+            self.logger.warning("write_events_to_db: 'Price' column is missing or empty. Filling with NaN.")
+            df['Price'] = float('nan')
 
+        # Add a 'time_stamp' column with the current timestamp
         df['time_stamp'] = datetime.now()
 
-        if self.conn is None:
-            self.logger.error("write_events_to_db: Database connection is not available.")
-            return
+        # Exclude 'event_id' if present
+        if 'event_id' in df.columns:
+            df = df.drop(columns=['event_id'])
 
-        df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
-        self.logger.info(f"write_events_to_db: Events data written to database for URL: {url}")
+        # Ensure 'event_id' is excluded to allow PostgreSQL to auto-generate it
+        try:
+            df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
+            self.logger.info("write_events_to_db: Events data written to the 'events' table.")
+        except Exception as e:
+            self.logger.error("write_events_to_db: Failed to write events data to the database: %s", e)
 
-    
     def get_events(self, query):
         """
-        Extracts events data based on the sql query provided.
-        Parameters:
-            query (str): Properly formatted sql.
+        Extracts events data based on the SQL query provided.
+
+        Args:
+            query (str): Properly formatted SQL query.
+
         Returns:
             pandas.DataFrame: A DataFrame containing the extracted events data.
         """
-        # Extract events data from the URL
-        events_data = extract_events_data(url)
-
-        # Clean and process the events data
-        cleaned_events_data = clean_events(events_data)
-
-        return cleaned_events_data
-
+        try:
+            # Execute the query and return the DataFrame
+            events_df = pd.read_sql_query(query, self.conn)
+            # Clean the events data
+            cleaned_df = self.clean_events(events_df)
+            return cleaned_df
+        except Exception as e:
+            self.logger.error("get_events: Failed to extract events data: %s", e)
+            return pd.DataFrame()
 
     def dedup(self):
         """
-        Remove duplicates from 'events' and 'urls' tables in the database.
+        Removes duplicates from the 'events' and 'urls' tables in the database.
 
-        This method connects to the database and removes duplicate entries from the 'events' and 'urls' tables.
-        For the 'events' table, duplicates are identified based on the columns: 'Org_Name', 'Keyword', 'URL', 
-        'Type_of_Event', 'Location', 'Day_of_Week', 'Start_Date', and 'End_Date'. For the 'urls' table, duplicates 
-        are identified based on the 'links' column. The last occurrence of each duplicate is kept.
+        For the 'events' table, duplicates are identified based on the combination of
+        'Name_of_the_Event' and 'Start_Date'. Only the latest entry is kept.
 
-        If the database connection is not available, an error is logged and the method returns without making any changes.
-
-        Raises:
-            Exception: If there is an error during the deduplication process, an error is logged with the exception message.
+        For the 'urls' table, duplicates are identified based on the 'links' column.
+        Only the latest entry is kept.
         """
         try:
-            df = pd.read_sql('SELECT * FROM events', self.conn)
-            shape_before = df.shape
-            self.logger.info(f"dedup: Deduplicating events table with {shape_before} rows and columns.")
+            # Deduplicate 'events' table based on 'Name_of_the_Event' and 'Start_Date'
+            dedup_events_query = """
+                DELETE FROM events e1
+                USING events e2
+                WHERE e1.event_id < e2.event_id
+                  AND e1.Name_of_the_Event = e2.Name_of_the_Event
+                  AND e1.Start_Date = e2.Start_Date;
+            """
+            self.execute_query(dedup_events_query)
+            self.logger.info("dedup: Deduplicated 'events' table successfully.")
 
-            dedup_df = df.drop_duplicates(
-                subset=["event_name", "start_date"],
-                keep="last"
-            )
-            shape_after = dedup_df.shape
-            self.logger.info(f"dedup: Deduplicated events table to {shape_after} rows and columns.")
-
-            # Write the deduplicated DataFrame back to the database
-            dedup_df.to_sql("events", self.conn, index=False, if_exists="replace")
-            self.logger.info(f"def dedup(): Deduplicated events table.")
-
-            df = pd.read_sql('SELECT * FROM urls', self.conn)
-            shape_before = df.shape
-            self.logger.info(f"dedup: Deduplicating urls table with {shape_before} rows and columns.")
-
-            dedup_df = df.drop_duplicates(subset=["links"], keep="last")
-            shape_after = dedup_df.shape
-            dedup_df.to_sql("urls", self.conn, index=False, if_exists="replace")
-            self.logger.info(f"dedup: Deduplicated urls table to {shape_after} rows and columns.")
+            # Deduplicate 'urls' table based on 'links'
+            dedup_urls_query = """
+                DELETE FROM urls u1
+                USING urls u2
+                WHERE u1.id < u2.id
+                  AND u1.links = u2.links;
+            """
+            self.execute_query(dedup_urls_query)
+            self.logger.info("dedup: Deduplicated 'urls' table successfully.")
 
         except Exception as e:
-            self.logger.error(f"dedup: Failed to deduplicate tables: {e}")
-
+            self.logger.error("dedup: Failed to deduplicate tables: %s", e)
 
     def delete_old_events(self):
         """
-        Delete events older than config days from the 'events' table in the database.
+        Deletes events older than a specified number of days from the 'events' table.
 
-        This method connects to the database and deletes events older than config days from the 'events' table.
-        If the database connection is not available, an error is logged and the method returns without making any changes.
-
-        Raises:
-            Exception: If there is an error during the deletion process, an error is logged with the exception message.
+        The number of days is specified in the configuration under 'clean_up' -> 'old_events'.
         """
-        # Query to delete events older than config days
-        days = int(self.config['clean_up']['old_events'])
-        query = text(f"DELETE FROM events WHERE end_date < current_date - interval '{days} days'")
-        with self.conn.begin() as connection:
-            connection.execute(query)
-        self.logger.info(f"delete_old_events(): Deleted events older than {days} days from the 'events' table.")  
-
+        try:
+            days = int(self.config['clean_up']['old_events'])
+            delete_query = """
+                DELETE FROM events
+                WHERE End_Date < CURRENT_DATE - INTERVAL '%s days';
+            """ % days
+            self.execute_query(delete_query)
+            self.logger.info("delete_old_events: Deleted events older than %d days.", days)
+        except Exception as e:
+            self.logger.error("delete_old_events: Failed to delete old events: %s", e)
 
     def delete_event_and_url(self, url, event_name, start_date):
         """
-        Delete an event from the 'events' table and the corresponding URL from the 'urls' table.
+        Deletes an event from the 'events' table and the corresponding URL from the 'urls' table.
 
-        Parameters:
+        Args:
             url (str): The URL of the event to be deleted.
             event_name (str): The name of the event to be deleted.
             start_date (str): The start date of the event to be deleted.
-
-        Returns:
-            None
-
-        Notes:
-            - The function logs an info message indicating the URL, event name, and start date of the event to be deleted.
-            - The function deletes the event from the 'events' table based on the URL, event name, and start date.
-            - The function deletes the corresponding URL from the 'urls' table based on the URL.
-            - If the database connection is not available, an error is logged and the function returns without making any changes.
         """
-        self.logger.info(f"delete_event_and_url(): Deleting event with URL: {url}, Event Name: {event_name}, Start Date: {start_date}")
+        try:
+            self.logger.info("delete_event_and_url: Deleting event with URL: %s, Event Name: %s, Start Date: %s", url, event_name, start_date)
 
-        if self.conn is None:
-            self.logger.error("delete_event_and_url(): Database connection is not available.")
-            return
+            # Delete the event from 'events' table
+            delete_event_query = """
+                DELETE FROM events
+                WHERE Name_of_the_Event = :event_name
+                  AND Start_Date = :start_date;
+            """
+            params = {'event_name': event_name, 'start_date': start_date}
+            self.execute_query(delete_event_query, params)
+            self.logger.info("delete_event_and_url: Deleted event from 'events' table.")
 
-        # Delete the event from the 'events' table
-        query = text("DELETE FROM events WHERE event_name = :event_name AND start_date = :start_date")
-        with self.conn.begin() as connection:
-            connection.execute(query, {'event_name': event_name, 'start_date': start_date})
+            # Delete the corresponding URL from 'urls' table
+            delete_url_query = "DELETE FROM urls WHERE links = :url;"
+            params = {'url': url}
+            self.execute_query(delete_url_query, params)
+            self.logger.info("delete_event_and_url: Deleted URL from 'urls' table.")
 
-        # Delete the corresponding URL from the 'urls' table
-        query = text("DELETE FROM urls WHERE links = :url")
-        with self.conn.begin() as connection:
-            connection.execute(query, {'url': url})
-
-        self.logger.info(f"delete_event_and_url(): Deleted event and URL from the database.")
-    
+        except Exception as e:
+            self.logger.error("delete_event_and_url: Failed to delete event and URL: %s", e)
 
     def set_calendar_urls(self):
         """
-        Mark URLs containing 'calendar' in 'other_links' as relevant.
+        Marks URLs containing 'calendar' in 'other_links' as relevant.
         """
         try:
-            query = "SELECT * FROM urls WHERE other_links ILIKE %s"
-            params = ("%calendar%",)
-            urls_df = pd.read_sql_query(query, self.conn, params=params)
+            query = "SELECT * FROM urls WHERE other_links ILIKE '%calendar%';"
+            urls_df = pd.read_sql_query(query, self.conn)
 
             for _, row in urls_df.iterrows():
                 if not row['relevant']:
                     self.update_url(row['links'], update_other_links='No', relevant=True, increment_crawl_trys=0)
 
-            self.logger.info(f"set_calendar_urls(): Marked {len(urls_df)} calendar URLs as relevant.")
+            self.logger.info("set_calendar_urls: Marked %d calendar URLs as relevant.", len(urls_df))
 
         except Exception as e:
-            self.logger.error(f"set_calendar_urls: Failed to mark calendar URLs: {e}")
+            self.logger.error("set_calendar_urls: Failed to mark calendar URLs: %s", e)
 
 
 if __name__ == "__main__":
-
     start_time = datetime.now()
 
     # Load configuration from a YAML file
@@ -464,16 +480,22 @@ if __name__ == "__main__":
     # Set up logging
     logging.basicConfig(
         filename=config['logging']['log_file'],
-        filemode='w',
+        filemode='a',  # Changed to append mode to preserve logs
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s"
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     )
 
+    # Initialize DatabaseHandler
     db_handler = DatabaseHandler(config)
+
+    # Perform deduplication, set calendar URLs, and delete old events
     db_handler.dedup()
     db_handler.set_calendar_urls()
     db_handler.delete_old_events()
 
+    # Close the database connection
+    db_handler.conn.dispose()  # Using dispose() for SQLAlchemy Engine
+
     end_time = datetime.now()
-    logging.info(f"__main__: Finished the process at {end_time}")
-    logging.info(f"__main__: Total time taken: {end_time - start_time}")
+    logging.info("Main: Finished the process at %s", end_time)
+    logging.info("Main: Total time taken: %s", end_time - start_time)

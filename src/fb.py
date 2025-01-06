@@ -308,7 +308,7 @@ class FacebookEventScraper:
                     if 'allevents.in' in url:
                         return url, extracted_text, 'allevents'
                     else:
-                        return url, extracted_text, 'default'
+                        return url, extracted_text, 'single_event'
             
         # Check if the URL is a Facebook URL
         # We have to get thru all of them before we know if we need to bail out to Facebook
