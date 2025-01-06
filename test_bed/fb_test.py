@@ -62,9 +62,6 @@ def get_event_links_text(keywords):
             for keyword in keywords:
                 search_url = f"{base_url}{location}{keyword}"
                 logging.info(f"********search_url********\n{search_url}")
-
-                print("********search_url********\n", search_url)
-
                 event_links = fb_scraper.extract_event_links(page, search_url)
                 logging.info(f"def scrape_events(): Used {search_url} to get {len(event_links)} event_links\n")
 

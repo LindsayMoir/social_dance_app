@@ -14,7 +14,7 @@ import scrapy
 from scrapy.crawler import CrawlerProcess
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import (create_engine, update, MetaData)
+from sqlalchemy import create_engine, update, MetaData, text
 import sys
 import time
 import yaml
@@ -121,7 +121,7 @@ class EventSpider(scrapy.Spider):
         if iframe_links:
             db_handler.update_url(url, update_other_links='calendar', relevant=True, increment_crawl_trys=0)
             for calendar_url in iframe_links:
-                self.fetch_google_calendar_events(calendar_url, keywords, org_name, url)
+                self.fetch_google_calendar_events(calendar_url, url)
 
         if 'facebook' in url:
             facebooks_events_links = self.fb_get_event_links(url)
@@ -440,7 +440,7 @@ class EventSpider(scrapy.Spider):
             return None
 
 
-    def fetch_google_calendar_events(self, calendar_url, keywords, org_name, url):
+    def fetch_google_calendar_events(self, calendar_url, url):
         """
         Fetch events from a Google Calendar and process them.
 
@@ -467,7 +467,7 @@ class EventSpider(scrapy.Spider):
             for calendar_id in decoded_calendar_ids:
                 events_df = self.get_events(calendar_id)
                 if not events_df.empty:
-                    db_handler.write_events_to_db(events_df, calendar_url, keywords, org_name)
+                    db_handler.write_events_to_db(events_df, calendar_url)
                     db_handler.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1, )
                     db_handler.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
         else:

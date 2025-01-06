@@ -24,6 +24,17 @@ logging.info("\n\naddress_clean_up started.")
 db_handler = DatabaseHandler(config)
 conn = db_handler.get_db_connection()
 
+def read_events_table():
+    """
+    Reads the 'events' table and stores the data in a DataFrame.
+    """
+    # Read the entire 'events' table into a DataFrame
+    events_df = pd.read_sql_query("SELECT * FROM events", conn)
+    logging.info(f"clean_up_address: Retrieved {len(events_df)} records from 'events' table.")
+
+    return events_df
+
+
 def create_address_table():
     """
     Creates the 'address' table if it does not exist.
@@ -50,6 +61,7 @@ def create_address_table():
         logging.info("create_address_table: 'address' table created or already exists.")
     except Exception as e:
         logging.error(f"create_address_table: Failed to create 'address' table: {e}")
+
 
 def get_address_id(address_dict):
     """
@@ -87,90 +99,86 @@ def get_address_id(address_dict):
     except Exception as e:
         logging.error(f"get_address_id: Failed to retrieve or insert address '{address_dict['full_address']}': {e}")
         return None
+    
 
-def clean_up_address():
+def clean_up_address(events_df):
     """
     Cleans up and standardizes address data from the 'events' table.
     It parses the 'location' field, inserts unique addresses into the 'address' table,
     and updates the 'events' table with the corresponding address_id.
     """
-    try:
-        # Read the entire 'events' table into a DataFrame
-        events_df = pd.read_sql_query("SELECT * FROM events", conn)
-        logging.info(f"clean_up_address: Retrieved {len(events_df)} records from 'events' table.")
 
-        # Add 'address_id' column to 'events' table if it doesn't exist
-        if 'address_id' not in events_df.columns:
-            alter_query = "ALTER TABLE events ADD COLUMN address_id INTEGER"
-            with conn.connect() as connection:
-                connection.execute(text(alter_query))
-                connection.commit()
-            logging.info("clean_up_address: Added 'address_id' column to 'events' table.")
+    # Add 'address_id' column to 'events' table if it doesn't exist
+    if 'address_id' not in events_df.columns:
+        alter_query = "ALTER TABLE events ADD COLUMN address_id INTEGER"
+        with conn.connect() as connection:
+            connection.execute(text(alter_query))
+            connection.commit()
+        logging.info("clean_up_address: Added 'address_id' column to 'events' table.")
 
-        # Iterate over each row in the DataFrame
-        for index, row in events_df.iterrows():
-            location = row.get('location') or ''
-            location = str(location).strip()
-            if not location:
-                logging.warning(f"clean_up_address: Skipping row {index} due to empty 'location'.")
-                continue  # Skip if 'location' is empty
+    # Iterate over each row in the DataFrame
+    for index, row in events_df.iterrows():
+        location = row.get('location') or ''
+        location = str(location).strip()
+        if not location:
+            logging.warning(f"clean_up_address: Skipping row {index} due to empty 'location'.")
+            continue  # Skip if 'location' is empty
 
-            # Parse the address using pyap for Canadian addresses
-            parsed_addresses = pyap.parse(location, country='CA')
-            if not parsed_addresses:
-                logging.warning(f"clean_up_address: No address found in 'location' for row {index}.")
-                continue  # Skip if no address is found
+        # Parse the address using pyap for Canadian addresses
+        parsed_addresses = pyap.parse(location, country='CA')
+        if not parsed_addresses:
+            logging.warning(f"clean_up_address: No address found in 'location' for row {index}.")
+            continue  # Skip if no address is found
 
-            # Assuming one address per event; modify if multiple addresses per event exist
-            address = parsed_addresses[0]
+        # Assuming one address per event; modify if multiple addresses per event exist
+        address = parsed_addresses[0]
 
-            # Debug: Log the attributes of the Address object
-            logging.debug(f"Row {index} Address Attributes: {address.__dict__}")
+        # Debug: Log the attributes of the Address object
+        logging.debug(f"Row {index} Address Attributes: {address.__dict__}")
 
-            # Create a dictionary of address components using getattr to handle missing attributes
-            address_dict = {
-                'full_address': address.full_address or '',
-                'street_number': getattr(address, 'street_number', ''),
-                'street_name': getattr(address, 'street_name', ''),
-                'street_type': getattr(address, 'street_type', ''),
-                'floor': getattr(address, 'floor', ''),
-                'postal_box': getattr(address, 'postal_box', ''),
-                'city': getattr(address, 'city', ''),
-                'province_or_state': getattr(address, 'region1', ''),
-                'postal_code': getattr(address, 'postal_code', ''),
-                'country_id': getattr(address, 'country_id', 'CA')  # Changed 'Canada' to 'CA' for consistency
-            }
+        # Create a dictionary of address components using getattr to handle missing attributes
+        address_dict = {
+            'full_address': address.full_address or '',
+            'street_number': getattr(address, 'street_number', ''),
+            'street_name': getattr(address, 'street_name', ''),
+            'street_type': getattr(address, 'street_type', ''),
+            'floor': getattr(address, 'floor', ''),
+            'postal_box': getattr(address, 'postal_box', ''),
+            'city': getattr(address, 'city', ''),
+            'province_or_state': getattr(address, 'region1', ''),
+            'postal_code': getattr(address, 'postal_code', ''),
+            'country_id': getattr(address, 'country_id', 'CA')  # Changed 'Canada' to 'CA' for consistency
+        }
 
-            # Log the constructed address_dict for debugging
-            logging.debug(f"Row {index} Address Dict: {address_dict}")
+        # Log the constructed address_dict for debugging
+        logging.debug(f"Row {index} Address Dict: {address_dict}")
 
-            # Retrieve or insert the address and get its address_id
-            address_id = get_address_id(address_dict)
-            if address_id is None:
-                logging.error(f"clean_up_address: Failed to obtain address_id for row {index}.")
-                continue  # Skip updating this row if address_id is not available
+        # Retrieve or insert the address and get its address_id
+        address_id = get_address_id(address_dict)
+        if address_id is None:
+            logging.error(f"clean_up_address: Failed to obtain address_id for row {index}.")
+            continue  # Skip updating this row if address_id is not available
 
-            # Update the 'address_id' in the 'events' table for the current row
-            event_id = row.get('event_id')  # Ensure this matches your primary key column
-            if event_id is not None:
-                update_query = "UPDATE events SET address_id = :address_id WHERE event_id = :event_id"
-                params = {'address_id': address_id, 'event_id': event_id}
-                try:
-                    with conn.connect() as connection:
-                        connection.execute(text(update_query), params)
-                        connection.commit()
-                    logging.info(f"clean_up_address: Updated 'address_id' for event_id {event_id}.")
-                except Exception as e:
-                    logging.error(f"clean_up_address: Failed to update 'address_id' for event_id {event_id}: {e}")
-            else:
-                logging.warning(f"clean_up_address: 'event_id' not found for row {index}; cannot update 'address_id'.")
+        # Update the 'address_id' in the 'events' table for the current row
+        event_id = row.get('event_id')  # Ensure this matches your primary key column
+        if event_id is not None:
+            update_query = "UPDATE events SET address_id = :address_id WHERE event_id = :event_id"
+            params = {'address_id': address_id, 'event_id': event_id}
+            try:
+                with conn.connect() as connection:
+                    connection.execute(text(update_query), params)
+                    connection.commit()
+                logging.info(f"clean_up_address: Updated 'address_id' for event_id {event_id}.")
+            except Exception as e:
+                logging.error(f"clean_up_address: Failed to update 'address_id' for event_id {event_id}: {e}")
+        else:
+            logging.warning(f"clean_up_address: 'event_id' not found for row {index}; cannot update 'address_id'.")
 
-    except Exception as e:
-        logging.error(f"clean_up_address: An error occurred during address cleanup: {e}")
 
 if __name__ == '__main__':
     create_address_table()
-    clean_up_address()
+    events_df = read_events_table()
+    clean_up_address(events_df)
     try:
         db_handler.close_connection()  # This should now work correctly
         logging.info("address_clean_up: Database connection closed successfully.")

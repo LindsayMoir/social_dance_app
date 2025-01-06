@@ -2,11 +2,11 @@ import logging
 import os
 from datetime import datetime
 import pandas as pd
+import pyap
 import re  # Added missing import
 from sqlalchemy import create_engine, update, MetaData, text
 from sqlalchemy.exc import SQLAlchemyError
 import yaml
-
 
 class DatabaseHandler:
     def __init__(self, config):
@@ -74,7 +74,6 @@ class DatabaseHandler:
         except SQLAlchemyError as e:
             self.logger.error("execute_query: Query execution failed: %s", e)
             return None
-        
     
     def close_connection(self):
         """
@@ -88,7 +87,6 @@ class DatabaseHandler:
                 self.logger.error("close_connection: Failed to close database connection: %s", e)
         else:
             self.logger.warning("close_connection: No database connection to close.")
-
 
     def url_in_table(self, url):
         """
@@ -338,16 +336,149 @@ class DatabaseHandler:
         # Add a 'time_stamp' column with the current timestamp
         df['time_stamp'] = datetime.now()
 
-        # Exclude 'event_id' if present
+        # Ensure 'event_id' is excluded to allow PostgreSQL to auto-generate it
         if 'event_id' in df.columns:
             df = df.drop(columns=['event_id'])
 
-        # Ensure 'event_id' is excluded to allow PostgreSQL to auto-generate it
+        # Clean up the 'location' column
+        self.create_address_table()
+        df = self.clean_up_address(df)
+
+        # Write the cleaned events data to the 'events' table
         try:
             df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
             self.logger.info("write_events_to_db: Events data written to the 'events' table.")
         except Exception as e:
             self.logger.error("write_events_to_db: Failed to write events data to the database: %s", e)
+
+    def create_address_table(self):
+        """
+        Creates the 'address' table if it does not exist.
+        """
+        query = """
+        CREATE TABLE IF NOT EXISTS address (
+            address_id SERIAL PRIMARY KEY,
+            full_address TEXT UNIQUE,
+            street_number TEXT,
+            street_name TEXT,
+            street_type TEXT,
+            floor TEXT,
+            postal_box TEXT,
+            city TEXT,
+            province_or_state TEXT,
+            postal_code TEXT,
+            country_id TEXT
+        )
+        """
+        try:
+            with self.conn.connect() as connection:
+                connection.execute(text(query))
+                connection.commit()
+            logging.info("create_address_table: 'address' table created or already exists.")
+        except Exception as e:
+            logging.error(f"create_address_table: Failed to create 'address' table: {e}")
+
+    def get_address_id(self, address_dict):
+        """
+        Retrieves the address_id for a given address. If the address does not exist,
+        it inserts the address into the 'address' table and returns the new address_id.
+        
+        Parameters:
+            address_dict (dict): Dictionary containing address components.
+        
+        Returns:
+            int: The address_id corresponding to the address.
+        """
+        select_query = "SELECT address_id FROM address WHERE full_address = :full_address"
+        params = {'full_address': address_dict['full_address']}
+        try:
+            with self.conn.connect() as connection:
+                result = connection.execute(text(select_query), params).fetchone()
+                if result:
+                    logging.info(f"get_address_id: Found existing address_id {result[0]} for address '{address_dict['full_address']}'.")
+                    return result[0]
+                else:
+                    # Insert the new address and retrieve the generated address_id
+                    columns = ', '.join(address_dict.keys())
+                    placeholders = ', '.join([f":{k}" for k in address_dict.keys()])
+                    insert_query = f"INSERT INTO address ({columns}) VALUES ({placeholders}) RETURNING address_id"
+
+                    logging.debug(f"Insert Query: {insert_query}")
+                    logging.debug(f"Insert Params: {address_dict}")
+
+                    result = connection.execute(text(insert_query), address_dict).fetchone()
+                    address_id = result[0]
+                    connection.commit()
+                    logging.info(f"get_address_id: Inserted new address_id {address_id} for address '{address_dict['full_address']}'.")
+                    return address_id
+        except Exception as e:
+            logging.error(f"get_address_id: Failed to retrieve or insert address '{address_dict['full_address']}': {e}")
+            return None
+        
+    def clean_up_address(self, events_df):
+        """
+        Cleans up and standardizes address data from the 'events' table.
+        It parses the 'location' field, inserts unique addresses into the 'address' table,
+        and updates the 'events' table with the corresponding address_id.
+        """
+
+        # Add 'address_id' column to 'events' table if it doesn't exist
+        if 'address_id' not in events_df.columns:
+            alter_query = "ALTER TABLE events ADD COLUMN address_id INTEGER"
+            with self.conn.connect() as connection:
+                connection.execute(text(alter_query))
+                connection.commit()
+            logging.info("clean_up_address: Added 'address_id' column to 'events' table.")
+
+        # Iterate over each row in the DataFrame
+        for index, row in events_df.iterrows():
+            location = row.get('location') or ''
+            location = str(location).strip()
+            if not location:
+                logging.warning(f"clean_up_address: Skipping row {index} due to empty 'location'.")
+                continue  # Skip if 'location' is empty
+
+            # Parse the address using pyap for Canadian addresses
+            parsed_addresses = pyap.parse(location, country='CA')
+            if not parsed_addresses:
+                logging.warning(f"clean_up_address: No address found in 'location' for row {index}.")
+                continue  # Skip if no address is found
+
+            # Assuming one address per event; modify if multiple addresses per event exist
+            address = parsed_addresses[0]
+
+            # Debug: Log the attributes of the Address object
+            logging.debug(f"Row {index} Address Attributes: {address.__dict__}")
+
+            # Create a dictionary of address components using getattr to handle missing attributes
+            address_dict = {
+                'full_address': address.full_address or '',
+                'street_number': getattr(address, 'street_number', ''),
+                'street_name': getattr(address, 'street_name', ''),
+                'street_type': getattr(address, 'street_type', ''),
+                'floor': getattr(address, 'floor', ''),
+                'postal_box': getattr(address, 'postal_box', ''),
+                'city': getattr(address, 'city', ''),
+                'province_or_state': getattr(address, 'region1', ''),
+                'postal_code': getattr(address, 'postal_code', ''),
+                'country_id': getattr(address, 'country_id', 'CA')  # Changed 'Canada' to 'CA' for consistency
+            }
+
+            # Log the constructed address_dict for debugging
+            logging.debug(f"Row {index} Address Dict: {address_dict}")
+
+            # Retrieve or insert the address and get its address_id
+            address_id = self.get_address_id(address_dict)
+            if address_id is None:
+                logging.error(f"clean_up_address: Failed to obtain address_id for row {index}.")
+                continue  # Skip updating this row if address_id is not available
+
+            # Update the 'address_id' in the 'events' table for the current row
+            event_id = row.get('event_id')  # Ensure this matches your primary key column
+            if event_id is not None:
+                events_df.at[index, 'address_id'] = address_id
+
+            return events_df
 
     def get_events(self, query):
         """
@@ -468,7 +599,6 @@ class DatabaseHandler:
 
         except Exception as e:
             self.logger.error("set_calendar_urls: Failed to mark calendar URLs: %s", e)
-
 
 if __name__ == "__main__":
     start_time = datetime.now()
