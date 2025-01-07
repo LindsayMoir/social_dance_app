@@ -18,7 +18,7 @@ class DatabaseHandler:
         """
         self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.logger.info("DatabaseHandler: Config initialized.")
+        self.logger.info("\n\nDatabaseHandler: Config initialized.")
 
         self.conn = self.get_db_connection()
         if self.conn is None:
@@ -49,6 +49,73 @@ class DatabaseHandler:
         except Exception as e:
             self.logger.error("DatabaseHandler: Database connection failed: %s", e)
             return None
+        
+    def create_tables(self):
+        """
+        Creates the 'urls' and 'events' tables in the database if they do not already exist.
+        """
+        try:
+            # Create the 'urls' table
+            urls_table_query = """
+                CREATE TABLE IF NOT EXISTS urls (
+                    url_id SERIAL PRIMARY KEY,
+                    time_stamps TIMESTAMP,
+                    org_names TEXT,
+                    keywords TEXT,
+                    links TEXT UNIQUE,
+                    other_links TEXT,
+                    relevant BOOLEAN,
+                    crawl_trys INTEGER
+                )
+            """
+            self.execute_query(urls_table_query)
+            self.logger.info("create_tables: 'urls' table created or already exists.")
+
+            # Create the 'events' table
+            events_table_query = """
+                CREATE TABLE IF NOT EXISTS events (
+                    event_id SERIAL PRIMARY KEY,
+                    org_name TEXT,
+                    dance_style TEXT,
+                    url TEXT,
+                    event_type TEXT,
+                    event_name TEXT,
+                    day_of_week TEXT,
+                    start_date DATE,
+                    end_date DATE,
+                    start_time TIME,
+                    end_time TIME,
+                    price NUMERIC,
+                    location TEXT,
+                    address_id INTEGER,
+                    description TEXT,
+                    time_stamp TIMESTAMP
+                )
+            """
+            self.execute_query(events_table_query)
+            self.logger.info("create_tables: 'events' table created or already exists.")
+
+            # Create the address table
+            address_table_query = """
+                CREATE TABLE IF NOT EXISTS address (
+                    address_id SERIAL PRIMARY KEY,
+                    full_address TEXT UNIQUE,
+                    street_number TEXT,
+                    street_name TEXT,
+                    street_type TEXT,
+                    floor TEXT,
+                    postal_box TEXT,
+                    city TEXT,
+                    province_or_state TEXT,
+                    postal_code TEXT,
+                    country_id TEXT
+                )
+            """
+            self.execute_query(address_table_query)
+            self.logger.info("create_tables: 'events' table created or already exists.")
+
+        except Exception as e:
+            self.logger.error("create_tables: Failed to create tables: %s", e)
 
     def execute_query(self, query, params=None):
         """
@@ -172,7 +239,7 @@ class DatabaseHandler:
             self.logger.error("update_url: Failed to update URL '%s': %s", url, e)
             return False
 
-    def write_url_to_db(self, keywords, url, other_links, relevant, increment_crawl_trys):
+    def write_url_to_db(self, org_names, keywords, url, other_links, relevant, increment_crawl_trys):
         """
         Writes or updates a URL in the 'urls' table.
 
@@ -189,7 +256,7 @@ class DatabaseHandler:
             self.logger.info("write_url_to_db: Inserting new URL '%s' into the 'urls' table.", url)
             new_df = pd.DataFrame({
                 "time_stamps": [datetime.now()],
-                "org_names": ['Facebook'],  # Corrected spelling
+                "org_names": [org_names],  
                 "keywords": [keywords],
                 "links": [url],
                 "other_links": [other_links],
@@ -316,32 +383,45 @@ class DatabaseHandler:
             - Ensures that only relevant columns are written to the database.
         """
         # Save the events data to a CSV file for debugging purposes
-        df.to_csv('events.csv', index=False)
+        df.to_csv('output/events.csv', index=False)
 
-        # Ensure 'Start_Date' and 'End_Date' are in datetime.date format
-        for col in ['Start_Date', 'End_Date']:
+        # Need to check if it is from google calendar or from the LLM.
+        if 'calendar' in url:
+            
+            # Rename columns to match the database schema
+            df = df.rename(columns={
+                'URL': 'url',
+                'Type_of_Event': 'event_type',
+                'Name_of_the_Event': 'event_name',
+                'Day_of_Week': 'day_of_week',
+                'Start_Date': 'start_date',
+                'End_Date': 'end_date',
+                'Start_Time': 'start_time',
+                'End_Time': 'end_time',
+                'Price': 'price',
+                'Location': 'location',
+                'Description': 'description'
+            })
+
+        # Ensure 'start_date' and 'start_date' are in datetime.date format
+        for col in ['start_date', 'end_date']:
             df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
 
-        # Ensure 'Start_Time' and 'End_Time' are in datetime.time format
-        for col in ['Start_Time', 'End_Time']:
+        # Ensure 'start_time' and 'end_time' are in datetime.time format
+        for col in ['start_time', 'end_time']:
             df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
 
-        # Clean and convert the 'Price' column to numeric format
-        if 'Price' in df.columns and not df['Price'].isnull().all():
-            df['Price'] = pd.to_numeric(df['Price'], errors='coerce')
+        # Clean and convert the 'price' column to numeric format
+        if 'price' in df.columns and not df['price'].isnull().all():
+            df['price'] = pd.to_numeric(df['price'], errors='coerce')
         else:
-            self.logger.warning("write_events_to_db: 'Price' column is missing or empty. Filling with NaN.")
-            df['Price'] = float('nan')
+            self.logger.warning("write_events_to_db: 'price' column is missing or empty. Filling with NaN.")
+            df['price'] = float('nan')
 
         # Add a 'time_stamp' column with the current timestamp
         df['time_stamp'] = datetime.now()
 
-        # Ensure 'event_id' is excluded to allow PostgreSQL to auto-generate it
-        if 'event_id' in df.columns:
-            df = df.drop(columns=['event_id'])
-
         # Clean up the 'location' column
-        self.create_address_table()
         df = self.clean_up_address(df)
 
         # Write the cleaned events data to the 'events' table
@@ -350,33 +430,6 @@ class DatabaseHandler:
             self.logger.info("write_events_to_db: Events data written to the 'events' table.")
         except Exception as e:
             self.logger.error("write_events_to_db: Failed to write events data to the database: %s", e)
-
-    def create_address_table(self):
-        """
-        Creates the 'address' table if it does not exist.
-        """
-        query = """
-        CREATE TABLE IF NOT EXISTS address (
-            address_id SERIAL PRIMARY KEY,
-            full_address TEXT UNIQUE,
-            street_number TEXT,
-            street_name TEXT,
-            street_type TEXT,
-            floor TEXT,
-            postal_box TEXT,
-            city TEXT,
-            province_or_state TEXT,
-            postal_code TEXT,
-            country_id TEXT
-        )
-        """
-        try:
-            with self.conn.connect() as connection:
-                connection.execute(text(query))
-                connection.commit()
-            logging.info("create_address_table: 'address' table created or already exists.")
-        except Exception as e:
-            logging.error(f"create_address_table: Failed to create 'address' table: {e}")
 
     def get_address_id(self, address_dict):
         """
@@ -421,15 +474,6 @@ class DatabaseHandler:
         It parses the 'location' field, inserts unique addresses into the 'address' table,
         and updates the 'events' table with the corresponding address_id.
         """
-
-        # Add 'address_id' column to 'events' table if it doesn't exist
-        if 'address_id' not in events_df.columns:
-            alter_query = "ALTER TABLE events ADD COLUMN address_id INTEGER"
-            with self.conn.connect() as connection:
-                connection.execute(text(alter_query))
-                connection.commit()
-            logging.info("clean_up_address: Added 'address_id' column to 'events' table.")
-
         # Iterate over each row in the DataFrame
         for index, row in events_df.iterrows():
             location = row.get('location') or ''
@@ -516,8 +560,8 @@ class DatabaseHandler:
                 DELETE FROM events e1
                 USING events e2
                 WHERE e1.event_id < e2.event_id
-                  AND e1.Name_of_the_Event = e2.Name_of_the_Event
-                  AND e1.Start_Date = e2.Start_Date;
+                  AND e1.event_name = e2.event_name
+                  AND e1.start_date = e2.start_date;
             """
             self.execute_query(dedup_events_query)
             self.logger.info("dedup: Deduplicated 'events' table successfully.")
@@ -526,7 +570,7 @@ class DatabaseHandler:
             dedup_urls_query = """
                 DELETE FROM urls u1
                 USING urls u2
-                WHERE u1.id < u2.id
+                WHERE u1.url_id < u2.url_id
                   AND u1.links = u2.links;
             """
             self.execute_query(dedup_urls_query)
@@ -617,6 +661,7 @@ if __name__ == "__main__":
 
     # Initialize DatabaseHandler
     db_handler = DatabaseHandler(config)
+    db_handler.create_tables()
 
     # Perform deduplication, set calendar URLs, and delete old events
     db_handler.dedup()

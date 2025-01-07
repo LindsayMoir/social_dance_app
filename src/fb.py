@@ -12,7 +12,6 @@ import yaml
 # Import other classes
 from db import DatabaseHandler
 from llm import LLMHandler
-from scraper import EventSpider
 
 
 class FacebookEventScraper:
@@ -403,7 +402,6 @@ if __name__ == "__main__":
     config_path = "config/config.yaml"
 
     # Instantiate the class libraries
-    event_spider = EventSpider(config_path=config_path)
     fb_scraper = FacebookEventScraper(config_path=config_path)
     db_handler = DatabaseHandler(fb_scraper.config)
     llm_handler = LLMHandler(config_path=config_path)

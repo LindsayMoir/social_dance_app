@@ -17,7 +17,7 @@ class LLMHandler:
         logging.info("LLMHandler initialized.")
     
     
-    def driver(self, db_handler, url, search_term, extracted_text, keywords):
+    def driver(self, url, search_term, extracted_text, keywords):
         """
         Determine the relevance of a given URL based on its content, keywords, or organization name.
 
@@ -33,26 +33,26 @@ class LLMHandler:
             logging.info(f"def driver(): URL {url} 'facebook' is in the URL.")
             keyword_or_fb_status = True
         else:
-            keyword_or_fb_status = self.check_keywords_in_text(db_handler, url, extracted_text, keywords)
+            keyword_or_fb_status = self.check_keywords_in_text(url, extracted_text, keywords)
 
         if keyword_or_fb_status:
             # Call the llm to process the extracted text
-            llm_status = self.process_llm_response(db_handler, url, extracted_text, keywords)
+            llm_status = self.process_llm_response(url, extracted_text)
 
             if llm_status:
                 # Mark the event link as relevant
-                db_handler.write_url_to_db(keywords, url, search_term, relevant=True, increment_crawl_trys=1)
+                db_handler.write_url_to_db('', keywords, url, search_term, relevant=True, increment_crawl_trys=1)
             
             else:
                 # Mark the event link as irrelevant
-                db_handler.write_url_to_db(keywords, url, search_term, relevant=False, increment_crawl_trys=1)
+                db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_trys=1)
 
         else:
             # Mark the event link as irrelevant
-            db_handler.write_url_to_db(keywords, url, search_term, relevant=False, increment_crawl_trys=1)
+            db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_trys=1)
 
 
-    def check_keywords_in_text(self, db_handler, url, extracted_text, keywords_list):
+    def check_keywords_in_text(self, url, extracted_text, keywords_list):
         """
         Parameters:
         url (str): The URL of the webpage being checked.
@@ -66,7 +66,7 @@ class LLMHandler:
         if keywords_list or 'facebook' in url:
             if any(kw in extracted_text.lower() for kw in keywords_list):
                 logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
-                return self.process_llm_response(db_handler, url, extracted_text, keywords_list)
+                return self.process_llm_response(url, extracted_text)
             
         if 'calendar' in url:
             logging.info(f"def check_keywords_in_text: URL {url} marked as relevant because 'calendar' is in the URL.")
@@ -76,7 +76,7 @@ class LLMHandler:
         return False
     
 
-    def process_llm_response(self, db_handler, url, extracted_text, keywords):
+    def process_llm_response(self, url, extracted_text):
         """
         Generate a prompt, query a Language Learning Model (LLM), and process the response.
 
@@ -127,7 +127,7 @@ class LLMHandler:
         # Generate the LLM prompt using the extracted text and configuration details.
         logging.info(f"def generate_prompt(): Generating prompt for URL: {url}")
         txt_file_path = self.config['prompts'][prompt_type]
-        logging.info(f"def generate_prompt(): prompt type: {prompt_type}, textt file path: {txt_file_path}")
+        logging.info(f"def generate_prompt(): prompt type: {prompt_type}, text file path: {txt_file_path}")
         
         # Get the prompt file
         with open(txt_file_path, 'r') as file:
@@ -157,14 +157,13 @@ class LLMHandler:
             KeyError: If the 'OpenAI' organization key is not found in the keys file.
             Exception: For any other exceptions that may occur during the API call.
         """
-        if not hasattr(self, 'api_key'):
-            # Read the API key from the security file
-            keys_df = pd.read_csv(self.config['input']['keys'])
-            self.api_key = keys_df.loc[keys_df['organization'] == 'OpenAI', 'key_pw'].values[0]
+        # Read the API key from the security file
+        keys_df = pd.read_csv(self.config['input']['keys'])
+        self.api_key = keys_df.loc[keys_df['organization'] == 'OpenAI', 'key_pw'].values[0]
 
-            # Set the API key as an environment variable
-            os.environ["OPENAI_API_KEY"] = self.api_key
-            self.client = OpenAI()
+        # Set the API key as an environment variable
+        os.environ["OPENAI_API_KEY"] = self.api_key
+        self.client = OpenAI()
 
         # Query the LLM
         response = self.client.chat.completions.create(
@@ -258,7 +257,7 @@ if __name__ == "__main__":
     for index, row in extracted_text_df.iterrows():
         url = row['url']
         extracted_text = row['extracted_text']
-        llm.driver(db_handler, url, search_term, extracted_text, keywords)
+        llm.driver(url, search_term, extracted_text, keywords)
 
     # Run deduplication and set calendar URLs
     db_handler.dedup()
