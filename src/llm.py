@@ -8,6 +8,14 @@ import yaml
 
 from db import DatabaseHandler
 
+# Check if 'db_handler' is not defined and instantiate it if necessary
+if 'db_handler' not in globals():
+    # Load configuration from YAML
+    with open("config/config.yaml", "r") as file:
+        config = yaml.safe_load(file)
+    # Instantiate the database handler using the loaded config
+    db_handler = DatabaseHandler(config)
+
 class LLMHandler:
     def __init__(self, config_path="config/config.yaml"):
         # Load configuration from a YAML file
@@ -17,7 +25,7 @@ class LLMHandler:
         logging.info("LLMHandler initialized.")
     
     
-    def driver(self, url, search_term, extracted_text, keywords):
+    def driver(self, url, search_term, extracted_text, org_name, keywords):
         """
         Determine the relevance of a given URL based on its content, keywords, or organization name.
 
@@ -37,7 +45,7 @@ class LLMHandler:
 
         if keyword_or_fb_status:
             # Call the llm to process the extracted text
-            llm_status = self.process_llm_response(url, extracted_text)
+            llm_status = self.process_llm_response(url, extracted_text, org_name, keywords)
 
             if llm_status:
                 # Mark the event link as relevant
@@ -52,7 +60,7 @@ class LLMHandler:
             db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_trys=1)
 
 
-    def check_keywords_in_text(self, url, extracted_text, keywords_list):
+    def check_keywords_in_text(self, url, extracted_text, org_name, keywords_list):
         """
         Parameters:
         url (str): The URL of the webpage being checked.
@@ -66,7 +74,7 @@ class LLMHandler:
         if keywords_list or 'facebook' in url:
             if any(kw in extracted_text.lower() for kw in keywords_list):
                 logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
-                return self.process_llm_response(url, extracted_text)
+                return self.process_llm_response(url, extracted_text, org_name, keywords_list)
             
         if 'calendar' in url:
             logging.info(f"def check_keywords_in_text: URL {url} marked as relevant because 'calendar' is in the URL.")
@@ -76,7 +84,7 @@ class LLMHandler:
         return False
     
 
-    def process_llm_response(self, url, extracted_text):
+    def process_llm_response(self, url, extracted_text, org_name, keywords):
         """
         Generate a prompt, query a Language Learning Model (LLM), and process the response.
 
@@ -101,7 +109,7 @@ class LLMHandler:
 
             if parsed_result:
                 events_df = pd.DataFrame(parsed_result)
-                db_handler.write_events_to_db(events_df, url)
+                db_handler.write_events_to_db(events_df, url, org_name, keywords)
                 logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
 
                 return True
@@ -240,7 +248,7 @@ if __name__ == "__main__":
     llm = LLMHandler(config_path="config/config.yaml")
 
     # Instantiate the database handler
-    #db_handler = DatabaseHandler(llm.config)
+    db_handler = DatabaseHandler(llm.config)
 
     # Get a test file
     extracted_text_df = pd.read_csv('output/extracted_text.csv')
@@ -249,7 +257,7 @@ if __name__ == "__main__":
     extracted_text_df = extracted_text_df.head(5)
 
     # Establish the constants
-    keywords = 'bachata'
+    keywords = ['bachata']
     search_term = 'https://facebook.com/search/top?q=events%20victoria%20bc%20canada%20dance%20bachata'
 
     # Call the driver function
@@ -257,7 +265,7 @@ if __name__ == "__main__":
     for index, row in extracted_text_df.iterrows():
         url = row['url']
         extracted_text = row['extracted_text']
-        llm.driver(url, search_term, extracted_text, keywords)
+        llm.driver(url, search_term, extracted_text, '', keywords)
 
     # Run deduplication and set calendar URLs
     db_handler.dedup()

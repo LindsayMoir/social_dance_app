@@ -49,12 +49,25 @@ class DatabaseHandler:
         except Exception as e:
             self.logger.error("DatabaseHandler: Database connection failed: %s", e)
             return None
-        
+
     def create_tables(self):
         """
-        Creates the 'urls' and 'events' tables in the database if they do not already exist.
+        Creates the 'urls', 'events', 'address', and 'fb_urls' tables in the database if they do not already exist.
+        If config['testing']['drop_tables'] is True, it will drop existing tables before creation.
         """
         try:
+            # Check if we need to drop tables as per configuration
+            if self.config['testing']['drop_tables']:
+                drop_queries = [
+                    "DROP TABLE IF EXISTS fb_urls CASCADE;",
+                    "DROP TABLE IF EXISTS address CASCADE;",
+                    "DROP TABLE IF EXISTS events CASCADE;",
+                    "DROP TABLE IF EXISTS urls CASCADE;"
+                ]
+                for query in drop_queries:
+                    self.execute_query(query)
+                self.logger.info("create_tables: Existing tables dropped as per configuration.")
+
             # Create the 'urls' table
             urls_table_query = """
                 CREATE TABLE IF NOT EXISTS urls (
@@ -95,7 +108,7 @@ class DatabaseHandler:
             self.execute_query(events_table_query)
             self.logger.info("create_tables: 'events' table created or already exists.")
 
-            # Create the address table
+            # Create the 'address' table
             address_table_query = """
                 CREATE TABLE IF NOT EXISTS address (
                     address_id SERIAL PRIMARY KEY,
@@ -112,7 +125,17 @@ class DatabaseHandler:
                 )
             """
             self.execute_query(address_table_query)
-            self.logger.info("create_tables: 'events' table created or already exists.")
+            self.logger.info("create_tables: 'address' table created or already exists.")
+
+            # Create the 'fb_urls' table
+            fb_urls_table_query = """
+                CREATE TABLE IF NOT EXISTS fb_urls (
+                    url TEXT PRIMARY KEY,
+                    time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """
+            self.execute_query(fb_urls_table_query)
+            self.logger.info("create_tables: 'fb_urls' table created or already exists.")
 
         except Exception as e:
             self.logger.error("create_tables: Failed to create tables: %s", e)
@@ -269,6 +292,26 @@ class DatabaseHandler:
             except Exception as e:
                 self.logger.error("write_url_to_db: Failed to insert URL '%s': %s", url, e)
 
+    def write_url_to_fb_table(self, url):
+        """
+        Writes a URL to the 'fb_urls' table in the database.
+
+        Args:
+            url (str): The URL to be written to the 'fb_urls' table.
+        """
+        try:
+            query = """
+            INSERT INTO fb_urls (url, time_stamp) 
+            VALUES (:url, :time_stamp)
+            ON CONFLICT (url) 
+            DO UPDATE SET time_stamp = EXCLUDED.time_stamp;
+            """
+            params = {'url': url, 'time_stamp': datetime.now()}
+            self.execute_query(query, params)
+            self.logger.info("write_url_to_fb_table: URL '%s' written to 'fb_urls' table.", url)
+        except Exception as e:
+            self.logger.error("write_url_to_fb_table: Failed to write URL '%s': %s", url, e)
+
     def clean_events(self, df):
         """
         Cleans and processes the events DataFrame.
@@ -370,7 +413,7 @@ class DatabaseHandler:
 
         return df
 
-    def write_events_to_db(self, df, url):
+    def write_events_to_db(self, df, url, org_name, keywords):
         """
         Writes event data to the 'events' table in the database.
 
@@ -402,6 +445,8 @@ class DatabaseHandler:
                 'Location': 'location',
                 'Description': 'description'
             })
+            df['org_name'] = org_name
+            df['dance_style'] = keywords
 
         # Ensure 'start_date' and 'start_date' are in datetime.date format
         for col in ['start_date', 'end_date']:

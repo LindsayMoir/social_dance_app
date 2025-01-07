@@ -6,11 +6,12 @@ constants:
   location: '%20victoria%20bc%20canada%20'
   fuzzywuzzy_threshold: 80
 crawling:
-  max_crawl_trys: 3
   depth_limit: 3
-  max_urls: 5
-  scroll_depth: 3
   headless: False
+  max_crawl_trys: 3
+  max_urls: 5
+  max_visited_links: 10
+  scroll_depth: 3
 database:
   host: 'localhost'
   name: 'social_dance_db'
@@ -42,5 +43,6 @@ startup:
   use_db: False
 testing:
   nof_no_url_events: 10
+  drop_tables: True
 update_schedule:
   true_links_hours: .01
