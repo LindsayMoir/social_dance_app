@@ -6,6 +6,7 @@ import logging
 from openai import OpenAI
 import os
 import pandas as pd
+from playwright.async_api import async_playwright
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import random
 import re
@@ -39,15 +40,41 @@ logging.basicConfig(
 
 logging.info("global: Working directory is: %s", os.getcwd())
 
+# Define the FacebookSession context manager
+class FacebookSession:
+    def __init__(self, headless=True, fb_handler=None):
+        self.headless = config['crawling']['headless']
+        self.fb_handler = fb_handler
+
+    def __enter__(self):
+        self.playwright = sync_playwright().start()
+        self.browser = self.playwright.chromium.launch(headless=self.headless)
+        self.page = self.browser.new_page()
+
+        if not self.fb_handler:
+            raise Exception("Facebook handler not provided for login.")
+
+        # Attempt to log in
+        self.fb_handler.login_to_facebook(self.page)
+
+        # Pause execution for manual CAPTCHA solving
+        logging.warning("If a Facebook CAPTCHA or puzzle appears, please solve it in the browser.")
+        input("After solving any puzzles and logging in successfully, press Enter to continue...")
+
+        return self.page
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.browser.close()
+        self.playwright.stop()
 
 # EventSpider class
 class EventSpider(scrapy.Spider):
     name = "event_spider"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, fb_page=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.visited_links = set()  # To track visited URLs and avoid duplicate crawls
-
+        self.fb_page = fb_page      # Store the persistent Facebook page
 
     def start_requests(self):
         """
@@ -93,7 +120,6 @@ class EventSpider(scrapy.Spider):
                                                                             'org_name': org_name, 
                                                                             'url': url})
 
-
     def parse(self, response, keywords, org_name, url):
         """
         Args:
@@ -109,6 +135,8 @@ class EventSpider(scrapy.Spider):
         It also extracts iframe sources and updates the URL if relevant. 
         The function checks for relevance of the links and continues crawling if they are relevant.
         """
+        fb_page = self.fb_page  # Access the persistent page from the spider's attribute
+
         # Get all of the subsidiary links on the page   
         page_links = response.css('a::attr(href)').getall()
         page_links = [response.urljoin(link) for link in page_links if link.startswith('http')]
@@ -126,7 +154,7 @@ class EventSpider(scrapy.Spider):
 
         facebooks_events_links = []
         if 'facebook' in url:
-            facebooks_events_links = self.fb_get_event_links(url)
+            facebooks_events_links = self.fb_get_event_links(fb_page, url)
             logging.info(f"def parse(): Found {len(facebooks_events_links)} event links on facebook {url}")
 
         # Put all links together and make sure that they get crawled and their subsequent levels get crawled
@@ -162,7 +190,7 @@ class EventSpider(scrapy.Spider):
 
             # Process the regular group facebook page
             # We want to see if there are any facebook event links in this url
-            facebooks_events_links = self.fb_get_event_links(url)
+            facebooks_events_links = self.fb_get_event_links(page, url)
 
             if facebooks_events_links:
                 for event_link in facebooks_events_links:
@@ -265,7 +293,7 @@ class EventSpider(scrapy.Spider):
         logging.info(f"def check_keywords_in_text: URL {url} marked as irrelevant since there are no keywords, events, or 'calendar' in URL.")
         return False
     
-    def fb_get_event_links(self, url):
+    def fb_get_event_links(self, page, url):
         """
         Extracts event links from a Facebook page.
 
@@ -273,6 +301,7 @@ class EventSpider(scrapy.Spider):
         It returns a list of event links found on the page.
 
         Args:
+            page (playwright.sync_api.Page): The Playwright page object to extract event links from.
             url (str): The URL of the Facebook page to extract event links from.
 
         Returns:
@@ -280,32 +309,19 @@ class EventSpider(scrapy.Spider):
         """
         # Extract event links from a Facebook page using Playwright.
         try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=config['crawling']['headless'])
-                page = browser.new_page()
+            page.goto(url, timeout=30000)  # Wait up to 30 seconds for the page to load
+            page.wait_for_timeout(3000)  # Additional wait for dynamic content
 
-                # Need to login to fbook first
-                login_status = fb_handler.login_to_facebook(page)
+            content = page.content()
+            pattern = r'https://www\.facebook\.com/events/\d+/'
+            matches = re.findall(pattern, content)
 
-                if login_status:
-                    page.goto(url, timeout=30000)  # Wait up to 30 seconds for the page to load
-                    page.wait_for_timeout(3000)  # Additional wait for dynamic content
-
-                    # Extract the page content
-                    content = page.content()
-                    pattern = r'https://www\.facebook\.com/events/\d+/'
-                    matches = re.findall(pattern, content)
-                    
-                    browser.close()
-                    return matches
-                else:
-                    logging.error(f"def fb_get_event_links(): Failed to login to Facebook for URL {url}.")
-                    return []
+            return matches
         except Exception as e:
-            logging.error(f"def fb_get_event_links(): Failed to fetch Facebook page content with Playwright for URL {url}: {e}")
+            logging.error(f"fb_get_event_links: Failed to fetch content for URL {url}: {e}")
             return []
         
-    def fb_extract_text(self, url):
+    def fb_extract_text(self, page, url):
         """
         Extracts text from a Facebook page using Playwright.
 
@@ -321,30 +337,17 @@ class EventSpider(scrapy.Spider):
         """
         # Extract text from a Facebook page using Playwright.
         try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=config['crawling']['headless'])
-                page = browser.new_page()
+            page.goto(url, timeout=30000)
+            page.wait_for_timeout(3000)
 
-                # Need to login to fbook first
-                login_status = fb_handler.login_to_facebook(page)
-
-                if login_status:
-                    page.goto(url, timeout=30000)  # Wait up to 30 seconds for the page to load
-                    page.wait_for_timeout(3000)  # Additional wait for dynamic content
-
-                    # Extract the visible text
-                    content = page.content()  # Get the full HTML content
-                    soup = BeautifulSoup(content, 'html.parser')
-                    extracted_text = ' '.join(soup.stripped_strings)
-
-                    browser.close()
-                    return extracted_text
-            
+            content = page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+            extracted_text = ' '.join(soup.stripped_strings)
+            return extracted_text
         except Exception as e:
-            logging.error(f"def fb_extract_text(): Failed to extract text with Playwright for URL {url}: {e}")
+            logging.error(f"fb_extract_text: Failed to extract text for URL {url}: {e}")
             return None
 
-    
     def generate_prompt(self, url, extracted_text, prompt_type):
         """
         Generate a prompt for a language model using extracted text and configuration details.
@@ -675,16 +678,18 @@ if __name__ == "__main__":
     db_handler.create_tables()
 
     # Run the crawler process
-    process = CrawlerProcess(settings={
-        "FEEDS": {"output.json": {"format": "json"}},
-        "LOG_FILE": config['logging']['scrapy_log_file'],
-        "LOG_LEVEL": "INFO",
-        "DEPTH_LIMIT": config['crawling']['depth_limit'],
-    })
+    # Use FacebookSession to maintain one login during the necessary operations
+    with FacebookSession(headless=config['crawling']['headless'], fb_handler=fb_handler) as fb_page:
+        process = CrawlerProcess(settings={
+            "FEEDS": {"output.json": {"format": "json"}},
+            "LOG_FILE": config['logging']['scrapy_log_file'],
+            "LOG_LEVEL": "INFO",
+            "DEPTH_LIMIT": config['crawling']['depth_limit'],
+        })
+        # Pass the persistent fb_page to the spider
+        process.crawl(EventSpider, fb_page=fb_page)
+        process.start()
 
-    # First crawl
-    process.crawl(EventSpider)
-    process.start()
     logging.info("__main__: Crawler process completed.")
 
     # Run deduplication and set calendar URLs

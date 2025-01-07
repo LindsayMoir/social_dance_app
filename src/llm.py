@@ -240,7 +240,7 @@ if __name__ == "__main__":
     llm = LLMHandler(config_path="config/config.yaml")
 
     # Instantiate the database handler
-    db_handler = DatabaseHandler(llm.config)
+    #db_handler = DatabaseHandler(llm.config)
 
     # Get a test file
     extracted_text_df = pd.read_csv('output/extracted_text.csv')
