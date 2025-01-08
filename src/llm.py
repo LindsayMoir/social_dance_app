@@ -25,7 +25,7 @@ class LLMHandler:
         logging.info("LLMHandler initialized.")
     
     
-    def driver(self, url, search_term, extracted_text, org_name, keywords):
+    def driver(self, url, search_term, extracted_text, org_name, keywords_list):
         """
         Determine the relevance of a given URL based on its content, keywords, or organization name.
 
@@ -41,11 +41,11 @@ class LLMHandler:
             logging.info(f"def driver(): URL {url} 'facebook' is in the URL.")
             keyword_or_fb_status = True
         else:
-            keyword_or_fb_status = self.check_keywords_in_text(url, extracted_text, keywords)
+            keyword_or_fb_status = self.check_keywords_in_text(url, extracted_text, keywords_list)
 
         if keyword_or_fb_status:
             # Call the llm to process the extracted text
-            llm_status = self.process_llm_response(url, extracted_text, org_name, keywords)
+            llm_status = self.process_llm_response(url, extracted_text, org_name, keywords_list)
 
             if llm_status:
                 # Mark the event link as relevant
@@ -65,7 +65,7 @@ class LLMHandler:
         Parameters:
         url (str): The URL of the webpage being checked.
         extracted_text (str): The text extracted from the webpage.
-        keywords (list, optional): A comma-separated list of keywords to check in the extracted text. Defaults to None.
+        keywords (list): A comma-separated list of keywords to check in the extracted text.
 
         Returns:
         bool: True if the text is relevant based on the presence of keywords or 'calendar' in the URL, False otherwise.
@@ -84,7 +84,7 @@ class LLMHandler:
         return False
     
 
-    def process_llm_response(self, url, extracted_text, org_name, keywords):
+    def process_llm_response(self, url, extracted_text, org_name, keywords_list):
         """
         Generate a prompt, query a Language Learning Model (LLM), and process the response.
 
@@ -109,7 +109,7 @@ class LLMHandler:
 
             if parsed_result:
                 events_df = pd.DataFrame(parsed_result)
-                db_handler.write_events_to_db(events_df, url, org_name, keywords)
+                db_handler.write_events_to_db(events_df, url, org_name, keywords_list)
                 logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
 
                 return True

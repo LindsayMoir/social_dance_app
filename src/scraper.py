@@ -86,19 +86,26 @@ class EventSpider(scrapy.Spider):
             keywords = row['keywords']
             url = row['links']
 
-            # We need to write the url to the database, if it is not already there
-            other_links, relevant, increment_crawl_trys = '', True, 1
-            db_handler.write_url_to_db(org_name, keywords, url, other_links, relevant, increment_crawl_trys)
-            logging.info(f"Starting crawl for URL: {url}")
-            yield scrapy.Request(url=url, callback=self.parse, cb_kwargs={'keywords': keywords, 
-                                                                            'org_name': org_name, 
-                                                                            'url': url})
+            if 'facebook' in url:
+                db_handler.write_url_to_fb_table(url)
+                logging.info(f"Skipping crawl for Facebook URL: {url}")
+            else:
+                # We need to write the url to the database, if it is not already there
+                other_links, relevant, increment_crawl_trys = '', True, 1
+                db_handler.write_url_to_db(org_name, keywords, url, other_links, relevant, increment_crawl_trys)
+
+                if url not in self.visited_links:
+                    self.visited_links.add(url)  # Mark the page link as visited
+                    logging.info(f"Starting crawl for URL: {url}")
+                    yield scrapy.Request(url=url, callback=self.parse, cb_kwargs={'keywords': keywords, 
+                                                    'org_name': org_name, 
+                                                    'url': url})
 
     def parse(self, response, keywords, org_name, url):
         """
         Args:
             response (scrapy.http.Response): The response object to parse.
-            keywords (list): A list of keywords to check for relevance.
+            keywords (str): A comma separated string of keywords to check for relevance.
             org_name (str): The name of the organization to check for relevance.
             url (str): The URL of the current page being parsed.
 
@@ -158,7 +165,7 @@ class EventSpider(scrapy.Spider):
 
         Parameters:
         url (str): The URL to be evaluated.
-        keywords (list of str): A list of keywords to check within the URL content.
+        keywords (str): A comma separated string of keywords to check within the URL content.
         org_name (str): The name of the organization to check within the URL content.
 
         Returns:
@@ -185,7 +192,7 @@ class EventSpider(scrapy.Spider):
 
             else:
                 # Mark the event link as irrelevant
-                db_handler.db_handler.update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0) 
+                db_handler.update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0) 
 
         else:
             logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords.")
@@ -296,7 +303,7 @@ class EventSpider(scrapy.Spider):
 
         Args:
             calendar_url (str): The URL of the Google Calendar to fetch events from.
-            keywords (list): A list of keywords to associate with the events.
+            keywords (str): A comma separated list of keywords to associate with the events.
             org_name (str): The name of the organization associated with the events.
             url (str): The URL to update after processing the events.
 
@@ -517,7 +524,6 @@ if __name__ == "__main__":
     # Run the crawler process
 
     process = CrawlerProcess(settings={
-        "FEEDS": {"output.json": {"format": "json"}},
         "LOG_FILE": config['logging']['scrapy_log_file'],
         "LOG_LEVEL": "INFO",
         "DEPTH_LIMIT": config['crawling']['depth_limit'],
@@ -527,10 +533,6 @@ if __name__ == "__main__":
     process.start()
 
     logging.info("__main__: Crawler process completed.")
-
-    # Run deduplication and set calendar URLs
-    db_handler.dedup()
-    db_handler.set_calendar_urls()
 
     # Get the end time
     end_time = datetime.now()

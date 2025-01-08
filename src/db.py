@@ -466,15 +466,17 @@ class DatabaseHandler:
         # Add a 'time_stamp' column with the current timestamp
         df['time_stamp'] = datetime.now()
 
-        # Clean up the 'location' column
-        df = self.clean_up_address(df)
+        # Clean up the 'location' column and update address_ids
+        cleaned_df = self.clean_up_address(df)
+
+        cleaned_df.to_csv('output/cleaned_events.csv', index=False)
+
+        # Log the number of events to be written
+        logging.info(f"write_events_to_db: Number of events to write: {len(df)}")
 
         # Write the cleaned events data to the 'events' table
-        try:
-            df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
-            self.logger.info("write_events_to_db: Events data written to the 'events' table.")
-        except Exception as e:
-            self.logger.error("write_events_to_db: Failed to write events data to the database: %s", e)
+        cleaned_df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
+        self.logger.info("write_events_to_db: Events data written to the 'events' table.")
 
     def get_address_id(self, address_dict):
         """
@@ -527,19 +529,13 @@ class DatabaseHandler:
                 logging.warning(f"clean_up_address: Skipping row {index} due to empty 'location'.")
                 continue  # Skip if 'location' is empty
 
-            # Parse the address using pyap for Canadian addresses
             parsed_addresses = pyap.parse(location, country='CA')
             if not parsed_addresses:
                 logging.warning(f"clean_up_address: No address found in 'location' for row {index}.")
-                continue  # Skip if no address is found
+                continue
 
-            # Assuming one address per event; modify if multiple addresses per event exist
             address = parsed_addresses[0]
-
-            # Debug: Log the attributes of the Address object
             logging.debug(f"Row {index} Address Attributes: {address.__dict__}")
-
-            # Create a dictionary of address components using getattr to handle missing attributes
             address_dict = {
                 'full_address': address.full_address or '',
                 'street_number': getattr(address, 'street_number', ''),
@@ -550,24 +546,17 @@ class DatabaseHandler:
                 'city': getattr(address, 'city', ''),
                 'province_or_state': getattr(address, 'region1', ''),
                 'postal_code': getattr(address, 'postal_code', ''),
-                'country_id': getattr(address, 'country_id', 'CA')  # Changed 'Canada' to 'CA' for consistency
+                'country_id': getattr(address, 'country_id', 'CA')
             }
-
-            # Log the constructed address_dict for debugging
             logging.debug(f"Row {index} Address Dict: {address_dict}")
-
-            # Retrieve or insert the address and get its address_id
             address_id = self.get_address_id(address_dict)
             if address_id is None:
                 logging.error(f"clean_up_address: Failed to obtain address_id for row {index}.")
-                continue  # Skip updating this row if address_id is not available
+                continue
 
-            # Update the 'address_id' in the 'events' table for the current row
-            event_id = row.get('event_id')  # Ensure this matches your primary key column
-            if event_id is not None:
-                events_df.at[index, 'address_id'] = address_id
+            events_df.at[index, 'address_id'] = address_id
 
-            return events_df
+        return events_df  # Moved outside of the loop
 
     def get_events(self, query):
         """
@@ -672,23 +661,6 @@ class DatabaseHandler:
         except Exception as e:
             self.logger.error("delete_event_and_url: Failed to delete event and URL: %s", e)
 
-    def set_calendar_urls(self):
-        """
-        Marks URLs containing 'calendar' in 'other_links' as relevant.
-        """
-        try:
-            query = "SELECT * FROM urls WHERE other_links ILIKE '%calendar%';"
-            urls_df = pd.read_sql_query(query, self.conn)
-
-            for _, row in urls_df.iterrows():
-                if not row['relevant']:
-                    self.update_url(row['links'], update_other_links='No', relevant=True, increment_crawl_trys=0)
-
-            self.logger.info("set_calendar_urls: Marked %d calendar URLs as relevant.", len(urls_df))
-
-        except Exception as e:
-            self.logger.error("set_calendar_urls: Failed to mark calendar URLs: %s", e)
-
 if __name__ == "__main__":
     start_time = datetime.now()
 
@@ -708,9 +680,8 @@ if __name__ == "__main__":
     db_handler = DatabaseHandler(config)
     db_handler.create_tables()
 
-    # Perform deduplication, set calendar URLs, and delete old events
+    # Perform deduplication and delete old events
     db_handler.dedup()
-    db_handler.set_calendar_urls()
     db_handler.delete_old_events()
 
     # Close the database connection
