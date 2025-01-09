@@ -119,8 +119,9 @@ class EventSpider(scrapy.Spider):
         # Get all of the subsidiary links on the page   
         page_links = response.css('a::attr(href)').getall()
         page_links = [response.urljoin(link) for link in page_links if link.startswith('http')]
-        page_links = page_links[:config['crawling']['max_urls']]  # Limit the number of links
-        page_links = page_links + [url]  # Add the current URL to the list
+        logging.info(f"def parse(): Found {len(page_links)} links on {response.url}")
+        page_links = page_links[:config['crawling']['max_website_urls']]  # Limit the number of links
+        logging.info(f"def parse(): Limiting the number of links to {config['crawling']['max_website_urls']}.")
 
         # Extract iframe sources
         iframe_links = response.css('iframe::attr(src)').getall()
@@ -132,24 +133,26 @@ class EventSpider(scrapy.Spider):
                 self.fetch_google_calendar_events(calendar_url, url, org_name, keywords)
 
         # Put all links together
-        all_links = set(page_links + iframe_links + [url])
+        all_links = set(page_links + [url])
 
         # identify any current or future facebook links. We want those out and processed by fb.py
         # Iterate over a copy of all_links to safely remove items during iteration
         for link in list(all_links):
-            if 'facebook' in link:  # Assuming you meant to check the link itself
+            if 'facebook' in link or 'instagram' in link:
                 db_handler.write_url_to_fb_table(link)
                 all_links.remove(link)  # Safely remove from the original set
-                logging.info(f"def parse(): Found a Facebook URL, processing: {link}")
-
+                logging.info(f"def parse(): Found a Facebook or Instagram URL, processing: {link}")
+        
         logging.info(f"def parse() Found {len(all_links)} links on {response.url}")
 
         # Check for relevance and crawl further
         for link in all_links:
             if link not in self.visited_links:
                 self.visited_links.add(link)  # Mark the page link as visited
-                if len(self.visited_links) >= config['crawling']['max_urls']:
-                    logging.info("def parse(): Maximum URL limit reached. Stopping further crawling.")
+                other_links, relevant, increment_crawl_trys = '', True, 1
+                db_handler.write_url_to_db(org_name, keywords, url, other_links, relevant, increment_crawl_trys)
+                if len(self.visited_links) >= config['crawling']['urls_run_limit']:
+                    logging.info(f"def parse(): Maximum URL limit reached: {config['crawling']['urls_run_limit']} Stopping further crawling.")
                     break
                 
                 self.driver(link, keywords, org_name)
@@ -241,7 +244,7 @@ class EventSpider(scrapy.Spider):
         # Check if the response contains JSON
         if 'json' in result:
             start_position = result.find('[')
-            end_position = result.find(']') + 1
+            end_position = result.rfind(']') + 1
             if start_position != -1 and end_position != -1:
                 # Extract JSON part
                 json_string = result[start_position:end_position]
@@ -250,6 +253,7 @@ class EventSpider(scrapy.Spider):
                     # Convert JSON string to Python object
                     logging.info("def extract_and_parse_json(): JSON found in result.")
                     events_json =json.loads(json_string)
+                    logging.info(f"def extract_and_parse_json(): For url: {url}, \nhere is the events_json: \n{events_json}.")
                     return events_json
                     
                 except json.JSONDecodeError as e:
@@ -278,7 +282,7 @@ class EventSpider(scrapy.Spider):
             browser = p.chromium.launch(headless=config['crawling']['headless'])
             page = browser.new_page()
             page.goto(url, timeout=30000)  # Wait up to 30 seconds for the page to load
-            page.wait_for_timeout(3000)  # Additional wait for dynamic content
+            page.wait_for_timeout(9000)  # Additional wait for dynamic content
 
             # Extract the visible text
             content = page.content()  # Get the full HTML content
@@ -291,7 +295,6 @@ class EventSpider(scrapy.Spider):
         # except Exception as e:
         #     logging.error(f"def extract_text_with_playwright(): Failed to extract text with Playwright for URL {url}: {e}")
         #     return None
-
 
     def fetch_google_calendar_events(self, calendar_url, url, org_name, keywords):
         """
@@ -321,19 +324,32 @@ class EventSpider(scrapy.Spider):
                 events_df = self.get_events(calendar_id)
                 if not events_df.empty:
                     db_handler.write_events_to_db(events_df, calendar_url, org_name, keywords)
-                    db_handler.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1, )
+                    db_handler.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1)
                     db_handler.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
         else:
             start_idx = calendar_url.find("src=") + 4
             end_idx = calendar_url.find("&", start_idx)
             calendar_id = calendar_url[start_idx:end_idx] if end_idx != -1 else calendar_url[start_idx:]
-            calendar_id = base64.b64decode(calendar_id + '=' * (4 - len(calendar_id) % 4)).decode('utf-8')
+            
+            # Wrap base64 decoding in try/except
+            try:
+                padded_calendar_id = calendar_id + '=' * (4 - len(calendar_id) % 4)
+                decoded_bytes = base64.b64decode(padded_calendar_id)
+                calendar_id = decoded_bytes.decode('utf-8', errors='replace')
+            except (UnicodeDecodeError, base64.binascii.Error) as e:
+                logging.error(
+                    f"def fetch_google_calendar_events(): Failed to decode calendar_id: \n{calendar_id} \n"
+                    f"for calendar_url: {calendar_url} \nand url: \n{url} with exception: \n{e}"
+                )
+                calendar_id = None
 
-            events_df = self.get_events(calendar_id)
-            if not events_df.empty:
-                db_handler.write_events_to_db(events_df, calendar_url, org_name, keywords)
-                db_handler.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1)
-                db_handler.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
+            # Proceed only if calendar_id was successfully decoded
+            if calendar_id:
+                events_df = self.get_events(calendar_id)
+                if not events_df.empty:
+                    db_handler.write_events_to_db(events_df, calendar_url, org_name, keywords)
+                    db_handler.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1)
+                    db_handler.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
 
         return
 
@@ -528,8 +544,14 @@ if __name__ == "__main__":
         "LOG_FILE": config['logging']['scrapy_log_file'],
         "LOG_LEVEL": "INFO",
         "DEPTH_LIMIT": config['crawling']['depth_limit'],
+        "FEEDS": {
+            "output/output.json": {
+                "format": "json"
+            }
+        }
     })
-    # Pass the persistent fb_page to the spider
+
+    # Start the crawler process
     process.crawl(EventSpider)
     process.start()
 

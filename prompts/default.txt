@@ -69,6 +69,7 @@ _____________________________________
 •	For example:
 	o	The 1st Tuesday in 2025 is January 7, 2025.
 	o	Saturdays in February 2025 are February 1, 8, 15, and 22.
+•	Never put characters like this "// ... Repeat for each Saturday up to 2026-01-10" in to denote repeating events. ALWAYS stick to STRICT JSON formatting rules as in the above "Event Fields to Extract:".
 ________________________________________
 4. Outdated Pages:
 •	Events explicitly marked as "canceled" or "postponed" should have that wording put in their "description" field.

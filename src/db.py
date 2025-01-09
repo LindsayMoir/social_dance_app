@@ -70,7 +70,7 @@ class DatabaseHandler:
                 ]
                 for query in drop_queries:
                     self.execute_query(query)
-                self.logger.info("create_tables: Existing tables dropped as per configuration.")
+                self.logger.info(f"create_tables: Existing tables dropped as per configuration value of '{self.config['testing']['drop_tables']}'.")
             else:
                 # Don't drop any tables
                 pass
@@ -200,30 +200,6 @@ class DatabaseHandler:
                 self.logger.error("close_connection: Failed to close database connection: %s", e)
         else:
             self.logger.warning("close_connection: No database connection to close.")
-
-    def url_in_table(self, url):
-        """
-        Checks if a given URL exists in the 'urls' table.
-
-        Args:
-            url (str): The URL to check.
-
-        Returns:
-            bool: True if the URL exists, False otherwise.
-        """
-        query = 'SELECT 1 FROM urls WHERE links = :url LIMIT 1'
-        params = {'url': url}
-        try:
-            result = self.execute_query(query, params)
-            exists = result.fetchone() is not None
-            if exists:
-                self.logger.info("url_in_table: URL '%s' exists in the 'urls' table.", url)
-            else:
-                self.logger.info("url_in_table: URL '%s' does not exist in the 'urls' table.", url)
-            return exists
-        except Exception as e:
-            self.logger.error("url_in_table: Failed to check URL '%s': %s", url, e)
-            return False
 
     def update_url(self, url, update_other_links, relevant, increment_crawl_trys):
         """
@@ -468,7 +444,10 @@ class DatabaseHandler:
                 'Location': 'location',
                 'Description': 'description'
             })
+            df['url'] = url
             df['org_name'] = org_name
+            if isinstance(keywords, list):
+                keywords = ', '.join(keywords)
             df['dance_style'] = keywords
 
         # Ensure 'start_date' and 'start_date' are in datetime.date format
@@ -580,26 +559,6 @@ class DatabaseHandler:
             events_df.at[index, 'address_id'] = address_id
 
         return events_df  # Moved outside of the loop
-
-    def get_events(self, query):
-        """
-        Extracts events data based on the SQL query provided.
-
-        Args:
-            query (str): Properly formatted SQL query.
-
-        Returns:
-            pandas.DataFrame: A DataFrame containing the extracted events data.
-        """
-        try:
-            # Execute the query and return the DataFrame
-            events_df = pd.read_sql_query(query, self.conn)
-            # Clean the events data
-            cleaned_df = self.clean_events(events_df)
-            return cleaned_df
-        except Exception as e:
-            self.logger.error("get_events: Failed to extract events data: %s", e)
-            return pd.DataFrame()
 
     def dedup(self):
         """
