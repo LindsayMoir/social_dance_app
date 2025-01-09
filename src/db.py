@@ -57,16 +57,23 @@ class DatabaseHandler:
         """
         try:
             # Check if we need to drop tables as per configuration
-            if self.config['testing']['drop_tables']:
+            if self.config['testing']['drop_tables'] == True:
                 drop_queries = [
                     "DROP TABLE IF EXISTS fb_urls CASCADE;",
                     "DROP TABLE IF EXISTS address CASCADE;",
                     "DROP TABLE IF EXISTS events CASCADE;",
                     "DROP TABLE IF EXISTS urls CASCADE;"
                 ]
+            elif self.config['testing']['drop_tables'] == 'events':
+                drop_queries = [
+                    "DROP TABLE IF EXISTS events CASCADE;"
+                ]
                 for query in drop_queries:
                     self.execute_query(query)
                 self.logger.info("create_tables: Existing tables dropped as per configuration.")
+            else:
+                # Don't drop any tables
+                pass
 
             # Create the 'urls' table
             urls_table_query = """
@@ -136,6 +143,22 @@ class DatabaseHandler:
             """
             self.execute_query(fb_urls_table_query)
             self.logger.info("create_tables: 'fb_urls' table created or already exists.")
+
+            # Create the 'organizations' table
+            organizations_table_query = """
+                CREATE TABLE IF NOT EXISTS organizations (
+                    org_id SERIAL PRIMARY KEY,
+                    org_name TEXT,
+                    web_url TEXT,
+                    fb_url TEXT,
+                    ig_url TEXT,
+                    phone TEXT CHECK (phone ~ '^\(\d{3}\) \d{3}-\d{4}$'),
+                    email TEXT,
+                    address_id INTEGER
+                )
+            """
+            self.execute_query(organizations_table_query)
+            self.logger.info("create_tables: 'organizations' table created or already exists.")
 
         except Exception as e:
             self.logger.error("create_tables: Failed to create tables: %s", e)

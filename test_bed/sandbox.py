@@ -1,0 +1,5 @@
+string = """We are excited to bring you dancing the 4th Friday of every month at an all ages venue right in the heart of downtown, with a wooden dance floor!!!!! 7:45pm Doors open
+Salsa Caliente’s team will be there to greet you. 8:00pm Salsa lesson
+Taught by World Salsa University certified instructor, Christina Morrison. No experience or partner is necessary as we rotate partners throughout the lesson so you will already know a LOT of people by the time the dancing begins. 9:00pm- midnight
+Dancing to Salsa, Bachata, Merengue, Cha Cha Cha and more. All ages welcome. $15.00 per person + service fee on Eventbrite or cash only at the door. $10 cash for Edelweiss Club members at the door only. *Limited capacity. First come first served. We reserve the right to refuse entrance at the door."""
+print(len(string))

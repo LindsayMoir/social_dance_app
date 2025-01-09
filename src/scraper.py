@@ -437,6 +437,7 @@ class EventSpider(scrapy.Spider):
         df['Price'] = pd.to_numeric(df['description'].str.extract(r'\$(\d{1,5})')[0], errors='coerce')
 
         # Clean the description
+        # Remove HTML tags and unnecessary whitespace
         df['description'] = df['description'].apply(
             lambda x: re.sub(r'\s{2,}', ' ', re.sub(r'<[^>]*>', ' ', str(x) if pd.notnull(x) else '')).strip()
         ).str.replace('&#39;', "'").str.replace("you're", "you are")
