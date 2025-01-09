@@ -174,11 +174,6 @@ class EventSpider(scrapy.Spider):
         Returns:
         bool: True if the URL is relevant, False otherwise.
         """
-        if 'facebook' in url:
-            db_handler.write_url_to_fb_table(url)
-            logging.debug(f"def driver(): URL {url} is a Facebook link and should never happen.")
-            return
-        
         # Process non-facebook links
         extracted_text = self.extract_text_with_playwright(url)
 
@@ -227,60 +222,6 @@ class EventSpider(scrapy.Spider):
 
         logging.info(f"def check_keywords_in_text: URL {url} marked as irrelevant since there are no keywords, events, or 'calendar' in URL.")
         return False
-
-    def extract_and_parse_json(self, result, url):
-        """
-        Parameters:
-        result (str): The response string from which JSON needs to be extracted.
-        url (str): The URL from which the response was obtained.
-        Returns:
-        list or None: Returns a list of events if JSON is successfully extracted and parsed, 
-                      otherwise returns None.
-        """
-        if "No events found" in result:
-            logging.info("def extract_and_parse_json(): No events found in result.")
-            return None
-        
-        # Check if the response contains JSON
-        if 'json' in result and len(result) > 100:
-            logging.info("def extract_and_parse_json(): JSON found in result.")
-
-            # Step 1: Remove single-line comments
-            no_comments = re.sub(r'\s*//.*', '', result)
-
-            # Step 2: Remove ellipsis patterns (if they occur)
-            cleaned_str = re.sub(r',\s*\.\.\.\s*', '', no_comments, flags=re.DOTALL)
-
-            # Step 3: Ensure the string is a valid JSON array
-            cleaned_str = cleaned_str.strip()
-
-            # If the string doesn't start with '[', prepend it.
-            if not cleaned_str.startswith('['):
-                cleaned_str = '[' + cleaned_str
-
-            # If the string doesn't end with ']', append it.
-            if not cleaned_str.endswith(']'):
-                cleaned_str = cleaned_str + ']'
-
-            # Step 4: Remove any trailing commas before the closing bracket
-            cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)
-
-            # For debugging: print the cleaned JSON string
-            logging.info(f"def extract_and_parse_json(): for url {url}, \nCleaned JSON string: \n{cleaned_str}")
-
-            # Parse the cleaned JSON string
-            try:
-                # Convert JSON string to Python object
-                events_json =json.loads(cleaned_str)
-                return events_json
-                
-            except json.JSONDecodeError as e:
-                logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
-                return None
-            
-        else:
-            logging.info("def extract_and_parse_json(): No valid events found in result.")
-            return None
     
     def extract_text_with_playwright(self, url):
         """
@@ -299,8 +240,8 @@ class EventSpider(scrapy.Spider):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=config['crawling']['headless'])
             page = browser.new_page()
-            page.goto(url, timeout=30000)  # Wait up to 30 seconds for the page to load
-            page.wait_for_timeout(9000)  # Additional wait for dynamic content
+            page.goto(url, timeout=20000)  # Wait up to 30 seconds for the page to load
+            page.wait_for_timeout(3000)  # Additional wait for dynamic content
 
             # Extract the visible text
             content = page.content()  # Get the full HTML content

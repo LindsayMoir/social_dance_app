@@ -4,6 +4,7 @@ import logging
 from openai import OpenAI
 import os
 import pandas as pd
+import re
 import yaml
 
 from db import DatabaseHandler
@@ -192,7 +193,6 @@ class LLMHandler:
         
         return None
 
-
     def extract_and_parse_json(self, result, url):
         """
         Parameters:
@@ -207,28 +207,43 @@ class LLMHandler:
             return None
         
         # Check if the response contains JSON
-        if 'json' in result:
+        if 'json' in result and len(result) > 100:
+            logging.info("def extract_and_parse_json(): JSON found in result.")
+
+            # Get just the JSON string from the response
             start_position = result.find('[')
-            end_position = result.find(']') + 1
-            if start_position != -1 and end_position != -1:
-                # Extract JSON part
-                json_string = result[start_position:end_position]
+            end_position = result.rfind(']') + 1
+            json_string = result[start_position:end_position]
 
-                #try:
+            # Remove single-line comments
+            cleaned_str = re.sub(r'\s*//.*', '', json_string)
+
+            # Remove ellipsis patterns (if they occur)
+            cleaned_str = cleaned_str.replace('...', '')
+
+            # Ensure the string is a valid JSON array
+            cleaned_str = cleaned_str.strip()
+
+            # Remove any trailing commas before the closing bracket
+            cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)
+
+            # For debugging: print the cleaned JSON string
+            logging.info(f"def extract_and_parse_json(): for url {url}, \nCleaned JSON string: \n{cleaned_str}")
+
+            # Parse the cleaned JSON string
+            try:
                 # Convert JSON string to Python object
-                logging.info("def extract_and_parse_json(): JSON found in result.")
-                events_json = json.loads(json_string)
+                events_json =json.loads(cleaned_str)
                 return events_json
-                    
-                #except json.JSONDecodeError as e:
-                #logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
-                #return None
+                
+            except json.JSONDecodeError as e:
+                logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
+                return None
+            
+        else:
+            logging.info("def extract_and_parse_json(): No valid events found in result.")
+            return None
 
-        logging.info("def extract_and_parse_json(): No JSON found in result.")
-        
-        return None
-    
-   
 # Run the LLM
 if __name__ == "__main__":
 

@@ -3,53 +3,36 @@ import pandas as pd
 import re
 
 json_str = """
-{
-        "org_name": "Salsa Del Barrio",
-        "dance_style": "salsa",
+    [{
+        "org_name": "Miguelito Valdes Trio",
+        "dance_style": "swing",
         "url": "",
         "event_type": "other",
-        "event_name": "Salsa Del Barrio",
-        "day_of_week": "Saturday",
-        "start_date": "2023-11-11",
-        "end_date": "2023-11-11",
-        "start_time": "11:00",
-        "end_time": "12:00",
+        "event_name": "Miguelito Valdes Trio",
+        "day_of_week": "Tuesday",
+        "start_date": "2025-01-07",
+        "end_date": "2025-01-07",
+        "start_time": "20:30",
+        "end_time": "",
         "price": "",
         "location": "",
-        "description": "Radio show featuring interviews with local and international Salsa dancers and musicians, the history of Salsa music and dance and lots of great Salsa music!"
+        "description": ""
     },
     {
-        "org_name": "Salsa Del Barrio",
+        "org_name": "Cuban Salsa Club",
         "dance_style": "salsa",
         "url": "",
-        "event_type": "[other, fred]",
-        "event_name": "Salsa Del Barrio",
-        "day_of_week": "Saturday",
-        "start_date": "2023-11-18",
-        "end_date": "2023-11-18",
-        "start_time": "11:00",
-        "end_time": "12:00",
+        "event_type": "social dance",
+        "event_name": "[tentative] Cuban Salsa Club",
+        "day_of_week": "Wednesday",
+        "start_date": "2025-01-08",
+        "end_date": "2025-01-08",
+        "start_time": "19:00",
+        "end_time": "",
         "price": "",
         "location": "",
-        "description": "Radio show featuring interviews with local and international Salsa dancers and musicians, the history of Salsa music and dance and lots of great Salsa music!"
-    },
-    {
-        "org_name": "Salsa Del Barrio",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "other",
-        "event_name": "[Salsa Del Barrio]",
-        "day_of_week": "Saturday",
-        "start_date": "2023-11-25",
-        "end_date": "2023-11-25",
-        "start_time": "11:00",
-        "end_time": "12:00",
-        "price": "",
-        "location": "",
-        "description": "Radio show featuring interviews with local and international Salsa dancers and musicians, the history of Salsa music and dance and lots of great Salsa music!"
-    },
-    // ... Repeat for each Saturday up to 2024-10-05
-]
+        "description": ""
+    }]
 """
 
 # Step 1: Remove single-line comments

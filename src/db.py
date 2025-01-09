@@ -444,7 +444,6 @@ class DatabaseHandler:
                 'Location': 'location',
                 'Description': 'description'
             })
-            df['url'] = url
             df['org_name'] = org_name
             if isinstance(keywords, list):
                 keywords = ', '.join(keywords)
@@ -468,9 +467,14 @@ class DatabaseHandler:
         # Add a 'time_stamp' column with the current timestamp
         df['time_stamp'] = datetime.now()
 
+        # Put the url in if it is not already in the dataframe
+        if df['url'].isnull().all():
+            df['url'] = url
+
         # Clean up the 'location' column and update address_ids
         cleaned_df = self.clean_up_address(df)
 
+        # Save the cleaned events data to a CSV file for debugging purposes
         cleaned_df.to_csv('output/cleaned_events.csv', index=False)
 
         # Log the number of events to be written
