@@ -240,11 +240,21 @@ class EventSpider(scrapy.Spider):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=config['crawling']['headless'])
             page = browser.new_page()
-            page.goto(url, timeout=20000)  # Wait up to 30 seconds for the page to load
-            page.wait_for_timeout(3000)  # Additional wait for dynamic content
+            page.goto(url, timeout=20000)
+            page.wait_for_timeout(3000)
 
-            # Extract the visible text
-            content = page.content()  # Get the full HTML content
+            # Strategy 1: Check if URL indicates a sign-in flow
+            if "accounts.google.com" in page.url:
+                print("Google sign-in detected via URL.")
+                input("Please complete sign-in and press Enter to continue...")
+
+            # Strategy 2: Check for common sign-in elements
+            elif page.is_visible("input#identifierId"):
+                print("Google sign-in page detected by element.")
+                input("Please complete sign-in and press Enter to continue...")
+
+            # After potential sign-in
+            content = page.content()
             soup = BeautifulSoup(content, 'html.parser')
             extracted_text = ' '.join(soup.stripped_strings)
 

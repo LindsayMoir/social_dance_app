@@ -467,12 +467,18 @@ class DatabaseHandler:
         # Add a 'time_stamp' column with the current timestamp
         df['time_stamp'] = datetime.now()
 
-        # Put the url in if it is not already in the dataframe
-        if df['url'].isnull().all():
+        # Put the url in if it is NOT social media or calendar url
+        if any(social in url for social in ['facebook', 'instagram', 'calendar']):
+            pass
+        else:
             df['url'] = url
 
         # Clean up the 'location' column and update address_ids
         cleaned_df = self.clean_up_address(df)
+
+        # Delete the rows if the majority of important columns are empty
+        cleaned_df = cleaned_df.dropna(subset=['start_date', 'end_date', 'start_time', 
+                                               'end_time', 'location', 'description'], how='all')
 
         # Save the cleaned events data to a CSV file for debugging purposes
         cleaned_df.to_csv('output/cleaned_events.csv', index=False)
@@ -483,6 +489,8 @@ class DatabaseHandler:
         # Write the cleaned events data to the 'events' table
         cleaned_df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
         self.logger.info("write_events_to_db: Events data written to the 'events' table.")
+
+        return None
 
     def get_address_id(self, address_dict):
         """
@@ -501,7 +509,6 @@ class DatabaseHandler:
             with self.conn.connect() as connection:
                 result = connection.execute(text(select_query), params).fetchone()
                 if result:
-                    logging.info(f"get_address_id: Found existing address_id {result[0]} for address '{address_dict['full_address']}'.")
                     return result[0]
                 else:
                     # Insert the new address and retrieve the generated address_id
