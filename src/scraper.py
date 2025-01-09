@@ -242,27 +242,45 @@ class EventSpider(scrapy.Spider):
             return None
         
         # Check if the response contains JSON
-        if 'json' in result:
-            start_position = result.find('[')
-            end_position = result.rfind(']') + 1
-            if start_position != -1 and end_position != -1:
-                # Extract JSON part
-                json_string = result[start_position:end_position]
+        if 'json' in result and len(result) > 100:
+            logging.info("def extract_and_parse_json(): JSON found in result.")
 
-                try:
-                    # Convert JSON string to Python object
-                    logging.info("def extract_and_parse_json(): JSON found in result.")
-                    events_json =json.loads(json_string)
-                    logging.info(f"def extract_and_parse_json(): For url: {url}, \nhere is the events_json: \n{events_json}.")
-                    return events_json
-                    
-                except json.JSONDecodeError as e:
-                    logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
-                    return None
+            # Step 1: Remove single-line comments
+            no_comments = re.sub(r'\s*//.*', '', result)
 
-        logging.info("def extract_and_parse_json(): No JSON found in result.")
-        
-        return None
+            # Step 2: Remove ellipsis patterns (if they occur)
+            cleaned_str = re.sub(r',\s*\.\.\.\s*', '', no_comments, flags=re.DOTALL)
+
+            # Step 3: Ensure the string is a valid JSON array
+            cleaned_str = cleaned_str.strip()
+
+            # If the string doesn't start with '[', prepend it.
+            if not cleaned_str.startswith('['):
+                cleaned_str = '[' + cleaned_str
+
+            # If the string doesn't end with ']', append it.
+            if not cleaned_str.endswith(']'):
+                cleaned_str = cleaned_str + ']'
+
+            # Step 4: Remove any trailing commas before the closing bracket
+            cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)
+
+            # For debugging: print the cleaned JSON string
+            logging.info(f"def extract_and_parse_json(): for url {url}, \nCleaned JSON string: \n{cleaned_str}")
+
+            # Parse the cleaned JSON string
+            try:
+                # Convert JSON string to Python object
+                events_json =json.loads(cleaned_str)
+                return events_json
+                
+            except json.JSONDecodeError as e:
+                logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
+                return None
+            
+        else:
+            logging.info("def extract_and_parse_json(): No valid events found in result.")
+            return None
     
     def extract_text_with_playwright(self, url):
         """

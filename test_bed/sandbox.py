@@ -1,601 +1,90 @@
 import json
 import pandas as pd
+import re
 
-string = """
-[
-    {
-        "org_name": "",
-        "dance_style": "",
+json_str = """
+{
+        "org_name": "Salsa Del Barrio",
+        "dance_style": "salsa",
         "url": "",
         "event_type": "other",
-        "event_name": "Studio closed for the holidays",
-        "day_of_week": "",
-        "start_date": "2024-12-23",
-        "end_date": "2025-01-05",
-        "start_time": "",
-        "end_time": "",
+        "event_name": "Salsa Del Barrio",
+        "day_of_week": "Saturday",
+        "start_date": "2023-11-11",
+        "end_date": "2023-11-11",
+        "start_time": "11:00",
+        "end_time": "12:00",
         "price": "",
         "location": "",
-        "description": "Studio closed for the holidays"
+        "description": "Radio show featuring interviews with local and international Salsa dancers and musicians, the history of Salsa music and dance and lots of great Salsa music!"
     },
     {
-        "org_name": "Studio 4 Athletics",
+        "org_name": "Salsa Del Barrio",
         "dance_style": "salsa",
         "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Ladies Team",
-        "day_of_week": "Monday",
-        "start_date": "2025-01-06",
-        "end_date": "2025-01-06",
-        "start_time": "19:00",
-        "end_time": "20:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Ladies Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Salsa On 2 & Cha Cha Cha - Intermediate/ Advanced",
-        "day_of_week": "Monday",
-        "start_date": "2025-01-06",
-        "end_date": "2025-01-06",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Salsa On 2 & Cha Cha Cha - Intermediate/ Advanced"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Touring & Training Team",
-        "day_of_week": "Monday",
-        "start_date": "2025-01-06",
-        "end_date": "2025-01-06",
-        "start_time": "21:00",
-        "end_time": "22:30",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Touring & Training Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Student Salsa Team",
-        "day_of_week": "Tuesday",
-        "start_date": "2025-01-07",
-        "end_date": "2025-01-07",
-        "start_time": "19:00",
-        "end_time": "20:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Student Salsa Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Salsa On 2 & Cha Cha- Fundamentals",
-        "day_of_week": "Tuesday",
-        "start_date": "2025-01-07",
-        "end_date": "2025-01-07",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Salsa On 2 & Cha Cha- Fundamentals"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Salsa On 2 & Cha Cha- Beginner Intermediate",
-        "day_of_week": "Tuesday",
-        "start_date": "2025-01-07",
-        "end_date": "2025-01-07",
-        "start_time": "21:00",
-        "end_time": "22:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Salsa On 2 & Cha Cha- Beginner Intermediate"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Ladies Team",
-        "day_of_week": "Wednesday",
-        "start_date": "2025-01-08",
-        "end_date": "2025-01-08",
-        "start_time": "19:00",
-        "end_time": "20:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Ladies Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Company Class",
-        "day_of_week": "Wednesday",
-        "start_date": "2025-01-08",
-        "end_date": "2025-01-08",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Company Class"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Touring & Training Team",
-        "day_of_week": "Wednesday",
-        "start_date": "2025-01-08",
-        "end_date": "2025-01-08",
-        "start_time": "21:00",
-        "end_time": "22:30",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Touring & Training Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "bachata, merengue",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Bachata Team",
-        "day_of_week": "Thursday",
-        "start_date": "2025-01-09",
-        "end_date": "2025-01-09",
-        "start_time": "19:00",
-        "end_time": "20:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Bachata Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "bachata, merengue",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Bachata & Merengue- All Levels",
-        "day_of_week": "Thursday",
-        "start_date": "2025-01-09",
-        "end_date": "2025-01-09",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Bachata & Merengue- All Levels"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "social dance",
-        "event_name": "Student Social & Practice Time",
-        "day_of_week": "Thursday",
-        "start_date": "2025-01-09",
-        "end_date": "2025-01-09",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Student Social & Practice Time"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "social dance",
-        "event_name": "Party- Caliente Salsa Saturdays",
+        "event_type": "[other, fred]",
+        "event_name": "Salsa Del Barrio",
         "day_of_week": "Saturday",
-        "start_date": "2025-01-11",
-        "end_date": "2025-01-12",
-        "start_time": "20:15",
-        "end_time": "00:00",
+        "start_date": "2023-11-18",
+        "end_date": "2023-11-18",
+        "start_time": "11:00",
+        "end_time": "12:00",
         "price": "",
-        "location": "STUDIO 4 ATHLETICS, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Party- Caliente Salsa Saturdays"
+        "location": "",
+        "description": "Radio show featuring interviews with local and international Salsa dancers and musicians, the history of Salsa music and dance and lots of great Salsa music!"
     },
     {
-        "org_name": "Studio 4 Athletics",
+        "org_name": "Salsa Del Barrio",
         "dance_style": "salsa",
         "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Ladies Team",
-        "day_of_week": "Monday",
-        "start_date": "2025-01-13",
-        "end_date": "2025-01-13",
-        "start_time": "19:00",
-        "end_time": "20:00",
+        "event_type": "other",
+        "event_name": "[Salsa Del Barrio]",
+        "day_of_week": "Saturday",
+        "start_date": "2023-11-25",
+        "end_date": "2023-11-25",
+        "start_time": "11:00",
+        "end_time": "12:00",
         "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Ladies Team"
+        "location": "",
+        "description": "Radio show featuring interviews with local and international Salsa dancers and musicians, the history of Salsa music and dance and lots of great Salsa music!"
     },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Salsa On 2 & Cha Cha Cha - Intermediate/ Advanced",
-        "day_of_week": "Monday",
-        "start_date": "2025-01-13",
-        "end_date": "2025-01-13",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Salsa On 2 & Cha Cha Cha - Intermediate/ Advanced"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Touring & Training Team",
-        "day_of_week": "Monday",
-        "start_date": "2025-01-13",
-        "end_date": "2025-01-13",
-        "start_time": "21:00",
-        "end_time": "22:30",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Touring & Training Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Student Salsa Team",
-        "day_of_week": "Tuesday",
-        "start_date": "2025-01-14",
-        "end_date": "2025-01-14",
-        "start_time": "19:00",
-        "end_time": "20:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Student Salsa Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Salsa On 2 & Cha Cha- Fundamentals",
-        "day_of_week": "Tuesday",
-        "start_date": "2025-01-14",
-        "end_date": "2025-01-14",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Salsa On 2 & Cha Cha- Fundamentals"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Salsa On 2 & Cha Cha- Beginner Intermediate",
-        "day_of_week": "Tuesday",
-        "start_date": "2025-01-14",
-        "end_date": "2025-01-14",
-        "start_time": "21:00",
-        "end_time": "22:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Salsa On 2 & Cha Cha- Beginner Intermediate"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Ladies Team",
-        "day_of_week": "Wednesday",
-        "start_date": "2025-01-15",
-        "end_date": "2025-01-15",
-        "start_time": "19:00",
-        "end_time": "20:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Ladies Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Company Class",
-        "day_of_week": "Wednesday",
-        "start_date": "2025-01-15",
-        "end_date": "2025-01-15",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Company Class"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Touring & Training Team",
-        "day_of_week": "Wednesday",
-        "start_date": "2025-01-15",
-        "end_date": "2025-01-15",
-        "start_time": "21:00",
-        "end_time": "22:30",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Touring & Training Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "bachata, merengue",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Bachata Team",
-        "day_of_week": "Thursday",
-        "start_date": "2025-01-16",
-        "end_date": "2025-01-16",
-        "start_time": "19:00",
-        "end_time": "20:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Bachata Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "bachata, merengue",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Bachata & Merengue- All Levels",
-        "day_of_week": "Thursday",
-        "start_date": "2025-01-16",
-        "end_date": "2025-01-16",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Bachata & Merengue- All Levels"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "social dance",
-        "event_name": "Student Social & Practice Time",
-        "day_of_week": "Thursday",
-        "start_date": "2025-01-16",
-        "end_date": "2025-01-16",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Student Social & Practice Time"
-    },
-    {
-        "org_name": "Dance City",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "social dance",
-        "event_name": "Party- Salsa Night @ Dance City",
-        "day_of_week": "Friday",
-        "start_date": "2025-01-24",
-        "end_date": "2025-01-25",
-        "start_time": "20:15",
-        "end_time": "00:00",
-        "price": "",
-        "location": "Victoria Edelweiss Club, 108 Niagara St, Victoria, BC V8V 1E9, Canada",
-        "description": "Party- Salsa Night @ Dance City"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Ladies Team",
-        "day_of_week": "Monday",
-        "start_date": "2025-01-27",
-        "end_date": "2025-01-27",
-        "start_time": "19:00",
-        "end_time": "20:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Ladies Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Salsa On 2 & Cha Cha Cha - Intermediate/ Advanced",
-        "day_of_week": "Monday",
-        "start_date": "2025-01-27",
-        "end_date": "2025-01-27",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Salsa On 2 & Cha Cha Cha - Intermediate/ Advanced"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Touring & Training Team",
-        "day_of_week": "Monday",
-        "start_date": "2025-01-27",
-        "end_date": "2025-01-27",
-        "start_time": "21:00",
-        "end_time": "22:30",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Touring & Training Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Student Salsa Team",
-        "day_of_week": "Tuesday",
-        "start_date": "2025-01-28",
-        "end_date": "2025-01-28",
-        "start_time": "19:00",
-        "end_time": "20:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Student Salsa Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Salsa On 2 & Cha Cha- Fundamentals",
-        "day_of_week": "Tuesday",
-        "start_date": "2025-01-28",
-        "end_date": "2025-01-28",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Salsa On 2 & Cha Cha- Fundamentals"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Salsa On 2 & Cha Cha- Beginner Intermediate",
-        "day_of_week": "Tuesday",
-        "start_date": "2025-01-28",
-        "end_date": "2025-01-28",
-        "start_time": "21:00",
-        "end_time": "22:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Salsa On 2 & Cha Cha- Beginner Intermediate"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Ladies Team",
-        "day_of_week": "Wednesday",
-        "start_date": "2025-01-29",
-        "end_date": "2025-01-29",
-        "start_time": "19:00",
-        "end_time": "20:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Ladies Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Company Class",
-        "day_of_week": "Wednesday",
-        "start_date": "2025-01-29",
-        "end_date": "2025-01-29",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Company Class"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Touring & Training Team",
-        "day_of_week": "Wednesday",
-        "start_date": "2025-01-29",
-        "end_date": "2025-01-29",
-        "start_time": "21:00",
-        "end_time": "22:30",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Touring & Training Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "bachata, merengue",
-        "url": "",
-        "event_type": "rehearsal",
-        "event_name": "Rehearsal- Bachata Team",
-        "day_of_week": "Thursday",
-        "start_date": "2025-01-30",
-        "end_date": "2025-01-30",
-        "start_time": "19:00",
-        "end_time": "20:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Rehearsal- Bachata Team"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "bachata, merengue",
-        "url": "",
-        "event_type": "class",
-        "event_name": "Bachata & Merengue- All Levels",
-        "day_of_week": "Thursday",
-        "start_date": "2025-01-30",
-        "end_date": "2025-01-30",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Bachata & Merengue- All Levels"
-    },
-    {
-        "org_name": "Studio 4 Athletics",
-        "dance_style": "salsa",
-        "url": "",
-        "event_type": "social dance",
-        "event_name": "Student Social & Practice Time",
-        "day_of_week": "Thursday",
-        "start_date": "2025-01-30",
-        "end_date": "2025-01-30",
-        "start_time": "20:00",
-        "end_time": "21:00",
-        "price": "",
-        "location": "Studio 4 Athletics, 715 Yates St, Victoria, BC V8W 1L6, Canada",
-        "description": "Student Social & Practice Time"
-    }
+    // ... Repeat for each Saturday up to 2024-10-05
 ]
 """
 
-# Parse the JSON string into a Python list of dictionaries
-data = json.loads(string)
+# Step 1: Remove single-line comments
+no_comments = re.sub(r'\s*//.*', '', json_str)
 
-# Convert the list of dictionaries into a pandas DataFrame
-df = pd.DataFrame(data)
+# Step 2: Remove ellipsis patterns (if they occur)
+cleaned_str = re.sub(r',\s*\.\.\.\s*', '', no_comments, flags=re.DOTALL)
 
-# Display the DataFrame
-print(df)
+# Step 3: Ensure the string is a valid JSON array
+cleaned_str = cleaned_str.strip()
+
+# If the string doesn't start with '[', prepend it.
+if not cleaned_str.startswith('['):
+    cleaned_str = '[' + cleaned_str
+
+# If the string doesn't end with ']', append it.
+if not cleaned_str.endswith(']'):
+    cleaned_str = cleaned_str + ']'
+
+# Step 4: Remove any trailing commas before the closing bracket
+cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)
+
+# For debugging: print the cleaned JSON string
+print(cleaned_str)
+
+# Parse the cleaned JSON string
+try:
+    data = json.loads(cleaned_str)
+except json.JSONDecodeError as e:
+    print(f"JSON decoding error: {e}")
+    data = []
+
+# Convert to DataFrame if parsing was successful
+if data:
+    df = pd.DataFrame(data)
+    print(df)
+else:
+    print("No data parsed.")
