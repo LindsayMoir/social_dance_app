@@ -236,7 +236,6 @@ class EventSpider(scrapy.Spider):
         Raises:
             Exception: If there is an issue with loading the page or extracting the text.
         """
-        #try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=config['crawling']['headless'])
             page = browser.new_page()
@@ -260,10 +259,6 @@ class EventSpider(scrapy.Spider):
 
             browser.close()
             return extracted_text
-            
-        # except Exception as e:
-        #     logging.error(f"def extract_text_with_playwright(): Failed to extract text with Playwright for URL {url}: {e}")
-        #     return None
 
     def fetch_google_calendar_events(self, calendar_url, url, org_name, keywords):
         """

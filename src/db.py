@@ -163,6 +163,23 @@ class DatabaseHandler:
         except Exception as e:
             self.logger.error("create_tables: Failed to create tables: %s", e)
 
+        # See if this worked.
+        query = """
+                SELECT table_schema,
+                    table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                AND table_type = 'BASE TABLE'
+                ORDER BY table_name;
+                """
+        rows = self.execute_query(query)
+        if rows:
+            for schema, table in rows:
+                self.logger.info("Schema: %s, Table: %s", schema, table)
+        else:
+            self.logger.info("No tables found or query failed.")
+
+
     def execute_query(self, query, params=None):
         """
         Executes a given SQL query with optional parameters.
@@ -477,8 +494,13 @@ class DatabaseHandler:
         cleaned_df = self.clean_up_address(df)
 
         # Delete the rows if the majority of important columns are empty
-        cleaned_df = cleaned_df.dropna(subset=['start_date', 'end_date', 'start_time', 
-                                               'end_time', 'location', 'description'], how='all')
+        important_columns = ['start_date', 'end_date', 'start_time', 'end_time', 'location', 'description']
+
+        # Replace empty strings (and strings containing only whitespace) with NA in the entire DataFrame for just the important columns
+        cleaned_df[important_columns] = cleaned_df[important_columns].replace(r'^\s*$', pd.NA, regex=True)
+
+        # Now drop rows where all important columns are NA
+        cleaned_df = cleaned_df.dropna(subset=important_columns, how='all')
 
         # Save the cleaned events data to a CSV file for debugging purposes
         cleaned_df.to_csv('output/cleaned_events.csv', index=False)
