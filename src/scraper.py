@@ -91,7 +91,7 @@ class EventSpider(scrapy.Spider):
                 logging.info(f"Skipping crawl for Facebook URL: {url}")
             else:
                 # We need to write the url to the database, if it is not already there
-                other_links, relevant, increment_crawl_trys = '', True, 1
+                other_links, relevant, increment_crawl_trys = '', None, 1
                 db_handler.write_url_to_db(org_name, keywords, url, other_links, relevant, increment_crawl_trys)
 
                 if url not in self.visited_links:
@@ -149,7 +149,7 @@ class EventSpider(scrapy.Spider):
         for link in all_links:
             if link not in self.visited_links:
                 self.visited_links.add(link)  # Mark the page link as visited
-                other_links, relevant, increment_crawl_trys = '', True, 1
+                other_links, relevant, increment_crawl_trys = '', None, 1
                 db_handler.write_url_to_db(org_name, keywords, url, other_links, relevant, increment_crawl_trys)
                 if len(self.visited_links) >= config['crawling']['urls_run_limit']:
                     logging.info(f"def parse(): Maximum URL limit reached: {config['crawling']['urls_run_limit']} Stopping further crawling.")
@@ -186,15 +186,27 @@ class EventSpider(scrapy.Spider):
 
             if llm_status:
                 # Mark the event link as relevant
-                db_handler.update_url(url, update_other_links='', relevant=True, increment_crawl_trys=0)
+                update_status = db_handler.update_url(url, update_other_links='', relevant=True, increment_crawl_trys=0)
+                logging.info(f"def driver(): URL {url} not in url table.")
+                if update_status:
+                    pass
+                else:
+                    db_handler.write_url_to_db(org_name, keywords, url, '', True, 1)
+                    logging.info(f"def driver(): URL {url} marked as relevant, since there is a LLM response.")
 
             else:
                 # Mark the event link as irrelevant
-                db_handler.update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0) 
+                update_status = db_handler.update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0)
+                logging.info(f"def driver(): URL {url} not in url table.")
+                if update_status:
+                    pass
+                else:
+                    db_handler.write_url_to_db(org_name, keywords, url, '', False, 1)
+                    logging.info(f"def driver(): URL {url} marked as irrelevant since there is NO LLM response.")
 
         else:
-            logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords.")
             db_handler.update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
+            logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords.")
 
         return
 

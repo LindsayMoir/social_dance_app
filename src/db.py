@@ -43,7 +43,7 @@ class DatabaseHandler:
             )
 
             # Create and return the SQLAlchemy engine
-            engine = create_engine(connection_string)
+            engine = create_engine(connection_string, isolation_level="AUTOCOMMIT")
             return engine
 
         except Exception as e:
@@ -78,11 +78,10 @@ class DatabaseHandler:
             # Create the 'urls' table
             urls_table_query = """
                 CREATE TABLE IF NOT EXISTS urls (
-                    url_id SERIAL PRIMARY KEY,
+                    links TEXT PRIMARY KEY,
                     time_stamps TIMESTAMP,
                     org_names TEXT,
                     keywords TEXT,
-                    links TEXT UNIQUE,
                     other_links TEXT,
                     relevant BOOLEAN,
                     crawl_trys INTEGER
@@ -231,7 +230,14 @@ class DatabaseHandler:
         Returns:
             bool: True if update was successful, False otherwise.
         """
-        try:
+        # See if url is in the urls table
+        query = """"
+            SELECT * FROM urls
+            WHERE links = :url
+            """
+        params = {'url': url}
+        result = self.execute_query(query, params)
+        if result:
             # Prepare the update query with conditional 'other_links'
             if update_other_links != 'No':
                 query = """
@@ -264,19 +270,15 @@ class DatabaseHandler:
                     'increment': increment_crawl_trys,
                     'relevant': relevant,
                     'url': url
-                }
-
-            result = self.execute_query(query, params)
-            if result and result.rowcount > 0:
-                self.logger.info("update_url: Updated URL '%s' successfully.", url)
+                } 
                 return True
-            else:
-                self.logger.info("update_url: URL '%s' not found for update.", url)
-                return False
-
-        except Exception as e:
-            self.logger.error("update_url: Failed to update URL '%s': %s", url, e)
+        else:
+            self.logger.info("update_url: URL '%s' not found for update.", url)
             return False
+
+    # except Exception as e:
+    #     self.logger.error("update_url: Failed to update URL '%s': %s", url, e)
+    #     return False
 
     def write_url_to_db(self, org_names, keywords, url, other_links, relevant, increment_crawl_trys):
         """
