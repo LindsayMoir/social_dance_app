@@ -198,10 +198,9 @@ class DatabaseHandler:
             with self.conn.connect() as connection:
                 result = connection.execute(text(query), params or {})
                 connection.commit()
-                self.logger.info("execute_query: Query executed successfully.")
                 return result
         except SQLAlchemyError as e:
-            self.logger.error("execute_query: Query execution failed: %s", e)
+            self.logger.error("def execute_query(): {query}\nQuery execution failed: %s", e)
             return None
     
     def close_connection(self):
@@ -231,16 +230,17 @@ class DatabaseHandler:
             bool: True if update was successful, False otherwise.
         """
         # See if url is in the urls table
-        query = """"
+        select_query = """
             SELECT * FROM urls
             WHERE links = :url
-            """
-        params = {'url': url}
-        result = self.execute_query(query, params)
+        """
+        select_params = {'url': url}
+        result = self.execute_query(select_query, select_params)
+
         if result:
             # Prepare the update query with conditional 'other_links'
             if update_other_links != 'No':
-                query = """
+                update_query = """
                     UPDATE urls
                     SET 
                         time_stamps = :current_time,
@@ -249,7 +249,7 @@ class DatabaseHandler:
                         relevant = :relevant
                     WHERE links = :url
                 """
-                params = {
+                update_params = {
                     'current_time': datetime.now(),
                     'other_links': update_other_links,
                     'increment': increment_crawl_trys,
@@ -257,7 +257,7 @@ class DatabaseHandler:
                     'url': url
                 }
             else:
-                query = """
+                update_query = """
                     UPDATE urls
                     SET 
                         time_stamps = :current_time,
@@ -265,20 +265,24 @@ class DatabaseHandler:
                         relevant = :relevant
                     WHERE links = :url
                 """
-                params = {
+                update_params = {
                     'current_time': datetime.now(),
                     'increment': increment_crawl_trys,
                     'relevant': relevant,
                     'url': url
-                } 
+                }
+
+            # Execute the update
+            update_result = self.execute_query(update_query, update_params)
+            if update_result and update_result.rowcount > 0:
+                self.logger.info("update_url: Updated URL '%s' successfully.", url)
                 return True
+            else:
+                self.logger.info("update_url: Failed to update URL '%s'.", url)
+                return False
         else:
             self.logger.info("update_url: URL '%s' not found for update.", url)
             return False
-
-    # except Exception as e:
-    #     self.logger.error("update_url: Failed to update URL '%s': %s", url, e)
-    #     return False
 
     def write_url_to_db(self, org_names, keywords, url, other_links, relevant, increment_crawl_trys):
         """
@@ -528,30 +532,44 @@ class DatabaseHandler:
             int: The address_id corresponding to the address.
         """
         select_query = "SELECT address_id FROM address WHERE full_address = :full_address"
-        params = {'full_address': address_dict['full_address']}
+        select_params = {'full_address': address_dict['full_address']}
+        
         try:
-            with self.conn.connect() as connection:
-                result = connection.execute(text(select_query), params).fetchone()
-                if result:
-                    return result[0]
-                else:
-                    # Insert the new address and retrieve the generated address_id
-                    columns = ', '.join(address_dict.keys())
-                    placeholders = ', '.join([f":{k}" for k in address_dict.keys()])
-                    insert_query = f"INSERT INTO address ({columns}) VALUES ({placeholders}) RETURNING address_id"
+            # Attempt to retrieve the address_id if it exists
+            result = self.execute_query(select_query, select_params)
+            if result:
+                row = result.fetchone()
+                if row:
+                    return row[0]
 
-                    logging.debug(f"Insert Query: {insert_query}")
-                    logging.debug(f"Insert Params: {address_dict}")
-
-                    result = connection.execute(text(insert_query), address_dict).fetchone()
-                    address_id = result[0]
-                    connection.commit()
+            # If not found, insert the new address
+            columns = ', '.join(address_dict.keys())
+            placeholders = ', '.join([f":{k}" for k in address_dict.keys()])
+            insert_query = f"""
+                INSERT INTO address ({columns})
+                VALUES ({placeholders})
+                RETURNING address_id
+            """
+            
+            logging.debug(f"Insert Query: {insert_query}")
+            logging.debug(f"Insert Params: {address_dict}")
+            
+            # Execute the insert query
+            insert_result = self.execute_query(insert_query, address_dict)
+            if insert_result:
+                row = insert_result.fetchone()
+                if row:
+                    address_id = row[0]
                     logging.info(f"get_address_id: Inserted new address_id {address_id} for address '{address_dict['full_address']}'.")
                     return address_id
+
+            logging.error(f"get_address_id: Failed to insert or retrieve address_id for '{address_dict['full_address']}'.")
+            return None
+
         except Exception as e:
             logging.error(f"get_address_id: Failed to retrieve or insert address '{address_dict['full_address']}': {e}")
             return None
-        
+
     def clean_up_address(self, events_df):
         """
         Cleans up and standardizes address data from the 'events' table.
