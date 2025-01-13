@@ -1,0 +1,21 @@
+SELECT * 
+FROM events
+WHERE url NOT ILIKE '%google%'
+ORDER BY org_name
+
+SELECT org_name, COUNT (*) FROM events
+GROUP BY org_name
+
+SELECT * FROM urls
+ORDER BY org_names
+
+UPDATE urls
+SET 
+    time_stamps = '2025-01-10 11:14:28.983997',
+    other_links = '',
+    crawl_trys = 35,
+    relevant = TRUE
+WHERE links = 'https://www.redhotswing.com/';
+
+SELECT * FROM events
+ORDER BY org_name

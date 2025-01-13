@@ -1,6 +1,5 @@
-﻿City,State,Country,Search_Terms
-Victoria,British Columbia,Canada,bachata social dance events
-Victoria,British Columbia,Canada,kizomba social dance events
-Victoria,British Columbia,Canada,salsa social dance events
-Victoria,British Columbia,Canada,west coast swing social dance events
-Victoria,British Columbia,Canada,zouk social dance events
+﻿dance_style,keywords
+kizomba,"kizomba, urban kiz, semba, tarraxo, tarraxa, tarraxinha, douceur"
+latin,"salsa, bachata, kizomba, merengue, cha cha cha"
+swing,"swing, balboa, lindy hop, east coast swing"
+wcs,"west coast swing, wcs"
