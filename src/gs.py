@@ -4,29 +4,46 @@ import logging
 import pandas as pd
 from googleapiclient.discovery import build
 
-# Configure logging (adjust configuration as needed)
-logging.basicConfig(level=logging.INFO)
+# Initial basic logging configuration for early logs (console output)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 class GoogleSearch:
     def __init__(self, config_path="config/config.yaml"):
         """
-        Initialize GoogleSearch by loading configuration from a YAML file
-        and retrieving Google API credentials.
+        Initialize GoogleSearch by loading configuration from a YAML file,
+        setting up logging based on config, and retrieving Google API credentials.
 
         Args:
             config_path (str): Path to the configuration YAML file.
                                Defaults to "config/config.yaml".
-
-        Attributes:
-            config (dict): The configuration settings loaded from the YAML file.
-            api_key (str): The Google API key retrieved for searches.
-            cse_id (str): The Google Custom Search Engine ID retrieved.
         """
         self.config = self.load_config(config_path)
+        self.setup_logging()  # Set up file logging based on configuration
         logging.info("def __init__(): Configuration loaded successfully.")
-        
+
         # Retrieve and store API credentials once during initialization
         self.api_key, self.cse_id = self.get_keys('Google')
+
+    def setup_logging(self):
+        """
+        Set up logging file handler based on configuration.
+        """
+        log_file = self.config.get('logging', {}).get('file', 'gs_log.txt')
+        # Create file handler if not already set
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(formatter)
+        # Add file handler to the root logger
+        logging.getLogger().addHandler(file_handler)
+        logging.info(f"Logging to file: {log_file}")
 
     def load_config(self, config_path):
         """
@@ -52,16 +69,6 @@ class GoogleSearch:
     def get_keys(self, organization="Google"):
         """
         Retrieve the API key and CSE ID for a given organization from a CSV file.
-
-        Args:
-            organization (str): The name of the organization to retrieve keys for.
-                                Defaults to "Google".
-
-        Returns:
-            tuple: A tuple containing the API key and CSE ID for the specified organization.
-
-        Raises:
-            ValueError: If no keys are found for the specified organization.
         """
         keys_path = self.config['input']['keys']
         keys_df = pd.read_csv(keys_path)
@@ -118,8 +125,6 @@ class GoogleSearch:
             googleapiclient.errors.HttpError: If an error occurs during the API request.
         """
         logging.info(f"Performing Google search for query: {query}")
-        
-        # Use stored credentials
         service = build("customsearch", "v1", developerKey=self.api_key)
         response = service.cse().list(
             q=query,
