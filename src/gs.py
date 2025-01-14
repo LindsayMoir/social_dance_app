@@ -1,8 +1,11 @@
-import os
-import yaml
+from datetime import datetime
+from googleapiclient.discovery import build
 import logging
 import pandas as pd
-from googleapiclient.discovery import build
+import os
+import yaml
+
+from llm import LLMHandler
 
 # Initial basic logging configuration for early logs (console output)
 logging.basicConfig(
@@ -32,7 +35,7 @@ class GoogleSearch:
         """
         Set up logging file handler based on configuration.
         """
-        log_file = self.config.get('logging', {}).get('file', 'gs_log.txt')
+        log_file = self.config['logging']['gs_log_file']
         # Create file handler if not already set
         file_handler = logging.FileHandler(log_file)
         file_handler.setLevel(logging.INFO)
@@ -109,8 +112,33 @@ class GoogleSearch:
         query = f"{keywords} {location}"
         logging.debug(f"def build_query_string(): Built query string: {query}")
         return query
+    
+    def title_to_org_name(self, title, url):
+        """
+        Extract organization names from a title string.
 
-    def google_search(self, query, num_results=10):
+        Args:
+            title (str): The title string to extract organization names from.
+
+        Returns:
+            org_name (str): A likely organization names extracted from the title.
+        """
+        # Get prompt
+        prompt_file_path = self.config['prompts']['title_to_org_name']
+        with open(prompt_file_path, 'r') as file:
+            prompt = file.read()
+        prompt = prompt + title
+
+        # Get the organization name from the title
+        org_name = llm_instance.query_llm(prompt, url)
+        logging.info(f"def title_to_org_name(): Organization name returned by LLM is: {org_name}")
+
+        # Remove unecessary characters from the org_name
+        org_name = org_name.translate(str.maketrans("", "", "'\"<>"))
+
+        return org_name
+
+    def google_search(self, query, keywords, num_results=10):
         """
         Perform a Google search using the Custom Search API and retrieve title, URL, and snippet.
 
@@ -119,7 +147,7 @@ class GoogleSearch:
             num_results (int, optional): The number of search results to retrieve. Defaults to 10.
 
         Returns:
-            list: A list of dictionaries containing 'title', 'url', and 'snippet' for each search result.
+            list: A list of dictionaries containing 'org_name', 'title', 'keywords', 'url', and 'snippet' for each search result.
 
         Raises:
             googleapiclient.errors.HttpError: If an error occurs during the API request.
@@ -137,9 +165,12 @@ class GoogleSearch:
             for item in response['items']:
                 title = item.get('title')
                 url = item.get('link')
+                org_name = self.title_to_org_name(title, url)
                 snippet = item.get('snippet')
                 results.append({
+                    'org_names': org_name,
                     'title': title,
+                    'keywords': keywords,
                     'url': url,
                     'snippet': snippet
                 })
@@ -163,7 +194,7 @@ class GoogleSearch:
         keywords_df = self.read_keywords()
         for _, row in keywords_df.iterrows():
             query = self.build_query_string(row)
-            results = self.google_search(query)
+            results = self.google_search(query, row['keywords'])
             all_results.extend(results)
         logging.info(f"Driver completed with total {len(all_results)} results.")
 
@@ -173,10 +204,24 @@ class GoogleSearch:
 
 # Example usage:
 if __name__ == "__main__":
+
+    # Get the start time
+    start_time = datetime.now()
+    logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
+
     gs_instance = GoogleSearch()
+    llm_instance = LLMHandler()
     results_df = gs_instance.driver()
 
     # Write to a CSV file so it's readable in Excel
     output_path = gs_instance.config['output']['gs_search_results']
     results_df.to_csv(output_path, index=False)
     logging.info(f"Results written to {output_path}")
+
+    # Get the end time
+    end_time = datetime.now()
+    logging.info(f"__main__: Finished the crawler process at {end_time}")
+
+    # Calculate the total time taken
+    total_time = end_time - start_time
+    logging.info(f"__main__: Total time taken: {total_time}\n\n")

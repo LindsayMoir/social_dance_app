@@ -25,7 +25,6 @@ class LLMHandler:
 
         logging.info("LLMHandler initialized.")
     
-    
     def driver(self, url, search_term, extracted_text, org_name, keywords_list):
         """
         Determine the relevance of a given URL based on its content, keywords, or organization name.
@@ -59,7 +58,6 @@ class LLMHandler:
         else:
             # Mark the event link as irrelevant
             db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_trys=1)
-
 
     def check_keywords_in_text(self, url, extracted_text, org_name, keywords_list):
         """
@@ -152,7 +150,6 @@ class LLMHandler:
         logging.info(f"def generate_prompt(): \n{txt_file_path}")
 
         return prompt
-
 
     def query_llm(self, prompt, url):
         """
