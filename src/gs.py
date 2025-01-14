@@ -164,15 +164,13 @@ class GoogleSearch:
         if 'items' in response:
             for item in response['items']:
                 title = item.get('title')
+                logging.info(f"def google_search(): Title: {title}")
                 url = item.get('link')
                 org_name = self.title_to_org_name(title, url)
-                snippet = item.get('snippet')
                 results.append({
                     'org_names': org_name,
-                    'title': title,
                     'keywords': keywords,
-                    'url': url,
-                    'snippet': snippet
+                    'links': url
                 })
             logging.info(f"Found {len(results)} results for query: {query}")
         else:
@@ -214,7 +212,7 @@ if __name__ == "__main__":
     results_df = gs_instance.driver()
 
     # Write to a CSV file so it's readable in Excel
-    output_path = gs_instance.config['output']['gs_search_results']
+    output_path = gs_instance.config['input']['data_urls']
     results_df.to_csv(output_path, index=False)
     logging.info(f"Results written to {output_path}")
 

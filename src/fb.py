@@ -355,7 +355,6 @@ class FacebookEventScraper:
         3. Generates a prompt and queries the LLM to process the extracted text.
         4. Parses the LLM response to extract event data.
         5. Updates the event data with the URL and saves it to the database using `db_handler.write_events_to_db`.
-        6. Deduplicates the data in the database.
 
         Returns:
             None

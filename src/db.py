@@ -696,6 +696,20 @@ class DatabaseHandler:
         except Exception as e:
             self.logger.error("delete_event_and_url: Failed to delete event and URL: %s", e)
 
+    def delete_events_with_nulls(self):
+        """
+        Deletes events with start_date and start_time being null in the 'events' table.
+        """
+        try:
+            delete_query = """
+            DELETE FROM events
+            WHERE start_date IS NULL AND start_time IS NULL;
+            """
+            self.execute_query(delete_query)
+            self.logger.info("def delete_events_with_nulls(): Success")
+        except Exception as e:
+            self.logger.error("def delete_events_with_nulls(): Failed to delete events with start_date and start_time being null: %s", e)
+
 if __name__ == "__main__":
     start_time = datetime.now()
 
@@ -718,6 +732,7 @@ if __name__ == "__main__":
     # Perform deduplication and delete old events
     db_handler.dedup()
     db_handler.delete_old_events()
+    db_handler.delete_events_with_nulls()
 
     # Close the database connection
     db_handler.conn.dispose()  # Using dispose() for SQLAlchemy Engine

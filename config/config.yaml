@@ -1,6 +1,6 @@
 clean_up:
   dedup: True
-  old_events: 7
+  old_events: 3
 constants:
   fb_base_url: 'https://www.facebook.com/search/events?q=events'
   location: '%20victoria%20bc%20canada%20'
@@ -9,8 +9,8 @@ crawling:
   depth_limit: 3
   headless: False
   max_crawl_trys: 3
-  max_website_urls: 10
-  urls_run_limit: 50
+  max_website_urls: 5
+  urls_run_limit: 150
   scroll_depth: 3
 database:
   host: 'localhost'

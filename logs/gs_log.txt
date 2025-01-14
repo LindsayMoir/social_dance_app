@@ -1,0 +1,215 @@
+2025-01-13 21:46:34 [INFO] Logging to file: logs/gs_log.txt
+2025-01-13 21:46:34 [INFO] def __init__(): Configuration loaded successfully.
+2025-01-13 21:46:34 [INFO] Retrieved keys for organization: Google
+2025-01-13 21:46:34 [INFO] LLMHandler initialized.
+2025-01-13 21:46:34 [INFO] Read 4 keywords from data/keywords.csv
+2025-01-13 21:46:34 [INFO] Performing Google search for query: kizomba, urban kiz, semba, tarraxo, tarraxa, tarraxinha, douceur Victoria, British Columbia, Canada
+2025-01-13 21:46:34 [INFO] file_cache is only supported with oauth2client<4.0.0
+2025-01-13 21:46:38 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:46:38 [INFO] def query_llm(): LLM response content: 
+"Victoria International KizombaFestival"
+
+2025-01-13 21:46:38 [INFO] def query_llm(): LLM response received based on url https://www.instagram.com/vic_international_kizomba_fest/.
+2025-01-13 21:46:38 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Victoria International KizombaFestival"
+2025-01-13 21:46:42 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:46:42 [INFO] def query_llm(): LLM response content: 
+"Kizomba Victoria"
+
+2025-01-13 21:46:42 [INFO] def query_llm(): LLM response received based on url https://www.facebook.com/groups/265269613666246/.
+2025-01-13 21:46:42 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Kizomba Victoria"
+2025-01-13 21:46:42 [INFO] Found 2 results for query: kizomba, urban kiz, semba, tarraxo, tarraxa, tarraxinha, douceur Victoria, British Columbia, Canada
+2025-01-13 21:46:42 [INFO] Performing Google search for query: salsa, bachata, kizomba, merengue, cha cha cha Victoria, British Columbia, Canada
+2025-01-13 21:46:42 [INFO] file_cache is only supported with oauth2client<4.0.0
+2025-01-13 21:46:44 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:46:44 [INFO] def query_llm(): LLM response content: 
+"Paso Doble Dance Studios"
+
+2025-01-13 21:46:44 [INFO] def query_llm(): LLM response received based on url https://thedancestudiofinder.com/dance-studios/categories/paso-doble/.
+2025-01-13 21:46:44 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Paso Doble Dance Studios"
+2025-01-13 21:46:50 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:46:50 [INFO] def query_llm(): LLM response content: 
+"<Latin Dance Canada>"
+
+2025-01-13 21:46:50 [INFO] def query_llm(): LLM response received based on url https://latindancecanada.com/our-family/.
+2025-01-13 21:46:50 [INFO] def title_to_org_name(): Organization name returned by LLM is: "<Latin Dance Canada>"
+2025-01-13 21:46:56 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:46:56 [INFO] def query_llm(): LLM response content: 
+"Salsa Moderna"
+
+2025-01-13 21:46:56 [INFO] def query_llm(): LLM response received based on url https://latinvictoria.ca/.
+2025-01-13 21:46:56 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Salsa Moderna"
+2025-01-13 21:46:59 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:46:59 [INFO] def query_llm(): LLM response content: 
+"None"
+
+2025-01-13 21:46:59 [INFO] def query_llm(): LLM response received based on url https://www.instagram.com/elegancia_cubana/.
+2025-01-13 21:46:59 [INFO] def title_to_org_name(): Organization name returned by LLM is: "None"
+2025-01-13 21:47:03 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:47:03 [INFO] def query_llm(): LLM response content: 
+"Bachata Sensual Workshop"
+
+2025-01-13 21:47:03 [INFO] def query_llm(): LLM response received based on url https://www.eventbrite.ca/e/bachata-sensual-workshop-2025-tickets-1136959238689.
+2025-01-13 21:47:03 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Bachata Sensual Workshop"
+2025-01-13 21:47:10 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:47:10 [INFO] def query_llm(): LLM response content: 
+"Salsa Dancing Nanaimo"
+
+2025-01-13 21:47:10 [INFO] def query_llm(): LLM response received based on url https://www.facebook.com/groups/salsadancingnanaimo/.
+2025-01-13 21:47:10 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Salsa Dancing Nanaimo"
+2025-01-13 21:47:12 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:47:12 [INFO] def query_llm(): LLM response content: 
+"Latin Dancing Festivals in Canada"
+
+2025-01-13 21:47:12 [INFO] def query_llm(): LLM response received based on url https://latindancecalendar.com/festivals/location/canada/.
+2025-01-13 21:47:12 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Latin Dancing Festivals in Canada"
+2025-01-13 21:47:14 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:47:14 [INFO] def query_llm(): LLM response content: 
+"None"
+
+2025-01-13 21:47:14 [INFO] def query_llm(): LLM response received based on url https://wherecanwedance.com/event_types/social.
+2025-01-13 21:47:14 [INFO] def title_to_org_name(): Organization name returned by LLM is: "None"
+2025-01-13 21:47:19 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:47:19 [INFO] def query_llm(): LLM response content: 
+"Latin Dancing Festivals Worldwide"
+
+2025-01-13 21:47:19 [INFO] def query_llm(): LLM response received based on url https://latindancecalendar.com/festivals/.
+2025-01-13 21:47:19 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Latin Dancing Festivals Worldwide"
+2025-01-13 21:47:36 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:47:36 [INFO] def query_llm(): LLM response content: 
+"Salsa Dancing Nanaimo"
+
+2025-01-13 21:47:36 [INFO] def query_llm(): LLM response received based on url https://www.facebook.com/groups/salsadancingnanaimo/posts/1107350607491341/.
+2025-01-13 21:47:36 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Salsa Dancing Nanaimo"
+2025-01-13 21:47:36 [INFO] Found 10 results for query: salsa, bachata, kizomba, merengue, cha cha cha Victoria, British Columbia, Canada
+2025-01-13 21:47:36 [INFO] Performing Google search for query: swing, balboa, lindy hop, east coast swing Victoria, British Columbia, Canada
+2025-01-13 21:47:36 [INFO] file_cache is only supported with oauth2client<4.0.0
+2025-01-13 21:47:59 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:47:59 [INFO] def query_llm(): LLM response content: 
+"Strictly Lindy Hop Swing Vancouver, BC"
+
+2025-01-13 21:47:59 [INFO] def query_llm(): LLM response received based on url https://www.facebook.com/groups/strictlylindy/posts/1234576006605637/.
+2025-01-13 21:47:59 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Strictly Lindy Hop Swing Vancouver, BC"
+2025-01-13 21:48:03 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:03 [INFO] def query_llm(): LLM response content: 
+"Red Hot Swing"
+
+2025-01-13 21:48:03 [INFO] def query_llm(): LLM response received based on url https://www.redhotswing.com/.
+2025-01-13 21:48:03 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Red Hot Swing"
+2025-01-13 21:48:06 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:06 [INFO] def query_llm(): LLM response content: 
+"Strictly Lindy Hop Swing Vancouver, BC"
+
+2025-01-13 21:48:06 [INFO] def query_llm(): LLM response received based on url https://www.facebook.com/groups/strictlylindy/.
+2025-01-13 21:48:06 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Strictly Lindy Hop Swing Vancouver, BC"
+2025-01-13 21:48:10 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:10 [INFO] def query_llm(): LLM response content: 
+"East Coast Swing Dance Studios"
+
+2025-01-13 21:48:10 [INFO] def query_llm(): LLM response received based on url https://thedancestudiofinder.com/dance-studios/categories/east-coast-swing/.
+2025-01-13 21:48:10 [INFO] def title_to_org_name(): Organization name returned by LLM is: "East Coast Swing Dance Studios"
+2025-01-13 21:48:13 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:13 [INFO] def query_llm(): LLM response content: 
+"Lindy Cruise"
+
+2025-01-13 21:48:13 [INFO] def query_llm(): LLM response received based on url https://lindycruise.com/schedule/.
+2025-01-13 21:48:13 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Lindy Cruise"
+2025-01-13 21:48:19 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:19 [INFO] def query_llm(): LLM response content: 
+"None"
+
+2025-01-13 21:48:19 [INFO] def query_llm(): LLM response received based on url https://www.swingvictoria.net/events/past-events/swing-social-shag-and-balboa-shake-out-july-16-2022.
+2025-01-13 21:48:19 [INFO] def title_to_org_name(): Organization name returned by LLM is: "None"
+2025-01-13 21:48:23 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:23 [INFO] def query_llm(): LLM response content: 
+"Arthur Murray Victoria"
+
+2025-01-13 21:48:23 [INFO] def query_llm(): LLM response received based on url https://victoriaarthurmurray.com/dances-we-teach.
+2025-01-13 21:48:23 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Arthur Murray Victoria"
+2025-01-13 21:48:26 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:26 [INFO] def query_llm(): LLM response content: 
+"None"
+
+2025-01-13 21:48:26 [INFO] def query_llm(): LLM response received based on url https://www.swingvictoria.net/faq/where-to-swing-dance-in-victoria.
+2025-01-13 21:48:26 [INFO] def title_to_org_name(): Organization name returned by LLM is: "None"
+2025-01-13 21:48:31 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:31 [INFO] def query_llm(): LLM response content: 
+"Dance Lesson / Instruction"
+
+2025-01-13 21:48:31 [INFO] def query_llm(): LLM response received based on url http://www.danceweb.co.uk/dance-class-dance-lesson---instruction/12729.aspx.
+2025-01-13 21:48:31 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Dance Lesson / Instruction"
+2025-01-13 21:48:43 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:43 [INFO] def query_llm(): LLM response content: 
+"Swing scene still thriving in Victoria"
+
+2025-01-13 21:48:43 [INFO] def query_llm(): LLM response received based on url https://www.vicnews.com/entertainment/swing-scene-still-thriving-in-victoria-34869.
+2025-01-13 21:48:43 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Swing scene still thriving in Victoria"
+2025-01-13 21:48:43 [INFO] Found 10 results for query: swing, balboa, lindy hop, east coast swing Victoria, British Columbia, Canada
+2025-01-13 21:48:43 [INFO] Performing Google search for query: west coast swing, wcs Victoria, British Columbia, Canada
+2025-01-13 21:48:43 [INFO] file_cache is only supported with oauth2client<4.0.0
+2025-01-13 21:48:46 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:46 [INFO] def query_llm(): LLM response content: 
+"Victoria West Coast Swing Collective"
+
+2025-01-13 21:48:46 [INFO] def query_llm(): LLM response received based on url https://www.facebook.com/groups/victoriawestcoastswingcollective/.
+2025-01-13 21:48:46 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Victoria West Coast Swing Collective"
+2025-01-13 21:48:51 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:51 [INFO] def query_llm(): LLM response content: 
+"Victoria West Coast Swing Collective Society"
+
+2025-01-13 21:48:51 [INFO] def query_llm(): LLM response received based on url https://www.victoriawestcoastswing.com/.
+2025-01-13 21:48:51 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Victoria West Coast Swing Collective Society"
+2025-01-13 21:48:52 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:52 [INFO] def query_llm(): LLM response content: 
+"None"
+
+2025-01-13 21:48:52 [INFO] def query_llm(): LLM response received based on url https://www.instagram.com/ewienzveg/?hl=en.
+2025-01-13 21:48:52 [INFO] def title_to_org_name(): Organization name returned by LLM is: "None"
+2025-01-13 21:48:58 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:48:58 [INFO] def query_llm(): LLM response content: 
+"Victoria West Coast Swing Collective Society"
+
+2025-01-13 21:48:58 [INFO] def query_llm(): LLM response received based on url https://www.victoriawestcoastswing.com/jay-holman.
+2025-01-13 21:48:58 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Victoria West Coast Swing Collective Society"
+2025-01-13 21:49:01 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:49:01 [INFO] def query_llm(): LLM response content: 
+"Improv West Coast Swing"
+
+2025-01-13 21:49:01 [INFO] def query_llm(): LLM response received based on url https://www.instagram.com/coachgabrielshaw/p/CRU6v-hJMuY/?next=%2Fnowweknownews%2Ffeed%2F&locale=zh-hans&hl=ar.
+2025-01-13 21:49:01 [INFO] def title_to_org_name(): Organization name returned by LLM is: "Improv West Coast Swing"
+2025-01-13 21:49:04 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:49:04 [INFO] def query_llm(): LLM response content: 
+"BC Swing Dance"
+
+2025-01-13 21:49:04 [INFO] def query_llm(): LLM response received based on url https://bcswingdance.ca/index.php/learn-to-dance/.
+2025-01-13 21:49:04 [INFO] def title_to_org_name(): Organization name returned by LLM is: "BC Swing Dance"
+2025-01-13 21:49:06 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:49:06 [INFO] def query_llm(): LLM response content: 
+"OH MY DANCE PRODUCTIONS"
+
+2025-01-13 21:49:06 [INFO] def query_llm(): LLM response received based on url https://www.nanaimodancefusion.ca/.
+2025-01-13 21:49:06 [INFO] def title_to_org_name(): Organization name returned by LLM is: "OH MY DANCE PRODUCTIONS"
+2025-01-13 21:49:10 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:49:10 [INFO] def query_llm(): LLM response content: 
+"BC Swing Dance Club"
+
+2025-01-13 21:49:10 [INFO] def query_llm(): LLM response received based on url https://bcswingdance.ca/.
+2025-01-13 21:49:10 [INFO] def title_to_org_name(): Organization name returned by LLM is: "BC Swing Dance Club"
+2025-01-13 21:49:15 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:49:15 [INFO] def query_llm(): LLM response content: 
+"None"
+
+2025-01-13 21:49:15 [INFO] def query_llm(): LLM response received based on url https://www.tiktok.com/discover/victoria-falls-gorge-swing?lang=en.
+2025-01-13 21:49:15 [INFO] def title_to_org_name(): Organization name returned by LLM is: "None"
+2025-01-13 21:49:19 [INFO] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-13 21:49:19 [INFO] def query_llm(): LLM response content: 
+"West Coast Swing"
+
+2025-01-13 21:49:19 [INFO] def query_llm(): LLM response received based on url https://m.facebook.com/events/2638928582968589/.
+2025-01-13 21:49:19 [INFO] def title_to_org_name(): Organization name returned by LLM is: "West Coast Swing"
+2025-01-13 21:49:19 [INFO] Found 10 results for query: west coast swing, wcs Victoria, British Columbia, Canada
+2025-01-13 21:49:19 [INFO] Driver completed with total 32 results.
+2025-01-13 21:49:19 [INFO] Results written to data/urls.csv
+2025-01-13 21:49:19 [INFO] __main__: Finished the crawler process at 2025-01-13 21:49:19.592574
+2025-01-13 21:49:19 [INFO] __main__: Total time taken: 0:02:45.114847
+
+

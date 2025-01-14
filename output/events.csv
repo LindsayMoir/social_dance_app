@@ -1,2 +1,8 @@
 org_name,dance_style,url,event_type,event_name,day_of_week,start_date,end_date,start_time,end_time,price,location,description
-Victoria Latin Dance Association,"salsa, bachata, kizomba, merengue",,social dance,Sunday Social - Victoria Latin Dance Association,Sunday,2025-01-26,2025-01-26,16:15,20:30,$12.00 - $15.00,"111 Superior Street, Victoria, BC V8V 1T2","Step into mystery and elegance on Sunday, January 26th, 2025, for a spectacular evening of Latin social dancing with a special Masquerade theme! Put on your finest mask and attire—those who come dressed to impress will be entered into a raffle for a chance to win a special prize."
+Red Hot Swing,swing,,class,Swing 1,Tuesday,2025-01-14,2025-02-18,18:15,19:45,,Saint Matthias Anglican Church (600 Richmond Ave),6 beginner lessons; Prerequisites: none
+Red Hot Swing,swing,,class,Swing 1,Wednesday,2025-01-15,2025-02-19,18:15,19:45,,City Light Church (550 Obed Ave),6 beginner lessons; Prerequisites: none
+Red Hot Swing,swing,,class,Swing 1,Sunday,2025-01-12,2025-02-16,16:30,18:00,,Dance Victoria (2750 Quadra Street),6 beginner lessons; Prerequisites: none
+Red Hot Swing,swing,,class,Swing 2 Charleston,Sunday,2025-01-12,2025-02-16,20:00,21:30,,Dance Victoria (2750 Quadra Street),6 lessons; Prerequisites: Swing 1 or instructor permission
+Red Hot Swing,"swing, lindy hop",,class,Swing 2 Lindy Hop,Wednesday,2025-01-15,2025-02-19,20:00,21:30,,City Light Church (550 Obed Ave),6 lessons; Prerequisites: Swing 1 or instructor permission
+Red Hot Swing,"swing, lindy hop",,class,Swing 4 Lindy Hop,Sunday,2025-01-12,2025-02-16,18:15,19:45,,Dance Victoria (2750 Quadra Street),6 lessons; Prerequisites: Swing 3 Lindy Hop or instructor permission
+Red Hot Swing,"swing, balboa",,class,Swing 4 Balboa,Tuesday,2025-01-14,2025-02-18,20:00,21:30,,Saint Matthias Anglican Church (600 Richmond Ave),6 lessons; Prerequisites: Swing 3 Lindy Hop or instructor permission
