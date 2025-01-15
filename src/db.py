@@ -62,7 +62,8 @@ class DatabaseHandler:
                     "DROP TABLE IF EXISTS fb_urls CASCADE;",
                     "DROP TABLE IF EXISTS address CASCADE;",
                     "DROP TABLE IF EXISTS events CASCADE;",
-                    "DROP TABLE IF EXISTS urls CASCADE;"
+                    "DROP TABLE IF EXISTS urls CASCADE;",
+                    "DROP TABLE IF EXISTS organization CASCADE;"
                 ]
             elif self.config['testing']['drop_tables'] == 'events':
                 drop_queries = [
@@ -137,6 +138,8 @@ class DatabaseHandler:
             fb_urls_table_query = """
                 CREATE TABLE IF NOT EXISTS fb_urls (
                     url TEXT PRIMARY KEY,
+                    org_name TEXT,
+                    keywords TEXT,
                     time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """
@@ -314,7 +317,7 @@ class DatabaseHandler:
             except Exception as e:
                 self.logger.error("write_url_to_db: Failed to insert URL '%s': %s", url, e)
 
-    def write_url_to_fb_table(self, url):
+    def write_url_to_fb_table(self, org_name, keywords,url):
         """
         Writes a URL to the 'fb_urls' table in the database.
 
@@ -323,12 +326,15 @@ class DatabaseHandler:
         """
         try:
             query = """
-            INSERT INTO fb_urls (url, time_stamp) 
-            VALUES (:url, :time_stamp)
+            INSERT INTO fb_urls (url, org_name, keywords, time_stamp) 
+            VALUES (:url, :org_name, :keywords, :time_stamp)
             ON CONFLICT (url) 
             DO UPDATE SET time_stamp = EXCLUDED.time_stamp;
             """
-            params = {'url': url, 'time_stamp': datetime.now()}
+            params = {'url': url,
+                      'org_name': org_name,
+                      'keywords': keywords,
+                      'time_stamp': datetime.now()}
             self.execute_query(query, params)
             self.logger.info("write_url_to_fb_table: URL '%s' written to 'fb_urls' table.", url)
         except Exception as e:

@@ -36,6 +36,7 @@ logging:
   scrapy_log_file: 'logs/scrapy.log'
   extracted_text: 'output/extracted_text.csv'
 output:
+  fb_search_results: 'output/fb_search_results.csv'
   gs_search_results: 'output/gs_search_results.csv'
 prompts:
   allevents: 'prompts/all_events_in_prompt.txt'
@@ -47,6 +48,6 @@ startup:
   use_db: False
 testing:
   nof_no_url_events: 10
-  drop_tables: False
+  drop_tables: True
 update_schedule:
   true_links_hours: .01

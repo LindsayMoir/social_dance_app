@@ -87,7 +87,7 @@ class EventSpider(scrapy.Spider):
             url = row['links']
 
             if 'facebook' in url:
-                db_handler.write_url_to_fb_table(url)
+                db_handler.write_url_to_fb_table(org_name, keywords, url)
                 logging.info(f"Skipping crawl for Facebook URL: {url}")
             else:
                 # We need to write the url to the database, if it is not already there
@@ -139,7 +139,7 @@ class EventSpider(scrapy.Spider):
         # Iterate over a copy of all_links to safely remove items during iteration
         for link in list(all_links):
             if 'facebook' in link or 'instagram' in link:
-                db_handler.write_url_to_fb_table(link)
+                db_handler.write_url_to_fb_table(org_name, keywords, link)
                 all_links.remove(link)  # Safely remove from the original set
                 logging.info(f"def parse(): Found a Facebook or Instagram URL, processing: {link}")
         
