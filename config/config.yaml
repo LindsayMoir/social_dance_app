@@ -48,6 +48,6 @@ startup:
   use_db: False
 testing:
   nof_no_url_events: 10
-  drop_tables: True
+  drop_tables: False
 update_schedule:
   true_links_hours: .01

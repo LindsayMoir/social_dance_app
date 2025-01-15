@@ -55,115 +55,119 @@ class DatabaseHandler:
         Creates the 'urls', 'events', 'address', and 'fb_urls' tables in the database if they do not already exist.
         If config['testing']['drop_tables'] is True, it will drop existing tables before creation.
         """
-        try:
-            # Check if we need to drop tables as per configuration
-            if self.config['testing']['drop_tables'] == True:
-                drop_queries = [
-                    "DROP TABLE IF EXISTS fb_urls CASCADE;",
-                    "DROP TABLE IF EXISTS address CASCADE;",
-                    "DROP TABLE IF EXISTS events CASCADE;",
-                    "DROP TABLE IF EXISTS urls CASCADE;",
-                    "DROP TABLE IF EXISTS organization CASCADE;"
-                ]
-            elif self.config['testing']['drop_tables'] == 'events':
-                drop_queries = [
-                    "DROP TABLE IF EXISTS events CASCADE;"
-                ]
-                for query in drop_queries:
-                    self.execute_query(query)
-                self.logger.info(f"create_tables: Existing tables dropped as per configuration value of '{self.config['testing']['drop_tables']}'.")
-            else:
-                # Don't drop any tables
-                pass
+        
+        # Check if we need to drop tables as per configuration
+        if self.config['testing']['drop_tables'] == True:
+            drop_queries = [
+                "DROP TABLE IF EXISTS fb_urls CASCADE;",
+                "DROP TABLE IF EXISTS address CASCADE;",
+                "DROP TABLE IF EXISTS events CASCADE;",
+                "DROP TABLE IF EXISTS urls CASCADE;",
+                "DROP TABLE IF EXISTS organization CASCADE;"
+            ]
+        elif self.config['testing']['drop_tables'] == 'events':
+            drop_queries = [
+                "DROP TABLE IF EXISTS events CASCADE;"
+            ]
+        else:
+            # Don't drop any tables
+            drop_queries = []
 
-            # Create the 'urls' table
-            urls_table_query = """
-                CREATE TABLE IF NOT EXISTS urls (
-                    links TEXT PRIMARY KEY,
-                    time_stamps TIMESTAMP,
-                    org_names TEXT,
-                    keywords TEXT,
-                    other_links TEXT,
-                    relevant BOOLEAN,
-                    crawl_trys INTEGER
+        if drop_queries:
+            for query in drop_queries:
+                self.execute_query(query)
+                self.logger.info(
+                    f"create_tables: Existing tables dropped as per configuration value of "
+                    f"'{self.config['testing']['drop_tables']}'."
                 )
-            """
-            self.execute_query(urls_table_query)
-            self.logger.info("create_tables: 'urls' table created or already exists.")
+        else:
+            pass
 
-            # Create the 'events' table
-            events_table_query = """
-                CREATE TABLE IF NOT EXISTS events (
-                    event_id SERIAL PRIMARY KEY,
-                    org_name TEXT,
-                    dance_style TEXT,
-                    url TEXT,
-                    event_type TEXT,
-                    event_name TEXT,
-                    day_of_week TEXT,
-                    start_date DATE,
-                    end_date DATE,
-                    start_time TIME,
-                    end_time TIME,
-                    price NUMERIC,
-                    location TEXT,
-                    address_id INTEGER,
-                    description TEXT,
-                    time_stamp TIMESTAMP
-                )
-            """
-            self.execute_query(events_table_query)
-            self.logger.info("create_tables: 'events' table created or already exists.")
+        # Create the 'urls' table
+        urls_table_query = """
+            CREATE TABLE IF NOT EXISTS urls (
+                links TEXT PRIMARY KEY,
+                time_stamps TIMESTAMP,
+                org_names TEXT,
+                keywords TEXT,
+                other_links TEXT,
+                relevant BOOLEAN,
+                crawl_trys INTEGER
+            )
+        """
+        self.execute_query(urls_table_query)
+        self.logger.info("create_tables: 'urls' table created or already exists.")
 
-            # Create the 'address' table
-            address_table_query = """
-                CREATE TABLE IF NOT EXISTS address (
-                    address_id SERIAL PRIMARY KEY,
-                    full_address TEXT UNIQUE,
-                    street_number TEXT,
-                    street_name TEXT,
-                    street_type TEXT,
-                    floor TEXT,
-                    postal_box TEXT,
-                    city TEXT,
-                    province_or_state TEXT,
-                    postal_code TEXT,
-                    country_id TEXT
-                )
-            """
-            self.execute_query(address_table_query)
-            self.logger.info("create_tables: 'address' table created or already exists.")
+        # Create the 'events' table
+        events_table_query = """
+            CREATE TABLE IF NOT EXISTS events (
+                event_id SERIAL PRIMARY KEY,
+                org_name TEXT,
+                dance_style TEXT,
+                url TEXT,
+                event_type TEXT,
+                event_name TEXT,
+                day_of_week TEXT,
+                start_date DATE,
+                end_date DATE,
+                start_time TIME,
+                end_time TIME,
+                price NUMERIC,
+                location TEXT,
+                address_id INTEGER,
+                description TEXT,
+                time_stamp TIMESTAMP
+            )
+        """
+        self.execute_query(events_table_query)
+        self.logger.info("create_tables: 'events' table created or already exists.")
 
-            # Create the 'fb_urls' table
-            fb_urls_table_query = """
-                CREATE TABLE IF NOT EXISTS fb_urls (
-                    url TEXT PRIMARY KEY,
-                    org_name TEXT,
-                    keywords TEXT,
-                    time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """
-            self.execute_query(fb_urls_table_query)
-            self.logger.info("create_tables: 'fb_urls' table created or already exists.")
+        # Create the 'address' table
+        address_table_query = """
+            CREATE TABLE IF NOT EXISTS address (
+                address_id SERIAL PRIMARY KEY,
+                full_address TEXT UNIQUE,
+                street_number TEXT,
+                street_name TEXT,
+                street_type TEXT,
+                floor TEXT,
+                postal_box TEXT,
+                city TEXT,
+                province_or_state TEXT,
+                postal_code TEXT,
+                country_id TEXT
+            )
+        """
+        self.execute_query(address_table_query)
+        self.logger.info("create_tables: 'address' table created or already exists.")
 
-            # Create the 'organizations' table
-            organizations_table_query = """
-                CREATE TABLE IF NOT EXISTS organizations (
-                    org_id SERIAL PRIMARY KEY,
-                    org_name TEXT,
-                    web_url TEXT,
-                    fb_url TEXT,
-                    ig_url TEXT,
-                    phone TEXT CHECK (phone ~ '^\(\d{3}\) \d{3}-\d{4}$'),
-                    email TEXT,
-                    address_id INTEGER
-                )
-            """
-            self.execute_query(organizations_table_query)
-            self.logger.info("create_tables: 'organizations' table created or already exists.")
+        # Create the 'fb_urls' table
+        fb_urls_table_query = """
+            CREATE TABLE IF NOT EXISTS fb_urls (
+                url TEXT PRIMARY KEY,
+                org_name TEXT,
+                keywords TEXT,
+                time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        self.execute_query(fb_urls_table_query)
+        self.logger.info("create_tables: 'fb_urls' table created or already exists.")
 
-        except Exception as e:
-            self.logger.error("create_tables: Failed to create tables: %s", e)
+        # Create the 'organizations' table
+        organizations_table_query = """
+            CREATE TABLE IF NOT EXISTS organizations (
+                org_id SERIAL PRIMARY KEY,
+                org_name TEXT,
+                web_url TEXT,
+                fb_url TEXT,
+                ig_url TEXT,
+                phone TEXT CHECK (phone ~ '^\(\d{3}\) \d{3}-\d{4}$'),
+                email TEXT,
+                address_id INTEGER
+            )
+        """
+        self.execute_query(organizations_table_query)
+        self.logger.info("create_tables: 'organizations' table created or already exists.")
 
         # See if this worked.
         query = """
