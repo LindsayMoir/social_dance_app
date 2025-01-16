@@ -8,7 +8,8 @@ from sqlalchemy import create_engine, update, MetaData, text
 from sqlalchemy.exc import SQLAlchemyError
 import yaml
 
-class DatabaseHandler:
+
+class DatabaseHandler():
     def __init__(self, config):
         """
         Initializes the DatabaseHandler with the given configuration.
@@ -17,13 +18,21 @@ class DatabaseHandler:
             config (dict): A dictionary containing configuration parameters for the database connection.
         """
         self.config = config
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.logger.info("\n\nDatabaseHandler: Config initialized.")
+
+        # Set up logging
+        logging.basicConfig(
+                filename=self.config['logging']['db_log_file'],
+                filemode='w',
+                level=logging.INFO,
+                format="%(asctime)s - %(levelname)s - %(message)s",
+                datefmt='%Y-%m-%d %H:%M:%S'
+                )
 
         self.conn = self.get_db_connection()
         if self.conn is None:
             raise ConnectionError("DatabaseHandler: Failed to establish a database connection.")
-        self.logger.info("DatabaseHandler: Database connection established.")
+        logging.info("def __init__(): Database connection established.")
+
 
     def get_db_connection(self):
         """
@@ -47,8 +56,9 @@ class DatabaseHandler:
             return engine
 
         except Exception as e:
-            self.logger.error("DatabaseHandler: Database connection failed: %s", e)
+            logging.error("DatabaseHandler: Database connection failed: %s", e)
             return None
+        
 
     def create_tables(self):
         """
@@ -76,7 +86,7 @@ class DatabaseHandler:
         if drop_queries:
             for query in drop_queries:
                 self.execute_query(query)
-                self.logger.info(
+                logging.info(
                     f"create_tables: Existing tables dropped as per configuration value of "
                     f"'{self.config['testing']['drop_tables']}'."
                 )
@@ -96,7 +106,7 @@ class DatabaseHandler:
             )
         """
         self.execute_query(urls_table_query)
-        self.logger.info("create_tables: 'urls' table created or already exists.")
+        logging.info("create_tables: 'urls' table created or already exists.")
 
         # Create the 'events' table
         events_table_query = """
@@ -120,7 +130,7 @@ class DatabaseHandler:
             )
         """
         self.execute_query(events_table_query)
-        self.logger.info("create_tables: 'events' table created or already exists.")
+        logging.info("create_tables: 'events' table created or already exists.")
 
         # Create the 'address' table
         address_table_query = """
@@ -139,7 +149,7 @@ class DatabaseHandler:
             )
         """
         self.execute_query(address_table_query)
-        self.logger.info("create_tables: 'address' table created or already exists.")
+        logging.info("create_tables: 'address' table created or already exists.")
 
         # Create the 'fb_urls' table
         fb_urls_table_query = """
@@ -151,7 +161,7 @@ class DatabaseHandler:
             )
         """
         self.execute_query(fb_urls_table_query)
-        self.logger.info("create_tables: 'fb_urls' table created or already exists.")
+        logging.info("create_tables: 'fb_urls' table created or already exists.")
 
         # Create the 'organizations' table
         organizations_table_query = """
@@ -167,7 +177,7 @@ class DatabaseHandler:
             )
         """
         self.execute_query(organizations_table_query)
-        self.logger.info("create_tables: 'organizations' table created or already exists.")
+        logging.info("create_tables: 'organizations' table created or already exists.")
 
         # See if this worked.
         query = """
@@ -181,9 +191,9 @@ class DatabaseHandler:
         rows = self.execute_query(query)
         if rows:
             for schema, table in rows:
-                self.logger.info("Schema: %s, Table: %s", schema, table)
+                logging.info("Schema: %s, Table: %s", schema, table)
         else:
-            self.logger.info("No tables found or query failed.")
+            logging.info("No tables found or query failed.")
 
 
     def execute_query(self, query, params=None):
@@ -198,7 +208,7 @@ class DatabaseHandler:
             result: The result of the executed query, if any.
         """
         if self.conn is None:
-            self.logger.error("execute_query: No database connection available.")
+            logging.error("execute_query: No database connection available.")
             return None
 
         try:
@@ -207,8 +217,9 @@ class DatabaseHandler:
                 connection.commit()
                 return result
         except SQLAlchemyError as e:
-            self.logger.error("def execute_query(): {query}\nQuery execution failed: %s", e)
+            logging.error("def execute_query(): {query}\nQuery execution failed: %s", e)
             return None
+        
     
     def close_connection(self):
         """
@@ -217,11 +228,12 @@ class DatabaseHandler:
         if self.conn:
             try:
                 self.conn.dispose()
-                self.logger.info("close_connection: Database connection closed successfully.")
+                logging.info("close_connection: Database connection closed successfully.")
             except Exception as e:
-                self.logger.error("close_connection: Failed to close database connection: %s", e)
+                logging.error("close_connection: Failed to close database connection: %s", e)
         else:
-            self.logger.warning("close_connection: No database connection to close.")
+            logging.warning("close_connection: No database connection to close.")
+
 
     def update_url(self, url, update_other_links, relevant, increment_crawl_trys):
         """
@@ -282,14 +294,15 @@ class DatabaseHandler:
             # Execute the update
             update_result = self.execute_query(update_query, update_params)
             if update_result and update_result.rowcount > 0:
-                self.logger.info("update_url: Updated URL '%s' successfully.", url)
+                logging.info("update_url: Updated URL '%s' successfully.", url)
                 return True
             else:
-                self.logger.info("update_url: Failed to update URL '%s'.", url)
+                logging.info("update_url: Failed to update URL '%s'.", url)
                 return False
         else:
-            self.logger.info("update_url: URL '%s' not found for update.", url)
+            logging.info("update_url: URL '%s' not found for update.", url)
             return False
+        
 
     def write_url_to_db(self, org_names, keywords, url, other_links, relevant, increment_crawl_trys):
         """
@@ -303,9 +316,9 @@ class DatabaseHandler:
             increment_crawl_trys (int): The number of times the URL has been crawled.
         """
         if self.update_url(url, other_links, relevant, increment_crawl_trys + 1):
-            self.logger.info("write_url_to_db: URL '%s' updated in the 'urls' table.", url)
+            logging.info("write_url_to_db: URL '%s' updated in the 'urls' table.", url)
         else:
-            self.logger.info("write_url_to_db: Inserting new URL '%s' into the 'urls' table.", url)
+            logging.info("write_url_to_db: Inserting new URL '%s' into the 'urls' table.", url)
             new_df = pd.DataFrame({
                 "time_stamps": [datetime.now()],
                 "org_names": [org_names],  
@@ -317,9 +330,10 @@ class DatabaseHandler:
             })
             try:
                 new_df.to_sql('urls', self.conn, if_exists='append', index=False, method='multi')
-                self.logger.info("write_url_to_db: URL '%s' inserted into the 'urls' table.", url)
+                logging.info("write_url_to_db: URL '%s' inserted into the 'urls' table.", url)
             except Exception as e:
-                self.logger.error("write_url_to_db: Failed to insert URL '%s': %s", url, e)
+                logging.error("write_url_to_db: Failed to insert URL '%s': %s", url, e)
+
 
     def write_url_to_fb_table(self, org_name, keywords,url):
         """
@@ -340,9 +354,10 @@ class DatabaseHandler:
                       'keywords': keywords,
                       'time_stamp': datetime.now()}
             self.execute_query(query, params)
-            self.logger.info("write_url_to_fb_table: URL '%s' written to 'fb_urls' table.", url)
+            logging.info("write_url_to_fb_table: URL '%s' written to 'fb_urls' table.", url)
         except Exception as e:
-            self.logger.error("write_url_to_fb_table: Failed to write URL '%s': %s", url, e)
+            logging.error("write_url_to_fb_table: Failed to write URL '%s': %s", url, e)
+
 
     def clean_events(self, df):
         """
@@ -444,6 +459,7 @@ class DatabaseHandler:
         df = df.sort_values(by=['Start_Date', 'Start_Time']).reset_index(drop=True)
 
         return df
+    
 
     def write_events_to_db(self, df, url, org_name, keywords):
         """
@@ -494,7 +510,7 @@ class DatabaseHandler:
         if 'price' in df.columns and not df['price'].isnull().all():
             df['price'] = pd.to_numeric(df['price'], errors='coerce')
         else:
-            self.logger.warning("write_events_to_db: 'price' column is missing or empty. Filling with NaN.")
+            logging.warning("write_events_to_db: 'price' column is missing or empty. Filling with NaN.")
             df['price'] = float('nan')
 
         # Add a 'time_stamp' column with the current timestamp
@@ -526,9 +542,10 @@ class DatabaseHandler:
 
         # Write the cleaned events data to the 'events' table
         cleaned_df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
-        self.logger.info("write_events_to_db: Events data written to the 'events' table.")
+        logging.info("write_events_to_db: Events data written to the 'events' table.")
 
         return None
+    
 
     def get_address_id(self, address_dict):
         """
@@ -579,6 +596,7 @@ class DatabaseHandler:
         except Exception as e:
             logging.error(f"get_address_id: Failed to retrieve or insert address '{address_dict['full_address']}': {e}")
             return None
+        
 
     def clean_up_address(self, events_df):
         """
@@ -622,6 +640,7 @@ class DatabaseHandler:
             events_df.at[index, 'address_id'] = address_id
 
         return events_df  # Moved outside of the loop
+    
 
     def dedup(self):
         """
@@ -643,20 +662,21 @@ class DatabaseHandler:
                   AND e1.start_date = e2.start_date;
             """
             self.execute_query(dedup_events_query)
-            self.logger.info("dedup: Deduplicated 'events' table successfully.")
+            logging.info("dedup: Deduplicated 'events' table successfully.")
 
-            # Deduplicate 'urls' table based on 'links'
+            # Deduplicate 'urls' table based on 'links' using ctid for row identification
             dedup_urls_query = """
-                DELETE FROM urls u1
-                USING urls u2
-                WHERE u1.url_id < u2.url_id
-                  AND u1.links = u2.links;
+                DELETE FROM urls a
+                USING urls b
+                WHERE a.ctid < b.ctid
+                AND a.links = b.links;
             """
             self.execute_query(dedup_urls_query)
-            self.logger.info("dedup: Deduplicated 'urls' table successfully.")
+            logging.info("dedup: Deduplicated 'urls' table successfully.")
 
         except Exception as e:
-            self.logger.error("dedup: Failed to deduplicate tables: %s", e)
+            logging.error("dedup: Failed to deduplicate tables: %s", e)
+
 
     def delete_old_events(self):
         """
@@ -671,9 +691,9 @@ class DatabaseHandler:
                 WHERE End_Date < CURRENT_DATE - INTERVAL '%s days';
             """ % days
             self.execute_query(delete_query)
-            self.logger.info("delete_old_events: Deleted events older than %d days.", days)
+            logging.info("delete_old_events: Deleted events older than %d days.", days)
         except Exception as e:
-            self.logger.error("delete_old_events: Failed to delete old events: %s", e)
+            logging.error("delete_old_events: Failed to delete old events: %s", e)
 
     def delete_event_and_url(self, url, event_name, start_date):
         """
@@ -685,7 +705,7 @@ class DatabaseHandler:
             start_date (str): The start date of the event to be deleted.
         """
         try:
-            self.logger.info("delete_event_and_url: Deleting event with URL: %s, Event Name: %s, Start Date: %s", url, event_name, start_date)
+            logging.info("delete_event_and_url: Deleting event with URL: %s, Event Name: %s, Start Date: %s", url, event_name, start_date)
 
             # Delete the event from 'events' table
             delete_event_query = """
@@ -695,16 +715,17 @@ class DatabaseHandler:
             """
             params = {'event_name': event_name, 'start_date': start_date}
             self.execute_query(delete_event_query, params)
-            self.logger.info("delete_event_and_url: Deleted event from 'events' table.")
+            logging.info("delete_event_and_url: Deleted event from 'events' table.")
 
             # Delete the corresponding URL from 'urls' table
             delete_url_query = "DELETE FROM urls WHERE links = :url;"
             params = {'url': url}
             self.execute_query(delete_url_query, params)
-            self.logger.info("delete_event_and_url: Deleted URL from 'urls' table.")
+            logging.info("delete_event_and_url: Deleted URL from 'urls' table.")
 
         except Exception as e:
-            self.logger.error("delete_event_and_url: Failed to delete event and URL: %s", e)
+            logging.error("delete_event_and_url: Failed to delete event and URL: %s", e)
+
 
     def delete_events_with_nulls(self):
         """
@@ -716,9 +737,24 @@ class DatabaseHandler:
             WHERE start_date IS NULL AND start_time IS NULL;
             """
             self.execute_query(delete_query)
-            self.logger.info("def delete_events_with_nulls(): Success")
+            logging.info("def delete_events_with_nulls(): Success")
         except Exception as e:
-            self.logger.error("def delete_events_with_nulls(): Failed to delete events with start_date and start_time being null: %s", e)
+            logging.error("def delete_events_with_nulls(): Failed to delete events with start_date and start_time being null: %s", e)
+
+    def delete_url_from_fb_urls(self, url):
+        """
+        Deletes a URL from the 'fb_urls' table in the database.
+
+        Args:
+            url (str): The URL to be deleted from the 'fb_urls' table.
+        """
+        try:
+            delete_query = "DELETE FROM fb_urls WHERE url = :url;"
+            params = {'url': url}
+            self.execute_query(delete_query, params)
+            logging.info("delete_url_from_fb_urls: Deleted URL '%s' from 'fb_urls' table.", url)
+        except Exception as e:
+            logging.error("delete_url_from_fb_urls: Failed to delete URL '%s': %s", url, e)
 
 if __name__ == "__main__":
     start_time = datetime.now()

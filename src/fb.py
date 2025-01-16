@@ -1,8 +1,8 @@
 from bs4 import BeautifulSoup
+from datetime import datetime
 from fuzzywuzzy import fuzz
 from googleapiclient.discovery import build
 import logging
-import os
 import pandas as pd
 from playwright.sync_api import sync_playwright
 import re
@@ -10,26 +10,23 @@ import requests
 import yaml
 
 # Import other classes
+from bh import BaseHandler
 from db import DatabaseHandler
 from llm import LLMHandler
 
 
-class FacebookEventScraper:
+# Load configuration
+with open("config/config.yaml", "r") as file:
+    config = yaml.safe_load(file)
+
+# Instantiate DatabaseHandler with the configuration dictionary
+db_handler = DatabaseHandler(config)
+
+
+class FacebookEventScraper(BaseHandler):
     def __init__(self, config_path="config/config.yaml"):
-
-        # Load configuration from a YAML file
-        with open(config_path, "r") as file:
-            self.config = yaml.safe_load(file)
-
-        # Set up logging
-        logging.basicConfig(
-            filename=self.config['logging']['log_file'],
-            filemode='w',
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s - %(message)s"
-        )
-
-        logging.info("FacebookEventScraper initialized.")
+        # Initialize base class (loads config, sets up logging, etc.)
+        super().__init__(config_path)
 
         # Start Playwright and log into Facebook once
         self.playwright = sync_playwright().start()
@@ -61,7 +58,7 @@ class FacebookEventScraper:
 
     def login_to_facebook(self, page):
         """
-        Logs into Facebook using credentials from the configuration, and handles potential captcha challenges.
+        Logs into Facebook using credentials from the self.configuration, and handles potential captcha challenges.
 
         Args:
             page (playwright.sync_api.Page): The Playwright page instance.
@@ -82,7 +79,7 @@ class FacebookEventScraper:
         page.click("button[name='login']")
 
         # Wait for navigation or potential challenge
-        page.wait_for_timeout(60000)
+        page.wait_for_timeout(10000)
 
         # Always prompt for manual captcha resolution
         logging.warning("Please solve any captcha or challenge in the browser, then press Enter here to continue...")
@@ -115,7 +112,7 @@ class FacebookEventScraper:
         """
         # Use the stored already logged-in page
         page = self.logged_in_page  
-        page.goto(search_url, timeout=60000)
+        page.goto(search_url, timeout=10000)
         page.wait_for_timeout(5000)
 
         for _ in range(self.config['crawling']['scroll_depth']):
@@ -129,7 +126,7 @@ class FacebookEventScraper:
         return links
     
 
-    def extract_event_text(self, page, link):
+    def extract_event_text(self, link):
         """
         Extracts text from an event page using Playwright and BeautifulSoup.
 
@@ -141,13 +138,17 @@ class FacebookEventScraper:
             str: The extracted text content.
         """
         # Use the stored already logged-in page
-        page = self.logged_in_page 
-        page.goto(link, timeout=60000)
-        page.wait_for_timeout(5000)
-        content = page.content()
-        soup = BeautifulSoup(content, 'html.parser')
-        extracted_text = ' '.join(soup.stripped_strings)
-        logging.info(f"def extract_event_text(): Extracted text from {link}.")
+        try:
+            page = self.logged_in_page 
+            page.goto(link, timeout=10000)
+            page.wait_for_timeout(5000)
+            content = page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+            extracted_text = ' '.join(soup.stripped_strings)
+            logging.info(f"def extract_event_text(): Extracted text from {link}.")
+        except Exception as e:
+            logging.error(f"Failed to extract text from {link}: {e}")
+            extracted_text = None
 
         return extracted_text
     
@@ -180,7 +181,7 @@ class FacebookEventScraper:
                     if link in urls_visited:
                         continue
 
-                    extracted_text = self.extract_event_text(page, link)
+                    extracted_text = self.extract_event_text(link)
                     extracted_text_list.append((link, extracted_text))
                     urls_visited.add(link)
 
@@ -190,7 +191,7 @@ class FacebookEventScraper:
                         if second_level_link in urls_visited:
                             continue
 
-                        second_level_text = self.extract_event_text(page, second_level_link)
+                        second_level_text = self.extract_event_text(second_level_link)
                         extracted_text_list.append((second_level_link, second_level_text))
                         urls_visited.add(second_level_link)
 
@@ -220,7 +221,7 @@ class FacebookEventScraper:
 
         if fb_status:
             logging.info("def extract_text_from_fb_url(): Successfully logged into Facebook.")
-            extracted_text = fb_scraper.extract_event_text(page, url)
+            extracted_text = fb_scraper.extract_event_text(url)
 
             return extracted_text
     
@@ -379,6 +380,10 @@ class FacebookEventScraper:
         Returns:
             None
         """
+        # Sanitize URL if malformed (e.g., duplicate scheme)
+        if url.startswith("http://https") or url.startswith("https://https"):
+            url = url.replace("http://https", "https://").replace("https://https", "https://")
+
         extracted_text = self.extract_text_from_fb_url(url)
         if not extracted_text:
             db_handler.delete_url_from_fb_urls(url)
@@ -419,7 +424,7 @@ class FacebookEventScraper:
             keywords = row.get('keywords', '')
             logging.info(f"def driver_fb_urls(): Processing URL: {url}")
             self.process_fb_url(url, org_name, keywords)
-            
+
 
     def driver_fb_search(self):
         """
@@ -496,19 +501,32 @@ class FacebookEventScraper:
 
 
 if __name__ == "__main__":
-    # Initialize shared dependencies
-    config_path = "config/config.yaml"
+
+    # Get the start time
+    start_time = datetime.now()
+    logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
     # Instantiate the class libraries
-    fb_scraper = FacebookEventScraper(config_path=config_path)
-    db_handler = DatabaseHandler(fb_scraper.config)
-    llm_handler = LLMHandler(config_path=config_path)
+    fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
+    llm_handler = LLMHandler(config_path='config/config.yaml')
 
     # Use the scraper
     logging.info(f"def __main__: Starting Facebook event scraping.")
+    logging.info(f"def __main__: Running driver_fb_urls.")
     fb_scraper.driver_fb_urls()
+    logging.info(f"def __main__: Running driver_fb_search.")
     fb_scraper.driver_fb_search()
+    logging.info(f"def __main__: Running driver_no_urls.")
     fb_scraper.driver_no_urls()
 
+    # Close the browser and stop Playwright
     fb_scraper.browser.close()
     fb_scraper.playwright.stop()
+
+    # Get the end time
+    end_time = datetime.now()
+    logging.info(f"__main__: Finished the crawler process at {end_time}")
+
+    # Calculate the total time taken
+    total_time = end_time - start_time
+    logging.info(f"__main__: Total time taken: {total_time}\n\n")

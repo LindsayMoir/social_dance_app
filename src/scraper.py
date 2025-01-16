@@ -23,27 +23,14 @@ import sys
 import time
 import yaml
 
-print(os.getcwd())
 
+from bh import BaseHandler
 from db import DatabaseHandler
 from llm import LLMHandler
 
-# Load configuration from a YAML file
-with open("config/config.yaml", "r") as file:
-    config = yaml.safe_load(file)
-
-# Set up logging
-logging.basicConfig(
-    filename=config['logging']['log_file'],
-    filemode='w',
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
-logging.info("global: Working directory is: %s", os.getcwd())
 
 # EventSpider class
-class EventSpider(scrapy.Spider):
+class EventSpider(BaseHandler, scrapy.Spider):
     name = "event_spider"
 
     def __init__(self, *args, **kwargs):
@@ -77,9 +64,19 @@ class EventSpider(scrapy.Spider):
             # Read the URLs from the database
             query = "SELECT * FROM urls WHERE relevant = true;"
             urls_df = pd.read_sql_query(query, conn)
+
         else:
-            # Load initial URLs from the 'urls.csv' file
-            urls_df = pd.read_csv(config['input']['data_urls'])
+            # Directory containing CSV files
+            urls_dir = config['input']['urls']
+
+            # List all CSV files in the directory
+            csv_files = [os.path.join(urls_dir, f) for f in os.listdir(urls_dir) if f.endswith('.csv')]
+
+            # Read each CSV file into a DataFrame
+            dataframes = [pd.read_csv(file) for file in csv_files]
+
+            # Concatenate all DataFrames into one
+            urls_df = pd.concat(dataframes, ignore_index=True)
 
         for _, row in urls_df.iterrows():
             org_name = row['org_names']
@@ -209,6 +206,7 @@ class EventSpider(scrapy.Spider):
             logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords.")
 
         return
+    
 
     def check_keywords_in_text(self, url, extracted_text, keywords, org_name):
         """
@@ -234,6 +232,7 @@ class EventSpider(scrapy.Spider):
 
         logging.info(f"def check_keywords_in_text: URL {url} marked as irrelevant since there are no keywords, events, or 'calendar' in URL.")
         return False
+    
     
     def extract_text_with_playwright(self, url):
         """
@@ -271,6 +270,7 @@ class EventSpider(scrapy.Spider):
 
             browser.close()
             return extracted_text
+        
 
     def fetch_google_calendar_events(self, calendar_url, url, org_name, keywords):
         """
@@ -328,6 +328,7 @@ class EventSpider(scrapy.Spider):
                     db_handler.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
 
         return
+    
 
     def get_events(self, calendar_id):
         """
@@ -382,6 +383,7 @@ class EventSpider(scrapy.Spider):
             return df
 
         return self.clean_events(df)
+
 
     def clean_events(self, df):
         """
@@ -499,6 +501,7 @@ class EventSpider(scrapy.Spider):
         # Return the collected events as a pandas dataframe
 
         return df
+    
    
 # Run the crawler
 if __name__ == "__main__":

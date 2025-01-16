@@ -1,0 +1,205 @@
+2025-01-15 21:49:29 - INFO - def __init__(): Database connection established.
+2025-01-15 21:49:29 - INFO - 
+
+__main__: Starting the crawler process at 2025-01-15 21:49:29.485995
+2025-01-15 21:49:29 - INFO - Global logging configured.
+2025-01-15 21:49:29 - INFO - def __init__(): Database connection established.
+2025-01-15 21:49:29 - INFO - FacebookEventScraper initialized.
+2025-01-15 21:49:32 - INFO - Already logged into Facebook. Skipping login.
+2025-01-15 21:49:32 - INFO - LLMHandler initialized.
+2025-01-15 21:49:32 - INFO - def __main__: Starting Facebook event scraping.
+2025-01-15 21:49:32 - INFO - def __main__: Running driver_fb_urls.
+2025-01-15 21:49:32 - INFO - def driver_fb_urls(): Retrieved 16 Facebook URLs.
+2025-01-15 21:49:32 - INFO - def driver_fb_urls(): Processing URL: https://www.facebook.com/groups/1634269246863069/
+2025-01-15 21:49:32 - INFO - Already logged into Facebook. Skipping login.
+2025-01-15 21:49:32 - INFO - def extract_text_from_fb_url(): Successfully logged into Facebook.
+2025-01-15 21:49:38 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/groups/1634269246863069/.
+2025-01-15 21:49:38 - INFO - def generate_prompt(): Generating prompt for URL: https://www.facebook.com/groups/1634269246863069/
+2025-01-15 21:49:38 - INFO - def generate_prompt(): prompt type: fb, text file path: prompts/fb_prompt.txt
+2025-01-15 21:49:38 - INFO - def generate_prompt(): 
+prompts/fb_prompt.txt
+2025-01-15 21:50:00 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-15 21:50:00 - INFO - def query_llm(): LLM response content: 
+No events found.
+
+2025-01-15 21:50:00 - INFO - def query_llm(): LLM response received based on url https://www.facebook.com/groups/1634269246863069/.
+2025-01-15 21:50:00 - INFO - delete_url_from_fb_urls: Deleted URL 'https://www.facebook.com/groups/1634269246863069/' from 'fb_urls' table.
+2025-01-15 21:50:00 - INFO - def process_fb_url(): No valid events found for URL: https://www.facebook.com/groups/1634269246863069/. URL deleted from fb_urls table.
+2025-01-15 21:50:00 - INFO - def driver_fb_urls(): Processing URL: https://www.facebook.com/groups/3158235040/
+2025-01-15 21:50:00 - INFO - Already logged into Facebook. Skipping login.
+2025-01-15 21:50:00 - INFO - def extract_text_from_fb_url(): Successfully logged into Facebook.
+2025-01-15 21:50:06 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/groups/3158235040/.
+2025-01-15 21:50:06 - INFO - def generate_prompt(): Generating prompt for URL: https://www.facebook.com/groups/3158235040/
+2025-01-15 21:50:06 - INFO - def generate_prompt(): prompt type: fb, text file path: prompts/fb_prompt.txt
+2025-01-15 21:50:06 - INFO - def generate_prompt(): 
+prompts/fb_prompt.txt
+2025-01-15 21:50:11 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-15 21:50:11 - INFO - def query_llm(): LLM response content: 
+No events found.
+
+2025-01-15 21:50:11 - INFO - def query_llm(): LLM response received based on url https://www.facebook.com/groups/3158235040/.
+2025-01-15 21:50:11 - INFO - delete_url_from_fb_urls: Deleted URL 'https://www.facebook.com/groups/3158235040/' from 'fb_urls' table.
+2025-01-15 21:50:11 - INFO - def process_fb_url(): No valid events found for URL: https://www.facebook.com/groups/3158235040/. URL deleted from fb_urls table.
+2025-01-15 21:50:11 - INFO - def driver_fb_urls(): Processing URL: https://www.facebook.com/groups/265269613666246/
+2025-01-15 21:50:11 - INFO - Already logged into Facebook. Skipping login.
+2025-01-15 21:50:11 - INFO - def extract_text_from_fb_url(): Successfully logged into Facebook.
+2025-01-15 21:50:17 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/groups/265269613666246/.
+2025-01-15 21:50:17 - INFO - def generate_prompt(): Generating prompt for URL: https://www.facebook.com/groups/265269613666246/
+2025-01-15 21:50:17 - INFO - def generate_prompt(): prompt type: fb, text file path: prompts/fb_prompt.txt
+2025-01-15 21:50:17 - INFO - def generate_prompt(): 
+prompts/fb_prompt.txt
+2025-01-15 21:50:36 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-15 21:50:36 - INFO - def query_llm(): LLM response content: 
+No events found.
+
+2025-01-15 21:50:36 - INFO - def query_llm(): LLM response received based on url https://www.facebook.com/groups/265269613666246/.
+2025-01-15 21:50:36 - INFO - delete_url_from_fb_urls: Deleted URL 'https://www.facebook.com/groups/265269613666246/' from 'fb_urls' table.
+2025-01-15 21:50:36 - INFO - def process_fb_url(): No valid events found for URL: https://www.facebook.com/groups/265269613666246/. URL deleted from fb_urls table.
+2025-01-15 21:50:36 - INFO - def driver_fb_urls(): Processing URL: https://www.facebook.com/groups/salsadancingnanaimo/
+2025-01-15 21:50:36 - INFO - Already logged into Facebook. Skipping login.
+2025-01-15 21:50:36 - INFO - def extract_text_from_fb_url(): Successfully logged into Facebook.
+2025-01-15 21:50:46 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/groups/salsadancingnanaimo/.
+2025-01-15 21:50:46 - INFO - def generate_prompt(): Generating prompt for URL: https://www.facebook.com/groups/salsadancingnanaimo/
+2025-01-15 21:50:46 - INFO - def generate_prompt(): prompt type: fb, text file path: prompts/fb_prompt.txt
+2025-01-15 21:50:46 - INFO - def generate_prompt(): 
+prompts/fb_prompt.txt
+2025-01-15 21:52:06 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-15 21:52:06 - INFO - def query_llm(): LLM response content: 
+```json
+[
+    {
+        "org_name": "Latino Club Team",
+        "dance_style": "salsa",
+        "url": "",
+        "event_type": "social dance",
+        "event_name": "Social Dancing Night",
+        "day_of_week": "Saturday",
+        "start_date": "2023-10-07",
+        "end_date": "2023-10-07",
+        "start_time": "18:00",
+        "end_time": "",
+        "price": "",
+        "location": "867 Bruce Avenue",
+        "description": ""
+    }
+]
+```
+
+2025-01-15 21:52:06 - INFO - def query_llm(): LLM response received based on url https://www.facebook.com/groups/salsadancingnanaimo/.
+2025-01-15 21:52:06 - INFO - def extract_and_parse_json(): JSON found in result.
+2025-01-15 21:52:06 - INFO - def extract_and_parse_json(): for url https://www.facebook.com/groups/salsadancingnanaimo/, 
+Cleaned JSON string: 
+[
+    {
+        "org_name": "Latino Club Team",
+        "dance_style": "salsa",
+        "url": "",
+        "event_type": "social dance",
+        "event_name": "Social Dancing Night",
+        "day_of_week": "Saturday",
+        "start_date": "2023-10-07",
+        "end_date": "2023-10-07",
+        "start_time": "18:00",
+        "end_time": "",
+        "price": "",
+        "location": "867 Bruce Avenue",
+        "description": ""
+    }
+]
+2025-01-15 21:52:07 - WARNING - clean_up_address: No address found in 'location' for row 0.
+2025-01-15 21:52:07 - INFO - write_events_to_db: Number of events to write: 1
+2025-01-15 21:52:07 - INFO - write_events_to_db: Events data written to the 'events' table.
+2025-01-15 21:52:07 - INFO - def process_fb_url(): Valid events found for Facebook URL: https://www.facebook.com/groups/salsadancingnanaimo/. Events written to database.
+2025-01-15 21:52:07 - INFO - def driver_fb_urls(): Processing URL: https://www.facebook.com/groups/salsadancingnanaimo/posts/1107350607491341/
+2025-01-15 21:52:07 - INFO - Already logged into Facebook. Skipping login.
+2025-01-15 21:52:07 - INFO - def extract_text_from_fb_url(): Successfully logged into Facebook.
+2025-01-15 21:52:14 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/groups/salsadancingnanaimo/posts/1107350607491341/.
+2025-01-15 21:52:14 - INFO - def generate_prompt(): Generating prompt for URL: https://www.facebook.com/groups/salsadancingnanaimo/posts/1107350607491341/
+2025-01-15 21:52:14 - INFO - def generate_prompt(): prompt type: fb, text file path: prompts/fb_prompt.txt
+2025-01-15 21:52:14 - INFO - def generate_prompt(): 
+prompts/fb_prompt.txt
+2025-01-15 21:54:12 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-15 21:54:12 - INFO - def query_llm(): LLM response content: 
+```json
+[
+    {
+        "org_name": "",
+        "dance_style": "",
+        "url": "",
+        "event_type": "social dance",
+        "event_name": "Social Dancing Night",
+        "day_of_week": "Saturday",
+        "start_date": "2024-12-28",
+        "end_date": "2024-12-28",
+        "start_time": "18:00",
+        "end_time": "",
+        "price": "",
+        "location": "867 Bruce Avenue",
+        "description": ""
+    }
+]
+```
+
+2025-01-15 21:54:12 - INFO - def query_llm(): LLM response received based on url https://www.facebook.com/groups/salsadancingnanaimo/posts/1107350607491341/.
+2025-01-15 21:54:12 - INFO - def extract_and_parse_json(): JSON found in result.
+2025-01-15 21:54:12 - INFO - def extract_and_parse_json(): for url https://www.facebook.com/groups/salsadancingnanaimo/posts/1107350607491341/, 
+Cleaned JSON string: 
+[
+    {
+        "org_name": "",
+        "dance_style": "",
+        "url": "",
+        "event_type": "social dance",
+        "event_name": "Social Dancing Night",
+        "day_of_week": "Saturday",
+        "start_date": "2024-12-28",
+        "end_date": "2024-12-28",
+        "start_time": "18:00",
+        "end_time": "",
+        "price": "",
+        "location": "867 Bruce Avenue",
+        "description": ""
+    }
+]
+2025-01-15 21:54:12 - WARNING - clean_up_address: No address found in 'location' for row 0.
+2025-01-15 21:54:12 - INFO - write_events_to_db: Number of events to write: 1
+2025-01-15 21:54:12 - INFO - write_events_to_db: Events data written to the 'events' table.
+2025-01-15 21:54:12 - INFO - def process_fb_url(): Valid events found for Facebook URL: https://www.facebook.com/groups/salsadancingnanaimo/posts/1107350607491341/. Events written to database.
+2025-01-15 21:54:12 - INFO - def driver_fb_urls(): Processing URL: https://www.facebook.com/groups/strictlylindy/posts/1234576006605637/
+2025-01-15 21:54:12 - INFO - Already logged into Facebook. Skipping login.
+2025-01-15 21:54:12 - INFO - def extract_text_from_fb_url(): Successfully logged into Facebook.
+2025-01-15 21:54:19 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/groups/strictlylindy/posts/1234576006605637/.
+2025-01-15 21:54:19 - INFO - def generate_prompt(): Generating prompt for URL: https://www.facebook.com/groups/strictlylindy/posts/1234576006605637/
+2025-01-15 21:54:19 - INFO - def generate_prompt(): prompt type: fb, text file path: prompts/fb_prompt.txt
+2025-01-15 21:54:19 - INFO - def generate_prompt(): 
+prompts/fb_prompt.txt
+2025-01-15 21:55:04 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-15 21:55:04 - INFO - def query_llm(): LLM response content: 
+No events found.
+
+2025-01-15 21:55:04 - INFO - def query_llm(): LLM response received based on url https://www.facebook.com/groups/strictlylindy/posts/1234576006605637/.
+2025-01-15 21:55:04 - INFO - delete_url_from_fb_urls: Deleted URL 'https://www.facebook.com/groups/strictlylindy/posts/1234576006605637/' from 'fb_urls' table.
+2025-01-15 21:55:04 - INFO - def process_fb_url(): No valid events found for URL: https://www.facebook.com/groups/strictlylindy/posts/1234576006605637/. URL deleted from fb_urls table.
+2025-01-15 21:55:04 - INFO - def driver_fb_urls(): Processing URL: https://www.facebook.com/groups/victoriawestcoastswingcollective/
+2025-01-15 21:55:04 - INFO - Already logged into Facebook. Skipping login.
+2025-01-15 21:55:04 - INFO - def extract_text_from_fb_url(): Successfully logged into Facebook.
+2025-01-15 21:55:11 - INFO - def extract_event_text(): Extracted text from https://www.facebook.com/groups/victoriawestcoastswingcollective/.
+2025-01-15 21:55:11 - INFO - def generate_prompt(): Generating prompt for URL: https://www.facebook.com/groups/victoriawestcoastswingcollective/
+2025-01-15 21:55:11 - INFO - def generate_prompt(): prompt type: fb, text file path: prompts/fb_prompt.txt
+2025-01-15 21:55:11 - INFO - def generate_prompt(): 
+prompts/fb_prompt.txt
+2025-01-15 21:55:57 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-01-15 21:55:57 - INFO - def query_llm(): LLM response content: 
+No events found.
+
+2025-01-15 21:55:57 - INFO - def query_llm(): LLM response received based on url https://www.facebook.com/groups/victoriawestcoastswingcollective/.
+2025-01-15 21:55:57 - INFO - delete_url_from_fb_urls: Deleted URL 'https://www.facebook.com/groups/victoriawestcoastswingcollective/' from 'fb_urls' table.
+2025-01-15 21:55:57 - INFO - def process_fb_url(): No valid events found for URL: https://www.facebook.com/groups/victoriawestcoastswingcollective/. URL deleted from fb_urls table.
+2025-01-15 21:55:57 - INFO - def driver_fb_urls(): Processing URL: https://www.instagram.com/vic_international_kizomba_fest/
+2025-01-15 21:55:57 - INFO - Already logged into Facebook. Skipping login.
+2025-01-15 21:55:57 - INFO - def extract_text_from_fb_url(): Successfully logged into Facebook.
+2025-01-15 21:56:03 - INFO - def extract_event_text(): Extracted text from https://www.instagram.com/vic_international_kizomba_fest/.
+2025-01-15 21:56:03 - INFO - def generate_prompt(): Generating prompt for URL: https://www.instagram.com/vic_international_kizomba_fest/
+2025-01-15 21:56:03 - INFO - def generate_prompt(): prompt type: fb, text file path: prompts/fb_prompt.txt
+2025-01-15 21:56:03 - INFO - def generate_prompt(): 
+prompts/fb_prompt.txt

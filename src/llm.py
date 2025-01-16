@@ -7,23 +7,14 @@ import pandas as pd
 import re
 import yaml
 
-from db import DatabaseHandler
+from bh import BaseHandler
 
-# Check if 'db_handler' is not defined and instantiate it if necessary
-if 'db_handler' not in globals():
-    # Load configuration from YAML
-    with open("config/config.yaml", "r") as file:
-        config = yaml.safe_load(file)
-    # Instantiate the database handler using the loaded config
-    db_handler = DatabaseHandler(config)
 
-class LLMHandler:
+class LLMHandler(BaseHandler):
     def __init__(self, config_path="config/config.yaml"):
-        # Load configuration from a YAML file
-        with open(config_path, "r") as file:
-            self.config = yaml.safe_load(file)
+        # Initialize base class (loads config, sets up logging, etc.)
+        super().__init__(config_path)
 
-        logging.info("LLMHandler initialized.")
     
     def driver(self, url, search_term, extracted_text, org_name, keywords_list):
         """
@@ -258,9 +249,6 @@ if __name__ == "__main__":
 
     # Instantiate the LLM handler
     llm = LLMHandler(config_path="config/config.yaml")
-
-    # Instantiate the database handler
-    db_handler = DatabaseHandler(llm.config)
 
     # Get a test file
     extracted_text_df = pd.read_csv('output/extracted_text.csv')

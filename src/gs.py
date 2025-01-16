@@ -1,3 +1,39 @@
+"""
+gs.py: A module for performing Google searches using the Custom Search API,
+processing results with a Language Learning Model (LLM), and storing results.
+
+This module defines the `GoogleSearch` class, which:
+- Loads configuration from a YAML file.
+- Sets up logging based on the configuration.
+- Retrieves Google API credentials and reads keywords from specified CSV files.
+- Constructs search queries using keywords and location parameters.
+- Performs Google searches and processes results using an LLM to extract organization names.
+- Aggregates and returns search results in a Pandas DataFrame.
+- Provides an entry point to run the search process and save results to a CSV file.
+
+Classes:
+    GoogleSearch: Encapsulates methods for loading configurations, performing searches,
+                  processing responses with an LLM, and writing results.
+
+Usage Example:
+    if __name__ == "__main__":
+        # Initialize the GoogleSearch instance and run the driver
+        gs_instance = GoogleSearch()
+        results_df = gs_instance.driver()
+        # Write results to a CSV file
+        output_path = gs_instance.config['input']['data_urls']
+        results_df.to_csv(output_path, index=False)
+        ...
+
+Dependencies:
+    - googleapiclient.discovery for Google Custom Search API
+    - pandas for data manipulation and CSV I/O
+    - yaml for configuration file parsing
+    - logging for logging events
+    - LLMHandler for processing results with a language model
+"""
+
+
 from datetime import datetime
 from googleapiclient.discovery import build
 import logging
@@ -5,16 +41,12 @@ import pandas as pd
 import os
 import yaml
 
+
+from bh import BaseHandler
 from llm import LLMHandler
 
-# Initial basic logging configuration for early logs (console output)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
 
-class GoogleSearch:
+class GoogleSearch(BaseHandler):
     def __init__(self, config_path="config/config.yaml"):
         """
         Initialize GoogleSearch by loading configuration from a YAML file,
@@ -24,9 +56,8 @@ class GoogleSearch:
             config_path (str): Path to the configuration YAML file.
                                Defaults to "config/config.yaml".
         """
-        self.config = self.load_config(config_path)
-        self.setup_logging()  # Set up file logging based on configuration
-        logging.info("def __init__(): Configuration loaded successfully.")
+        # Initialize base class (loads config, sets up logging, etc.)
+        super().__init__(config_path)
 
         # Retrieve and store API credentials once during initialization
         self.api_key, self.cse_id = self.get_keys('Google')
