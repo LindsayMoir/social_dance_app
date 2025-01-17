@@ -10,15 +10,17 @@ import requests
 import yaml
 
 # Import other classes
-from bh import BaseHandler
 from llm import LLMHandler
 from db import DatabaseHandler
 
 
-class FacebookEventScraper(BaseHandler):
+class FacebookEventScraper():
     def __init__(self, config_path="config/config.yaml"):
-        # Initialize base class (loads config, sets up logging, etc.)
-        super().__init__(config_path)
+        # Initialize base class (loads config)
+
+        # Get config
+        with open(config_path, 'r') as file:
+            self.config = yaml.safe_load(file)
 
         # Start Playwright and log into Facebook once
         self.playwright = sync_playwright().start()
@@ -29,6 +31,9 @@ class FacebookEventScraper(BaseHandler):
         # Attempt to log into Facebook and store the logged-in page for reuse
         if not self.login_to_facebook(self.logged_in_page, self.browser):
             logging.error("Facebook login failed during initialization.")
+
+        # Set up the set for urls visited
+        self.urls_visited = set()
 
 
     def get_credentials(self, organization):
@@ -194,7 +199,6 @@ class FacebookEventScraper(BaseHandler):
         base_url = self.config['constants']['fb_base_url']
         location = self.config['constants']['location']
         extracted_text_list = []
-        urls_visited = set()
 
         try:
             # Use the stored logged-in page
@@ -206,26 +210,26 @@ class FacebookEventScraper(BaseHandler):
                 logging.info(f"def scrape_events: Used {search_url} to get {len(event_links)} event_links\n")
 
                 for link in event_links:
-                    if link in urls_visited:
-                        continue
-
-                    extracted_text = self.extract_event_text(link)
-                    extracted_text_list.append((link, extracted_text))
-                    urls_visited.add(link)
-                    if len(urls_visited) >= self.config['crawling']['urls_run_limit']:
-                        break
+                    if link in self.urls_visited:
+                        pass
+                    else:
+                        extracted_text = self.extract_event_text(link)
+                        extracted_text_list.append((link, extracted_text))
+                        self.urls_visited.add(link)
+                        if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                            break
 
                     # Get second-level links
                     second_level_links = self.extract_event_links(page, link)
                     for second_level_link in second_level_links:
-                        if second_level_link in urls_visited:
-                            continue
-
-                        second_level_text = self.extract_event_text(second_level_link)
-                        extracted_text_list.append((second_level_link, second_level_text))
-                        urls_visited.add(second_level_link)
-                        if len(urls_visited) >= self.config['crawling']['urls_run_limit']:
-                            break
+                        if second_level_link in self.urls_visited:
+                            pass
+                        else:
+                            second_level_text = self.extract_event_text(second_level_link)
+                            extracted_text_list.append((second_level_link, second_level_text))
+                            self.urls_visited.add(second_level_link)
+                            if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                                break
 
         except Exception as e:
             logging.error(f"Failed to scrape events: {e}")
@@ -345,26 +349,44 @@ class FacebookEventScraper(BaseHandler):
         """
         logging.info(f"Starting scrape and process for query: {query}.")
         extracted_text = ''
-        results = self.google_search(query, 5)
+        results = self.google_search(query, config['crawling']['urls_run_limit'])
 
+        # # We have to get thru all of them before we know if we need to bail out to Facebook
         for title, url in results:
-            # Check if the query is similar to the title
-            similarity = fuzz.token_set_ratio(query, title)
-            if similarity > self.config['constants']['fuzzywuzzy_threshold'] and 'facebook' not in url:  # 80% threshold
-                logging.info(f"def scrape_and_process(): Relevant result found: Title: {title}, URL: {url}.")
 
-                # Scrape text from the non-Facebook URL
-                extracted_text = self.extract_text_from_url(url)
-                if extracted_text:
-                    logging.info(f"def scrape_and_process(): Text extracted from url: {url}.")
-                    if 'allevents.in' in url:
-                        return url, extracted_text, 'allevents'
-                    else:
-                        return url, extracted_text, 'single_event'
+            # Check and see if url has already been visited
+            if url in self.urls_visited:
+                pass
+
+            else:
+                # Check and see if we have hit our limit for urls to visit
+                if config['crawling']['urls_run_limit'] > len(self.urls_visited):
+                    return url, None, 'default'
+                else:
+                    # Add to self.urls_visited
+                    self.urls_visited.add(url)
+
+                    # Check if the query is similar to the title
+                    similarity = fuzz.token_set_ratio(query, title)
+                    if similarity > self.config['constants']['fuzzywuzzy_threshold'] and 'facebook' not in url:  # 80% threshold
+                        logging.info(f"def scrape_and_process(): Relevant result found: Title: {title}, URL: {url}.")
+
+                        # Scrape text from the non-Facebook URL
+                        extracted_text = self.extract_text_from_url(url)
+                        if extracted_text:
+                            logging.info(f"def scrape_and_process(): Text extracted from url: {url}.")
+                            if 'allevents.in' in url:
+                                return url, extracted_text, 'allevents'
+                            else:
+                                return url, extracted_text, 'single_event'
             
-        # Check if the URL is a Facebook URL
-        # We have to get thru all of them before we know if we need to bail out to Facebook
+        # Might be a facebook event
         for title, url in results:
+
+            # Check and see if we have hit our limit for urls to visit
+            if config['crawling']['urls_run_limit'] > len(self.urls_visited):
+                return url, None, 'default'
+                
             # Check if the query is similar to the title
             similarity = fuzz.token_set_ratio(query, title)
             if similarity > self.config['constants']['fuzzywuzzy_threshold'] and 'facebook' in url:  # 80% threshold
@@ -372,16 +394,19 @@ class FacebookEventScraper(BaseHandler):
 
                 # Convert Facebook URL
                 url = self.convert_facebook_url(url)
-                logging.info(f"def scrape_and_process(): fb_url is: {url}")
-
                 logging.info(f"def scrape_and_process(): Extracting text from facebook url: {url}.")
+
+                # Scrape text from the Facebook URL
                 extracted_text = self.extract_text_from_fb_url(url)
                 if extracted_text:
                     logging.info(f"def scrape_and_process(): Text extracted from facebook url: {url}.")
                     return url, extracted_text, 'single_event'
-
-        logging.info(f"def scrape_and_process(): No relevant results found for: query: {query}.")
-        return url, None, 'default'
+                else:
+                    logging.info(f"def scrape_and_process(): No relevant results found for: query: {query}.")
+                    return url, None, 'default'
+        
+        logging.info(f"def scrape_and_process(): No relevant results found for: query: {query}.")        
+        return None, None, 'default'
             
 
     def save_to_csv(self, extracted_text_list, output_path):
@@ -397,6 +422,34 @@ class FacebookEventScraper(BaseHandler):
         logging.info(f"def save_to_csv(): Extracted text data written to {output_path}")
     
 
+    def fix_facebook_event_url(self, malformed_url):
+        """
+        Extracts and fixes a malformed Facebook event URL.
+        
+        Args:
+            malformed_url (str): The potentially malformed URL.
+        
+        Returns:
+            str or None: A corrected URL in the format 
+                        'https://www.facebook.com/events/<event_id>/' 
+                        if found, otherwise None.
+        """
+        # Regular expression pattern to capture the Facebook event URL structure.
+        pattern = re.compile(
+            r"(https?://)?(?:www\.)?facebook\.com/events/(\d+)/",
+            re.IGNORECASE
+        )
+        
+        match = pattern.search(malformed_url)
+        if match:
+            event_id = match.group(2)  # Extracted event id
+            # Construct a properly formatted URL
+            fixed_url = f"https://www.facebook.com/events/{event_id}/"
+            return fixed_url
+        
+        return None
+
+
     def process_fb_url(self, url, org_name, keywords):
         """
         Processes a single Facebook URL: extracts text, interacts with LLM, and updates the database.
@@ -409,32 +462,39 @@ class FacebookEventScraper(BaseHandler):
         Returns:
             None
         """
-        # Sanitize URL if malformed (e.g., duplicate scheme)
+        # Sanitize URL if malformed
         if url.startswith("http://https") or url.startswith("https://https"):
-            url = url.replace("http://https", "https://").replace("https://https", "https://")
+            url = self.fix_facebook_event_url(url)
 
-        extracted_text = self.extract_text_from_fb_url(url)
-        if not extracted_text:
-            db_handler.delete_url_from_fb_urls(url)
-            logging.info(f"def process_fb_url(): No text extracted for Facebook URL: {url}. URL deleted from fb_urls table.")
-            return
+        if url:
 
-        prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
-        llm_response = llm_handler.query_llm(prompt, url)
+            # Extract text and update db
+            extracted_text = self.extract_text_from_fb_url(url)
+            if not extracted_text:
+                db_handler.delete_url_from_fb_urls(url)
+                logging.info(f"def process_fb_url(): No text extracted for Facebook URL: {url}. URL deleted from fb_urls table.")
+                return
 
-        if "No events found" in llm_response:
-            db_handler.delete_url_from_fb_urls(url)
-            logging.info(f"def process_fb_url(): No valid events found for URL: {url}. URL deleted from fb_urls table.")
-        else:
-            parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
-            events_df = pd.DataFrame(parsed_result)
+            # Generate prompt and query LLM
+            prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
+            llm_response = llm_handler.query_llm(prompt, url)
 
-            # If the URL field is empty, fill it with the current URL.
-            if events_df['url'].values[0] == '':
-                events_df.loc[0, 'url'] = url
+            # If no events found delete the url from fb_urls table
+            if "No events found" in llm_response:
+                db_handler.delete_url_from_fb_urls(url)
+                logging.info(f"def process_fb_url(): No valid events found for URL: {url}. URL deleted from fb_urls table.")
+            
+            else:
+                # If parsed_result extract and write to db
+                parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
+                events_df = pd.DataFrame(parsed_result)
 
-            db_handler.write_events_to_db(events_df, url, org_name, keywords)
-            logging.info(f"def process_fb_url(): Valid events found for Facebook URL: {url}. Events written to database.")
+                # If the URL field is empty, fill it with the current URL.
+                if events_df['url'].values[0] == '':
+                    events_df.loc[0, 'url'] = url
+
+                db_handler.write_events_to_db(events_df, url, org_name, keywords)
+                logging.info(f"def process_fb_url(): Valid events found for Facebook URL: {url}. Events written to database.")
 
 
     def driver_fb_urls(self):
@@ -468,7 +528,6 @@ class FacebookEventScraper(BaseHandler):
         for _, row in keywords_df.iterrows():
             keywords_list = row['keywords'].split(',')
             org_name = row.get('org_name', '')
-            keywords_str = row.get('keywords', '')
 
             # Scrape the events
             search_url, extracted_text_list = self.scrape_events(keywords_list)
@@ -482,11 +541,21 @@ class FacebookEventScraper(BaseHandler):
                 logging.info(f"def driver_fb_search(): Extracted text data written to {output_path}.")
 
                 for url, extracted_text in extracted_text_list:
-                    # If URL is a Facebook URL, process it using the shared helper
-                    if 'facebook.com' in url:
+
+                    # Check if URL has already been visited and if it is a facebook url
+                    if url not in self.urls_visited and 'facebook.com' in url:
                         logging.info(f"def driver_fb_search(): Processing Facebook URL: {url}")
+
+                        # Add to self.urls_visited and check to see if we are at our crawl limit
+                        self.urls_visited.add(url)
+                        if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                            break
+
+                        # Set prompt and process_llm_response
                         prompt = 'fb'
                         llm_status = llm_handler.process_llm_response(url, extracted_text, org_name, keywords_list, prompt)
+                        if llm_status:
+                            logging.info(f"def driver_fb_search(): Processed Facebook URL via process_llm_response: {url}.")
                     else:
                         logging.debug(
                             "def driver_fb_search(): Processing non-Facebook URL. "
@@ -513,6 +582,8 @@ class FacebookEventScraper(BaseHandler):
 
         for _, row in no_urls_df.iterrows():
             query_text = row['event_name']
+            org_name = row['org_name']
+            keywords = row['dance_style']
             url, extracted_text, prompt_type = self.scrape_and_process(query_text)
 
             if extracted_text:
@@ -531,21 +602,18 @@ class FacebookEventScraper(BaseHandler):
                         events_df.loc[0, 'url'] = url
                         events_df.to_csv(self.config['debug']['after_url_updated'], index=False)
 
-                    db_handler.write_events_to_db(events_df, url)
+                    db_handler.write_events_to_db(events_df, url, org_name, keywords)
 
         return None
 
 
 if __name__ == "__main__":
 
-    # Get the start time
-    start_time = datetime.now()
-    logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
-
     # Get config
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
+    # Configure logging
     logging.basicConfig(
         filename=config['logging']['log_file'],
         filemode='w',
@@ -553,6 +621,10 @@ if __name__ == "__main__":
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt='%Y-%m-%d %H:%M:%S'
         )
+    
+    # Get the start time
+    start_time = datetime.now()
+    logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
     # Instantiate the class libraries
     db_handler = DatabaseHandler(config)

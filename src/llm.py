@@ -7,19 +7,21 @@ import pandas as pd
 import re
 import yaml
 
-from bh import BaseHandler
-from db import DataBaseHandler
+from db import DatabaseHandler
 
 
-class LLMHandler(BaseHandler):
+class LLMHandler():
     def __init__(self, config_path="config/config.yaml"):
-        # Initialize base class (loads config, sets up logging, etc.)
-        super().__init__(config_path)
+        # Initialize base class
+
+        # Get config
+        with open('config/config.yaml', 'r') as file:
+            self.config = yaml.safe_load(file)
 
         # Need DataBaseHandler, if it is not already in globals
         if 'db_handler' not in globals():
             global db_handler
-            db_handler = DataBaseHandler(self.config)
+            db_handler = DatabaseHandler(self.config)
 
 
     def driver(self, url, search_term, extracted_text, org_name, keywords_list):
@@ -252,9 +254,13 @@ class LLMHandler(BaseHandler):
 # Run the LLM
 if __name__ == "__main__":
 
+    # Get config
+    with open('config/config.yaml', 'r') as file:
+        config = yaml.safe_load(file)
+
     # Set up logging
     logging.basicConfig(
-        filename="logs/llm.log",
+        filename=config['logging']['log_file'],
         filemode='w',
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s"

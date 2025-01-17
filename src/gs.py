@@ -40,12 +40,11 @@ import pandas as pd
 import os
 import yaml
 
-
-from bh import BaseHandler
+# Import the LLMHandler class
 from llm import LLMHandler
 
 
-class GoogleSearch(BaseHandler):
+class GoogleSearch():
     def __init__(self, config_path="config/config.yaml"):
         """
         Initialize GoogleSearch by loading configuration from a YAML file,
@@ -55,8 +54,6 @@ class GoogleSearch(BaseHandler):
             config_path (str): Path to the configuration YAML file.
                                Defaults to "config/config.yaml".
         """
-        # Initialize base class (loads config, sets up logging, etc.)
-        super().__init__(config_path)
 
         # Retrieve and store API credentials once during initialization
         self.api_key, self.cse_id = self.get_keys('Google')
@@ -236,6 +233,18 @@ if __name__ == "__main__":
     # Get the start time
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
+
+    # Get config
+    with open('config/config.yaml', 'r') as file:
+        config = yaml.safe_load(file)
+
+    # Set up logging
+    logging.basicConfig(
+        filename=config['logging']['log_file'],
+        filemode='a',  # Changed to append mode to preserve logs
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+    )
 
     gs_instance = GoogleSearch()
     llm_instance = LLMHandler()

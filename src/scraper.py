@@ -512,6 +512,10 @@ if __name__ == "__main__":
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
+    # Get config
+    with open('config/config.yaml', 'r') as file:
+        config = yaml.safe_load(file)
+
     # Instantiate class'
     db_handler = DatabaseHandler(config)
     llm_handler = LLMHandler(config_path="config/config.yaml")
