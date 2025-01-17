@@ -19,15 +19,6 @@ class DatabaseHandler():
         """
         self.config = config
 
-        # Set up logging
-        logging.basicConfig(
-                filename=self.config['logging']['db_log_file'],
-                filemode='w',
-                level=logging.INFO,
-                format="%(asctime)s - %(levelname)s - %(message)s",
-                datefmt='%Y-%m-%d %H:%M:%S'
-                )
-
         self.conn = self.get_db_connection()
         if self.conn is None:
             raise ConnectionError("DatabaseHandler: Failed to establish a database connection.")

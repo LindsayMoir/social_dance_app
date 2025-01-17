@@ -179,7 +179,8 @@ class EventSpider(BaseHandler, scrapy.Spider):
 
         if keyword_status:
             # Call the llm to process the extracted text
-            llm_status = llm_handler.process_llm_response(url, extracted_text, org_name, keywords)
+            prompt = 'default'
+            llm_status = llm_handler.process_llm_response(url, extracted_text, org_name, keywords, prompt)
 
             if llm_status:
                 # Mark the event link as relevant
@@ -224,7 +225,8 @@ class EventSpider(BaseHandler, scrapy.Spider):
             keywords_list = [kw.strip().lower() for kw in keywords.split(',')]
             if any(kw in extracted_text.lower() for kw in keywords_list):
                 logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
-                return llm_handler.process_llm_response(url, extracted_text, org_name, keywords_list)
+                prompt = 'default'
+                return llm_handler.process_llm_response(url, extracted_text, org_name, keywords_list, prompt)
 
         if 'calendar' in url:
             logging.info(f"def check_keywords_in_text: URL {url} marked as relevant because 'calendar' is in the URL.")

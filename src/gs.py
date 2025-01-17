@@ -33,7 +33,6 @@ Dependencies:
     - LLMHandler for processing results with a language model
 """
 
-
 from datetime import datetime
 from googleapiclient.discovery import build
 import logging

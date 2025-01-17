@@ -10,7 +10,7 @@ crawling:
   headless: False
   max_crawl_trys: 3
   max_website_urls: 5
-  urls_run_limit: 150
+  urls_run_limit: 10
   scroll_depth: 3
 database:
   host: 'localhost'
@@ -20,6 +20,9 @@ database:
 date_range:
   months: 3
   days_ahead: 365
+debug:
+  after_url_updated: 'debug/after_url_updated.csv'
+  before_url_updated: 'debug/before_url_updated.csv'
 input:
   data_urls: 'data/urls/urls.csv'
   data_keywords: 'data//other/keywords.csv'
@@ -31,7 +34,7 @@ location:
 llm:
   url_evaluator: 'o1-mini'
 logging:
-  db_log_file: 'logs/db_log.txt'
+  log_file: 'logs/log.txt'
   log_file: 'logs/log.txt'
   extracted_text: 'output/extracted_text.csv'
 output:

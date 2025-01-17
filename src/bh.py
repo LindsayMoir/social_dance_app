@@ -2,6 +2,7 @@
 import yaml
 import logging
 
+
 class BaseHandler:
     _config = None
     _logging_configured = False
@@ -26,7 +27,7 @@ class BaseHandler:
             BaseHandler._logging_configured = True
             logging.info("Global logging configured.")
 
-        # Lazy import to break circular dependency
+        # Lazy import to break circular dependency for DatBaseHandler
         if BaseHandler._db_handler is None:
             from db import DatabaseHandler
             BaseHandler._db_handler = DatabaseHandler(self.config)

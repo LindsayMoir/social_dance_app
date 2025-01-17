@@ -11,16 +11,8 @@ import yaml
 
 # Import other classes
 from bh import BaseHandler
-from db import DatabaseHandler
 from llm import LLMHandler
-
-
-# Load configuration
-with open("config/config.yaml", "r") as file:
-    config = yaml.safe_load(file)
-
-# Instantiate DatabaseHandler with the configuration dictionary
-db_handler = DatabaseHandler(config)
+from db import DatabaseHandler
 
 
 class FacebookEventScraper(BaseHandler):
@@ -35,7 +27,7 @@ class FacebookEventScraper(BaseHandler):
         self.logged_in_page = self.context.new_page()
 
         # Attempt to log into Facebook and store the logged-in page for reuse
-        if not self.login_to_facebook(self.logged_in_page):
+        if not self.login_to_facebook(self.logged_in_page, self.browser):
             logging.error("Facebook login failed during initialization.")
 
 
@@ -56,21 +48,32 @@ class FacebookEventScraper(BaseHandler):
         return appid_uid, key_pw, cse_id
     
 
-    def login_to_facebook(self, page):
+    def login_to_facebook(self, page, browser):
         """
-        Logs into Facebook using credentials from the self.configuration, and handles potential captcha challenges.
-
+        Logs into Facebook using credentials from the configuration, handles potential additional
+        login prompts, and saves session state for future reuse. 
+        Manual intervention required for captcha challenges.
+        
         Args:
             page (playwright.sync_api.Page): The Playwright page instance.
-
+            browser (playwright.sync_api.Browser): The Playwright browser instance.
+        
         Returns:
             bool: True if login is successful, False otherwise.
         """
-        # If already logged in, reuse the page
-        if hasattr(self, 'logged_in_page') and self.logged_in_page:
-            logging.info("Already logged into Facebook. Skipping login.")
-            return True
-
+        # Try to load saved authentication state if it exists
+        try:
+            context = browser.new_context(storage_state="auth.json")
+            page = context.new_page()
+            page.goto("https://www.facebook.com/", timeout=60000)
+            # If this URL doesn't redirect to login, assume logged in
+            if "login" not in page.url.lower():
+                logging.info("Loaded existing session. Already logged into Facebook.")
+                self.logged_in_page = page
+                return True
+        except Exception as e:
+            logging.info("No valid saved session found. Proceeding with manual login.")
+        
         email, password, _ = self.get_credentials('Facebook')
 
         page.goto("https://www.facebook.com/login", timeout=60000)
@@ -78,24 +81,49 @@ class FacebookEventScraper(BaseHandler):
         page.fill("input[name='pass']", password)
         page.click("button[name='login']")
 
-        # Wait for navigation or potential challenge
-        page.wait_for_timeout(10000)
+        # Wait briefly for potential navigation or additional login prompts
+        page.wait_for_timeout(5000)
 
-        # Always prompt for manual captcha resolution
+        # Detect and handle additional login prompts if they appear
+        def check_additional_login(p):
+            if p.is_visible("input[name='email']") and p.is_visible("input[name='pass']"):
+                logging.info("Additional login prompt detected. Re-filling credentials.")
+                p.fill("input[name='email']", email)
+                p.fill("input[name='pass']", password)
+                p.click("button[name='login']")
+                # Wait for navigation or further prompts
+                p.wait_for_timeout(5000)
+                return True
+            return False
+
+        # Attempt to handle any subsequent login prompts up to a few times if necessary
+        attempts = 0
+        while attempts < 3 and check_additional_login(page):
+            attempts += 1
+
+        # Prompt for manual captcha/challenge resolution if necessary
         logging.warning("Please solve any captcha or challenge in the browser, then press Enter here to continue...")
         input("After solving captcha/challenge (if any), press Enter to continue...")
 
-        # Wait a bit more for navigation to complete after manual intervention
+        # Wait for navigation to complete after manual intervention
         page.wait_for_timeout(5000)
 
         # Check if login failed by examining the URL
         if "login" in page.url.lower():
-            logging.error("Login failed. Please check your credentials.")
+            logging.error("Login failed. Please check your credentials or solve captcha challenges.")
             return False
+
+        # Save session state for future reuse
+        try:
+            context = page.context
+            context.storage_state(path="auth.json")
+            logging.info("Session state saved for future use.")
+        except Exception as e:
+            logging.warning(f"Could not save session state: {e}")
 
         # Mark page as logged-in for future reuse
         self.logged_in_page = page
-        logging.info("def login_to_facebook(): Login successful.")
+        logging.info("Login to Facebook successful.")
         return True
     
 
@@ -184,6 +212,8 @@ class FacebookEventScraper(BaseHandler):
                     extracted_text = self.extract_event_text(link)
                     extracted_text_list.append((link, extracted_text))
                     urls_visited.add(link)
+                    if len(urls_visited) >= self.config['crawling']['urls_run_limit']:
+                        break
 
                     # Get second-level links
                     second_level_links = self.extract_event_links(page, link)
@@ -194,6 +224,8 @@ class FacebookEventScraper(BaseHandler):
                         second_level_text = self.extract_event_text(second_level_link)
                         extracted_text_list.append((second_level_link, second_level_text))
                         urls_visited.add(second_level_link)
+                        if len(urls_visited) >= self.config['crawling']['urls_run_limit']:
+                            break
 
         except Exception as e:
             logging.error(f"Failed to scrape events: {e}")
@@ -214,10 +246,7 @@ class FacebookEventScraper(BaseHandler):
         Returns:
             str: Extracted text content from the Facebook event page.
         """
-        # Use the stored logged-in page
-        page = self.logged_in_page
-
-        fb_status = fb_scraper.login_to_facebook(page)
+        fb_status = fb_scraper.login_to_facebook(self.logged_in_page, self.browser)
 
         if fb_status:
             logging.info("def extract_text_from_fb_url(): Successfully logged into Facebook.")
@@ -456,11 +485,18 @@ class FacebookEventScraper(BaseHandler):
                     # If URL is a Facebook URL, process it using the shared helper
                     if 'facebook.com' in url:
                         logging.info(f"def driver_fb_search(): Processing Facebook URL: {url}")
-                        self.process_fb_url(url, org_name, keywords_str)
+                        prompt = 'fb'
+                        llm_status = llm_handler.process_llm_response(url, extracted_text, org_name, keywords_list, prompt)
                     else:
-                        # Handle non-Facebook URLs if needed
-                        pass
+                        logging.debug(
+                            "def driver_fb_search(): Processing non-Facebook URL. "
+                            "This is unlikely to happen and you should figure out why: "
+                            f"{url}"
+                        )
+                        prompt = 'default'
+                        llm_status = llm_handler.process_llm_response(url, extracted_text, org_name, keywords_list, prompt)
 
+        return None
     
     def driver_no_urls(self):
         """
@@ -489,11 +525,11 @@ class FacebookEventScraper(BaseHandler):
                     parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
                     events_df = pd.DataFrame(parsed_result)
                     logging.info(f"def driver_no_urls(): URL is: {url}")
-                    events_df.to_csv('before_url_updated.csv', index=False)
+                    events_df.to_csv(self.config['debug']['before_url_updated'], index=False)
 
                     if events_df['url'].values[0] == '':
                         events_df.loc[0, 'url'] = url
-                        events_df.to_csv('after_url_updated.csv', index=False)
+                        events_df.to_csv(self.config['debug']['after_url_updated'], index=False)
 
                     db_handler.write_events_to_db(events_df, url)
 
@@ -506,7 +542,20 @@ if __name__ == "__main__":
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
+    # Get config
+    with open('config/config.yaml', 'r') as file:
+        config = yaml.safe_load(file)
+
+    logging.basicConfig(
+        filename=config['logging']['log_file'],
+        filemode='w',
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        datefmt='%Y-%m-%d %H:%M:%S'
+        )
+
     # Instantiate the class libraries
+    db_handler = DatabaseHandler(config)
     fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
     llm_handler = LLMHandler(config_path='config/config.yaml')
 

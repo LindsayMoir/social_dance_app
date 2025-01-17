@@ -8,6 +8,7 @@ import re
 import yaml
 
 from bh import BaseHandler
+from db import DataBaseHandler
 
 
 class LLMHandler(BaseHandler):
@@ -15,7 +16,12 @@ class LLMHandler(BaseHandler):
         # Initialize base class (loads config, sets up logging, etc.)
         super().__init__(config_path)
 
-    
+        # Need DataBaseHandler, if it is not already in globals
+        if 'db_handler' not in globals():
+            global db_handler
+            db_handler = DataBaseHandler(self.config)
+
+
     def driver(self, url, search_term, extracted_text, org_name, keywords_list):
         """
         Determine the relevance of a given URL based on its content, keywords, or organization name.
@@ -27,16 +33,21 @@ class LLMHandler(BaseHandler):
         Returns:
         bool: True if the URL is relevant, False otherwise.
         """
+        # Set default value of prompt
+        prompt = 'default'
+
         # Check keywords in the extracted text
         if 'facebook' in url:
             logging.info(f"def driver(): URL {url} 'facebook' is in the URL.")
-            keyword_or_fb_status = True
-        else:
-            keyword_or_fb_status = self.check_keywords_in_text(url, extracted_text, keywords_list)
+            fb_status = True
+            if fb_status:
+                prompt = 'fb'
 
-        if keyword_or_fb_status:
+        keyword_status = self.check_keywords_in_text(url, extracted_text, keywords_list)
+        
+        if keyword_status == True or fb_status == True:
             # Call the llm to process the extracted text
-            llm_status = self.process_llm_response(url, extracted_text, org_name, keywords_list)
+            llm_status = self.process_llm_response(url, extracted_text, org_name, keywords_list, prompt)
 
             if llm_status:
                 # Mark the event link as relevant
@@ -49,6 +60,7 @@ class LLMHandler(BaseHandler):
         else:
             # Mark the event link as irrelevant
             db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_trys=1)
+            
 
     def check_keywords_in_text(self, url, extracted_text, org_name, keywords_list):
         """
@@ -60,11 +72,16 @@ class LLMHandler(BaseHandler):
         Returns:
         bool: True if the text is relevant based on the presence of keywords or 'calendar' in the URL, False otherwise.
         """
+        #Set default value of prompt
+        prompt = 'default'
+
         # Check for keywords in the extracted text and determine relevance.
         if keywords_list or 'facebook' in url:
             if any(kw in extracted_text.lower() for kw in keywords_list):
                 logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
-                return self.process_llm_response(url, extracted_text, org_name, keywords_list)
+                if 'facebook' in url:
+                    prompt = 'fb'
+                return self.process_llm_response(url, extracted_text, org_name, keywords_list, prompt)
             
         if 'calendar' in url:
             logging.info(f"def check_keywords_in_text: URL {url} marked as relevant because 'calendar' is in the URL.")
@@ -74,7 +91,7 @@ class LLMHandler(BaseHandler):
         return False
     
 
-    def process_llm_response(self, url, extracted_text, org_name, keywords_list):
+    def process_llm_response(self, url, extracted_text, org_name, keywords_list, prompt):
         """
         Generate a prompt, query a Language Learning Model (LLM), and process the response.
 
@@ -249,6 +266,9 @@ if __name__ == "__main__":
 
     # Instantiate the LLM handler
     llm = LLMHandler(config_path="config/config.yaml")
+
+    # Instantiate the database handler
+    db_handler = llm.db_handler()
 
     # Get a test file
     extracted_text_df = pd.read_csv('output/extracted_text.csv')
