@@ -82,21 +82,17 @@ class EventSpider(BaseHandler, scrapy.Spider):
             org_name = row['org_names']
             keywords = row['keywords']
             url = row['links']
+            
+            # We need to write the url to the database, if it is not already there
+            other_links, relevant, increment_crawl_trys = '', None, 1
+            db_handler.write_url_to_db(org_name, keywords, url, other_links, relevant, increment_crawl_trys)
 
-            if 'facebook' in url:
-                db_handler.write_url_to_fb_table(org_name, keywords, url)
-                logging.info(f"Skipping crawl for Facebook URL: {url}")
-            else:
-                # We need to write the url to the database, if it is not already there
-                other_links, relevant, increment_crawl_trys = '', None, 1
-                db_handler.write_url_to_db(org_name, keywords, url, other_links, relevant, increment_crawl_trys)
-
-                if url not in self.visited_links:
-                    self.visited_links.add(url)  # Mark the page link as visited
-                    logging.info(f"Starting crawl for URL: {url}")
-                    yield scrapy.Request(url=url, callback=self.parse, cb_kwargs={'keywords': keywords, 
-                                                    'org_name': org_name, 
-                                                    'url': url})
+            if url not in self.visited_links:
+                self.visited_links.add(url)  # Mark the page link as visited
+                logging.info(f"Starting crawl for URL: {url}")
+                yield scrapy.Request(url=url, callback=self.parse, cb_kwargs={'keywords': keywords, 
+                                                'org_name': org_name, 
+                                                'url': url})
 
     def parse(self, response, keywords, org_name, url):
         """
@@ -136,7 +132,6 @@ class EventSpider(BaseHandler, scrapy.Spider):
         # Iterate over a copy of all_links to safely remove items during iteration
         for link in list(all_links):
             if 'facebook' in link or 'instagram' in link:
-                db_handler.write_url_to_fb_table(org_name, keywords, link)
                 all_links.remove(link)  # Safely remove from the original set
                 logging.info(f"def parse(): Found a Facebook or Instagram URL, processing: {link}")
         

@@ -349,7 +349,7 @@ class FacebookEventScraper():
         """
         logging.info(f"Starting scrape and process for query: {query}.")
         extracted_text = ''
-        results = self.google_search(query, config['crawling']['urls_run_limit'])
+        results = self.google_search(query, self.config['crawling']['urls_run_limit'])
 
         # # We have to get thru all of them before we know if we need to bail out to Facebook
         for title, url in results:
@@ -360,7 +360,7 @@ class FacebookEventScraper():
 
             else:
                 # Check and see if we have hit our limit for urls to visit
-                if config['crawling']['urls_run_limit'] > len(self.urls_visited):
+                if self.config['crawling']['urls_run_limit'] > len(self.urls_visited):
                     return url, None, 'default'
                 else:
                     # Add to self.urls_visited
@@ -466,13 +466,18 @@ class FacebookEventScraper():
         if url.startswith("http://https") or url.startswith("https://https"):
             url = self.fix_facebook_event_url(url)
 
+        # Establish default values
+        update_other_links = 'No'
+        relevant = False
+        increment_crawl_trys = 1
+
         if url:
 
             # Extract text and update db
             extracted_text = self.extract_text_from_fb_url(url)
             if not extracted_text:
-                db_handler.delete_url_from_fb_urls(url)
-                logging.info(f"def process_fb_url(): No text extracted for Facebook URL: {url}. URL deleted from fb_urls table.")
+                db_handler.update_url(url, update_other_links, relevant, increment_crawl_trys)
+                logging.info(f"def process_fb_url(): No text extracted for Facebook URL. URL updated in urls table: {url}.")
                 return
 
             # Generate prompt and query LLM
@@ -481,7 +486,7 @@ class FacebookEventScraper():
 
             # If no events found delete the url from fb_urls table
             if "No events found" in llm_response:
-                db_handler.delete_url_from_fb_urls(url)
+                db_handler.update_url(url, update_other_links, relevant, increment_crawl_trys)
                 logging.info(f"def process_fb_url(): No valid events found for URL: {url}. URL deleted from fb_urls table.")
             
             else:
@@ -503,14 +508,18 @@ class FacebookEventScraper():
         2. For each url, extracts text and processes it.
         3. If valid events are found, writes them to the database; otherwise, deletes the URL.
         """
-        query = "SELECT url, org_name, keywords FROM fb_urls"
+        query = """
+                SELECT * 
+                FROM urls
+                WHERE links ILIKE '%facebook%'
+                """
         fb_urls_df = pd.read_sql(query, db_handler.get_db_connection())
         logging.info(f"def driver_fb_urls(): Retrieved {len(fb_urls_df)} Facebook URLs.")
 
         for _, row in fb_urls_df.iterrows():
-            url = row['url']
-            org_name = row.get('org_name', '')
-            keywords = row.get('keywords', '')
+            url = row['links']
+            org_name = row['org_names']
+            keywords = row['keywords']
             logging.info(f"def driver_fb_urls(): Processing URL: {url}")
             self.process_fb_url(url, org_name, keywords)
 
@@ -591,7 +600,7 @@ class FacebookEventScraper():
                 llm_response = llm_handler.query_llm(prompt, url)
 
                 if "No events found" in llm_response:
-                    db_handler.delete_event_and_url(url, row['event_name'], row['start_date'])
+                    db_handler.delete_event_and_update_url(url, row['event_name'], row['start_date'])
                 else:
                     parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
                     events_df = pd.DataFrame(parsed_result)

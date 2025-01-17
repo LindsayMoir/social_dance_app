@@ -60,11 +60,10 @@ class DatabaseHandler():
         # Check if we need to drop tables as per configuration
         if self.config['testing']['drop_tables'] == True:
             drop_queries = [
-                "DROP TABLE IF EXISTS fb_urls CASCADE;",
                 "DROP TABLE IF EXISTS address CASCADE;",
                 "DROP TABLE IF EXISTS events CASCADE;",
-                "DROP TABLE IF EXISTS urls CASCADE;",
-                "DROP TABLE IF EXISTS organization CASCADE;"
+                "DROP TABLE IF EXISTS organization CASCADE;",
+                "DROP TABLE IF EXISTS urls CASCADE;"
             ]
         elif self.config['testing']['drop_tables'] == 'events':
             drop_queries = [
@@ -141,18 +140,6 @@ class DatabaseHandler():
         """
         self.execute_query(address_table_query)
         logging.info("create_tables: 'address' table created or already exists.")
-
-        # Create the 'fb_urls' table
-        fb_urls_table_query = """
-            CREATE TABLE IF NOT EXISTS fb_urls (
-                url TEXT PRIMARY KEY,
-                org_name TEXT,
-                keywords TEXT,
-                time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """
-        self.execute_query(fb_urls_table_query)
-        logging.info("create_tables: 'fb_urls' table created or already exists.")
 
         # Create the 'organizations' table
         organizations_table_query = """
@@ -324,30 +311,6 @@ class DatabaseHandler():
                 logging.info("write_url_to_db: URL '%s' inserted into the 'urls' table.", url)
             except Exception as e:
                 logging.error("write_url_to_db: Failed to insert URL '%s': %s", url, e)
-
-
-    def write_url_to_fb_table(self, org_name, keywords,url):
-        """
-        Writes a URL to the 'fb_urls' table in the database.
-
-        Args:
-            url (str): The URL to be written to the 'fb_urls' table.
-        """
-        try:
-            query = """
-            INSERT INTO fb_urls (url, org_name, keywords, time_stamp) 
-            VALUES (:url, :org_name, :keywords, :time_stamp)
-            ON CONFLICT (url) 
-            DO UPDATE SET time_stamp = EXCLUDED.time_stamp;
-            """
-            params = {'url': url,
-                      'org_name': org_name,
-                      'keywords': keywords,
-                      'time_stamp': datetime.now()}
-            self.execute_query(query, params)
-            logging.info("write_url_to_fb_table: URL '%s' written to 'fb_urls' table.", url)
-        except Exception as e:
-            logging.error("write_url_to_fb_table: Failed to write URL '%s': %s", url, e)
 
 
     def clean_events(self, df):
@@ -686,7 +649,7 @@ class DatabaseHandler():
         except Exception as e:
             logging.error("delete_old_events: Failed to delete old events: %s", e)
 
-    def delete_event_and_url(self, url, event_name, start_date):
+    def delete_event_and_update_url(self, url, event_name, start_date):
         """
         Deletes an event from the 'events' table and the corresponding URL from the 'urls' table.
 
@@ -696,7 +659,7 @@ class DatabaseHandler():
             start_date (str): The start date of the event to be deleted.
         """
         try:
-            logging.info("delete_event_and_url: Deleting event with URL: %s, Event Name: %s, Start Date: %s", url, event_name, start_date)
+            logging.info("delete_event_and_update_url: Deleting event with URL: %s, Event Name: %s, Start Date: %s", url, event_name, start_date)
 
             # Delete the event from 'events' table
             delete_event_query = """
@@ -706,16 +669,17 @@ class DatabaseHandler():
             """
             params = {'event_name': event_name, 'start_date': start_date}
             self.execute_query(delete_event_query, params)
-            logging.info("delete_event_and_url: Deleted event from 'events' table.")
+            logging.info("delete_event_and_update_url: Deleted event from 'events' table.")
 
-            # Delete the corresponding URL from 'urls' table
-            delete_url_query = "DELETE FROM urls WHERE links = :url;"
-            params = {'url': url}
-            self.execute_query(delete_url_query, params)
-            logging.info("delete_event_and_url: Deleted URL from 'urls' table.")
+            # Update the corresponding URL from 'urls' table
+            update_other_links = 'No'
+            relevant = False
+            increment_crawl_trys = 1
+            db_handler.update_url(url, update_other_links, relevant, increment_crawl_trys)
+            logging.info("delete_event_and_update_url: Deleted URL from 'urls' table.")
 
         except Exception as e:
-            logging.error("delete_event_and_url: Failed to delete event and URL: %s", e)
+            logging.error("delete_event_and_update_url: Failed to delete event and URL: %s", e)
 
 
     def delete_events_with_nulls(self):
@@ -732,20 +696,6 @@ class DatabaseHandler():
         except Exception as e:
             logging.error("def delete_events_with_nulls(): Failed to delete events with start_date and start_time being null: %s", e)
 
-    def delete_url_from_fb_urls(self, url):
-        """
-        Deletes a URL from the 'fb_urls' table in the database.
-
-        Args:
-            url (str): The URL to be deleted from the 'fb_urls' table.
-        """
-        try:
-            delete_query = "DELETE FROM fb_urls WHERE url = :url;"
-            params = {'url': url}
-            self.execute_query(delete_query, params)
-            logging.info("delete_url_from_fb_urls: Deleted URL '%s' from 'fb_urls' table.", url)
-        except Exception as e:
-            logging.error("delete_url_from_fb_urls: Failed to delete URL '%s': %s", url, e)
 
 if __name__ == "__main__":
     start_time = datetime.now()
