@@ -1,3 +1,75 @@
+"""
+fb.py
+
+This module defines the FacebookEventScraper class for scraping Facebook event data
+using Playwright and BeautifulSoup. It handles logging into Facebook, extracting event
+links and text, performing Google searches related to events, processing URLs, and 
+interacting with a database and Language Learning Model (LLM) to process and store
+event data.
+
+Classes:
+    FacebookEventScraper:
+        - Initializes with configuration, sets up Playwright for browser automation.
+        - Logs into Facebook and maintains a session for scraping.
+        - Extracts event links and content from Facebook event pages.
+        - Uses Google Custom Search API for supplemental searches.
+        - Processes Facebook URLs including fixing malformed URLs.
+        - Interacts with LLMHandler for natural language processing tasks.
+        - Interacts with DatabaseHandler to read/write URLs and events to the database.
+        - Provides multiple driver methods for different scraping workflows:
+            • driver_fb_urls: Processes Facebook URLs from the database.
+            • driver_fb_search: Searches for Facebook events based on keywords.
+            • driver_no_urls: Handles events without URLs, attempts to find and update them.
+
+Usage Example:
+    if __name__ == "__main__":
+        # Load configuration and configure logging
+        with open('config/config.yaml', 'r') as file:
+            config = yaml.safe_load(file)
+        logging.basicConfig(
+            filename=config['logging']['log_file'],
+            filemode='w',
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+
+        # Initialize dependencies
+        db_handler = DatabaseHandler(config)
+        fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
+        llm_handler = LLMHandler(config_path='config/config.yaml')
+
+        # Run scraping drivers
+        fb_scraper.driver_fb_urls()
+        fb_scraper.driver_fb_search()
+        fb_scraper.driver_no_urls()
+
+        # Clean up resources
+        fb_scraper.browser.close()
+        fb_scraper.playwright.stop()
+        
+        # Logging of process duration handled in __main__ block
+
+Dependencies:
+    - Playwright: For browser automation to navigate and scrape Facebook.
+    - BeautifulSoup: To parse HTML content of event pages.
+    - pandas: For data manipulation and CSV operations.
+    - fuzzywuzzy: For fuzzy string matching.
+    - googleapiclient.discovery: For performing Google Custom Searches.
+    - requests: For HTTP requests when scraping non-JS rendered pages.
+    - yaml: For configuration file parsing.
+    - logging: For tracking the execution flow and errors.
+    - re: For regular expression operations.
+    - Other custom modules: llm (LLMHandler), db (DatabaseHandler).
+
+Note:
+    - The module assumes valid configuration in 'config/config.yaml'.
+    - Logging is configured in the main section to record key actions and errors.
+    - The class methods heavily rely on external services (Facebook, Google, database, LLM),
+      and their correct functioning depends on valid credentials and network access.
+"""
+
+
 from bs4 import BeautifulSoup
 from datetime import datetime
 from fuzzywuzzy import fuzz

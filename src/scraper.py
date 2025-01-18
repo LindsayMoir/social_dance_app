@@ -1,6 +1,55 @@
 """
-This program scrapes regular NON facebook pages and calendar pages for events.
+scraper.py
+
+This module defines the EventSpider class and orchestrates a web crawling process 
+to gather and process event data from various websites. It leverages Scrapy for 
+crawling, Playwright for dynamic content extraction, BeautifulSoup for HTML 
+parsing, and integrates with OpenAI's language model via LLMHandler for event 
+processing. The module also interacts with a PostgreSQL database through 
+DatabaseHandler to read and write URL and event data.
+
+Classes:
+    EventSpider(scrapy.Spider):
+        A custom Scrapy spider that:
+        - Initiates crawling by fetching URLs from a database or CSV files.
+        - Parses responses to extract links, handle iframes, and manage Facebook/Instagram URLs.
+        - Utilizes Playwright to extract page text content dynamically.
+        - Checks for relevant keywords in text, processes URLs through a language model,
+          and updates the database with event information.
+        - Handles Google Calendar event fetching and updates URLs accordingly.
+        - Maintains a set of visited links to avoid duplicate processing and 
+          respects configured crawling limits.
+
+Usage Example:
+    Running this script directly will:
+        1. Load configuration from 'config/config.yaml'.
+        2. Configure logging based on settings.
+        3. Initialize DatabaseHandler and LLMHandler.
+        4. Create necessary database tables.
+        5. Start a Scrapy CrawlerProcess with EventSpider to begin crawling.
+        6. Log progress and timing information throughout the process.
+
+Dependencies:
+    - Scrapy: For crawling and parsing web content.
+    - Playwright: For interacting with dynamic web pages.
+    - BeautifulSoup (bs4): For parsing HTML content.
+    - OpenAI: For querying a language model.
+    - SQLAlchemy: For database interactions.
+    - Pandas: For data manipulation and CSV I/O.
+    - requests: For HTTP requests.
+    - yaml: For configuration parsing.
+    - logging: For logging events and errors.
+    - Other standard libraries: base64, datetime, json, os, random, re, sys, time.
+    - Local modules: DatabaseHandler from db.py and LLMHandler from llm.py.
+
+Note:
+    - Ensure a valid YAML configuration file at 'config/config.yaml'.
+    - Properly configure database credentials, API keys, and crawling parameters 
+      in the configuration file.
+    - Logging is set up in the main block to record the crawler’s operation and 
+      any encountered errors.
 """
+
 
 import base64
 from bs4 import BeautifulSoup
@@ -23,18 +72,15 @@ import sys
 import time
 import yaml
 
-
-from bh import BaseHandler
 from db import DatabaseHandler
 from llm import LLMHandler
 
 
 # EventSpider class
-class EventSpider(BaseHandler, scrapy.Spider):
+class EventSpider(scrapy.Spider):
     name = "event_spider"
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self.visited_links = set()  # To track visited URLs and avoid duplicate crawls
 
     def start_requests(self):
@@ -521,7 +567,7 @@ if __name__ == "__main__":
     # Run the crawler process
 
     process = CrawlerProcess(settings={
-        "LOG_FILE": config['logging']['scrapy_log_file'],
+        "LOG_FILE": config['logging']['log_file'],
         "LOG_LEVEL": "INFO",
         "DEPTH_LIMIT": config['crawling']['depth_limit'],
         "FEEDS": {

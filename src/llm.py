@@ -1,3 +1,65 @@
+"""
+llm.py
+
+This module defines the LLMHandler class, which facilitates interactions with a 
+Language Learning Model (LLM) for processing event-related data. It integrates 
+with a PostgreSQL database to store and update event information, uses OpenAI 
+for language model queries, and leverages configuration settings loaded from 
+a YAML file.
+
+Classes:
+    LLMHandler:
+        - Initializes with configuration and ensures a DatabaseHandler instance is available.
+        - Provides methods to drive relevance determination, 
+          check keywords in text, and process responses from the LLM.
+        - Generates prompts for the LLM based on extracted event text and context.
+        - Queries the LLM using OpenAI's API and processes the model's responses.
+        - Extracts and parses JSON data from LLM responses to obtain structured event details.
+        - Contains utility methods for validating and processing LLM output.
+        - The `driver` method coordinates end-to-end processing for a given URL,
+          including querying the LLM, evaluating relevance, and updating the database.
+
+Usage Example:
+    if __name__ == "__main__":
+        # Load configuration and configure logging
+        with open('config/config.yaml', 'r') as file:
+            config = yaml.safe_load(file)
+        logging.basicConfig(
+            filename=config['logging']['log_file'],
+            filemode='w',
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s"
+        )
+
+        # Instantiate the LLM handler
+        llm_handler = LLMHandler(config_path="config/config.yaml")
+
+        # Example of using the driver method with test data
+        test_url = "https://example.com/event"
+        search_term = "sample search term"
+        extracted_text = "Sample extracted event text..."
+        org_name = "Sample Organization"
+        keywords = ["dance", "event"]
+
+        llm_handler.driver(test_url, search_term, extracted_text, org_name, keywords)
+
+Dependencies:
+    - openai: For interacting with the OpenAI API to query the LLM.
+    - pandas: For handling tabular data and reading/writing CSV files.
+    - yaml: For loading configuration from YAML files.
+    - logging: For logging debug and error messages.
+    - json, re, os, datetime: Standard libraries for JSON parsing, regular expressions,
+      operating system interactions, and time handling.
+    - DatabaseHandler from db module: For database interactions.
+
+Note:
+    - The module reads configuration from 'config/config.yaml' by default.
+    - LLMHandler expects valid API keys and database credentials specified in the 
+      configuration and keys files.
+    - Logging should be configured in the main execution context to capture log messages.
+"""
+
+
 from datetime import datetime
 import json
 import logging

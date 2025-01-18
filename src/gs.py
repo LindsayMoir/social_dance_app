@@ -54,47 +54,13 @@ class GoogleSearch():
             config_path (str): Path to the configuration YAML file.
                                Defaults to "config/config.yaml".
         """
+        # Get config
+        with open('config/config.yaml', 'r') as file:
+            self.config = yaml.safe_load(file)
 
         # Retrieve and store API credentials once during initialization
         self.api_key, self.cse_id = self.get_keys('Google')
 
-    def setup_logging(self):
-        """
-        Set up logging file handler based on configuration.
-        """
-        log_file = self.config['logging']['gs_log_file']
-        # Create file handler if not already set
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(logging.INFO)
-        formatter = logging.Formatter(
-            '%(asctime)s [%(levelname)s] %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        file_handler.setFormatter(formatter)
-        # Add file handler to the root logger
-        logging.getLogger().addHandler(file_handler)
-        logging.info(f"Logging to file: {log_file}")
-
-    def load_config(self, config_path):
-        """
-        Load configuration from a YAML file.
-
-        Args:
-            config_path (str): The path to the YAML configuration file.
-
-        Returns:
-            dict: The configuration data loaded from the YAML file.
-
-        Raises:
-            FileNotFoundError: If the configuration file does not exist at the given path.
-        """
-        if not os.path.exists(config_path):
-            logging.error(f"Configuration file not found at {config_path}")
-            raise FileNotFoundError(f"Configuration file not found at {config_path}")
-        with open(config_path, "r") as file:
-            config = yaml.safe_load(file)
-            logging.debug(f"Loaded config: {config}")
-            return config
 
     def get_keys(self, organization="Google"):
         """
@@ -230,10 +196,6 @@ class GoogleSearch():
 # Example usage:
 if __name__ == "__main__":
 
-    # Get the start time
-    start_time = datetime.now()
-    logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
-
     # Get config
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
@@ -245,6 +207,10 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     )
+
+    # Get the start time
+    start_time = datetime.now()
+    logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
     gs_instance = GoogleSearch()
     llm_instance = LLMHandler()

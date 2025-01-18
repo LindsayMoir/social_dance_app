@@ -1,12 +1,76 @@
-import logging
-import os
+"""
+db.py
+
+This module provides the DatabaseHandler class, which encapsulates methods 
+for connecting to, interacting with, and managing a PostgreSQL database 
+using SQLAlchemy. It includes functionality to create tables, execute queries, 
+update records, clean and process event data, deduplicate tables, and delete old 
+or invalid entries. The module also sets up logging to record database operations 
+and errors.
+
+Classes:
+    DatabaseHandler: 
+        - Initializes a connection to a PostgreSQL database using configuration 
+          parameters.
+        - Provides methods to create necessary tables ('urls', 'events', 'address', 
+          'organizations') if they do not exist, with options to drop tables 
+          based on configuration.
+        - Contains methods to execute SQL queries safely with error handling.
+        - Supports updating URLs, writing new URLs, cleaning event data, writing 
+          events to the database, deduplicating records, and deleting outdated 
+          or null events.
+        - Handles address parsing and normalization, inserting addresses into 
+          the 'address' table, and associating events with address IDs.
+        - Manages database connection lifecycle, including closing connections.
+
+Usage Example:
+    if __name__ == "__main__":
+        # Load configuration and set up logging
+        with open('config/config.yaml', 'r') as file:
+            config = yaml.safe_load(file)
+
+        logging.basicConfig(
+            filename=config['logging']['log_file'],
+            filemode='a',
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+        )
+
+        # Initialize DatabaseHandler and manage database operations
+        db_handler = DatabaseHandler(config)
+        db_handler.create_tables()
+        db_handler.dedup()
+        db_handler.delete_old_events()
+        db_handler.delete_events_with_nulls()
+        db_handler.conn.dispose()
+
+Dependencies:
+    - logging: For logging events, errors, and informational messages.
+    - os, datetime, re: Standard libraries for file operations, time, and regex.
+    - pandas (pd): For data manipulation and DataFrame operations.
+    - pyap: For parsing addresses from location strings.
+    - sqlalchemy: For database connection, query execution, and ORM support.
+    - yaml: For loading configuration from YAML files.
+
+Note:
+    The module assumes a valid YAML configuration file containing database 
+    credentials, logging configurations, and application-specific settings. 
+    Logging is configured in the main block to record operations and any errors 
+    encountered during database interactions.
+"""
+
 from datetime import datetime
+from fuzzywuzzy import fuzz
+import logging
+import numpy as np
+import os
 import pandas as pd
 import pyap
 import re  # Added missing import
 from sqlalchemy import create_engine, update, MetaData, text
 from sqlalchemy.exc import SQLAlchemyError
 import yaml
+
 
 
 class DatabaseHandler():
@@ -632,6 +696,127 @@ class DatabaseHandler():
             logging.error("dedup: Failed to deduplicate tables: %s", e)
 
 
+
+    def fetch_events_dataframe(self):
+        """
+        Fetch all events from the database and return as a sorted DataFrame.
+        """
+        query = "SELECT * FROM events"
+        df = pd.read_sql(query, self.conn)
+        df.sort_values(by=['start_date', 'start_time'], inplace=True)
+        return df
+
+    def decide_preferred_row(self, row1, row2):
+        """
+        Decide which of the two rows to keep based on the specified criteria:
+        a. Prefer the one with a non-empty URL.
+        b. If neither has a URL, prefer the one with more filled columns.
+        c. If tied, keep the most recent based on time_stamp.
+        
+        Returns:
+            tuple: (preferred_row, other_row)
+        """
+        # Prefer row with URL
+        if row1['url'] and not row2['url']:
+            return row1, row2
+        if row2['url'] and not row1['url']:
+            return row2, row1
+
+        # Count filled columns (excluding event_id)
+        filled_columns = lambda row: row.drop(labels='event_id').count()
+        count1 = filled_columns(row1)
+        count2 = filled_columns(row2)
+        
+        if count1 > count2:
+            return row1, row2
+        elif count2 > count1:
+            return row2, row1
+        else:
+            # If still tied, choose the most recent based on time_stamp
+            if row1['time_stamp'] >= row2['time_stamp']:
+                return row1, row2
+            else:
+                return row2, row1
+
+    def update_preferred_row_from_other(self, preferred, other, columns):
+        """
+        Update missing columns in the preferred row using values from the other row.
+        """
+        for col in columns:
+            if pd.isna(preferred[col]) or preferred[col] == '':
+                if not (pd.isna(other[col]) or other[col] == ''):
+                    preferred[col] = other[col]
+        return preferred
+
+
+    def fuzzy_duplicates(self):
+        """
+        Identify and remove fuzzy duplicates from the events table.
+        
+        Steps:
+        1. Sort events by start_date, start_time.
+        2. For groups with same start_date and start_time:
+             a. Fuzzy match event_name for events in group.
+             b. If fuzzy score > 80, decide which row to keep:
+                i. Prefer row with URL.
+                ii. If neither has URL, keep row with more filled columns.
+                iii. If tied, keep most recent based on time_stamp.
+             c. Update kept row with missing data from duplicate.
+             d. Update the database: update kept row, delete duplicate row.
+        """
+        # Fetch and sort events using self.conn
+        events_df = self.fetch_events_dataframe()
+        grouped = events_df.groupby(['start_date', 'start_time'])
+
+        for _, group in grouped:
+            if len(group) < 2:
+                continue  # Skip if no duplicates possible
+
+            # Check for duplicates within the group
+            for i in range(len(group)):
+                for j in range(i + 1, len(group)):
+                    row_i = group.iloc[i].copy()
+                    row_j = group.iloc[j].copy()
+                    score = fuzz.ratio(row_i['event_name'], row_j['event_name'])
+                    if score > 80:
+                        # Decide which row to keep
+                        preferred, other = self.decide_preferred_row(row_i, row_j)
+
+                        # Update preferred row with missing columns from other row
+                        preferred = self.update_preferred_row_from_other(preferred, other, events_df.columns)
+
+                        # Prepare update query parameters
+                        update_columns = [col for col in events_df.columns if col != 'event_id']
+                        set_clause = ", ".join([f"{col} = :{col}" for col in update_columns])
+                        update_query = f"""
+                            UPDATE events
+                            SET {set_clause}
+                            WHERE event_id = :event_id
+                        """
+
+                        update_params = {}
+                        for col in update_columns:
+                            value = preferred[col]
+                            if isinstance(value, (np.generic, np.ndarray)):
+                                try:
+                                    value = value.item() if hasattr(value, 'item') else value.tolist()
+                                except Exception:
+                                    pass
+                            update_params[col] = value
+                        update_params['event_id'] = int(preferred['event_id'])
+
+                        # Execute update query using self.execute_query
+                        self.execute_query(update_query, update_params)
+                        logging.info("fuzzy_duplicates: Kept row with event_id %s", preferred['event_id'])
+
+                        # Delete duplicate row from database
+                        delete_query = "DELETE FROM events WHERE event_id = :event_id"
+                        self.execute_query(delete_query, {'event_id': int(other['event_id'])})
+                        logging.info("fuzzy_duplicates: Deleted duplicate row with event_id %s", other['event_id'])
+
+        logging.info("fuzzy_duplicates: Fuzzy duplicate removal completed successfully.")
+
+
     def delete_old_events(self):
         """
         Deletes events older than a specified number of days from the 'events' table.
@@ -648,6 +833,81 @@ class DatabaseHandler():
             logging.info("delete_old_events: Deleted events older than %d days.", days)
         except Exception as e:
             logging.error("delete_old_events: Failed to delete old events: %s", e)
+
+
+    def delete_likley_dud_events(self):
+        """
+        1. If the event org_name, dance_style, and url == '', delete the event, UNLESS it has an address_id then keep it.
+        2. Drop events outside of British Columbia (BC).
+            a. However, not all events will have an address_id (Primary Key in address table, Foreign Key in events table).
+            b. Also, not all rows in the address table will have a province_or_state.
+            c. If they do have a province_or_state and it is not 'BC' then delete the event.
+        3. Drop events that are not in Canada.
+            a. However, NOT all events will have an address_id (Primary Key in address table, Foreign Key in events table). 
+            b. Also, not all rows in the address table will have a country_id. 
+            c. If they do have a country_id and it is not 'CA' then delete the event. 
+        4. Delete rows in events where dance_style and url are == '' AND event_type == 'other' AND location IS NULL and description IS NULL
+        """
+        try:
+            # 1. Delete events where org_name, dance_style, and url are empty, unless they have an address_id
+            delete_query_1 = """
+            DELETE FROM events
+            WHERE org_name = ''
+              AND dance_style = ''
+              AND url = ''
+              AND address_id IS NULL;
+            """
+            self.execute_query(delete_query_1)
+            logging.info("delete_likley_dud_events: Deleted events with empty org_name, dance_style, and url, and no address_id.")
+
+            # 2. Delete events outside of British Columbia (BC)
+            delete_query_2 = """
+            DELETE FROM events
+            WHERE address_id IN (
+            SELECT address_id
+            FROM address
+            WHERE province_or_state IS NOT NULL
+              AND province_or_state != 'BC'
+            );
+            """
+            self.execute_query(delete_query_2)
+            logging.info("delete_likley_dud_events: Deleted events outside of British Columbia (BC).")
+
+            # 3. Delete events that are not in Canada
+            delete_query_3 = """
+            DELETE FROM events
+            WHERE address_id IN (
+            SELECT address_id
+            FROM address
+            WHERE country_id IS NOT NULL
+              AND country_id != 'CA'
+            );
+            """
+            self.execute_query(delete_query_3)
+            logging.info("delete_likley_dud_events: Deleted events that are not in Canada (CA).")
+
+            # 4. Delete rows in events where dance_style and url are == '' AND event_type == 'other' AND location IS NULL and description IS NULL
+            delete_query = """
+            DELETE FROM events
+            WHERE dance_style = ''
+              AND url = ''
+              AND event_type = 'other'
+              AND location IS NULL
+              AND description IS NULL;
+            """
+            self.execute_query(delete_query)
+            logging.info(
+                "delete_likley_dud_events: Deleted events with empty "
+                "dance_style, url, event_type 'other', and null location "
+                "and description."
+            )
+        except Exception as e:
+            logging.error(
+                "delete_likley_dud_events: Failed to delete events with "
+                "empty dance_style, url, event_type 'other', and null "
+                "location and description: %s", e
+            )
+        
 
     def delete_event_and_update_url(self, url, event_name, start_date):
         """
@@ -692,13 +952,40 @@ class DatabaseHandler():
             WHERE start_date IS NULL AND start_time IS NULL;
             """
             self.execute_query(delete_query)
-            logging.info("def delete_events_with_nulls(): Success")
+            logging.info("def delete_events_with_nulls(): Both start_date and start_time being null deleted successfully.")
         except Exception as e:
             logging.error("def delete_events_with_nulls(): Failed to delete events with start_date and start_time being null: %s", e)
 
+        try:
+            delete_query = """
+            DELETE FROM events
+            WHERE 
+                org_name = ''
+                AND dance_style = ''
+                AND url = ''
+                AND address_id IS NULL;
+            """
+            self.execute_query(delete_query)
+            logging.info("def delete_events_with_nulls(): org_name, dance_style, url, (all NULL) and address_id IS NULL deleted successfully.")
+        except Exception as e:
+            logging.error("def delete_events_with_nulls(): Failed to delete events with start_date and start_time being null: %s", e)
+
+    
+    def driver(self):
+        """
+        Main driver function to perform database operations.
+        """
+        self.create_tables()
+        self.dedup()
+        self.delete_old_events()
+        self.delete_events_with_nulls()
+        self.delete_likley_dud_events()
+        self.fuzzy_duplicates()
+
+        # Close the database connection
+        self.conn.dispose()  # Using dispose() for SQLAlchemy Engine
 
 if __name__ == "__main__":
-    start_time = datetime.now()
 
     # Load configuration from a YAML file
     with open('config/config.yaml', 'r') as file:
@@ -712,17 +999,14 @@ if __name__ == "__main__":
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     )
 
+    start_time = datetime.now()
+    logging.info("Main: Started the process at %s", start_time)
+
     # Initialize DatabaseHandler
     db_handler = DatabaseHandler(config)
-    db_handler.create_tables()
 
     # Perform deduplication and delete old events
-    db_handler.dedup()
-    db_handler.delete_old_events()
-    db_handler.delete_events_with_nulls()
-
-    # Close the database connection
-    db_handler.conn.dispose()  # Using dispose() for SQLAlchemy Engine
+    db_handler.driver()
 
     end_time = datetime.now()
     logging.info("Main: Finished the process at %s", end_time)
