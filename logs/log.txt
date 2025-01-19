@@ -21,3 +21,79 @@
 2025-01-17 21:44:05,474 - INFO - root - fuzzy_duplicates: Fuzzy duplicate removal completed successfully.
 2025-01-17 21:44:05,476 - INFO - root - Main: Finished the process at 2025-01-17 21:44:05.476017
 2025-01-17 21:44:05,476 - INFO - root - Main: Total time taken: 0:00:00.172471
+2025-01-18 23:44:23,134 - INFO - def __init__(): Database connection established.
+2025-01-18 23:44:29,935 - INFO - Loaded existing session. Already logged into Facebook.
+2025-01-18 23:44:30,017 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:44:30,027 - INFO - def __init__(): Database connection established.
+2025-01-18 23:46:19,003 - INFO - def __init__(): Database connection established.
+2025-01-18 23:46:24,456 - INFO - Loaded existing session. Already logged into Facebook.
+2025-01-18 23:46:24,483 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:46:24,497 - INFO - def __init__(): Database connection established.
+2025-01-18 23:46:24,498 - INFO - def __init__(): Database connection established.
+2025-01-18 23:46:24,570 - INFO - def process_events_without_url(): Found 285 events without URLs.
+2025-01-18 23:49:33,265 - INFO - def __init__(): Database connection established.
+2025-01-18 23:49:37,915 - INFO - Loaded existing session. Already logged into Facebook.
+2025-01-18 23:49:37,937 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:49:37,951 - INFO - def __init__(): Database connection established.
+2025-01-18 23:49:37,952 - INFO - def __init__(): Database connection established.
+2025-01-18 23:49:37,999 - INFO - def process_events_without_url(): Found 285 events without URLs.
+2025-01-18 23:55:22,863 - INFO - def __init__(): Database connection established.
+2025-01-18 23:55:27,820 - INFO - Loaded existing session. Already logged into Facebook.
+2025-01-18 23:55:27,839 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:55:27,848 - INFO - def __init__(): Database connection established.
+2025-01-18 23:55:27,849 - INFO - def __init__(): Database connection established.
+2025-01-18 23:55:27,895 - INFO - def process_events_without_url(): Found 285 events without URLs.
+2025-01-18 23:55:27,906 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:55:27,907 - INFO - Performing Google search for query: Cuban Party night Victoria, British Columbia, Canada
+2025-01-18 23:55:27,914 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-18 23:55:28,390 - INFO - Found 5 results for query: Cuban Party night Victoria, British Columbia, Canada
+2025-01-18 23:55:28,392 - INFO - def process_events_without_url(): No URL found for event: Cuban Party night
+2025-01-18 23:55:28,400 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:55:28,401 - INFO - Performing Google search for query: Salsa Caliente Party night Victoria, British Columbia, Canada
+2025-01-18 23:55:28,404 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-18 23:55:28,979 - INFO - Found 5 results for query: Salsa Caliente Party night Victoria, British Columbia, Canada
+2025-01-18 23:55:28,981 - INFO - def process_events_without_url(): No URL found for event: Salsa Caliente Party night
+2025-01-18 23:55:28,988 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:55:28,988 - INFO - Performing Google search for query: LATINO LAND - District Victoria, British Columbia, Canada
+2025-01-18 23:55:28,991 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-18 23:55:29,628 - INFO - Found 5 results for query: LATINO LAND - District Victoria, British Columbia, Canada
+2025-01-18 23:55:29,629 - INFO - def process_events_without_url(): No URL found for event: LATINO LAND - District
+2025-01-18 23:55:29,636 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:55:29,637 - INFO - Performing Google search for query: Son weekend Victoria, British Columbia, Canada
+2025-01-18 23:55:29,640 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-18 23:55:30,050 - INFO - Found 5 results for query: Son weekend Victoria, British Columbia, Canada
+2025-01-18 23:55:30,052 - INFO - def process_events_without_url(): No URL found for event: Son weekend
+2025-01-18 23:55:30,058 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:55:30,059 - INFO - Performing Google search for query: Sunday Sundown Social: Fire and Ice Victoria, British Columbia, Canada
+2025-01-18 23:55:30,061 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-18 23:55:30,516 - INFO - Found 5 results for query: Sunday Sundown Social: Fire and Ice Victoria, British Columbia, Canada
+2025-01-18 23:58:02,111 - INFO - def __init__(): Database connection established.
+2025-01-18 23:58:06,707 - INFO - Loaded existing session. Already logged into Facebook.
+2025-01-18 23:58:06,732 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:58:06,742 - INFO - def __init__(): Database connection established.
+2025-01-18 23:58:06,743 - INFO - def __init__(): Database connection established.
+2025-01-18 23:58:06,788 - INFO - def process_events_without_url(): Found 285 events without URLs.
+2025-01-18 23:58:06,797 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:58:06,798 - INFO - Performing Google search for query: Cuban Party night Victoria, British Columbia, Canada
+2025-01-18 23:58:06,801 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-18 23:58:07,244 - INFO - Found 5 results for query: Cuban Party night Victoria, British Columbia, Canada
+2025-01-18 23:58:07,246 - INFO - def process_events_without_url(): No URL found for event: Cuban Party night
+2025-01-18 23:58:07,256 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:58:07,257 - INFO - Performing Google search for query: Salsa Caliente Party night Victoria, British Columbia, Canada
+2025-01-18 23:58:07,260 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-18 23:58:07,560 - INFO - Found 5 results for query: Salsa Caliente Party night Victoria, British Columbia, Canada
+2025-01-18 23:58:07,562 - INFO - def process_events_without_url(): No URL found for event: Salsa Caliente Party night
+2025-01-18 23:58:07,568 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:58:07,569 - INFO - Performing Google search for query: LATINO LAND - District Victoria, British Columbia, Canada
+2025-01-18 23:58:07,571 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-18 23:58:07,883 - INFO - Found 5 results for query: LATINO LAND - District Victoria, British Columbia, Canada
+2025-01-18 23:58:07,884 - INFO - def process_events_without_url(): No URL found for event: LATINO LAND - District
+2025-01-18 23:58:07,892 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:58:07,893 - INFO - Performing Google search for query: Son weekend Victoria, British Columbia, Canada
+2025-01-18 23:58:07,897 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-18 23:58:08,179 - INFO - Found 5 results for query: Son weekend Victoria, British Columbia, Canada
+2025-01-18 23:58:08,180 - INFO - def process_events_without_url(): No URL found for event: Son weekend
+2025-01-18 23:58:08,190 - INFO - Retrieved keys for organization: Google
+2025-01-18 23:58:08,191 - INFO - Performing Google search for query: Sunday Sundown Social: Fire and Ice Victoria, British Columbia, Canada
+2025-01-18 23:58:08,194 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-18 23:58:08,494 - INFO - Found 5 results for query: Sunday Sundown Social: Fire and Ice Victoria, British Columbia, Canada

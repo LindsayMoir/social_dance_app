@@ -150,7 +150,7 @@ class GoogleSearch():
         response = service.cse().list(
             q=query,
             cx=self.cse_id,
-            num=num_results
+            num=self.config['search']['gs_num_results']
         ).execute()
 
         results = []

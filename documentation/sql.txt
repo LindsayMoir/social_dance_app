@@ -6,12 +6,20 @@ FROM events
 WHERE url NOT ILIKE '%google%'
 ORDER BY org_name
 
-SELECT org_name, COUNT (*) 
+SELECT org_name, COUNT (*) AS counts
 FROM events
 GROUP BY org_name
-ORDER BY org_name
+ORDER BY counts DESC
 
 SELECT COUNT(*) FROM events
+
+SELECT *
+FROM events
+WHERE org_name = ''
+
+SELECT *
+FROM events
+WHERE event_name ILIKE '%Paparazzi%'
 
 SELECT * FROM urls
 ORDER BY org_names
@@ -24,5 +32,4 @@ SET
     relevant = TRUE
 WHERE links = 'https://www.redhotswing.com/';
 
-SELECT * FROM fb_urls;
 

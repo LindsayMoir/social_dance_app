@@ -293,7 +293,7 @@ class EventSpider(scrapy.Spider):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=config['crawling']['headless'])
             page = browser.new_page()
-            page.goto(url, timeout=20000)
+            page.goto(url, timeout=10000)
             page.wait_for_timeout(3000)
 
             # Strategy 1: Check if URL indicates a sign-in flow

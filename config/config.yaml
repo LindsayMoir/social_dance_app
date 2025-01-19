@@ -45,6 +45,8 @@ prompts:
   fb: 'prompts/fb_prompt.txt'
   single_event: 'prompts/single_event.txt'
   title_to_org_name: 'prompts/title_to_org_name.txt'
+search:
+  gs_num_results: 5
 startup:
   use_db: False
 testing:

@@ -696,7 +696,6 @@ class DatabaseHandler():
             logging.error("dedup: Failed to deduplicate tables: %s", e)
 
 
-
     def fetch_events_dataframe(self):
         """
         Fetch all events from the database and return as a sorted DataFrame.
