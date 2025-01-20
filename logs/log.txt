@@ -1,99 +1,90 @@
-2025-01-17 21:44:05,303 - INFO - root - Main: Started the process at 2025-01-17 21:44:05.303546
-2025-01-17 21:44:05,343 - INFO - root - def __init__(): Database connection established.
-2025-01-17 21:44:05,364 - INFO - root - create_tables: 'urls' table created or already exists.
-2025-01-17 21:44:05,365 - INFO - root - create_tables: 'events' table created or already exists.
-2025-01-17 21:44:05,366 - INFO - root - create_tables: 'address' table created or already exists.
-2025-01-17 21:44:05,367 - INFO - root - create_tables: 'organizations' table created or already exists.
-2025-01-17 21:44:05,370 - INFO - root - Schema: public, Table: address
-2025-01-17 21:44:05,370 - INFO - root - Schema: public, Table: events
-2025-01-17 21:44:05,371 - INFO - root - Schema: public, Table: fb_urls
-2025-01-17 21:44:05,372 - INFO - root - Schema: public, Table: organizations
-2025-01-17 21:44:05,372 - INFO - root - Schema: public, Table: urls
-2025-01-17 21:44:05,376 - INFO - root - dedup: Deduplicated 'events' table successfully.
-2025-01-17 21:44:05,377 - INFO - root - dedup: Deduplicated 'urls' table successfully.
-2025-01-17 21:44:05,379 - INFO - root - delete_old_events: Deleted events older than 3 days.
-2025-01-17 21:44:05,380 - INFO - root - def delete_events_with_nulls(): Both start_date and start_time being null deleted successfully.
-2025-01-17 21:44:05,381 - INFO - root - def delete_events_with_nulls(): org_name, dance_style, url, (all NULL) and address_id IS NULL deleted successfully.
-2025-01-17 21:44:05,382 - INFO - root - delete_likley_dud_events: Deleted events with empty org_name, dance_style, and url, and no address_id.
-2025-01-17 21:44:05,384 - INFO - root - delete_likley_dud_events: Deleted events outside of British Columbia (BC).
-2025-01-17 21:44:05,384 - INFO - root - delete_likley_dud_events: Deleted events that are not in Canada (CA).
-2025-01-17 21:44:05,385 - INFO - root - delete_likley_dud_events: Deleted events with empty dance_style, url, event_type 'other', and null location and description.
-2025-01-17 21:44:05,474 - INFO - root - fuzzy_duplicates: Fuzzy duplicate removal completed successfully.
-2025-01-17 21:44:05,476 - INFO - root - Main: Finished the process at 2025-01-17 21:44:05.476017
-2025-01-17 21:44:05,476 - INFO - root - Main: Total time taken: 0:00:00.172471
-2025-01-18 23:44:23,134 - INFO - def __init__(): Database connection established.
-2025-01-18 23:44:29,935 - INFO - Loaded existing session. Already logged into Facebook.
-2025-01-18 23:44:30,017 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:44:30,027 - INFO - def __init__(): Database connection established.
-2025-01-18 23:46:19,003 - INFO - def __init__(): Database connection established.
-2025-01-18 23:46:24,456 - INFO - Loaded existing session. Already logged into Facebook.
-2025-01-18 23:46:24,483 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:46:24,497 - INFO - def __init__(): Database connection established.
-2025-01-18 23:46:24,498 - INFO - def __init__(): Database connection established.
-2025-01-18 23:46:24,570 - INFO - def process_events_without_url(): Found 285 events without URLs.
-2025-01-18 23:49:33,265 - INFO - def __init__(): Database connection established.
-2025-01-18 23:49:37,915 - INFO - Loaded existing session. Already logged into Facebook.
-2025-01-18 23:49:37,937 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:49:37,951 - INFO - def __init__(): Database connection established.
-2025-01-18 23:49:37,952 - INFO - def __init__(): Database connection established.
-2025-01-18 23:49:37,999 - INFO - def process_events_without_url(): Found 285 events without URLs.
-2025-01-18 23:55:22,863 - INFO - def __init__(): Database connection established.
-2025-01-18 23:55:27,820 - INFO - Loaded existing session. Already logged into Facebook.
-2025-01-18 23:55:27,839 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:55:27,848 - INFO - def __init__(): Database connection established.
-2025-01-18 23:55:27,849 - INFO - def __init__(): Database connection established.
-2025-01-18 23:55:27,895 - INFO - def process_events_without_url(): Found 285 events without URLs.
-2025-01-18 23:55:27,906 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:55:27,907 - INFO - Performing Google search for query: Cuban Party night Victoria, British Columbia, Canada
-2025-01-18 23:55:27,914 - INFO - file_cache is only supported with oauth2client<4.0.0
-2025-01-18 23:55:28,390 - INFO - Found 5 results for query: Cuban Party night Victoria, British Columbia, Canada
-2025-01-18 23:55:28,392 - INFO - def process_events_without_url(): No URL found for event: Cuban Party night
-2025-01-18 23:55:28,400 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:55:28,401 - INFO - Performing Google search for query: Salsa Caliente Party night Victoria, British Columbia, Canada
-2025-01-18 23:55:28,404 - INFO - file_cache is only supported with oauth2client<4.0.0
-2025-01-18 23:55:28,979 - INFO - Found 5 results for query: Salsa Caliente Party night Victoria, British Columbia, Canada
-2025-01-18 23:55:28,981 - INFO - def process_events_without_url(): No URL found for event: Salsa Caliente Party night
-2025-01-18 23:55:28,988 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:55:28,988 - INFO - Performing Google search for query: LATINO LAND - District Victoria, British Columbia, Canada
-2025-01-18 23:55:28,991 - INFO - file_cache is only supported with oauth2client<4.0.0
-2025-01-18 23:55:29,628 - INFO - Found 5 results for query: LATINO LAND - District Victoria, British Columbia, Canada
-2025-01-18 23:55:29,629 - INFO - def process_events_without_url(): No URL found for event: LATINO LAND - District
-2025-01-18 23:55:29,636 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:55:29,637 - INFO - Performing Google search for query: Son weekend Victoria, British Columbia, Canada
-2025-01-18 23:55:29,640 - INFO - file_cache is only supported with oauth2client<4.0.0
-2025-01-18 23:55:30,050 - INFO - Found 5 results for query: Son weekend Victoria, British Columbia, Canada
-2025-01-18 23:55:30,052 - INFO - def process_events_without_url(): No URL found for event: Son weekend
-2025-01-18 23:55:30,058 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:55:30,059 - INFO - Performing Google search for query: Sunday Sundown Social: Fire and Ice Victoria, British Columbia, Canada
-2025-01-18 23:55:30,061 - INFO - file_cache is only supported with oauth2client<4.0.0
-2025-01-18 23:55:30,516 - INFO - Found 5 results for query: Sunday Sundown Social: Fire and Ice Victoria, British Columbia, Canada
-2025-01-18 23:58:02,111 - INFO - def __init__(): Database connection established.
-2025-01-18 23:58:06,707 - INFO - Loaded existing session. Already logged into Facebook.
-2025-01-18 23:58:06,732 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:58:06,742 - INFO - def __init__(): Database connection established.
-2025-01-18 23:58:06,743 - INFO - def __init__(): Database connection established.
-2025-01-18 23:58:06,788 - INFO - def process_events_without_url(): Found 285 events without URLs.
-2025-01-18 23:58:06,797 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:58:06,798 - INFO - Performing Google search for query: Cuban Party night Victoria, British Columbia, Canada
-2025-01-18 23:58:06,801 - INFO - file_cache is only supported with oauth2client<4.0.0
-2025-01-18 23:58:07,244 - INFO - Found 5 results for query: Cuban Party night Victoria, British Columbia, Canada
-2025-01-18 23:58:07,246 - INFO - def process_events_without_url(): No URL found for event: Cuban Party night
-2025-01-18 23:58:07,256 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:58:07,257 - INFO - Performing Google search for query: Salsa Caliente Party night Victoria, British Columbia, Canada
-2025-01-18 23:58:07,260 - INFO - file_cache is only supported with oauth2client<4.0.0
-2025-01-18 23:58:07,560 - INFO - Found 5 results for query: Salsa Caliente Party night Victoria, British Columbia, Canada
-2025-01-18 23:58:07,562 - INFO - def process_events_without_url(): No URL found for event: Salsa Caliente Party night
-2025-01-18 23:58:07,568 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:58:07,569 - INFO - Performing Google search for query: LATINO LAND - District Victoria, British Columbia, Canada
-2025-01-18 23:58:07,571 - INFO - file_cache is only supported with oauth2client<4.0.0
-2025-01-18 23:58:07,883 - INFO - Found 5 results for query: LATINO LAND - District Victoria, British Columbia, Canada
-2025-01-18 23:58:07,884 - INFO - def process_events_without_url(): No URL found for event: LATINO LAND - District
-2025-01-18 23:58:07,892 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:58:07,893 - INFO - Performing Google search for query: Son weekend Victoria, British Columbia, Canada
-2025-01-18 23:58:07,897 - INFO - file_cache is only supported with oauth2client<4.0.0
-2025-01-18 23:58:08,179 - INFO - Found 5 results for query: Son weekend Victoria, British Columbia, Canada
-2025-01-18 23:58:08,180 - INFO - def process_events_without_url(): No URL found for event: Son weekend
-2025-01-18 23:58:08,190 - INFO - Retrieved keys for organization: Google
-2025-01-18 23:58:08,191 - INFO - Performing Google search for query: Sunday Sundown Social: Fire and Ice Victoria, British Columbia, Canada
-2025-01-18 23:58:08,194 - INFO - file_cache is only supported with oauth2client<4.0.0
-2025-01-18 23:58:08,494 - INFO - Found 5 results for query: Sunday Sundown Social: Fire and Ice Victoria, British Columbia, Canada
+2025-01-19 20:10:03,109 - INFO - __main__: Starting the crawler process at 2025-01-19 20:10:03.109149
+2025-01-19 20:10:03,146 - INFO - def __init__(): Database connection established.
+2025-01-19 20:10:03,154 - INFO - def __init__(): Database connection established.
+2025-01-19 20:10:03,155 - INFO - def __init__(): Database connection established.
+2025-01-19 20:10:03,187 - INFO - def process_events_without_url(): Found 227 events without URLs.
+2025-01-19 20:10:04,008 - INFO - Retrieved credentials for Google.
+2025-01-19 20:10:04,009 - INFO - Performing Google search for query: Dubversified Culture presents: Stylust Victoria, British Columbia, Canada
+2025-01-19 20:10:04,015 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:10:04,585 - INFO - Found 10 results for query: Dubversified Culture presents: Stylust Victoria, British Columbia, Canada
+2025-01-19 20:10:11,928 - INFO - Extracted text from https://community.admitone.com/events/673063f69da926c91b06c226.
+2025-01-19 20:10:11,928 - INFO - def process_events_without_url(): Extracted text from URL: https://community.admitone.com/events/673063f69da926c91b06c226
+2025-01-19 20:10:11,929 - INFO - def check_keywords_in_text: URL https://community.admitone.com/events/673063f69da926c91b06c226 marked as irrelevant since there are no keywords, events, or 'calendar' in URL.
+2025-01-19 20:10:11,937 - INFO - Retrieved credentials for Google.
+2025-01-19 20:10:11,937 - INFO - Performing Google search for query: Swing Shift: Friday Night Swing Dance Victoria, British Columbia, Canada
+2025-01-19 20:10:11,940 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:10:12,221 - INFO - Found 10 results for query: Swing Shift: Friday Night Swing Dance Victoria, British Columbia, Canada
+2025-01-19 20:10:12,224 - INFO - def process_events_without_url(): No URL found for event: Swing Shift: Friday Night Swing Dance
+2025-01-19 20:10:12,245 - INFO - Retrieved credentials for Google.
+2025-01-19 20:10:12,246 - INFO - Performing Google search for query: RainCity Zouk: Jan Workshop + Day Social Victoria, British Columbia, Canada
+2025-01-19 20:10:12,254 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:10:12,641 - INFO - Found 10 results for query: RainCity Zouk: Jan Workshop + Day Social Victoria, British Columbia, Canada
+2025-01-19 20:10:12,642 - INFO - def process_events_without_url(): No URL found for event: RainCity Zouk: Jan Workshop + Day Social
+2025-01-19 20:10:12,649 - INFO - Retrieved credentials for Google.
+2025-01-19 20:10:12,649 - INFO - Performing Google search for query: Rx: Easter Swing Ticket Tournament - SAVE THE DATE Victoria, British Columbia, Canada
+2025-01-19 20:10:12,652 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:10:12,954 - INFO - Found 10 results for query: Rx: Easter Swing Ticket Tournament - SAVE THE DATE Victoria, British Columbia, Canada
+2025-01-19 20:10:12,955 - INFO - def process_events_without_url(): No URL found for event: Rx: Easter Swing Ticket Tournament - SAVE THE DATE
+2025-01-19 20:10:12,962 - INFO - Retrieved credentials for Google.
+2025-01-19 20:10:12,963 - INFO - Performing Google search for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:10:12,966 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:10:13,439 - INFO - Found 10 results for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:10:13,443 - INFO - def process_events_without_url(): No URL found for event: Thursdays Practica: Winter series Ali and Lorne
+2025-01-19 20:10:13,694 - INFO - def process_events_without_url(): Completed processing events without URLs.
+2025-01-19 20:10:13,695 - INFO - __main__: Finished the crawler process at 2025-01-19 20:10:13.695157
+2025-01-19 20:10:13,695 - INFO - __main__: Total time taken: 0:00:10.586008
+
+
+2025-01-19 20:16:34,280 - INFO - __main__: Starting the crawler process at 2025-01-19 20:16:34.279999
+2025-01-19 20:16:34,317 - INFO - def __init__(): Database connection established.
+2025-01-19 20:16:34,325 - INFO - def __init__(): Database connection established.
+2025-01-19 20:16:34,326 - INFO - def __init__(): Database connection established.
+2025-01-19 20:16:34,334 - INFO - Retrieved credentials for Google.
+2025-01-19 20:16:34,364 - INFO - def process_events_without_url(): Found 227 events without URLs.
+2025-01-19 20:16:35,190 - INFO - Performing Google search for query: Dubversified Culture presents: Stylust Victoria, British Columbia, Canada
+2025-01-19 20:16:35,193 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:16:35,512 - INFO - Found 10 results for query: Dubversified Culture presents: Stylust Victoria, British Columbia, Canada
+2025-01-19 20:16:44,275 - INFO - Extracted text from https://community.admitone.com/events/673063f69da926c91b06c226.
+2025-01-19 20:16:44,276 - INFO - def process_events_without_url(): Extracted text from URL: https://community.admitone.com/events/673063f69da926c91b06c226
+2025-01-19 20:16:44,276 - INFO - def check_keywords_in_text: URL https://community.admitone.com/events/673063f69da926c91b06c226 marked as irrelevant since there are no keywords, events, or 'calendar' in URL.
+2025-01-19 20:16:44,276 - INFO - Performing Google search for query: Swing Shift: Friday Night Swing Dance Victoria, British Columbia, Canada
+2025-01-19 20:16:44,280 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:16:44,596 - INFO - Found 10 results for query: Swing Shift: Friday Night Swing Dance Victoria, British Columbia, Canada
+2025-01-19 20:16:44,598 - INFO - def process_events_without_url(): No URL found for event: Swing Shift: Friday Night Swing Dance
+2025-01-19 20:16:44,599 - INFO - Performing Google search for query: RainCity Zouk: Jan Workshop + Day Social Victoria, British Columbia, Canada
+2025-01-19 20:16:44,604 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:16:45,077 - INFO - Found 10 results for query: RainCity Zouk: Jan Workshop + Day Social Victoria, British Columbia, Canada
+2025-01-19 20:16:45,082 - INFO - def process_events_without_url(): No URL found for event: RainCity Zouk: Jan Workshop + Day Social
+2025-01-19 20:16:45,083 - INFO - Performing Google search for query: Rx: Easter Swing Ticket Tournament - SAVE THE DATE Victoria, British Columbia, Canada
+2025-01-19 20:16:45,090 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:16:45,499 - INFO - Found 10 results for query: Rx: Easter Swing Ticket Tournament - SAVE THE DATE Victoria, British Columbia, Canada
+2025-01-19 20:16:45,501 - INFO - def process_events_without_url(): No URL found for event: Rx: Easter Swing Ticket Tournament - SAVE THE DATE
+2025-01-19 20:16:45,502 - INFO - Performing Google search for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:16:45,507 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:16:45,903 - INFO - Found 10 results for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:16:45,907 - INFO - def process_events_without_url(): No URL found for event: Thursdays Practica: Winter series Ali and Lorne
+2025-01-19 20:16:45,908 - INFO - Performing Google search for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:16:45,917 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:16:46,278 - INFO - Found 10 results for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:16:46,279 - INFO - def process_events_without_url(): No URL found for event: Thursdays Practica: Winter series Ali and Lorne
+2025-01-19 20:16:46,279 - INFO - Performing Google search for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:16:46,283 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:16:46,592 - INFO - Found 10 results for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:16:46,595 - INFO - def process_events_without_url(): No URL found for event: Thursdays Practica: Winter series Ali and Lorne
+2025-01-19 20:16:46,596 - INFO - Performing Google search for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:16:46,605 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:16:46,873 - INFO - Found 10 results for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:16:46,876 - INFO - def process_events_without_url(): No URL found for event: Thursdays Practica: Winter series Ali and Lorne
+2025-01-19 20:16:46,877 - INFO - Performing Google search for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:16:46,885 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:16:47,207 - INFO - Found 10 results for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:16:47,209 - INFO - def process_events_without_url(): No URL found for event: Thursdays Practica: Winter series Ali and Lorne
+2025-01-19 20:16:47,210 - INFO - Performing Google search for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:16:47,213 - INFO - file_cache is only supported with oauth2client<4.0.0
+2025-01-19 20:16:47,474 - INFO - Found 10 results for query: Thursdays Practica: Winter series Ali and Lorne Victoria, British Columbia, Canada
+2025-01-19 20:16:47,477 - INFO - def process_events_without_url(): No URL found for event: Thursdays Practica: Winter series Ali and Lorne
+2025-01-19 20:16:47,709 - INFO - def process_events_without_url(): Completed processing events without URLs.
+2025-01-19 20:16:47,709 - INFO - __main__: Finished the crawler process at 2025-01-19 20:16:47.709689
+2025-01-19 20:16:47,710 - INFO - __main__: Total time taken: 0:00:13.429690
+
+

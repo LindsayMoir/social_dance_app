@@ -72,15 +72,18 @@ import sys
 import time
 import yaml
 
+from credentials import get_credentials
 from db import DatabaseHandler
 from llm import LLMHandler
+from rd_ext import ReadExtract
 
 
 # EventSpider class
 class EventSpider(scrapy.Spider):
     name = "event_spider"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, config, *args, **kwargs):
+        self.config = config
         self.visited_links = set()  # To track visited URLs and avoid duplicate crawls
 
     def start_requests(self):
@@ -213,7 +216,7 @@ class EventSpider(scrapy.Spider):
         bool: True if the URL is relevant, False otherwise.
         """
         # Process non-facebook links
-        extracted_text = self.extract_text_with_playwright(url)
+        extracted_text = read_extract.extract_text_with_playwright(url)
 
         # Check keywords in the extracted text
         keyword_status = self.check_keywords_in_text(url, extracted_text, keywords, org_name)
@@ -275,44 +278,6 @@ class EventSpider(scrapy.Spider):
 
         logging.info(f"def check_keywords_in_text: URL {url} marked as irrelevant since there are no keywords, events, or 'calendar' in URL.")
         return False
-    
-    
-    def extract_text_with_playwright(self, url):
-        """
-        Extracts the text content from a web page using Playwright.
-        This method uses the Playwright library to load a web page and extract its visible text content.
-        It launches a headless Chromium browser, navigates to the specified URL, waits for the page to load,
-        and then retrieves the text content from the page.
-        Args:
-            url (str): The URL of the web page to extract text from.
-        Returns:
-            str: The extracted text content from the web page, or None if an error occurs.
-        Raises:
-            Exception: If there is an issue with loading the page or extracting the text.
-        """
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=config['crawling']['headless'])
-            page = browser.new_page()
-            page.goto(url, timeout=10000)
-            page.wait_for_timeout(3000)
-
-            # Strategy 1: Check if URL indicates a sign-in flow
-            if "accounts.google.com" in page.url:
-                print("Google sign-in detected via URL.")
-                input("Please complete sign-in and press Enter to continue...")
-
-            # Strategy 2: Check for common sign-in elements
-            elif page.is_visible("input#identifierId"):
-                print("Google sign-in page detected by element.")
-                input("Please complete sign-in and press Enter to continue...")
-
-            # After potential sign-in
-            content = page.content()
-            soup = BeautifulSoup(content, 'html.parser')
-            extracted_text = ' '.join(soup.stripped_strings)
-
-            browser.close()
-            return extracted_text
         
 
     def fetch_google_calendar_events(self, calendar_url, url, org_name, keywords):
@@ -392,8 +357,8 @@ class EventSpider(scrapy.Spider):
             - If an error occurs during the HTTP request, it logs the error and stops fetching events.
         """
         # Read the API key from the security file
-        keys_df = pd.read_csv(config['input']['keys'])
-        api_key = keys_df.loc[keys_df['organization'] == 'Google', 'key_pw'].values[0]
+        _, api_key, _ = get_credentials(self.config, 'Google')
+        
         days_ahead = config['date_range']['days_ahead']
 
         url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
@@ -551,21 +516,20 @@ if __name__ == "__main__":
 
     # Get the start time
     start_time = datetime.now()
-    logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
     # Get config
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-    # Instantiate class'
+    # Instantiate class libraries
     db_handler = DatabaseHandler(config)
     llm_handler = LLMHandler(config_path="config/config.yaml")
+    read_extract = ReadExtract("config/config.yaml")
 
     # Create the database tables
     db_handler.create_tables()
 
     # Run the crawler process
-
     process = CrawlerProcess(settings={
         "LOG_FILE": config['logging']['log_file'],
         "LOG_LEVEL": "INFO",
@@ -577,8 +541,7 @@ if __name__ == "__main__":
         }
     })
 
-    # Start the crawler process
-    process.crawl(EventSpider)
+    process.crawl(EventSpider, config=config)
     process.start()
 
     logging.info("__main__: Crawler process completed.")

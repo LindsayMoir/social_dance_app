@@ -176,7 +176,7 @@ class DatabaseHandler():
                 end_date DATE,
                 start_time TIME,
                 end_time TIME,
-                price NUMERIC,
+                price TEXT,
                 location TEXT,
                 address_id INTEGER,
                 description TEXT,
@@ -407,7 +407,7 @@ class DatabaseHandler():
         df = df[['htmlLink', 'summary', 'location', 'start.dateTime', 'end.dateTime', 'description']]
 
         # Extract and convert the price
-        df['Price'] = pd.to_numeric(df['description'].str.extract(r'\$(\d{1,5})')[0], errors='coerce')
+        df['Price'] = df['description'].str.extract(r'\$(\d{1,5})')[0]
 
         # Clean the description
         df['description'] = df['description'].apply(
@@ -524,12 +524,10 @@ class DatabaseHandler():
         for col in ['start_time', 'end_time']:
             df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
 
-        # Clean and convert the 'price' column to numeric format
-        if 'price' in df.columns and not df['price'].isnull().all():
-            df['price'] = pd.to_numeric(df['price'], errors='coerce')
-        else:
-            logging.warning("write_events_to_db: 'price' column is missing or empty. Filling with NaN.")
-            df['price'] = float('nan')
+        # No need to clean and convert the 'price' column to numeric format as it should remain as text
+        if 'price' not in df.columns:
+            logging.warning("write_events_to_db: 'price' column is missing. Filling with empty string.")
+            df['price'] = ''
 
         # Add a 'time_stamp' column with the current timestamp
         df['time_stamp'] = datetime.now()
@@ -564,6 +562,46 @@ class DatabaseHandler():
 
         return None
     
+    def update_event(self, event_identifier, new_data, best_url):
+        """
+        Updates an event row in the database based on event_identifier criteria by overlaying new_data.
+        If new_data has information for a column, it replaces existing data. The best_url is also set.
+        
+        Args:
+            event_identifier (dict): Criteria to locate the event row (e.g. {'event_name': ..., 'start_date': ..., 'start_time': ...}).
+            new_data (dict): Data to overlay onto the existing event record.
+            best_url (str): The best URL to update for the event.
+        """
+        select_query = """
+        SELECT * FROM events
+        WHERE event_name = :event_name
+        AND start_date = :start_date
+        AND start_time = :start_time
+        """
+        result = self.execute_query(select_query, event_identifier)
+        existing_row = result.fetchone() if result else None
+        if not existing_row:
+            logging.error("update_event: No matching event found for identifier: %s", event_identifier)
+            return False
+        
+        # Overlay new data onto existing row
+        updated_data = dict(existing_row)
+        for col, new_val in new_data.items():
+            if new_val not in [None, '', pd.NaT]:
+                updated_data[col] = new_val
+        
+        # Update URL
+        updated_data['url'] = best_url
+
+        update_cols = [col for col in updated_data.keys() if col != 'event_id']
+        set_clause = ", ".join([f"{col} = :{col}" for col in update_cols])
+        update_query = f"UPDATE events SET {set_clause} WHERE event_id = :event_id"
+        updated_data['event_id'] = existing_row['event_id']
+
+        self.execute_query(update_query, updated_data)
+        logging.info("update_event: Updated event %s", updated_data)
+        return True
+
 
     def get_address_id(self, address_dict):
         """

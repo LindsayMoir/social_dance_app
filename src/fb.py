@@ -82,8 +82,9 @@ import requests
 import yaml
 
 # Import other classes
-from llm import LLMHandler
+from credentials import get_credentials
 from db import DatabaseHandler
+from llm import LLMHandler
 
 
 class FacebookEventScraper():
@@ -106,23 +107,6 @@ class FacebookEventScraper():
 
         # Set up the set for urls visited
         self.urls_visited = set()
-
-
-    def get_credentials(self, organization):
-        """
-        Retrieves credentials for a given organization from the keys file.
-
-        Args:
-            organization (str): The organization for which to retrieve credentials.
-
-        Returns:
-            tuple: appid_uid, key_pw, access_token for the organization.
-        """
-        keys_df = pd.read_csv(self.config['input']['keys'])
-        keys_df = keys_df[keys_df['organization'] == organization]
-        appid_uid, key_pw, cse_id = keys_df.iloc[0][['appid_uid', 'key_pw', 'cse_id']]
-        logging.info(f"def get_credentials(): Retrieved credentials for {organization}.")
-        return appid_uid, key_pw, cse_id
     
 
     def login_to_facebook(self, page, browser):
@@ -246,6 +230,15 @@ class FacebookEventScraper():
         try:
             page = self.logged_in_page 
             page.goto(link, timeout=10000)
+
+            # Look for a button or link with text "See More"
+            more_button = self.page.query_selector("text=See More")
+            if more_button:
+                more_button.click()
+                # Randomize wait time after clicking "See More"
+                self.page.wait_for_timeout(random.randint(4000, 6000))
+                logging.info("Clicked 'See More' to load additional Facebook content.")
+
             page.wait_for_timeout(5000)
             content = page.content()
             soup = BeautifulSoup(content, 'html.parser')
@@ -585,7 +578,10 @@ class FacebookEventScraper():
                 FROM urls
                 WHERE links ILIKE '%facebook%'
                 """
-        fb_urls_df = pd.read_sql(query, db_handler.get_db_connection())
+        result = db_handler.execute_query(query, None)
+        rows = result.fetchall()
+        fb_urls_df = pd.DataFrame(rows, columns=result.keys())
+
         logging.info(f"def driver_fb_urls(): Retrieved {len(fb_urls_df)} Facebook URLs.")
 
         for _, row in fb_urls_df.iterrows():
@@ -655,7 +651,10 @@ class FacebookEventScraper():
         """
         query = "SELECT * FROM events WHERE url = %s"
         params = ('',)
-        no_urls_df = pd.read_sql(query, db_handler.get_db_connection(), params=params)
+        result = db_handler.execute_query(query, params)
+        rows = result.fetchall()
+        no_urls_df = pd.DataFrame(rows, columns=result.keys())
+
         logging.info(f"def driver_no_urls(): Retrieved {len(no_urls_df)} events without URLs.")
 
         # Reduce the number of events to process for testing

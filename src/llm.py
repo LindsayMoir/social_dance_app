@@ -141,7 +141,7 @@ class LLMHandler():
 
         # Check for keywords in the extracted text and determine relevance.
         if keywords_list or 'facebook' in url:
-            if any(kw in extracted_text.lower() for kw in keywords_list):
+            if extracted_text and any(kw in extracted_text.lower() for kw in keywords_list):
                 logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
                 if 'facebook' in url:
                     prompt = 'fb'
