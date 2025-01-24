@@ -33,9 +33,10 @@ ________________________________________
 	o	Past Month/Day: Assume the next year.
 •	"Today" should be interpreted as the current date.
 •	If an event starts with a day_of_week (e.g. Sunday, Monday, Tuesday, Wednesday, etc.) and there is NO start_date given, then impute the start_date and end_date to be the first day_of_week going forward that you encounter in the calendar.
-	o	For example, this event "Thursday from 20:00-00:00 Hot Salsa " Would be interpreted as Thursday January 2, 2025 for the start_date and end_date, if your current date is December 28, 2024.
-•	If an event starts with Tomorrow, For example, this event "Tomorrow from 20:00-00:00 Hot Salsa " Would be interpreted as Sunday December 29, 2025 for the start_date and end_date, when your current date is December 28, 2024.
-_____________________________________
+	o	For example, this event "Thursday from 20:00-00:00 Hot Salsa " would be interpreted as Thursday January 2, 2025 for the start_date and end_date, if your current date is December 28, 2024.
+•	If an event starts with Tomorrow, this event "Tomorrow from 20:00-00:00 Hot Salsa " would be interpreted as Sunday December 29, 2024 for the start_date and end_date, when your current date is December 28, 2024.
+•	If an event starts with Today, this event "Today at 21:00 Ritmo Latino Party" would be interpreted as Friday January 31, 2025 for the start-date and end_date, when your current date is Friday January 31, 2025.
+_______________________________
 3. Recurring Events:
 •	Only the FIRST event in the recurring event series should be put into the JSON output.
 *	The "description" should have the details about the recurring event.

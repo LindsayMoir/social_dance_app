@@ -10,7 +10,7 @@ crawling:
   headless: False
   max_crawl_trys: 3
   max_website_urls: 5
-  urls_run_limit: 100
+  urls_run_limit: 30
   scroll_depth: 3
 database:
   host: 'localhost'

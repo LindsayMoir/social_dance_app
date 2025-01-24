@@ -1,0 +1,347 @@
+________________________________________
+
+Context:
+I am building an application to save users time when searching for social dance events. 
+Extract relevant event details from the webpage's text (extracted_text) according to the instructions below. 
+The extracted_text is at the bottom of these instructions under the heading extracted_text
+________________________________________
+
+1. Event Fields to Extract:
+For each identified event, provide the following details in JSON format.
+You MUST include all of these fields. If you do not have any information for one of the fields, put '' in the field. Regardless, always fill the url field as ''.
+[{
+    "org_name": "<The name of the person or organization that is sponsoring or putting on the event>",
+    "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
+    "url": "<''>",
+    "event_type": "<choose one: social dance, class, workshop, other>",
+    "event_name": "<event name or title>",
+    "day_of_week": "<e.g., Monday, Tuesday>",
+    "start_date": "<YYYY-MM-DD>",
+    "end_date": "<YYYY-MM-DD or same as Start_Date if single-day>",
+    "start_time": "<HH:MM>",
+    "end_time": "<HH:MM or null>",
+    "price": "<e.g., $15>",
+    "location": "<venue name and address>",
+    "description": "<short summary of event details>"
+},
+{
+    "org_name": "<The name of the person or organization that is sponsoring or putting on the event>",
+    "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
+    "url": "<''>",
+    "event_type": "<choose one: social dance, class, workshop, other>",
+    "event_name": "<event name or title>",
+    "day_of_week": "<e.g., Monday, Tuesday>",
+    "start_date": "<YYYY-MM-DD>",
+    "end_date": "<YYYY-MM-DD or same as Start_Date if single-day>",
+    "start_time": "<HH:MM>",
+    "end_time": "<HH:MM or null>",
+    "price": "<e.g., $15>",
+    "location": "<venue name and address>",
+    "description": "<short summary of event details>"
+},
+{
+    "org_name": "<The name of the person or organization that is sponsoring or putting on the event>",
+    "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
+    "url": "<''>",
+    "event_type": "<choose one: social dance, class, workshop, other>",
+    "event_name": "<event name or title>",
+    "day_of_week": "<e.g., Monday, Tuesday>",
+    "start_date": "<YYYY-MM-DD>",
+    "end_date": "<YYYY-MM-DD or same as Start_Date if single-day>",
+    "start_time": "<HH:MM>",
+    "end_time": "<HH:MM or null>",
+    "price": "<e.g., $15>",
+    "location": "<venue name and address>",
+    "description": "<short summary of event details>"
+},
+...
+]
+The JSON must be properly formatted. No comments should be interjected. No "// ... (and an explanation)" be included. JSON should be regular.
+________________________________________
+2. Date Rules:
+•	Use the current date in the format YYYY-MM-DD and assume NO time zone.
+•	If a date mentions only the month and day (no year), infer the year as follows:
+	o	Future Month/Day: Assume the current year.
+	o	Past Month/Day: Assume the next year.
+•	"Today" should be interpreted as the current date.
+•	If an event starts with a day_of_week (e.g. Sunday, Monday, Tuesday, Wednesday, etc.) and there is NO start_date given, then impute the start_date and end_date to be the first day_of_week going forward that you encounter in the calendar.
+	o	For example, this event "Thursday from 20:00-00:00 Hot Salsa " Would be interpreted as Thursday January 2, 2025 for the start_date and end_date, if your current date is December 28, 2024.
+•	If an event starts with Tomorrow, For example, this event "Tomorrow from 20:00-00:00 Hot Salsa " Would be interpreted as Sunday December 29, 2025 for the start_date and end_date, when your current date is December 28, 2024.
+_____________________________________
+3. Recurring Events:
+•	For recurring events (e.g., "every Saturday" or "1st and 3rd Tuesdays"), compute all occurrences within 12 months from today's date unless an end date is explicitly mentioned.
+•	For example:
+	o	The 1st Tuesday in 2025 is January 7, 2025.
+	o	Saturdays in February 2025 are February 1, 8, 15, and 22.
+________________________________________
+4. Outdated Pages:
+•	Events explicitly marked as "canceled" or "postponed" should have that wording put in their "description" field.
+________________________________________
+5. Additional Notes:
+•	If there are events, only produce one JSON output. 
+	o	Everything should be in that one response JSON string. 
+	o	Do NOT create a separate JSON output for recurring JSON events. 
+•	DO NOT return a list for a field. For example, if you found several "dance_style" (e.g. salsa, bachata, kizomba) put that in the "dance_style" field as "salsa, bachata, kizomba". Not as "[salsa, bachata, kizomba]"
+•	If no events are found, respond with: "No events found."
+________________________________________
+
+Parsing Instructions
+The above extracted_text has 3 parts. Deal with each part (First Part - Your upcoming events See all), (Second Part - Suggested events), (Third Part = Popular with friends) of the extracted_text separately.
+________________________________________
+First Part - "Your upcoming events See all" 
+Ignore all of the extracted_text until you see the words "Your upcoming events See all".
+After that, from the extracted_text that occurs up to but not including "Suggested events" extract the fields shown in the JSON below. 
+Event Fields to Extract:
+For each identified event, provide the following details in JSON format.
+You MUST include all of these fields. If you do not have any information for one of the fields, put '' in the field.
+{
+    "org_name": "<The name of the person or organization that is sponsoring or putting on the event>",
+    "dance_style": "<choose one or muptiple: bachata, balboa, ballroom, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
+    "url": "<''>",
+    "event_type": "<choose one: social dance, class, workshop, other>",
+    "event_name": "<event name or title>",
+    "day_of_week": "<e.g., Monday, Tuesday>",
+    "start_date": "<YYYY-MM-DD>",
+    "end_date": "<YYYY-MM-DD or same as Start_Date if single-day>",
+    "start_time": "<HH:MM>",
+    "end_time": "<HH:MM or null>",
+    "price": "<e.g., $15>",
+    "location": "<venue name and address>",
+    "description": "<short summary of event details>"
+}
+For example, for this extracted_text:
+Your upcoming events See all 
+Sunday from 15:15-22:00 Winter Wonderland Catered Christmas Dinner and Dance Ali and 4 friends 
+Thursday 2 January 2025 from 19:30-22:30 Thursdays Practica: Winter series Lorne 
+Friday 7 February 2025 at 19:00 Za Thomaier in Victoria Roy and 5 friends Recommended events See all 
+Saturday from 19:00-00:00 COLOMBIAN WHITE PARTY Live Colombian Band “Parrandón Vallenato” Ali 
+Today from 16:00-23:45 Lights of Wonder 
+Tomorrow at 21:00 AFTERGLOW: KiNKY CLUB NiGHT Categories Classics Comedy Crafts Dance Drinks Fitness & workouts Foods Games Gardening Health & medical Healthy living and self-care Home and garden Music and audio Parties Professional networking Religions Shopping Social issues Sports Theatre TV and films Visual arts 29 
+Friday 29 November 2024 at 21:00 FIRE! Drum & Bass @ The Downbeat Event Centre 1325 Government St, Victoria, BC V8W 1Y9, Canada About Discussion More About Discussion FIRE! Drum & Bass 🔥 @ The Downbeat Event Centre Details 142 people responded Event by Rhythmicon and Tarantist 1325 Government St, Victoria, BC V8W 1Y9, Canada Public · Anyone on or off Facebook Tonight!! Only $20 @ the door. SET TIMES 9 - Rhythmicon 10 - BBStepz 1… See more Victoria, British Columbia 1325 Government St, Victoria, BC V8W 1Y9, Canada 1325 Government St, Victoria, BC V8W 1Y9, Canada Guests See All 44 Went 98 Interested Meet your hosts Rhythmicon 19 past events · Page · Musician/band West Coast Sound System Selector Learn more Tarantist 20 past events · Page · Musician/band A source for mixes and tracks by Tarantist, a producer, DJ  and sound designer based in Victoria B.C Message 
+
+Would produce this JSON ouptut for the Your upcoming events See all" part. 
+[{
+    "org_name": "",
+    "dance_style": "",
+    "url": "",
+    "event_type": "social dance",
+    "event_name": "Winter Wonderland Catered Christmas Dinner and Dance",
+    "day_of_week": "Sunday",
+    "start_date": "2024-12-29",
+    "end_date": "2024-12-29",
+    "start_time": "15:15",
+    "end_time": "22:00",
+    "price": "",
+    "location": "",
+    "description": ""
+},
+{
+    "org_name": "",
+    "dance_style": "",
+    "url": "",
+    "event_type": "",
+    "event_name": "Thursdays Practica: Winter series",
+    "day_of_week": "Thursday",
+    "start_date": "2025-01-02",
+    "end_date": "2025-01-02",
+    "start_time": "19:30",
+    "end_time": "22:30",
+    "price": "",
+    "location": "",
+    "description": ""
+},
+{
+    "org_name": "",
+    "dance_style": "",
+    "url": "",
+    "event_type": "social dance",
+    "event_name": "Za Thomaier in Victoria",
+    "day_of_week": "Friday",
+    "start_date": "2025-02-07",
+    "end_date": "2025-02-07",
+    "start_time": "19:00",
+    "end_time": "22:00",
+    "price": "",
+    "location": "Victoria",
+    "description": ""
+},
+{
+    "org_name": "",
+    "dance_style": "",
+    "url": "",
+    "event_type": "",
+    "event_name": "COLOMBIAN WHITE PARTY",
+    "day_of_week": "Saturday",
+    "start_date": "2024-12-28",
+    "end_date": "<2024-12-28>",
+    "start_time": "19:00",
+    "end_time": "",
+    "price": "",
+    "location": "",
+    "description": "Live Colombian Band “Parrandón Vallenato"
+},
+{
+    "org_name": "Downbeat Event Centre",
+    "dance_style": "",
+    "url": "",
+    "event_type": "",
+    "event_name": "FIRE! Drum & Bass @ The Downbeat Event Centre",
+    "day_of_week": "Friday",
+    "start_date": "2024-11-29",
+    "end_date": "<2024-11-29>",
+    "start_time": "21:00",
+    "end_time": "",
+    "price": "",
+    "location": "1325 Government St, Victoria, BC V8W 1Y9, Canada",
+    "description": ""
+}
+]
+________________________________________
+Second Part - Suggested events
+For the Second Part in the extracted_text AFTER you have encountered the words "Suggested events". I want you to extract the event fields and put them into the JSON string. 
+For example, if you encounter this:
+
+Suggested events 
+Tues, 31 Dec 2024 at 20:00 New Years Eve @ The Downbeat!!! 1325 Government St., Victoria, BC, Canada, British Columbia V8W 1M5 Linda is interested 321 people interested Interested 
+Thurs, 30 Jan 2025 at 20:00 Van Isle DJ Competition 1325 Government St., Victoria, BC, Canada, British Columbia V8W 1M5 124 people interested Interested 
+Sun, 16 Feb 2025 at 21:00 Dubversified Culture presents: Stylust Victoria, BC, Canada, British Columbia Linda is interested 283 people interested Interested
+
+You would create ADDITIONAL JSON entries that looks like this.
+[{
+    "org_name": "The Downbeat",
+    "dance_style": "",
+    "url": "",
+    "event_type": "",
+    "event_name": "New Years Eve @ The Downbeat!!!",
+    "day_of_week": "Tuesday",
+    "start_date": "2024-12-31",
+    "end_date": "2024-12-31",
+    "start_time": "20:00",
+    "end_time": "",
+    "price": "",
+    "location": "1325 Government St., Victoria, BC, Canada, V8W 1M5",
+    "description": ""
+},
+{
+    "org_name": "",
+    "dance_style": "",
+    "url": "",
+    "event_type": "",
+    "event_name": "Van Isle DJ Competition",
+    "day_of_week": "Thursday",
+    "start_date": "2025-01-30",
+    "end_date": "2025-01-30",
+    "start_time": "20:00",
+    "end_time": "",
+    "price": "",
+    "location": "1325 Government St., Victoria, BC, Canada, V8W 1M5",
+    "description": ""
+},
+{
+    "org_name": "Dubversified Culture",
+    "dance_style": "ballroom",
+    "url": "",
+    "event_type": "",
+    "event_name": "New Years Eve @ The Downbeat!!!",
+    "day_of_week": "Sunday",
+    "start_date": "2025-02-16",
+    "end_date": "2025-02-16",
+    "start_time": "21:00",
+    "end_time": "",
+    "price": "",
+    "location": "1325 Government St., Victoria, BC, Canada, British Columbia V8W 1M5",
+    "description": ""
+}
+]
+________________________________________
+Third Part - Popular with friends
+For the Third Part in the extracted_text AFTER you have encountered the words "Popular wiith friends". I want you to extract the event fields and put them into the JSON string. 
+For example, if you encounter this:
+
+Popular with friends 
+Today at 19:15 Salsastudio Potluck Bachata Party Salsastudio.net Vancouver Salsa Bachata Lorne is interested Interested 
+Tues, 31 Dec 2024 at 20:30 VWCSC New Year’s Eve Social Dance Party Eastern Star Hall Chapters No 5 & No 17 Robin, Journeey and 3 friends are interested Interested 
+Today at 19:00 The Home-for-the-Holidays Jam Session - Thursday, December 27, 7PM!!  Hosted by Kelby MacNayr Victoria, BC, Canada, British Columbia Sophia is interested Interested 
+Sat, 22 Mar 2025 at 17:00 Pride & Prejudice Spring Ball, Victoria Fairmont Empress Lorne, Veronica and 4 friends are interested Interested 
+Fri, 10 Jan 2025 at 18:30 Argentinian Tango for Beginners - level 1 Alive Tango Victoria Robin and Janine are interested Interested Privacy · Terms · Advertising · Ad choices · Cookies · More · Meta © 2024
+
+You would create ADDITIONAL JSON entries that looks like this.
+[{
+    "org_name": "Salsastudio.net",
+    "dance_style": "salsa, bachata",
+    "url": "",
+    "event_type": "",
+    "event_name": "Salsastudio Potluck Bachata Party",
+    "day_of_week": "Tuesday",
+    "start_date": "2024-12-27",
+    "end_date": "2024-12-27",
+    "start_time": "19:15",
+    "end_time": "",
+    "price": "",
+    "location": "Vancouver",
+    "description": ""
+},
+{
+    "org_name": "VWCSC",
+    "dance_style": "wcs",
+    "url": "",
+    "event_type": "dance party",
+    "event_name": "New Year’s Eve Social Dance Party",
+    "day_of_week": "Thursday",
+    "start_date": "2024-12-31",
+    "end_date": "2024-12-31",
+    "start_time": "20:30",
+    "end_time": "",
+    "price": "",
+    "location": "Eastern Star Hall Chapters No 5 & No 17 ",
+    "description": ""
+},
+{
+    "org_name": "Kelby MacNayr",
+    "dance_style": "",
+    "url": "",
+    "event_type": "",
+    "event_name": "The Home-for-the-Holidays Jam Session",
+    "day_of_week": "Tuesday",
+    "start_date": "2024-12-27",
+    "end_date": "2024-12-27",
+    "start_time": "19:00",
+    "end_time": "",
+    "price": "",
+    "location": "Victoria, BC, Canada",
+    "description": ""
+},
+{
+    "org_name": "",
+    "dance_style": "ballroom",
+    "url": "",
+    "event_type": "",
+    "event_name": "Pride & Prejudice Spring Ball",
+    "day_of_week": "Saturday",
+    "start_date": "2025-03-22",
+    "end_date": "2025-03-22",
+    "start_time": "17:00",
+    "end_time": "",
+    "price": "",
+    "location": "Victoria Fairmont Empress",
+    "description": ""
+},
+{
+    "org_name": "Alive Tango",
+    "dance_style": "tango",
+    "url": "",
+    "event_type": "",
+    "event_name": "Argentinian Tango for Beginners",
+    "day_of_week": "Friday",
+    "start_date": "2025-01-10",
+    "end_date": "2025--1-10",
+    "start_time": "17:00",
+    "end_time": "",
+    "price": "",
+    "location": "Victoria",
+    "description": ""
+}]
+
+________________________________________
+extracted_text
+
