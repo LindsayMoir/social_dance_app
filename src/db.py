@@ -532,11 +532,8 @@ class DatabaseHandler():
         # Add a 'time_stamp' column with the current timestamp
         df['time_stamp'] = datetime.now()
 
-        # Put the url in if it is NOT social media or calendar url
-        if any(social in url for social in ['facebook', 'instagram', 'calendar']):
-            pass
-        else:
-            df['url'] = url
+        # Add the 'url' column to the DataFrame
+        df['url'] = url
 
         # Clean up the 'location' column and update address_ids
         cleaned_df = self.clean_up_address(df)

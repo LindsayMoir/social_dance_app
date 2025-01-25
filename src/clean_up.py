@@ -43,7 +43,7 @@ from db import DatabaseHandler
 from gs import GoogleSearch
 from llm import LLMHandler
 from credentials import get_credentials
-from rd_ext import ReadExtract  # Import the asynchronous extraction class
+from test_bed.rd_ext import ReadExtract  # Import the asynchronous extraction class
 
 class CleanUp:
     def __init__(self, config):
@@ -223,7 +223,7 @@ if __name__ == "__main__":
     )
 
     start_time = datetime.now()
-    logging.info(f"__main__: Starting the crawler process at {start_time}")
+    logging.info(f"\n__main__: Starting the crawler process at {start_time}")
 
     clean_up_instance = CleanUp(config)
     asyncio.run(clean_up_instance.process_events_without_url())

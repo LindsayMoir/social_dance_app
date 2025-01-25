@@ -52,6 +52,6 @@ startup:
 testing:
   status: True
   nof_no_url_events: 10
-  drop_tables: False
+  drop_tables: True
 update_schedule:
   true_links_hours: .01

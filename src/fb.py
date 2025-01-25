@@ -744,20 +744,20 @@ class FacebookEventScraper():
                         )
                         prompt = 'default'
                         llm_status = llm_handler.process_llm_response(url, extracted_text, org_name, keywords_list, prompt)
-
-        return None
+            else:
+                logging.info(f"def driver_fb_search(): No extracted text found for search_url: {search_url}.")
+                return None
     
     def driver_no_urls(self):
         """
         Queries the database for events without URLs, scrapes the web for URLs and event data, processes the data using an LLM, 
         and updates the database with the new information.
         """
-        query = "SELECT * FROM events WHERE url = %s"
-        params = ('',)
+        query = "SELECT * FROM events WHERE url = :url"
+        params = {'url': ''}
         result = db_handler.execute_query(query, params)
 
         if result:
-
             rows = result.fetchall()
             no_urls_df = pd.DataFrame(rows, columns=result.keys())
 
