@@ -267,7 +267,7 @@ class EventSpider(scrapy.Spider):
         # Check for keywords in the extracted text and determine relevance.
         if keywords:
             keywords_list = [kw.strip().lower() for kw in keywords.split(',')]
-            if any(kw in extracted_text.lower() for kw in keywords_list):
+            if extracted_text and any(kw in extracted_text.lower() for kw in keywords_list):
                 logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
                 prompt = 'default'
                 return llm_handler.process_llm_response(url, extracted_text, org_name, keywords_list, prompt)
@@ -382,7 +382,8 @@ class EventSpider(scrapy.Spider):
                     break
                 params["pageToken"] = next_page_token
             else:
-                logging.error(f"def get_events(): Error: {response.status_code} - {response.text}")
+                logging.error(f"def get_events(): Error: {response.status_code} - {response.text}"
+                              f"for calendar_id: {calendar_id}")
                 break
 
         df = pd.json_normalize(all_events)

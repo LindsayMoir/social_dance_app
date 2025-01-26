@@ -9,7 +9,7 @@ crawling:
   depth_limit: 3
   headless: False
   max_crawl_trys: 3
-  max_website_urls: 5
+  max_website_urls: 7
   urls_run_limit: 30
   scroll_depth: 3
 database:
@@ -50,8 +50,8 @@ search:
 startup:
   use_db: False
 testing:
-  status: True
+  status: False
   nof_no_url_events: 10
-  drop_tables: True
+  drop_tables: False
 update_schedule:
   true_links_hours: .01

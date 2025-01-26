@@ -256,8 +256,11 @@ class DatabaseHandler():
         try:
             with self.conn.connect() as connection:
                 result = connection.execute(text(query), params or {})
+                if result.returns_rows:
+                    rows = result.fetchall()
+                    return rows
                 connection.commit()
-                return result
+                return None
         except SQLAlchemyError as e:
             logging.error("def execute_query(): {query}\nQuery execution failed: %s", e)
             return None
@@ -297,8 +300,8 @@ class DatabaseHandler():
         """
         select_params = {'url': url}
         result = self.execute_query(select_query, select_params)
+        if result and len(result) > 0:
 
-        if result:
             # Prepare the update query with conditional 'other_links'
             if update_other_links != 'No':
                 update_query = """
@@ -335,7 +338,7 @@ class DatabaseHandler():
 
             # Execute the update
             update_result = self.execute_query(update_query, update_params)
-            if update_result and update_result.rowcount > 0:
+            if update_result:
                 logging.info("update_url: Updated URL '%s' successfully.", url)
                 return True
             else:
@@ -532,8 +535,8 @@ class DatabaseHandler():
         # Add a 'time_stamp' column with the current timestamp
         df['time_stamp'] = datetime.now()
 
-        # Add the 'url' column to the DataFrame
-        df['url'] = url
+        # Update the 'url' column with the source URL if there is no URL in the DataFrame
+        df['url'] = df['url'].fillna('').replace('', url)
 
         # Clean up the 'location' column and update address_ids
         cleaned_df = self.clean_up_address(df)
@@ -576,7 +579,7 @@ class DatabaseHandler():
         AND start_time = :start_time
         """
         result = self.execute_query(select_query, event_identifier)
-        existing_row = result.fetchone() if result else None
+        existing_row = result[0] if result else None
         if not existing_row:
             logging.error("update_event: No matching event found for identifier: %s", event_identifier)
             return False
@@ -618,7 +621,7 @@ class DatabaseHandler():
             # Attempt to retrieve the address_id if it exists
             result = self.execute_query(select_query, select_params)
             if result:
-                row = result.fetchone()
+                row = result[0]
                 if row:
                     return row[0]
 
@@ -869,7 +872,7 @@ class DatabaseHandler():
             logging.error("delete_old_events: Failed to delete old events: %s", e)
 
 
-    def delete_likley_dud_events(self):
+    def delete_likely_dud_events(self):
         """
         1. If the event org_name, dance_style, and url == '', delete the event, UNLESS it has an address_id then keep it.
         2. Drop events outside of British Columbia (BC).
@@ -882,65 +885,80 @@ class DatabaseHandler():
             c. If they do have a country_id and it is not 'CA' then delete the event. 
         4. Delete rows in events where dance_style and url are == '' AND event_type == 'other' AND location IS NULL and description IS NULL
         """
-        try:
-            # 1. Delete events where org_name, dance_style, and url are empty, unless they have an address_id
-            delete_query_1 = """
-            DELETE FROM events
-            WHERE org_name = ''
-              AND dance_style = ''
-              AND url = ''
-              AND address_id IS NULL;
-            """
-            self.execute_query(delete_query_1)
-            logging.info("delete_likley_dud_events: Deleted events with empty org_name, dance_style, and url, and no address_id.")
 
-            # 2. Delete events outside of British Columbia (BC)
-            delete_query_2 = """
-            DELETE FROM events
-            WHERE address_id IN (
-            SELECT address_id
-            FROM address
-            WHERE province_or_state IS NOT NULL
-              AND province_or_state != 'BC'
-            );
-            """
-            self.execute_query(delete_query_2)
-            logging.info("delete_likley_dud_events: Deleted events outside of British Columbia (BC).")
+        # 1. Delete events where org_name, dance_style, and url are empty, unless they have an address_id
+        delete_query_1 = """
+        DELETE FROM events
+        WHERE org_name = :org_name
+        AND dance_style = :dance_style
+        AND url = :url
+        AND address_id IS NULL;
+        """
+        params = {
+            'org_name': '',
+            'dance_style': '',
+            'url': '',
+            'event_type': 'other'
+            }
 
-            # 3. Delete events that are not in Canada
-            delete_query_3 = """
-            DELETE FROM events
-            WHERE address_id IN (
-            SELECT address_id
-            FROM address
-            WHERE country_id IS NOT NULL
-              AND country_id != 'CA'
-            );
-            """
-            self.execute_query(delete_query_3)
-            logging.info("delete_likley_dud_events: Deleted events that are not in Canada (CA).")
+        self.execute_query(delete_query_1, params)
+        logging.info("delete_likely_dud_events: Deleted events with empty org_name, dance_style, and url, and no address_id.")
 
-            # 4. Delete rows in events where dance_style and url are == '' AND event_type == 'other' AND location IS NULL and description IS NULL
-            delete_query = """
-            DELETE FROM events
-            WHERE dance_style = ''
-              AND url = ''
-              AND event_type = 'other'
-              AND location IS NULL
-              AND description IS NULL;
-            """
-            self.execute_query(delete_query)
-            logging.info(
-                "delete_likley_dud_events: Deleted events with empty "
-                "dance_style, url, event_type 'other', and null location "
-                "and description."
-            )
-        except Exception as e:
-            logging.error(
-                "delete_likley_dud_events: Failed to delete events with "
-                "empty dance_style, url, event_type 'other', and null "
-                "location and description: %s", e
-            )
+        # 2. Delete events outside of British Columbia (BC)
+        delete_query_2 = """
+        DELETE FROM events
+        WHERE address_id IN (
+        SELECT address_id
+        FROM address
+        WHERE province_or_state IS NOT NULL
+            AND province_or_state != :province_or_state
+        );
+        """
+        params = {
+            'province_or_state': 'BC'
+            }
+        
+        self.execute_query(delete_query_2, params)
+        logging.info("delete_likely_dud_events: Deleted events outside of British Columbia (BC).")
+
+        # 3. Delete events that are not in Canada
+        delete_query_3 = """
+        DELETE FROM events
+        WHERE address_id IN (
+        SELECT address_id
+        FROM address
+        WHERE country_id IS NOT NULL
+            AND country_id != :country_id
+        );
+        """
+        params = {
+            'country_id': 'CA'
+            }
+        
+        self.execute_query(delete_query_3, params)
+        logging.info("delete_likely_dud_events: Deleted events that are not in Canada (CA).")
+
+        # 4. Delete rows in events where dance_style and url are == '' AND event_type == 'other' AND location IS NULL and description IS NULL
+        delete_query_4 = """
+        DELETE FROM events
+        WHERE dance_style = :dance_style
+            AND url = :url
+            AND event_type = :other
+            AND location IS NULL
+            AND description IS NULL;
+        """
+        params = {
+            'dance_style': '',
+            'url': '',
+            'event_type': 'other'
+            }
+        
+        self.execute_query(delete_query_4, params)
+        logging.info(
+            "def delete_likely_dud_events(): Deleted events with empty "
+            "dance_style, url, event_type 'other', and null location "
+            "and description."
+        )
         
 
     def delete_event_and_update_url(self, url, event_name, start_date):
@@ -990,20 +1008,6 @@ class DatabaseHandler():
         except Exception as e:
             logging.error("def delete_events_with_nulls(): Failed to delete events with start_date and start_time being null: %s", e)
 
-        try:
-            delete_query = """
-            DELETE FROM events
-            WHERE 
-                org_name = ''
-                AND dance_style = ''
-                AND url = ''
-                AND address_id IS NULL;
-            """
-            self.execute_query(delete_query)
-            logging.info("def delete_events_with_nulls(): org_name, dance_style, url, (all NULL) and address_id IS NULL deleted successfully.")
-        except Exception as e:
-            logging.error("def delete_events_with_nulls(): Failed to delete events with start_date and start_time being null: %s", e)
-
     
     def driver(self):
         """
@@ -1013,7 +1017,7 @@ class DatabaseHandler():
         self.dedup()
         self.delete_old_events()
         self.delete_events_with_nulls()
-        self.delete_likley_dud_events()
+        self.delete_likely_dud_events()
         self.fuzzy_duplicates()
 
         # Close the database connection

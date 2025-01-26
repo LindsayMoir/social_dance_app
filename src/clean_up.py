@@ -43,7 +43,7 @@ from db import DatabaseHandler
 from gs import GoogleSearch
 from llm import LLMHandler
 from credentials import get_credentials
-from test_bed.rd_ext import ReadExtract  # Import the asynchronous extraction class
+from rd_ext import ReadExtract  # Import the asynchronous extraction class
 
 class CleanUp:
     def __init__(self, config):

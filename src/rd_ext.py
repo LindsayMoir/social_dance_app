@@ -24,6 +24,7 @@ from datetime import datetime
 import logging
 import pandas as pd
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
 import random
 import yaml
 
