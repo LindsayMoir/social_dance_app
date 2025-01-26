@@ -260,14 +260,14 @@ class FacebookEventScraper():
                     logging.info(f"Extracted relevant text from {link}: {extracted_text}")
                     return extracted_text
                 else:
-                    logging.info(f"No relevant text found in {link}.")
+                    logging.info(f"def extract_event_text(): No relevant text found in {link}.")
                     return None
             else:
-                logging.info(f"No text could be extracted from {link}.")
+                logging.info(f"def extract_event_text(): No text could be extracted from {link}.")
                 return None
 
         except Exception as e:
-            logging.error(f"Failed to extract text from {link}: {e}")
+            logging.error(f"def extract_event_text(): Failed to extract text from {link}: {e}")
             return None
     
 
@@ -743,6 +743,9 @@ class FacebookEventScraper():
             logging.info(f"No 'Events' tab found for group: {url}")
         # except Exception as e:
         #     logging.error(f"Failed to extract event links from the 'Events' tab of group: {url}. Error: {e}")
+
+        # Close the page
+        page.close()
 
         return fb_group_events
 
