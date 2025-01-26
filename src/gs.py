@@ -169,7 +169,7 @@ if __name__ == "__main__":
     gs_instance = GoogleSearch()
     results_df = gs_instance.driver()
 
-    output_path = gs_instance.config['input']['data_urls']
+    output_path = gs_instance.config['input']['gs_urls']
     results_df.to_csv(output_path, index=False)
     logging.info(f"Results written to {output_path}")
 

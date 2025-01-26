@@ -337,59 +337,56 @@ class FacebookEventScraper():
         location = self.config['constants']['location']
         extracted_text_list = []
 
-        try:
-            # Use the stored logged-in page
-            page = self.logged_in_page
+        #try:
+        for keyword in keywords:
+            search_url = f"{base_url} {location} {keyword}"
+            event_links = self.extract_event_links(search_url)
+            logging.info(f"def scrape_events: Used {search_url} to get {len(event_links)} event_links\n")
 
-            for keyword in keywords:
-                search_url = f"{base_url} {location} {keyword}"
-                event_links = self.extract_event_links(search_url)
-                logging.info(f"def scrape_events: Used {search_url} to get {len(event_links)} event_links\n")
+            for link in event_links:
+                if link in self.urls_visited:
+                    continue  # Skip already visited URLs
+                else:
+                    self.urls_visited.add(link)
+                    if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                        logging.info("Reached the URL visit limit. Stopping the scraping process.")
+                        return search_url, extracted_text_list
+                    
+                    extracted_text = self.extract_event_text(link)
+                    if extracted_text:  # Only add if text was successfully extracted
+                        extracted_text_list.append((link, extracted_text))
+                    self.urls_visited.add(link)
+                    logging.debug(f"Visited URL: {link}. Total visited: {len(self.urls_visited)}")
 
-                for link in event_links:
-                    if link in self.urls_visited:
+                    # Check if the limit has been reached
+                    if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                        logging.info("Reached the URL visit limit. Stopping the scraping process.")
+                        return search_url, extracted_text_list
+
+                # Get second-level links
+                second_level_links = self.extract_event_links(link)
+                for second_level_link in second_level_links:
+                    if second_level_link in self.urls_visited:
                         continue  # Skip already visited URLs
                     else:
-                        self.urls_visited.add(link)
+                        self.urls_visited.add(second_level_link)
                         if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                             logging.info("Reached the URL visit limit. Stopping the scraping process.")
                             return search_url, extracted_text_list
                         
-                        extracted_text = self.extract_event_text(link)
-                        if extracted_text:  # Only add if text was successfully extracted
-                            extracted_text_list.append((link, extracted_text))
-                        self.urls_visited.add(link)
-                        logging.debug(f"Visited URL: {link}. Total visited: {len(self.urls_visited)}")
+                        second_level_text = self.extract_event_text(second_level_link)
+                        if second_level_text:  # Only add if text was successfully extracted
+                            extracted_text_list.append((second_level_link, second_level_text))
+                        self.urls_visited.add(second_level_link)
+                        logging.debug(f"Visited URL: {second_level_link}. Total visited: {len(self.urls_visited)}")
 
                         # Check if the limit has been reached
                         if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                             logging.info("Reached the URL visit limit. Stopping the scraping process.")
                             return search_url, extracted_text_list
 
-                    # Get second-level links
-                    second_level_links = self.extract_event_links(link)
-                    for second_level_link in second_level_links:
-                        if second_level_link in self.urls_visited:
-                            continue  # Skip already visited URLs
-                        else:
-                            self.urls_visited.add(second_level_link)
-                            if self.urls_visited >= self.config['crawling']['urls_run_limit']:
-                                logging.info("Reached the URL visit limit. Stopping the scraping process.")
-                                return search_url, extracted_text_list
-                            
-                            second_level_text = self.extract_event_text(second_level_link)
-                            if second_level_text:  # Only add if text was successfully extracted
-                                extracted_text_list.append((second_level_link, second_level_text))
-                            self.urls_visited.add(second_level_link)
-                            logging.debug(f"Visited URL: {second_level_link}. Total visited: {len(self.urls_visited)}")
-
-                            # Check if the limit has been reached
-                            if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                                logging.info("Reached the URL visit limit. Stopping the scraping process.")
-                                return search_url, extracted_text_list
-
-        except Exception as e:
-            logging.error(f"Failed to scrape events: {e}")
+        # except Exception as e:
+        #     logging.error(f"Failed to scrape events: {e}")
 
         logging.info(f"def scrape_events(): Extracted text from {len(extracted_text_list)} events.")
 
@@ -657,18 +654,24 @@ class FacebookEventScraper():
         """
         1. Gets all of the urls from fb_urls table.
         2. For each url, extracts text and processes it.
-        3. If valid events are found, writes them to the database; otherwise, deletes the URL.
+        3. If valid events are found, writes them to the database; otherwise, updates the URL.
         """
         query = """
-                SELECT * 
-                FROM urls
-                WHERE links ILIKE '%facebook%'
-                """
-        result = db_handler.execute_query(query, None)
-        rows = result.fetchall()
-        fb_urls_df = pd.DataFrame(rows, columns=result.keys())
+        SELECT * 
+        FROM urls
+        WHERE links ILIKE :link_pattern
+        """
+        params = {'link_pattern': '%facebook%'}
+        rows = db_handler.execute_query(query, params)
 
-        logging.info(f"def driver_fb_urls(): Retrieved {len(fb_urls_df)} Facebook URLs.")
+        if rows is not None and len(rows) > 0:
+            # Extract column names from the first row
+            column_names = rows[0]._fields  # Works if rows are SQLAlchemy Row objects
+            fb_urls_df = pd.DataFrame(rows, columns=column_names)
+            logging.info(f"def driver_fb_urls(): Retrieved {len(fb_urls_df)} Facebook URLs.")
+        else:
+            logging.info("def driver_fb_urls(): No Facebook URLs found in the database.")
+            return
 
         for _, row in fb_urls_df.iterrows():
             url = row['links']
@@ -685,6 +688,18 @@ class FacebookEventScraper():
 
                 # Get the event links from the facebook url
                 fb_event_links = self.extract_event_links(url)
+
+                # Get the event links from the event tab from the group page
+                if "facebook.com/groups" in url:
+                    fb_group_events = self.fb_group_event_links(url)
+
+                # Merge fb_group_events with fb_event_links
+                if fb_group_events:
+                    if fb_event_links:
+                        fb_event_links.update(fb_group_events)
+                    else:
+                        fb_event_links = fb_group_events
+
                 for url in fb_event_links:
                     if url in self.urls_visited:
                         continue
@@ -693,6 +708,41 @@ class FacebookEventScraper():
                         self.process_fb_url(url, org_name, keywords)
                         if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                             break   
+
+
+    def fb_group_event_links(self, url):
+
+        # Get the event links from the event tab from the group page
+        fb_group_events = set()
+        
+        #try:
+        # Navigate to the group page's "Events" tab
+        page = self.logged_in_page
+        page.goto(url, timeout=10000)
+
+        # Look for the "Events" tab and click it
+        events_tab_selector = "a[href*='/events' i]"
+        if page.is_visible(events_tab_selector):
+            page.click(events_tab_selector)
+            page.wait_for_timeout(3000)
+            logging.info(f"Navigated to the 'Events' tab for group: {url}")
+
+            # Scroll and gather links on the "Events" tab
+            for _ in range(self.config['crawling']['scroll_depth']):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(2000)
+
+            # Extract links matching the event URL pattern
+            content = page.content()
+            fb_group_events = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
+            logging.info(f"Extracted {len(fb_group_events)} event links from the 'Events' tab of group: {url}")
+
+        else:
+            logging.info(f"No 'Events' tab found for group: {url}")
+        # except Exception as e:
+        #     logging.error(f"Failed to extract event links from the 'Events' tab of group: {url}. Error: {e}")
+
+        return fb_group_events
 
 
     def driver_fb_search(self):
