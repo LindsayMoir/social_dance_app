@@ -281,7 +281,21 @@ class LLMHandler():
 
             # Get just the JSON string from the response
             start_position = result.find('[')
+
+            # If no start_position is returned, prepend the string with '['
+            if start_position == -1:
+                result = '[' + result
+                start_position = result.find('[')
+
+            # Get the end position of the JSON string
             end_position = result.rfind(']') + 1
+
+            # if no end_position is found append the string with ']'
+            if end_position == 0:
+                result = result + ']'
+                end_position = result.rfind(']') + 1
+
+            # Extract the JSON string
             json_string = result[start_position:end_position]
 
             # Remove single-line comments

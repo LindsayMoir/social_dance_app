@@ -80,6 +80,7 @@ from playwright.sync_api import sync_playwright
 import random
 import re
 import requests
+from sqlalchemy import inspect
 import yaml
 
 # Import other classes
@@ -664,15 +665,16 @@ class FacebookEventScraper():
         params = {'link_pattern': '%facebook%'}
         rows = db_handler.execute_query(query, params)
 
-        if rows is not None and len(rows) > 0:
-            # Extract column names from the first row
-            column_names = rows[0]._fields  # Works if rows are SQLAlchemy Row objects
+        if rows:
+            # Need to get column names
+            inspector = inspect(db_handler.conn)
+            table_name = 'urls'
+            column_names = [column['name'] for column in inspector.get_columns(table_name)]
             fb_urls_df = pd.DataFrame(rows, columns=column_names)
             logging.info(f"def driver_fb_urls(): Retrieved {len(fb_urls_df)} Facebook URLs.")
         else:
-            logging.info("def driver_fb_urls(): No Facebook URLs found in the database.")
-            return
-
+            logging.warning("No rows returned from the query.")
+        
         for _, row in fb_urls_df.iterrows():
             url = row['links']
             org_name = row['org_names']
@@ -693,12 +695,12 @@ class FacebookEventScraper():
                 if "facebook.com/groups" in url:
                     fb_group_events = self.fb_group_event_links(url)
 
-                # Merge fb_group_events with fb_event_links
-                if fb_group_events:
-                    if fb_event_links:
-                        fb_event_links.update(fb_group_events)
-                    else:
-                        fb_event_links = fb_group_events
+                    # Merge fb_group_events with fb_event_links
+                    if fb_group_events:
+                        if fb_event_links:
+                            fb_event_links.update(fb_group_events)
+                        else:
+                            fb_event_links = fb_group_events
 
                 for url in fb_event_links:
                     if url in self.urls_visited:

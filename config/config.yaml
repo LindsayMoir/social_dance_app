@@ -10,7 +10,7 @@ crawling:
   headless: False
   max_crawl_trys: 3
   max_website_urls: 7
-  urls_run_limit: 30
+  urls_run_limit: 100
   scroll_depth: 3
 database:
   host: 'localhost'
@@ -24,8 +24,8 @@ debug:
   after_url_updated: 'debug/after_url_updated.csv'
   before_url_updated: 'debug/before_url_updated.csv'
 input:
-  data_urls: 'data/urls/urls.csv'
   data_keywords: 'data//other/keywords.csv'
+  gs_urls: 'data/urls/gs_urls.csv'
   keys: '/mnt/d/OneDrive/Security/keys.csv'
   urls: 'data/urls'
 location:

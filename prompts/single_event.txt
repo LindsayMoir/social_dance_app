@@ -13,7 +13,7 @@ You MUST include all of these fields. If you do not have any information for one
 [{
     "org_name": "<The name of the person or organization that is sponsoring or putting on the event>",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
-    "url": "<the url or link starting with the characters http(s)://....>",
+    "url": "<the URL or link>",
     "event_type": "<choose one: social dance, class, workshop, other>",
     "event_name": "<event name or title>",
     "day_of_week": "<e.g., Monday, Tuesday>",

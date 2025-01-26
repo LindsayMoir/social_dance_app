@@ -68,7 +68,7 @@ import pandas as pd
 import pyap
 import re  # Added missing import
 from sqlalchemy import create_engine, update, MetaData, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 import yaml
 
 
@@ -247,7 +247,7 @@ class DatabaseHandler():
             params (dict): Optional dictionary of parameters for parameterized queries.
 
         Returns:
-            result: The result of the executed query, if any.
+            list of dict or None: A list of rows as dictionaries if the query returns rows, else None.
         """
         if self.conn is None:
             logging.error("execute_query: No database connection available.")
@@ -605,54 +605,52 @@ class DatabaseHandler():
 
     def get_address_id(self, address_dict):
         """
-        Retrieves the address_id for a given address. If the address does not exist,
-        it inserts the address into the 'address' table and returns the new address_id.
-        
-        Parameters:
-            address_dict (dict): Dictionary containing address components.
-        
-        Returns:
-            int: The address_id corresponding to the address.
-        """
-        select_query = "SELECT address_id FROM address WHERE full_address = :full_address"
-        select_params = {'full_address': address_dict['full_address']}
-        
-        try:
-            # Attempt to retrieve the address_id if it exists
-            result = self.execute_query(select_query, select_params)
-            if result:
-                row = result[0]
-                if row:
-                    return row[0]
+        Inserts a new address or retrieves the existing address_id using INSERT ... ON CONFLICT.
 
-            # If not found, insert the new address
-            columns = ', '.join(address_dict.keys())
-            placeholders = ', '.join([f":{k}" for k in address_dict.keys()])
-            insert_query = f"""
-                INSERT INTO address ({columns})
-                VALUES ({placeholders})
-                RETURNING address_id
+        Args:
+            address_dict (dict): Dictionary containing address details, e.g., {'full_address': '3277 Douglas St, Saanich, BC V8Z 3K9, Canada'}
+
+        Returns:
+            int or None: The address_id if successful, else None.
+        """
+        try:
+            # Define the INSERT query with ON CONFLICT DO NOTHING and RETURNING address_id
+            insert_query = """
+                INSERT INTO address (full_address)
+                VALUES (:full_address)
+                ON CONFLICT (full_address) DO NOTHING
+                RETURNING address_id;
             """
             
-            logging.debug(f"Insert Query: {insert_query}")
-            logging.debug(f"Insert Params: {address_dict}")
-            
-            # Execute the insert query
+            # Execute the INSERT query
             insert_result = self.execute_query(insert_query, address_dict)
+            
             if insert_result:
-                row = insert_result.fetchone()
-                if row:
-                    address_id = row[0]
-                    logging.info(f"get_address_id: Inserted new address_id {address_id} for address '{address_dict['full_address']}'.")
-                    return address_id
-
+                # Insert succeeded; retrieve the new address_id
+                row = insert_result[0]
+                address_id = row[0] # address_id is the first column in the result
+                logging.info(f"get_address_id: Inserted new address_id {address_id} for address '{address_dict['full_address']}'.")
+                return address_id
+            
+            # Insert did nothing because the address already exists; retrieve existing address_id
+            select_query = """
+                SELECT address_id FROM address WHERE full_address = :full_address;
+            """
+            select_result = self.execute_query(select_query, address_dict)
+            
+            if select_result:
+                row = select_result[0]
+                address_id = row[0] # address_id is the first column in the result
+                logging.info(f"get_address_id: Found existing address_id {address_id} for address '{address_dict['full_address']}'.")
+                return address_id
+            
             logging.error(f"get_address_id: Failed to insert or retrieve address_id for '{address_dict['full_address']}'.")
             return None
 
-        except Exception as e:
-            logging.error(f"get_address_id: Failed to retrieve or insert address '{address_dict['full_address']}': {e}")
+        except SQLAlchemyError as e:
+            logging.error(f"get_address_id: Database error: {e}")
             return None
-        
+
 
     def clean_up_address(self, events_df):
         """
@@ -690,7 +688,7 @@ class DatabaseHandler():
             logging.debug(f"Row {index} Address Dict: {address_dict}")
             address_id = self.get_address_id(address_dict)
             if address_id is None:
-                logging.error(f"clean_up_address: Failed to obtain address_id for row {index}.")
+                logging.info(f"clean_up_address: Failed to obtain address_id for row {index}.")
                 continue
 
             events_df.at[index, 'address_id'] = address_id
