@@ -170,31 +170,39 @@ class EventbriteScraper:
             extracted_text = await self.read_extract.extract_event_text(event_url)
 
             if extracted_text:
-                success = self.llm_handler.process_llm_response(
-                    url=event_url,
-                    extracted_text=extracted_text,
-                    org_name=org_name,
-                    keywords_list=keywords_list,
-                    prompt=prompt
-                )
+                keyword_status = self.check_keywords_in_text(event_url, extracted_text, org_name, keywords_list)
+                if keyword_status:
+                    logging.info(f"def process_event(): Keywords found in event: {event_url}")
 
-                if success:
-                    logging.info(f"Successfully processed and wrote event: {event_url}")
-                    # Insert or update the URL in the database
-                    self.db_handler.write_url_to_db(
-                        org_names=org_name,
-                        keywords=keywords_list,
+                    # Call the llm to process the extracted text
+                    success = self.llm_handler.process_llm_response(
                         url=event_url,
-                        other_links='',  # Populate as needed
-                        relevant=True,
-                        increment_crawl_trys=1
+                        extracted_text=extracted_text,
+                        org_name=org_name,
+                        keywords_list=keywords_list,
+                        prompt=prompt
                     )
+
+                    if success:
+                        logging.info(f"Successfully processed and wrote event: {event_url}")
+                        # Insert or update the URL in the database
+                        self.db_handler.write_url_to_db(
+                            org_names=org_name,
+                            keywords=keywords_list,
+                            url=event_url,
+                            other_links='',  # Populate as needed
+                            relevant=True,
+                            increment_crawl_trys=1
+                        )
+                    else:
+                        logging.warning(f"def process_event(): Failed to write event to db: {event_url}")
                 else:
-                    logging.warning(f"Failed to process event: {event_url}")
+                    logging.warning(f"def process_event(): No keywords in extracted_text: {event_url}")
             else:
-                logging.warning(f"No text extracted from event: {event_url}")
+                logging.warning(f"def process_event(): No extracted_text found for event: {event_url}")
         except Exception as e:
             logging.error(f"Error processing event {event_url}: {e}")
+
 
     async def driver(self):
         """
