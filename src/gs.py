@@ -132,6 +132,7 @@ class GoogleSearch():
             logging.info(f"No results found for query: {query}")
         return results
 
+
     def driver(self):
         """
         Reads keywords from a DataFrame, constructs search queries,
@@ -151,7 +152,6 @@ class GoogleSearch():
         return results_df
 
 
-# Example usage:
 if __name__ == "__main__":
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)

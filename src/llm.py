@@ -61,7 +61,7 @@ Note:
 
 
 from datetime import datetime
-import commentjson as json
+import json
 import logging
 from openai import OpenAI
 import os
@@ -107,7 +107,7 @@ class LLMHandler():
             if fb_status:
                 prompt = 'fb'
 
-        keyword_status = self.check_keywords_in_text(url, extracted_text, keywords_list)
+        keyword_status = self.check_keywords_in_text(url, extracted_text, org_name, keywords_list)
         
         if keyword_status == True or fb_status == True:
             # Call the llm to process the extracted text
@@ -261,46 +261,76 @@ class LLMHandler():
             return response.choices[0].message.content.strip()
         
         return None
+    
 
     def extract_and_parse_json(self, result, url):
-        """
-        Parameters:
-        result (str): The response string from which JSON needs to be extracted.
-        url (str): The URL from which the response was obtained.
-        Returns:
-        list or None: Returns a list of events if JSON is successfully extracted and parsed, 
-                      otherwise returns None.
-        """
-        if "No events found" in result:
-            logging.info("def extract_and_parse_json(): No events found in result.")
-            return None
-        
-        if 'json' in result and len(result) > 100:
-            logging.info("def extract_and_parse_json(): JSON found in result.")
+            """
+            Parameters:
+            result (str): The response string from which JSON needs to be extracted.
+            url (str): The URL from which the response was obtained.
+            Returns:
+            list or None: Returns a list of events if JSON is successfully extracted and parsed, 
+                        otherwise returns None.
+            """
+            if "No events found" in result:
+                logging.info("def extract_and_parse_json(): No events found in result.")
+                return None
+            
+            # Check if the response contains JSON
+            if 'json' in result and len(result) > 100:
+                logging.info("def extract_and_parse_json(): JSON found in result.")
 
-            start_position = result.find('[')
-            if start_position == -1:
-                result = '[' + result
+                # Get just the JSON string from the response
                 start_position = result.find('[')
 
-            end_position = result.rfind(']') + 1
-            if end_position == 0:
-                result = result + ']'
+                # If no start_position is returned, prepend the string with '['
+                if start_position == -1:
+                    result = '[' + result
+                    start_position = result.find('[')
+
+                # Get the end position of the JSON string
                 end_position = result.rfind(']') + 1
 
-            json_string = result[start_position:end_position].strip()
+                # if no end_position is found append the string with ']'
+                if end_position == 0:
+                    result = result + ']'
+                    end_position = result.rfind(']') + 1
 
-            logging.info(f"def extract_and_parse_json(): for url {url}, \nCleaned JSON string: \n{json_string}")
+                # Extract the JSON string
+                json_string = result[start_position:end_position]
 
-            try:
-                events_json = json.loads(json_string)
-                return events_json
-            except json.JSONDecodeError as e:
-                logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
+                # Remove single-line comments
+                cleaned_str = re.sub(r'(?<!:)//.*', '', json_string)
+
+                # Remove ellipsis patterns (if they occur)
+                cleaned_str = cleaned_str.replace('...', '')
+
+                # Ensure the string is a valid JSON array
+                cleaned_str = cleaned_str.strip()
+
+                # Remove any trailing commas before the closing bracket
+                cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)
+
+                # Remove '''json from the string
+                cleaned_str = cleaned_str.replace("```json", "")
+                cleaned_str = cleaned_str.replace("```", "")
+
+                # For debugging: print the cleaned JSON string
+                logging.info(f"def extract_and_parse_json(): for url {url}, \nCleaned JSON string: \n{cleaned_str}")
+
+                # Parse the cleaned JSON string
+                try:
+                    # Convert JSON string to Python object
+                    events_json =json.loads(cleaned_str)
+                    return events_json
+                    
+                except json.JSONDecodeError as e:
+                    logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
+                    return None
+                
+            else:
+                logging.info("def extract_and_parse_json(): No valid events found in result.")
                 return None
-        else:
-            logging.info("def extract_and_parse_json(): No valid events found in result.")
-            return None
         
 
 # Run the LLM
@@ -326,10 +356,10 @@ if __name__ == "__main__":
     llm = LLMHandler(config_path="config/config.yaml")
 
     # Instantiate the database handler
-    db_handler = llm.db_handler()
+    db_handler = DatabaseHandler(config)
 
     # Get a test file
-    extracted_text_df = pd.read_csv('output/extracted_text.csv')
+    extracted_text_df = pd.read_csv(config['output']['fb_search_results'])
 
     # Shrink it down to just the first 5 rows
     extracted_text_df = extracted_text_df.head(5)
@@ -344,10 +374,6 @@ if __name__ == "__main__":
         url = row['url']
         extracted_text = row['extracted_text']
         llm.driver(url, search_term, extracted_text, '', keywords)
-
-    # Run deduplication and set calendar URLs
-    db_handler.dedup()
-    db_handler.set_calendar_urls()
 
     # Get the end time
     end_time = datetime.now()

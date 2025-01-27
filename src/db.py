@@ -351,33 +351,45 @@ class DatabaseHandler():
 
     def write_url_to_db(self, org_names, keywords, url, other_links, relevant, increment_crawl_trys):
         """
-        Writes or updates a URL in the 'urls' table.
+        Inserts a new URL into the 'urls' table or updates it if it already exists.
 
         Args:
-            keywords (str): Keywords related to the URL.
+            org_names (str): Organization names related to the URL.
+            keywords (list): Keywords related to the URL.
             url (str): The URL to be written or updated.
             other_links (str): Other links associated with the URL.
             relevant (bool): Indicates if the URL is relevant.
             increment_crawl_trys (int): The number of times the URL has been crawled.
         """
-        if self.update_url(url, other_links, relevant, increment_crawl_trys + 1):
-            logging.info("write_url_to_db: URL '%s' updated in the 'urls' table.", url)
-        else:
-            logging.info("write_url_to_db: Inserting new URL '%s' into the 'urls' table.", url)
-            new_df = pd.DataFrame({
-                "time_stamps": [datetime.now()],
-                "org_names": [org_names],  
-                "keywords": [keywords],
-                "links": [url],
-                "other_links": [other_links],
-                "relevant": [relevant],
-                "crawl_trys": [increment_crawl_trys]
-            })
-            try:
-                new_df.to_sql('urls', self.conn, if_exists='append', index=False, method='multi')
-                logging.info("write_url_to_db: URL '%s' inserted into the 'urls' table.", url)
-            except Exception as e:
-                logging.error("write_url_to_db: Failed to insert URL '%s': %s", url, e)
+        insert_query = """
+            INSERT INTO urls (time_stamps, org_names, keywords, links, other_links, relevant, crawl_trys)
+            VALUES (:time_stamps, :org_names, :keywords, :links, :other_links, :relevant, :crawl_trys)
+            ON CONFLICT (links) DO UPDATE
+            SET 
+                time_stamps = EXCLUDED.time_stamps,
+                other_links = CASE 
+                                WHEN :other_links != 'No' THEN EXCLUDED.other_links 
+                                ELSE urls.other_links 
+                            END,
+                relevant = EXCLUDED.relevant,
+                crawl_trys = urls.crawl_trys + :increment_crawl_trys;
+        """
+        insert_params = {
+            'time_stamps': datetime.now(),
+            'org_names': org_names,
+            'keywords': keywords,
+            'links': url,
+            'other_links': other_links,
+            'relevant': relevant,
+            'crawl_trys': increment_crawl_trys,
+            'increment_crawl_trys': increment_crawl_trys
+        }
+        
+        try:
+            self.execute_query(insert_query, insert_params)
+            logging.info("def write_url_to_db(): URL '%s' inserted or updated in the 'urls' table.", url)
+        except Exception as e:
+            logging.error("def write_url_to_db(): Failed to insert/update URL '%s': %s", url, e)
 
 
     def clean_events(self, df):
@@ -514,7 +526,10 @@ class DatabaseHandler():
                 'Location': 'location',
                 'Description': 'description'
             })
-            df['org_name'] = org_name
+            # If df['org_name'] is null or '', use org_name from the function argument
+            df['org_name'] = df['org_name'].fillna('').replace('', org_name)
+            
+            # Check data type and assign dance_style
             if isinstance(keywords, list):
                 keywords = ', '.join(keywords)
             df['dance_style'] = keywords
