@@ -526,13 +526,20 @@ class DatabaseHandler():
                 'Location': 'location',
                 'Description': 'description'
             })
-            # If df['org_name'] is null or '', use org_name from the function argument
-            df['org_name'] = df['org_name'].fillna('').replace('', org_name)
             
             # Check data type and assign dance_style
             if isinstance(keywords, list):
                 keywords = ', '.join(keywords)
             df['dance_style'] = keywords
+        
+        if org_name in df.columns:
+            # If df['org_name'] is null or '', use org_name from the function argument
+            df['org_name'] = df['org_name'].fillna('').replace('', org_name)
+        else:
+            df['org_name'] = org_name
+
+        # Update the 'url' column with the source URL if there is no URL in the DataFrame
+        df['url'] = df['url'].fillna('').replace('', url)
 
         # Ensure 'start_date' and 'start_date' are in datetime.date format
         for col in ['start_date', 'end_date']:
@@ -549,9 +556,6 @@ class DatabaseHandler():
 
         # Add a 'time_stamp' column with the current timestamp
         df['time_stamp'] = datetime.now()
-
-        # Update the 'url' column with the source URL if there is no URL in the DataFrame
-        df['url'] = df['url'].fillna('').replace('', url)
 
         # Clean up the 'location' column and update address_ids
         cleaned_df = self.clean_up_address(df)
@@ -576,6 +580,7 @@ class DatabaseHandler():
         logging.info("write_events_to_db: Events data written to the 'events' table.")
 
         return None
+    
     
     def update_event(self, event_identifier, new_data, best_url):
         """

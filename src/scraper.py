@@ -297,8 +297,12 @@ class EventSpider(scrapy.Spider):
         Returns:
             None
         """
+        logging.info(f"def fetch_google_calendar_events(): Fetching events from Google Calendar URL: {calendar_url}"
+                     f"for URL: {url} with org_name: {org_name} and keywords: {keywords}")
+        
         calendar_id_pattern = r'src=([^&]+%40group.calendar.google.com)'
         calendar_ids = re.findall(calendar_id_pattern, calendar_url)
+        logging.info(f"def fetch_google_calendar_events(): Found {len(calendar_ids)} group.calendar.google.com IDs: {calendar_ids}")
 
         if calendar_ids:
             decoded_calendar_ids = [id.replace('%40', '@') for id in calendar_ids]
@@ -329,6 +333,7 @@ class EventSpider(scrapy.Spider):
 
             # Proceed only if calendar_id was successfully decoded
             if calendar_id:
+                logging.info(f"def fetch_google_calendar_events(): Decoded calendar_id base64: {calendar_id}")
                 events_df = self.get_events(calendar_id)
                 if not events_df.empty:
                     db_handler.write_events_to_db(events_df, calendar_url, org_name, keywords)
