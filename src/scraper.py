@@ -68,6 +68,7 @@ from scrapy.crawler import CrawlerProcess
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import create_engine, update, MetaData, text
+import string
 import sys
 import time
 import yaml
@@ -300,61 +301,87 @@ class EventSpider(scrapy.Spider):
 
         Args:
             calendar_url (str): The URL of the Google Calendar to fetch events from.
-            keywords (str): A comma separated list of keywords to associate with the events.
+            keywords (str): A comma-separated list of keywords to associate with the events.
             org_name (str): The name of the organization associated with the events.
             url (str): The URL to update after processing the events.
 
         Returns:
             None
         """
-        logging.info(f"def fetch_google_calendar_events(): Fetching events from Google Calendar URL: {calendar_url}"
-                     f"for URL: {url} with org_name: {org_name} and keywords: {keywords}")
-        
+        logging.info(f"Fetching events from Google Calendar URL: {calendar_url} "
+                    f"for URL: {url} with org_name: {org_name} and keywords: {keywords}")
+
         # Extract calendar IDs from the URL
-        if 'src=' in calendar_url:
-            calendar_ids = re.findall(r'src=([^&]+%40group.calendar.google.com)', calendar_url)
-        else:
-            calendar_ids = calendar_url if isinstance(calendar_url, list) else [calendar_url]
-            
-        if calendar_ids:
-            decoded_calendar_ids = [id.replace('%40', '@') for id in calendar_ids]
-            logging.info(f"def fetch_google_calendar_events(): Found {len(calendar_ids)} group.calendar.google.com IDs: {decoded_calendar_ids}")
-
-            for calendar_id in decoded_calendar_ids:
-                events_df = self.get_events(calendar_id)
-                if not events_df.empty:
-                    db_handler.write_events_to_db(events_df, calendar_url, org_name, keywords)
-                    db_handler.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1)
-                    db_handler.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
-        else:
-            start_idx = calendar_url.find("src=") + 4
-            end_idx = calendar_url.find("&", start_idx)
-            calendar_id = calendar_url[start_idx:end_idx] if end_idx != -1 else calendar_url[start_idx:]
-            
-            # Wrap base64 decoding in try/except
-            try:
-                padded_calendar_id = calendar_id + '=' * (4 - len(calendar_id) % 4)
-                decoded_bytes = base64.b64decode(padded_calendar_id)
-                calendar_id = decoded_bytes.decode('utf-8', errors='replace')
-            except (UnicodeDecodeError, base64.binascii.Error) as e:
-                logging.error(
-                    f"def fetch_google_calendar_events(): Failed to decode calendar_id: \n{calendar_id} \n"
-                    f"for calendar_url: {calendar_url} \nand url: \n{url} with exception: \n{e}"
-                )
-                calendar_id = None
-
-            # Proceed only if calendar_id was successfully decoded
+        calendar_ids = self.extract_calendar_ids(calendar_url)
+        if not calendar_ids:
+            calendar_id = self.decode_calendar_id(calendar_url)
             if calendar_id:
-                logging.info(f"def fetch_google_calendar_events(): Decoded calendar_id base64: {calendar_id}")
-                events_df = self.get_events(calendar_id)
-                if not events_df.empty:
-                    db_handler.write_events_to_db(events_df, calendar_url, org_name, keywords)
-                    db_handler.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1)
-                    db_handler.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
+                calendar_ids = [calendar_id]
 
-        return
+        # Process all valid calendar IDs
+        for calendar_id in calendar_ids:
+            self.process_calendar_id(calendar_id, calendar_url, url, org_name, keywords)
+            
+
+    def extract_calendar_ids(self, calendar_url):
+        """
+        Extract calendar IDs from the calendar URL.
+
+        Args:
+            calendar_url (str): The URL containing calendar IDs.
+
+        Returns:
+            list: A list of extracted calendar IDs.
+        """
+        calendar_id_pattern = r'src=([^&]+%40group.calendar.google.com)'
+        calendar_ids = re.findall(calendar_id_pattern, calendar_url)
+        return [id.replace('%40', '@') for id in calendar_ids]
+
+    def decode_calendar_id(self, calendar_url):
+        """
+        Decode a calendar ID from the calendar URL using base64 if necessary.
+
+        Args:
+            calendar_url (str): The URL containing the calendar ID.
+
+        Returns:
+            str or None: The decoded calendar ID if successful, None otherwise.
+        """
+        start_idx = calendar_url.find("src=") + 4
+        end_idx = calendar_url.find("&", start_idx)
+        calendar_id = calendar_url[start_idx:end_idx] if end_idx != -1 else calendar_url[start_idx]
+
+        # Attempt base64 decoding
+        try:
+            padded_calendar_id = calendar_id + '=' * (4 - len(calendar_id) % 4)
+            decoded_bytes = base64.b64decode(padded_calendar_id)
+            return decoded_bytes.decode('utf-8', errors='replace')
+        except (UnicodeDecodeError, base64.binascii.Error) as e:
+            logging.error(f"Failed to decode calendar ID: {calendar_id} for URL: {calendar_url} with exception: {e}")
+            return None
+
+    def process_calendar_id(self, calendar_id, calendar_url, url, org_name, keywords):
+        """
+        Process a single calendar ID by fetching events and updating the database.
+
+        Args:
+            calendar_id (str): The calendar ID to process.
+            calendar_url (str): The URL of the Google Calendar.
+            url (str): The original URL associated with the events.
+            org_name (str): The organization name.
+            keywords (str): Keywords associated with the events.
+
+        Returns:
+            None
+        """
+        logging.info(f"Processing calendar ID: {calendar_id}")
+        events_df = self.get_events(calendar_id)
+        if not events_df.empty:
+            db_handler.write_events_to_db(events_df, calendar_url, org_name, keywords)
+            db_handler.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1)
+            db_handler.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
+
     
-
     def get_events(self, calendar_id):
         """
         Args:
