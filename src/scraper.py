@@ -169,9 +169,19 @@ class EventSpider(scrapy.Spider):
         iframe_links = response.css('iframe::attr(src)').getall()
         iframe_links = [response.urljoin(link) for link in iframe_links if link.startswith('http')]
 
-        if iframe_links:
+        # Extract other Google Calendar links from the response.text using regex
+        calendar_pattern = re.compile(r'"gcal"\s*:\s*"([a-zA-Z0-9_.+-]+@group\.calendar\.google\.com)"') 
+        calendar_emails = calendar_pattern.findall(response.text)
+
+        # Debug log to verify extracted calendar emails
+        logging.info(f"def parse(): Extracted Google Calendar emails: {calendar_emails}")
+        
+        # Combine iframe and calendar links
+        google_calendar_links = iframe_links.extend(calendar_emails)
+
+        if google_calendar_links:
             db_handler.update_url(url, update_other_links='calendar', relevant=True, increment_crawl_trys=0)
-            for calendar_url in iframe_links:
+            for calendar_url in google_calendar_links:
                 self.fetch_google_calendar_events(calendar_url, url, org_name, keywords)
 
         # Put all links together
@@ -300,10 +310,12 @@ class EventSpider(scrapy.Spider):
         logging.info(f"def fetch_google_calendar_events(): Fetching events from Google Calendar URL: {calendar_url}"
                      f"for URL: {url} with org_name: {org_name} and keywords: {keywords}")
         
-        calendar_id_pattern = r'src=([^&]+%40group.calendar.google.com)'
-        calendar_ids = re.findall(calendar_id_pattern, calendar_url)
-        logging.info(f"def fetch_google_calendar_events(): Found {len(calendar_ids)} group.calendar.google.com IDs: {calendar_ids}")
-
+        # Extract calendar IDs from the URL
+        if 'src=' in calendar_url:
+            calendar_ids = re.findall(r'src=([^&]+%40group.calendar.google.com)', calendar_url)
+        else:
+            calendar_ids = calendar_url if isinstance(calendar_url, list) else [calendar_url]
+            
         if calendar_ids:
             decoded_calendar_ids = [id.replace('%40', '@') for id in calendar_ids]
             logging.info(f"def fetch_google_calendar_events(): Found {len(calendar_ids)} group.calendar.google.com IDs: {decoded_calendar_ids}")
