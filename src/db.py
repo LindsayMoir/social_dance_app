@@ -106,6 +106,8 @@ class DatabaseHandler():
                 f"{self.config['database']['name']}"
             )
 
+            print(connection_string)
+
             # Create and return the SQLAlchemy engine
             engine = create_engine(connection_string, isolation_level="AUTOCOMMIT")
             return engine
@@ -661,7 +663,6 @@ class DatabaseHandler():
             if select_result:
                 row = select_result[0]
                 address_id = row[0] # address_id is the first column in the result
-                logging.info(f"get_address_id: Found existing address_id {address_id} for address '{address_dict['full_address']}'.")
                 return address_id
             
             logging.error(f"get_address_id: Failed to insert or retrieve address_id for '{address_dict['full_address']}'.")
@@ -683,12 +684,10 @@ class DatabaseHandler():
             location = row.get('location') or ''
             location = str(location).strip()
             if not location:
-                logging.warning(f"clean_up_address: Skipping row {index} due to empty 'location'.")
                 continue  # Skip if 'location' is empty
 
             parsed_addresses = pyap.parse(location, country='CA')
             if not parsed_addresses:
-                logging.warning(f"clean_up_address: No address found in 'location' for row {index}.")
                 continue
 
             address = parsed_addresses[0]

@@ -14,8 +14,6 @@ FROM events
 GROUP BY org_name
 ORDER BY counts DESC
 
-SELECT COUNT(*) FROM events
-
 SELECT *
 FROM events
 WHERE org_name = ''

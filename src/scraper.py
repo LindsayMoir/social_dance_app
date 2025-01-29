@@ -164,28 +164,29 @@ class EventSpider(scrapy.Spider):
         page_links = [response.urljoin(link) for link in page_links if link.startswith('http')]
         logging.info(f"def parse(): Found {len(page_links)} links on {response.url}")
         page_links = page_links[:config['crawling']['max_website_urls']]  # Limit the number of links
-        logging.info(f"def parse(): Limiting the number of links to {config['crawling']['max_website_urls']}.")
+        logging.info(f"def parse(): Limiting the number of links to {config['crawling']['max_website_urls']}. "
+                     f"on url: {response.url}")
 
         # Extract iframe sources
         iframe_links = response.css('iframe::attr(src)').getall()
         iframe_links = [response.urljoin(link) for link in iframe_links if link.startswith('http')]
+        logging.info(f"def parse(): Found {len(iframe_links)}: iframe links are: {iframe_links} "
+                     f"on url: {response.url}")
 
         # Extract other Google Calendar links from the response.text using regex
         calendar_pattern = re.compile(r'"gcal"\s*:\s*"([a-zA-Z0-9_.+-]+@group\.calendar\.google\.com)"') 
         calendar_emails = calendar_pattern.findall(response.text)
-
-        # Debug log to verify extracted calendar emails
         logging.info(f"def parse(): Extracted Google Calendar emails: {calendar_emails}")
         
         # Combine iframe and calendar links
-        google_calendar_links = iframe_links.extend(calendar_emails)
+        iframe_links.extend(calendar_emails)
 
-        if google_calendar_links:
+        if iframe_links:
             db_handler.update_url(url, update_other_links='calendar', relevant=True, increment_crawl_trys=0)
-            for calendar_url in google_calendar_links:
+            for calendar_url in iframe_links:
                 self.fetch_google_calendar_events(calendar_url, url, org_name, keywords)
 
-        # Put all links together
+        # Put all non calendar links together
         all_links = set(page_links + [url])
 
         # identify any current or future facebook links. We want those out and processed by fb.py
@@ -295,10 +296,6 @@ class EventSpider(scrapy.Spider):
         """
         Fetch events from a Google Calendar and process them.
 
-        This function extracts calendar IDs from the provided Google Calendar URL,
-        fetches events using these IDs, and processes the events by writing them
-        to a database and updating URLs.
-
         Args:
             calendar_url (str): The URL of the Google Calendar to fetch events from.
             keywords (str): A comma-separated list of keywords to associate with the events.
@@ -308,20 +305,31 @@ class EventSpider(scrapy.Spider):
         Returns:
             None
         """
-        logging.info(f"Fetching events from Google Calendar URL: {calendar_url} "
-                    f"for URL: {url} with org_name: {org_name} and keywords: {keywords}")
+        logging.info(f"def fetch_google_calendar_events(): Inputs are: "                    
+                    f"calendar_url: {calendar_url}, "
+                    f"URL: {url}, "
+                    f"org_name: {org_name}, "
+                    f"keywords: {keywords}")
 
         # Extract calendar IDs from the URL
         calendar_ids = self.extract_calendar_ids(calendar_url)
+
+        # If no calendar ID was extracted, check if it's already a valid Gmail or Group Calendar ID
         if not calendar_ids:
-            calendar_id = self.decode_calendar_id(calendar_url)
-            if calendar_id:
-                calendar_ids = [calendar_id]
+            if self.is_valid_calendar_id(calendar_url):  
+                calendar_ids = [calendar_url]
+            else:
+                decoded_calendar_id = self.decode_calendar_id(calendar_url)
+                if decoded_calendar_id:
+                    calendar_ids = [decoded_calendar_id]
+                else:
+                    logging.error(f"fetch_google_calendar_events(): Failed to extract a valid Calendar ID from {calendar_url}")
+                    return  # Exit function if no valid ID is found
 
         # Process all valid calendar IDs
         for calendar_id in calendar_ids:
             self.process_calendar_id(calendar_id, calendar_url, url, org_name, keywords)
-            
+
 
     def extract_calendar_ids(self, calendar_url):
         """
@@ -336,6 +344,7 @@ class EventSpider(scrapy.Spider):
         calendar_id_pattern = r'src=([^&]+%40group.calendar.google.com)'
         calendar_ids = re.findall(calendar_id_pattern, calendar_url)
         return [id.replace('%40', '@') for id in calendar_ids]
+    
 
     def decode_calendar_id(self, calendar_url):
         """
@@ -347,18 +356,48 @@ class EventSpider(scrapy.Spider):
         Returns:
             str or None: The decoded calendar ID if successful, None otherwise.
         """
-        start_idx = calendar_url.find("src=") + 4
-        end_idx = calendar_url.find("&", start_idx)
-        calendar_id = calendar_url[start_idx:end_idx] if end_idx != -1 else calendar_url[start_idx]
-
-        # Attempt base64 decoding
         try:
+            # Extract possible calendar ID from `src=` parameter
+            start_idx = calendar_url.find("src=") + 4
+            end_idx = calendar_url.find("&", start_idx)
+            calendar_id = calendar_url[start_idx:end_idx] if end_idx != -1 else calendar_url[start_idx:]
+
+            # If it's already a valid calendar ID, return it
+            if self.is_valid_calendar_id(calendar_id):
+                return calendar_id
+
+            # Attempt base64 decoding
             padded_calendar_id = calendar_id + '=' * (4 - len(calendar_id) % 4)
             decoded_bytes = base64.b64decode(padded_calendar_id)
-            return decoded_bytes.decode('utf-8', errors='replace')
-        except (UnicodeDecodeError, base64.binascii.Error) as e:
-            logging.error(f"Failed to decode calendar ID: {calendar_id} for URL: {calendar_url} with exception: {e}")
+            decoded_id = decoded_bytes.decode('utf-8', errors='ignore')
+
+            if self.is_valid_calendar_id(decoded_id):
+                return decoded_id
+
+            logging.error(f"decode_calendar_id(): Decoded ID is not a valid Google Calendar ID: {decoded_id}")
             return None
+
+        except (UnicodeDecodeError, base64.binascii.Error, IndexError) as e:
+            logging.error(f"decode_calendar_id(): Failed to decode calendar ID from {calendar_url} with exception: {e}")
+            return None
+        
+
+    def is_valid_calendar_id(self, calendar_id):
+        """
+        Checks if a given string is a valid Google Calendar ID.
+        Google Calendar IDs can be:
+        - A Gmail address (e.g., victoriawcs@gmail.com)
+        - A group calendar ID (e.g., 17de2ca43f...@group.calendar.google.com)
+
+        Args:
+            calendar_id (str): The Calendar ID to validate.
+
+        Returns:
+            bool: True if the ID is valid, False otherwise.
+        """
+        calendar_id_pattern = re.compile(r'^[a-zA-Z0-9_.+-]+@(group\.calendar\.google\.com|gmail\.com)$')
+        return bool(calendar_id_pattern.fullmatch(calendar_id))
+
 
     def process_calendar_id(self, calendar_id, calendar_url, url, org_name, keywords):
         """
@@ -374,15 +413,21 @@ class EventSpider(scrapy.Spider):
         Returns:
             None
         """
-        logging.info(f"Processing calendar ID: {calendar_id}")
-        events_df = self.get_events(calendar_id)
+        logging.info(f"def process_calendar_id(): Inputs are: "
+                     f"calendar_id: {calendar_id}, "
+                     f"calendar_url: {calendar_url}, "
+                     f"url: {url}, "
+                     f"org_name: {org_name}, "
+                     f"keywords: {keywords}")
+        
+        events_df = self.get_calendar_events(calendar_id)
         if not events_df.empty:
             db_handler.write_events_to_db(events_df, calendar_url, org_name, keywords)
             db_handler.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1)
             db_handler.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
 
     
-    def get_events(self, calendar_id):
+    def get_calendar_events(self, calendar_id):
         """
         Args:
             calendar_id (str): The ID of the Google Calendar from which to fetch events.
@@ -426,13 +471,13 @@ class EventSpider(scrapy.Spider):
                     break
                 params["pageToken"] = next_page_token
             else:
-                logging.error(f"def get_events(): Error: {response.status_code} - {response.text}"
+                logging.error(f"def get_calendar_events(): Error: {response.status_code} - {response.text} "
                               f"for calendar_id: {calendar_id}")
                 break
 
         df = pd.json_normalize(all_events)
         if df.empty:
-            logging.info(f"def get_events(): No events found for calendar_id: {calendar_id}")
+            logging.info(f"def get_calendar_events(): No events found for calendar_id: {calendar_id}")
             return df
 
         return self.clean_events(df)

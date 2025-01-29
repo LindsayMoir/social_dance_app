@@ -235,32 +235,38 @@ class LLMHandler():
             KeyError: If the 'OpenAI' organization key is not found in the keys file.
             Exception: For any other exceptions that may occur during the API call.
         """
-        # Read the API key from the security file
-        keys_df = pd.read_csv(self.config['input']['keys'])
-        self.api_key = keys_df.loc[keys_df['organization'] == 'OpenAI', 'key_pw'].values[0]
+        if self.config['llm']['spend_money']:
+            logging.info(f"def query_llm(): Spending money is set to True. Querying the LLM.")
 
-        # Set the API key as an environment variable
-        os.environ["OPENAI_API_KEY"] = self.api_key
-        self.client = OpenAI()
+            # Read the API key from the security file
+            keys_df = pd.read_csv(self.config['input']['keys'])
+            self.api_key = keys_df.loc[keys_df['organization'] == 'OpenAI', 'key_pw'].values[0]
 
-        # Query the LLM
-        response = self.client.chat.completions.create(
-            model=self.config['llm']['url_evaluator'],
-            messages=[
-            {
-                "role": "user", 
-                "content": prompt
-            }
-            ]
-        )
+            # Set the API key as an environment variable
+            os.environ["OPENAI_API_KEY"] = self.api_key
+            self.client = OpenAI()
 
-        logging.info(f"def query_llm(): LLM response content: \n{response.choices[0].message.content.strip()}\n")
+            # Query the LLM
+            response = self.client.chat.completions.create(
+                model=self.config['llm']['url_evaluator'],
+                messages=[
+                {
+                    "role": "user", 
+                    "content": prompt
+                }
+                ]
+            )
+            logging.info(f"def query_llm(): LLM response content: \n{response.choices[0].message.content.strip()}\n")
 
-        if response.choices:
-            logging.info(f"def query_llm(): LLM response received based on url {url}.")
-            return response.choices[0].message.content.strip()
-        
-        return None
+            if response.choices:
+                logging.info(f"def query_llm(): LLM response received based on url {url}.")
+                return response.choices[0].message.content.strip()
+            else:
+                logging.error(f"def query_llm(): No LLM response received based on url {url}.")
+                return None    
+        else:
+            logging.info(f"def query_llm(): Spending money is set to False. Skipping the LLM query.")
+            return None
     
 
     def extract_and_parse_json(self, result, url):

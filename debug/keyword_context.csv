@@ -1,0 +1,311 @@
+Keyword,Context_Before,Context_After,Full_Context
+google,"-github a.icon:before{content:""\F09B""}.et-social-goodreads a.icon:before{content:""\F3A9""}.et-social-"," a.icon:before{content:""\F1A0""}.et-social-houzz a.icon:before{content:""\F27C""}.et-social-itunes a.ic","-github a.icon:before{content:""\F09B""}.et-social-goodreads a.icon:before{content:""\F3A9""}.et-social-google a.icon:before{content:""\F1A0""}.et-social-houzz a.icon:before{content:""\F27C""}.et-social-itunes a.ic"
+pretty,"52.min.css?ver=1732641630""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/js/pgcal.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca","52.min.css?ver=1732641630""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/pgcal.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca"
+google,"css?ver=1732641630""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/js/pgcal.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-con","css?ver=1732641630""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/pgcal.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-con"
+calendar,"=1732641630""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/js/pgcal.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plug","=1732641630""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/pgcal.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plug"
+pretty,"lic/js/pgcal.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/js/helpers.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.","lic/js/pgcal.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/helpers.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda."
+google,"pgcal.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/js/helpers.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-i","pgcal.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/helpers.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-i"
+calendar,"s?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/js/helpers.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-includes/j","s?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/helpers.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-includes/j"
+pretty,"?ver=4d63a3d491d11ffd8ac6""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/js/tippy.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca","?ver=4d63a3d491d11ffd8ac6""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/tippy.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca"
+google,"63a3d491d11ffd8ac6""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/js/tippy.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-con","63a3d491d11ffd8ac6""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/tippy.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-con"
+calendar,"1d11ffd8ac6""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/js/tippy.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plug","1d11ffd8ac6""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/tippy.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plug"
+pretty,"lic/js/tippy.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/lib/tippy/tippy.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""http","lic/js/tippy.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/tippy/tippy.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""http"
+google,"tippy.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/lib/tippy/tippy.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vld","tippy.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/tippy/tippy.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vld"
+calendar,"s?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/lib/tippy/tippy.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-c","s?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/tippy/tippy.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-c"
+pretty,"py/tippy.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/lib/popper/popper.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""ht","py/tippy.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/popper/popper.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""ht"
+google,"y.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/lib/popper/popper.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://v","y.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/popper/popper.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://v"
+calendar,"s?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/lib/popper/popper.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp","s?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/popper/popper.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp"
+pretty,"r/popper.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0""><link rel=""p","r/popper.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0""><link rel=""p"
+google,"r.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0""><link rel=""preload""","r.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0""><link rel=""preload"""
+calendar,"s?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0""><link rel=""preload"" as=""scri","s?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0""><link rel=""preload"" as=""scri"
+google,"as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/","-calendar/index.global.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-co","as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-co"
+calendar,"ipt"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/google-","/index.global.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plu","ipt"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plu"
+pretty,"x.global.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/lib/fullcalendar/index.global.min.js?ver=2.0.0""><link rel=""preload"" as=""scri","x.global.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/index.global.min.js?ver=2.0.0""><link rel=""preload"" as=""scri"
+google,"l.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/lib/fullcalendar/index.global.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" hre","l.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/index.global.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" hre"
+calendar,"s?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/lib/fullcalendar/index.global.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https:","s?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/index.global.min.js?ver=2.0.0""><link rel=""preload"" as=""script"" href=""https:"
+pretty,"r"">loading...</div>
+  <div class=""pgcal-branding"">Powered by <a href=""https://wordpress.org/plugins/","-google-calendar/"">Pretty Google Calendar</a></div>
+  </div>
+			</div>
+			</div>
+				
+				
+				
+				","r"">loading...</div>
+  <div class=""pgcal-branding"">Powered by <a href=""https://wordpress.org/plugins/pretty-google-calendar/"">Pretty Google Calendar</a></div>
+  </div>
+			</div>
+			</div>
+				
+				
+				
+				"
+google,"ing...</div>
+  <div class=""pgcal-branding"">Powered by <a href=""https://wordpress.org/plugins/pretty-","-calendar/"">Pretty Google Calendar</a></div>
+  </div>
+			</div>
+			</div>
+				
+				
+				
+				
+			</d","ing...</div>
+  <div class=""pgcal-branding"">Powered by <a href=""https://wordpress.org/plugins/pretty-google-calendar/"">Pretty Google Calendar</a></div>
+  </div>
+			</div>
+			</div>
+				
+				
+				
+				
+			</d"
+calendar,"/div>
+  <div class=""pgcal-branding"">Powered by <a href=""https://wordpress.org/plugins/pretty-google-","/"">Pretty Google Calendar</a></div>
+  </div>
+			</div>
+			</div>
+				
+				
+				
+				
+			</div>
+				
+","/div>
+  <div class=""pgcal-branding"">Powered by <a href=""https://wordpress.org/plugins/pretty-google-calendar/"">Pretty Google Calendar</a></div>
+  </div>
+			</div>
+			</div>
+				
+				
+				
+				
+			</div>
+				
+"
+Pretty,"v class=""pgcal-branding"">Powered by <a href=""https://wordpress.org/plugins/pretty-google-calendar/"">"," Google Calendar</a></div>
+  </div>
+			</div>
+			</div>
+				
+				
+				
+				
+			</div>
+				
+				
+			<","v class=""pgcal-branding"">Powered by <a href=""https://wordpress.org/plugins/pretty-google-calendar/"">Pretty Google Calendar</a></div>
+  </div>
+			</div>
+			</div>
+				
+				
+				
+				
+			</div>
+				
+				
+			<"
+Google,"=""pgcal-branding"">Powered by <a href=""https://wordpress.org/plugins/pretty-google-calendar/"">Pretty "," Calendar</a></div>
+  </div>
+			</div>
+			</div>
+				
+				
+				
+				
+			</div>
+				
+				
+			</div>		","=""pgcal-branding"">Powered by <a href=""https://wordpress.org/plugins/pretty-google-calendar/"">Pretty Google Calendar</a></div>
+  </div>
+			</div>
+			</div>
+				
+				
+				
+				
+			</div>
+				
+				
+			</div>		"
+Calendar,"-branding"">Powered by <a href=""https://wordpress.org/plugins/pretty-google-calendar/"">Pretty Google ","</a></div>
+  </div>
+			</div>
+			</div>
+				
+				
+				
+				
+			</div>
+				
+				
+			</div>		</div>
+	<","-branding"">Powered by <a href=""https://wordpress.org/plugins/pretty-google-calendar/"">Pretty Google Calendar</a></div>
+  </div>
+			</div>
+			</div>
+				
+				
+				
+				
+			</div>
+				
+				
+			</div>		</div>
+	<"
+pretty,"
+			</script>
+	<link rel=""stylesheet"" id=""pgcal_tippy-css"" href=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/css/tippy.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<link rel=""stylesheet""","
+			</script>
+	<link rel=""stylesheet"" id=""pgcal_tippy-css"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/css/tippy.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<link rel=""stylesheet"""
+google,"cript>
+	<link rel=""stylesheet"" id=""pgcal_tippy-css"" href=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/css/tippy.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<link rel=""stylesheet"" id=""ti","cript>
+	<link rel=""stylesheet"" id=""pgcal_tippy-css"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/css/tippy.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<link rel=""stylesheet"" id=""ti"
+calendar,"	<link rel=""stylesheet"" id=""pgcal_tippy-css"" href=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/css/tippy.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<link rel=""stylesheet"" id=""tippy_light","	<link rel=""stylesheet"" id=""pgcal_tippy-css"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/css/tippy.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<link rel=""stylesheet"" id=""tippy_light"
+pretty,""" media=""all"">
+<link rel=""stylesheet"" id=""tippy_light-css"" href=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/lib/tippy/light.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<link rel=""style",""" media=""all"">
+<link rel=""stylesheet"" id=""tippy_light-css"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/tippy/light.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<link rel=""style"
+google,"=""all"">
+<link rel=""stylesheet"" id=""tippy_light-css"" href=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/lib/tippy/light.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<link rel=""stylesheet"" ","=""all"">
+<link rel=""stylesheet"" id=""tippy_light-css"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/tippy/light.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<link rel=""stylesheet"" "
+calendar,"
+<link rel=""stylesheet"" id=""tippy_light-css"" href=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/lib/tippy/light.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<link rel=""stylesheet"" id=""pgcal","
+<link rel=""stylesheet"" id=""tippy_light-css"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/tippy/light.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<link rel=""stylesheet"" id=""pgcal"
+pretty,"ss"" media=""all"">
+<link rel=""stylesheet"" id=""pgcal_css-css"" href=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/css/pgcal.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<script type=""text/jav","ss"" media=""all"">
+<link rel=""stylesheet"" id=""pgcal_css-css"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/css/pgcal.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<script type=""text/jav"
+google,"ia=""all"">
+<link rel=""stylesheet"" id=""pgcal_css-css"" href=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/css/pgcal.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<script type=""text/javascript","ia=""all"">
+<link rel=""stylesheet"" id=""pgcal_css-css"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/css/pgcal.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<script type=""text/javascript"
+calendar,""">
+<link rel=""stylesheet"" id=""pgcal_css-css"" href=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/css/pgcal.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<script type=""text/javascript"" src=""ht",""">
+<link rel=""stylesheet"" id=""pgcal_css-css"" href=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/css/pgcal.css?ver=2.0.0"" type=""text/css"" media=""all"">
+<script type=""text/javascript"" src=""ht"
+pretty,"-common-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/lib/fullcalendar/index.global.min.js?ver=2.0.0"" id=""fullcalendar-js""></scrip","-common-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/index.global.min.js?ver=2.0.0"" id=""fullcalendar-js""></scrip"
+google,"-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/lib/fullcalendar/index.global.min.js?ver=2.0.0"" id=""fullcalendar-js""></script>-->
+<","-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/index.global.min.js?ver=2.0.0"" id=""fullcalendar-js""></script>-->
+<"
+calendar,"script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/lib/fullcalendar/index.global.min.js?ver=2.0.0"" id=""fullcalendar-js""></script>-->
+<!--<scrip","script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/index.global.min.js?ver=2.0.0"" id=""fullcalendar-js""></script>-->
+<!--<scrip"
+pretty,"alendar-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0"" id=""fc_googl","alendar-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0"" id=""fc_googl"
+google,"-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0"" id=""fc_googlecalend","-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0"" id=""fc_googlecalend"
+calendar,"script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0"" id=""fc_googlecalendar-js""></","script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0"" id=""fc_googlecalendar-js""></"
+google,"/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/","-calendar/index.global.min.js?ver=2.0.0"" id=""fc_googlecalendar-js""></script>-->
+<!--<script type=""te","/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0"" id=""fc_googlecalendar-js""></script>-->
+<!--<script type=""te"
+calendar,"ript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/google-","/index.global.min.js?ver=2.0.0"" id=""fc_googlecalendar-js""></script>-->
+<!--<script type=""text/javasc","ript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/fullcalendar/google-calendar/index.global.min.js?ver=2.0.0"" id=""fc_googlecalendar-js""></script>-->
+<!--<script type=""text/javasc"
+pretty,"alendar-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/lib/popper/popper.min.js?ver=2.0.0"" id=""popper-js""></script>-->
+<!--<script ","alendar-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/popper/popper.min.js?ver=2.0.0"" id=""popper-js""></script>-->
+<!--<script "
+google,"-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/lib/popper/popper.min.js?ver=2.0.0"" id=""popper-js""></script>-->
+<!--<script type=""t","-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/popper/popper.min.js?ver=2.0.0"" id=""popper-js""></script>-->
+<!--<script type=""t"
+calendar,"script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/lib/popper/popper.min.js?ver=2.0.0"" id=""popper-js""></script>-->
+<!--<script type=""text/javas","script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/popper/popper.min.js?ver=2.0.0"" id=""popper-js""></script>-->
+<!--<script type=""text/javas"
+pretty,"""popper-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/lib/tippy/tippy.min.js?ver=2.0.0"" id=""tippy-js""></script>-->
+<!--<script typ","""popper-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/tippy/tippy.min.js?ver=2.0.0"" id=""tippy-js""></script>-->
+<!--<script typ"
+google,"-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/lib/tippy/tippy.min.js?ver=2.0.0"" id=""tippy-js""></script>-->
+<!--<script type=""text","-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/tippy/tippy.min.js?ver=2.0.0"" id=""tippy-js""></script>-->
+<!--<script type=""text"
+calendar,"script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/lib/tippy/tippy.min.js?ver=2.0.0"" id=""tippy-js""></script>-->
+<!--<script type=""text/javascri","script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/lib/tippy/tippy.min.js?ver=2.0.0"" id=""tippy-js""></script>-->
+<!--<script type=""text/javascri"
+pretty,"=""tippy-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/js/tippy.js?ver=2.0.0"" id=""pgcal_tippy-js""></script>-->
+<!--<script type=""te","=""tippy-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/tippy.js?ver=2.0.0"" id=""pgcal_tippy-js""></script>-->
+<!--<script type=""te"
+google,"-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/js/tippy.js?ver=2.0.0"" id=""pgcal_tippy-js""></script>-->
+<!--<script type=""text/java","-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/tippy.js?ver=2.0.0"" id=""pgcal_tippy-js""></script>-->
+<!--<script type=""text/java"
+calendar,"script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/js/tippy.js?ver=2.0.0"" id=""pgcal_tippy-js""></script>-->
+<!--<script type=""text/javascript"" s","script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/tippy.js?ver=2.0.0"" id=""pgcal_tippy-js""></script>-->
+<!--<script type=""text/javascript"" s"
+pretty,";
+/* ]]> */
+</script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/js/helpers.js?ver=2.0.0"" id=""pgcal_helpers-js""></script>-->
+<!--<script type",";
+/* ]]> */
+</script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/helpers.js?ver=2.0.0"" id=""pgcal_helpers-js""></script>-->
+<!--<script type"
+google,"> */
+</script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/js/helpers.js?ver=2.0.0"" id=""pgcal_helpers-js""></script>-->
+<!--<script type=""text/","> */
+</script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/helpers.js?ver=2.0.0"" id=""pgcal_helpers-js""></script>-->
+<!--<script type=""text/"
+calendar,"script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/js/helpers.js?ver=2.0.0"" id=""pgcal_helpers-js""></script>-->
+<!--<script type=""text/javascrip","script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/helpers.js?ver=2.0.0"" id=""pgcal_helpers-js""></script>-->
+<!--<script type=""text/javascrip"
+pretty,"helpers-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/","-google-calendar/public/js/pgcal.js?ver=2.0.0"" id=""pgcal_loader-js""></script>-->
+<!--<script type=""t","helpers-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/pgcal.js?ver=2.0.0"" id=""pgcal_loader-js""></script>-->
+<!--<script type=""t"
+google,"-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-","-calendar/public/js/pgcal.js?ver=2.0.0"" id=""pgcal_loader-js""></script>-->
+<!--<script type=""text/jav","-js""></script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/pgcal.js?ver=2.0.0"" id=""pgcal_loader-js""></script>-->
+<!--<script type=""text/jav"
+calendar,"script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-","/public/js/pgcal.js?ver=2.0.0"" id=""pgcal_loader-js""></script>-->
+<!--<script type=""text/javascript"" ","script>-->
+<!--<script type=""text/javascript"" src=""https://vlda.ca/wp-content/plugins/pretty-google-calendar/public/js/pgcal.js?ver=2.0.0"" id=""pgcal_loader-js""></script>-->
+<!--<script type=""text/javascript"" "
+calendar," pgcal_inlineScript({""gcal"":""17de2ca43f525c87058ffafe1f0206da82a19d00a85a6ae979ad6bb618dcd8ae@group.",".google.com"",""locale"":""en"",""list_type"":""listCustom"",""custom_list_button"":""list"",""custom_days"":""28"","""," pgcal_inlineScript({""gcal"":""17de2ca43f525c87058ffafe1f0206da82a19d00a85a6ae979ad6bb618dcd8ae@group.calendar.google.com"",""locale"":""en"",""list_type"":""listCustom"",""custom_list_button"":""list"",""custom_days"":""28"","""
+google,"lineScript({""gcal"":""17de2ca43f525c87058ffafe1f0206da82a19d00a85a6ae979ad6bb618dcd8ae@group.calendar.",".com"",""locale"":""en"",""list_type"":""listCustom"",""custom_list_button"":""list"",""custom_days"":""28"",""views"":","lineScript({""gcal"":""17de2ca43f525c87058ffafe1f0206da82a19d00a85a6ae979ad6bb618dcd8ae@group.calendar.google.com"",""locale"":""en"",""list_type"":""listCustom"",""custom_list_button"":""list"",""custom_days"":""28"",""views"":"
