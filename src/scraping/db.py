@@ -119,7 +119,7 @@ class DatabaseHandler():
 
     def create_tables(self):
         """
-        Creates the 'urls', 'events', 'address', and 'fb_urls' tables in the database if they do not already exist.
+        Creates the 'urls', 'events', 'address', and 'organization tables in the database if they do not already exist.
         If config['testing']['drop_tables'] is True, it will drop existing tables before creation.
         """
         
