@@ -61,10 +61,12 @@ Note:
 
 
 from datetime import datetime
+from dotenv import load_dotenv
 import json
 import logging
 from openai import OpenAI
 import os
+import openai
 import pandas as pd
 import re
 import yaml
@@ -222,52 +224,43 @@ class LLMHandler():
         logging.info(f"def generate_prompt(): \n{txt_file_path}")
 
         return prompt
+    
 
     def query_llm(self, prompt, url):
         """
+        Query OpenAI LLM with a given prompt and return the response.
         Args:
             prompt (str): The prompt to send to the LLM.
             url (str): The URL associated with the prompt.
         Returns:
             str: The response from the LLM if available, otherwise None.
-        Raises:
-            FileNotFoundError: If the keys file specified in the config is not found.
-            KeyError: If the 'OpenAI' organization key is not found in the keys file.
-            Exception: For any other exceptions that may occur during the API call.
         """
         if self.config['llm']['spend_money']:
-            logging.info(f"def query_llm(): Spending money is set to True. Querying the LLM.")
+            logging.info("def query_llm(): Spending money is set to True. Querying the LLM.")
 
-            # Read the API key from the security file
-            keys_df = pd.read_csv(self.config['input']['keys'])
-            self.api_key = keys_df.loc[keys_df['organization'] == 'OpenAI', 'key_pw'].values[0]
+            try:
+                client = OpenAI()
+                response = client.chat.completions.create(
+                    model=self.config['llm']['url_evaluator'],
+                    messages=[{"role": "user", 
+                               "content": prompt}]
+                )
 
-            # Set the API key as an environment variable
-            os.environ["OPENAI_API_KEY"] = self.api_key
-            self.client = OpenAI()
-
-            # Query the LLM
-            response = self.client.chat.completions.create(
-                model=self.config['llm']['url_evaluator'],
-                messages=[
-                {
-                    "role": "user", 
-                    "content": prompt
-                }
-                ]
-            )
-            logging.info(f"def query_llm(): LLM response content: \n{response.choices[0].message.content.strip()}\n")
-
-            if response.choices:
-                logging.info(f"def query_llm(): LLM response received based on url {url}.")
-                return response.choices[0].message.content.strip()
-            else:
-                logging.error(f"def query_llm(): No LLM response received based on url {url}.")
-                return None    
+                # Extract and log the response
+                if response and response.choices:
+                    llm_response = response.choices[0].message.content.strip()
+                    logging.info(f"def query_llm(): LLM response received: {llm_response}")
+                    return llm_response
+                else:
+                    logging.error("def query_llm(): No LLM response received.")
+                    return None
+            except openai.OpenAIError as e:
+                logging.error(f"def query_llm(): OpenAI API call failed: {e}")
+                return None
         else:
-            logging.info(f"def query_llm(): Spending money is set to False. Skipping the LLM query.")
+            logging.info("def query_llm(): Spending money is set to False. Skipping the LLM query.")
             return None
-    
+
 
     def extract_and_parse_json(self, result, url):
             """

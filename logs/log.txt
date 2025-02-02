@@ -1,34 +1,240 @@
-2025-01-28 18:03:11,492 - INFO - 
-__main__: Starting the crawler process at 2025-01-28 18:03:11.492005
-2025-01-28 18:03:11,540 - INFO - def __init__(): Database connection established.
-2025-01-28 18:03:11,549 - INFO - def __init__(): Database connection established.
-2025-01-28 18:03:11,550 - INFO - def __init__(): Database connection established.
-2025-01-28 18:03:11,560 - INFO - Retrieved credentials for Google.
-2025-01-28 18:03:11,596 - INFO - def process_events_without_url(): Found 0 events without URLs.
-2025-01-28 18:03:11,596 - INFO - def process_events_without_url(): All events have a URL
-2025-01-28 18:03:11,597 - INFO - __main__: Finished the crawler process at 2025-01-28 18:03:11.597747
-2025-01-28 18:03:11,598 - INFO - __main__: Total time taken: 0:00:00.105742
+2025-02-02 11:34:59,583 - INFO - __main__: Starting the crawler process at 2025-02-02 11:34:59.583251
+2025-02-02 11:34:59,649 - INFO - def __init__(): Database connection established.
+2025-02-02 11:34:59,664 - INFO - def __init__(): Database connection established.
+2025-02-02 11:34:59,672 - INFO - def driver(): URL https://www.facebook.com/events/1225081802127940/ 'facebook' is in the URL.
+2025-02-02 11:34:59,672 - INFO - def check_keywords_in_text: URL https://www.facebook.com/events/1225081802127940/ marked as irrelevant since there are no keywords, events, or 'calendar' in URL.
+2025-02-02 11:34:59,672 - INFO - def generate_prompt(): Generating prompt for URL: https://www.facebook.com/events/1225081802127940/
+2025-02-02 11:34:59,673 - INFO - def generate_prompt(): prompt type: default, text file path: prompts/default.txt
+2025-02-02 11:34:59,676 - INFO - def generate_prompt(): 
+prompts/default.txt
+2025-02-02 11:34:59,676 - INFO - def query_llm(): Spending money is set to True. Querying the LLM.
+2025-02-02 11:35:28,634 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-02-02 11:35:28,649 - INFO - def query_llm(): LLM response received: ```json
+[
+    {
+        "org_name": "Ali and 2 friends",
+        "dance_style": "",
+        "url": "",
+        "event_type": "social dance",
+        "event_name": "Practica: Winter series",
+        "day_of_week": "Thursday",
+        "start_date": "2024-12-05",
+        "end_date": "2024-12-05",
+        "start_time": "19:30",
+        "end_time": "23:30",
+        "price": "",
+        "location": "",
+        "description": ""
+    },
+    {
+        "org_name": "Adam and 5 friends",
+        "dance_style": "urban kiz",
+        "url": "",
+        "event_type": "workshop",
+        "event_name": "Special Edition Urbankiz Workshop",
+        "day_of_week": "Saturday",
+        "start_date": "2024-12-07",
+        "end_date": "2024-12-07",
+        "start_time": "19:00",
+        "end_time": "23:30",
+        "price": "",
+        "location": "",
+        "description": ""
+    },
+    {
+        "org_name": "BestCoast Outfitters",
+        "dance_style": "",
+        "url": "",
+        "event_type": "other",
+        "event_name": "Paddling the Yukon River - BCO Event",
+        "day_of_week": "Thursday",
+        "start_date": "2024-12-12",
+        "end_date": "2024-12-12",
+        "start_time": "19:00",
+        "end_time": "",
+        "price": "",
+        "location": "865 Yates Street, Victoria, BC, Canada, British Columbia V8W 1M1",
+        "description": "Join us on December 12th at 7pm for this presentation with Nathan Slater as he shares stories from his epic 1200km canoe journey down the Teslin and Yukon Rivers."
+    },
+    {
+        "org_name": "The Lalas",
+        "dance_style": "",
+        "url": "",
+        "event_type": "other",
+        "event_name": "Los Angeles Burlesque Show",
+        "day_of_week": "Friday",
+        "start_date": "2025-01-24",
+        "end_date": "2025-01-24",
+        "start_time": "19:00",
+        "end_time": "",
+        "price": "",
+        "location": "",
+        "description": ""
+    },
+    {
+        "org_name": "Linda",
+        "dance_style": "",
+        "url": "",
+        "event_type": "social dance",
+        "event_name": "Shrek Rave - Victoria Wicket Hall",
+        "day_of_week": "Friday",
+        "start_date": "2025-02-28",
+        "end_date": "2025-02-28",
+        "start_time": "22:00",
+        "end_time": "",
+        "price": "",
+        "location": "",
+        "description": ""
+    },
+    {
+        "org_name": "Linda",
+        "dance_style": "",
+        "url": "",
+        "event_type": "social dance",
+        "event_name": "Daft Punk Night - Victoria Wicket Hall",
+        "day_of_week": "Saturday",
+        "start_date": "2025-03-15",
+        "end_date": "2025-03-15",
+        "start_time": "22:00",
+        "end_time": "",
+        "price": "",
+        "location": "",
+        "description": ""
+    }
+]
+```
+2025-02-02 11:35:28,650 - INFO - def extract_and_parse_json(): JSON found in result.
+2025-02-02 11:35:28,651 - INFO - def extract_and_parse_json(): for url https://www.facebook.com/events/1225081802127940/, 
+Cleaned JSON string: 
+[
+    {
+        "org_name": "Ali and 2 friends",
+        "dance_style": "",
+        "url": "",
+        "event_type": "social dance",
+        "event_name": "Practica: Winter series",
+        "day_of_week": "Thursday",
+        "start_date": "2024-12-05",
+        "end_date": "2024-12-05",
+        "start_time": "19:30",
+        "end_time": "23:30",
+        "price": "",
+        "location": "",
+        "description": ""
+    },
+    {
+        "org_name": "Adam and 5 friends",
+        "dance_style": "urban kiz",
+        "url": "",
+        "event_type": "workshop",
+        "event_name": "Special Edition Urbankiz Workshop",
+        "day_of_week": "Saturday",
+        "start_date": "2024-12-07",
+        "end_date": "2024-12-07",
+        "start_time": "19:00",
+        "end_time": "23:30",
+        "price": "",
+        "location": "",
+        "description": ""
+    },
+    {
+        "org_name": "BestCoast Outfitters",
+        "dance_style": "",
+        "url": "",
+        "event_type": "other",
+        "event_name": "Paddling the Yukon River - BCO Event",
+        "day_of_week": "Thursday",
+        "start_date": "2024-12-12",
+        "end_date": "2024-12-12",
+        "start_time": "19:00",
+        "end_time": "",
+        "price": "",
+        "location": "865 Yates Street, Victoria, BC, Canada, British Columbia V8W 1M1",
+        "description": "Join us on December 12th at 7pm for this presentation with Nathan Slater as he shares stories from his epic 1200km canoe journey down the Teslin and Yukon Rivers."
+    },
+    {
+        "org_name": "The Lalas",
+        "dance_style": "",
+        "url": "",
+        "event_type": "other",
+        "event_name": "Los Angeles Burlesque Show",
+        "day_of_week": "Friday",
+        "start_date": "2025-01-24",
+        "end_date": "2025-01-24",
+        "start_time": "19:00",
+        "end_time": "",
+        "price": "",
+        "location": "",
+        "description": ""
+    },
+    {
+        "org_name": "Linda",
+        "dance_style": "",
+        "url": "",
+        "event_type": "social dance",
+        "event_name": "Shrek Rave - Victoria Wicket Hall",
+        "day_of_week": "Friday",
+        "start_date": "2025-02-28",
+        "end_date": "2025-02-28",
+        "start_time": "22:00",
+        "end_time": "",
+        "price": "",
+        "location": "",
+        "description": ""
+    },
+    {
+        "org_name": "Linda",
+        "dance_style": "",
+        "url": "",
+        "event_type": "social dance",
+        "event_name": "Daft Punk Night - Victoria Wicket Hall",
+        "day_of_week": "Saturday",
+        "start_date": "2025-03-15",
+        "end_date": "2025-03-15",
+        "start_time": "22:00",
+        "end_time": "",
+        "price": "",
+        "location": "",
+        "description": ""
+    }
+]
+2025-02-02 11:35:28,854 - INFO - write_events_to_db: Number of events to write: 6
+2025-02-02 11:35:28,883 - INFO - write_events_to_db: Events data written to the 'events' table.
+2025-02-02 11:35:28,883 - INFO - def process_llm_response: URL https://www.facebook.com/events/1225081802127940/ marked as relevant with events written to the database.
+2025-02-02 11:35:28,887 - INFO - def write_url_to_db(): URL 'https://www.facebook.com/events/1225081802127940/' inserted or updated in the 'urls' table.
+2025-02-02 11:35:28,887 - INFO - __main__: Finished the crawler process at 2025-02-02 11:35:28.887668
+2025-02-02 11:35:28,888 - INFO - __main__: Total time taken: 0:00:29.304417
+2025-02-02 11:40:47,887 - INFO - 
+__main__: Starting the crawler process at 2025-02-02 11:40:47.887506
+2025-02-02 11:40:47,955 - INFO - def __init__(): Database connection established.
+2025-02-02 11:40:47,975 - INFO - def __init__(): Database connection established.
+2025-02-02 11:40:47,975 - INFO - def __init__(): Database connection established.
+2025-02-02 11:40:47,975 - INFO - Retrieved credentials for Google.
+2025-02-02 11:40:48,018 - INFO - def process_events_without_url(): Found 0 events without URLs.
+2025-02-02 11:40:48,018 - INFO - def process_events_without_url(): All events have a URL
+2025-02-02 11:40:48,019 - INFO - __main__: Finished the crawler process at 2025-02-02 11:40:48.019759
+2025-02-02 11:40:48,020 - INFO - __main__: Total time taken: 0:00:00.132253
 
 
-2025-01-28 18:03:44,226 - INFO - root - Main: Started the process at 2025-01-28 18:03:44.225982
-2025-01-28 18:03:44,263 - INFO - root - def __init__(): Database connection established.
-2025-01-28 18:03:44,284 - INFO - root - create_tables: 'urls' table created or already exists.
-2025-01-28 18:03:44,285 - INFO - root - create_tables: 'events' table created or already exists.
-2025-01-28 18:03:44,286 - INFO - root - create_tables: 'address' table created or already exists.
-2025-01-28 18:03:44,286 - INFO - root - create_tables: 'organizations' table created or already exists.
-2025-01-28 18:03:44,290 - INFO - root - Schema: public, Table: address
-2025-01-28 18:03:44,290 - INFO - root - Schema: public, Table: events
-2025-01-28 18:03:44,291 - INFO - root - Schema: public, Table: fb_urls
-2025-01-28 18:03:44,291 - INFO - root - Schema: public, Table: organizations
-2025-01-28 18:03:44,292 - INFO - root - Schema: public, Table: urls
-2025-01-28 18:03:44,303 - INFO - root - dedup: Deduplicated 'events' table successfully.
-2025-01-28 18:03:44,305 - INFO - root - dedup: Deduplicated 'urls' table successfully.
-2025-01-28 18:03:44,307 - INFO - root - delete_old_events: Deleted events older than 3 days.
-2025-01-28 18:03:44,309 - INFO - root - def delete_events_with_nulls(): Both start_date and start_time being null deleted successfully.
-2025-01-28 18:03:44,310 - INFO - root - delete_likely_dud_events: Deleted events with empty org_name, dance_style, and url, and no address_id.
-2025-01-28 18:03:44,311 - INFO - root - delete_likely_dud_events: Deleted events outside of British Columbia (BC).
-2025-01-28 18:03:44,313 - INFO - root - delete_likely_dud_events: Deleted events that are not in Canada (CA).
-2025-01-28 18:03:44,313 - ERROR - root - def execute_query(): {query}
+2025-02-02 11:44:13,210 - INFO - root - Main: Started the process at 2025-02-02 11:44:13.210131
+2025-02-02 11:44:13,275 - INFO - root - def __init__(): Database connection established.
+2025-02-02 11:44:13,299 - INFO - root - create_tables: 'urls' table created or already exists.
+2025-02-02 11:44:13,300 - INFO - root - create_tables: 'events' table created or already exists.
+2025-02-02 11:44:13,301 - INFO - root - create_tables: 'address' table created or already exists.
+2025-02-02 11:44:13,303 - INFO - root - create_tables: 'organizations' table created or already exists.
+2025-02-02 11:44:13,307 - INFO - root - Schema: public, Table: address
+2025-02-02 11:44:13,308 - INFO - root - Schema: public, Table: events
+2025-02-02 11:44:13,308 - INFO - root - Schema: public, Table: fb_urls
+2025-02-02 11:44:13,309 - INFO - root - Schema: public, Table: organizations
+2025-02-02 11:44:13,309 - INFO - root - Schema: public, Table: urls
+2025-02-02 11:44:13,313 - INFO - root - dedup: Deduplicated 'events' table successfully.
+2025-02-02 11:44:13,315 - INFO - root - dedup: Deduplicated 'urls' table successfully.
+2025-02-02 11:44:13,319 - INFO - root - delete_old_events: Deleted events older than 3 days.
+2025-02-02 11:44:13,321 - INFO - root - def delete_events_with_nulls(): Both start_date and start_time being null deleted successfully.
+2025-02-02 11:44:13,324 - INFO - root - delete_likely_dud_events: Deleted events with empty org_name, dance_style, and url, and no address_id.
+2025-02-02 11:44:13,325 - INFO - root - delete_likely_dud_events: Deleted events outside of British Columbia (BC).
+2025-02-02 11:44:13,326 - INFO - root - delete_likely_dud_events: Deleted events that are not in Canada (CA).
+2025-02-02 11:44:13,327 - ERROR - root - def execute_query(): {query}
 Query execution failed: (sqlalchemy.exc.InvalidRequestError) A value is required for bind parameter 'other'
 [SQL: 
         DELETE FROM events
@@ -40,89 +246,48 @@ Query execution failed: (sqlalchemy.exc.InvalidRequestError) A value is required
         ]
 [parameters: [{'dance_style': '', 'url': '', 'event_type': 'other'}]]
 (Background on this error at: https://sqlalche.me/e/20/cd3x)
-2025-01-28 18:03:44,314 - INFO - root - def delete_likely_dud_events(): Deleted events with empty dance_style, url, event_type 'other', and null location and description.
-2025-01-28 18:03:44,361 - INFO - root - fuzzy_duplicates: Kept row with event_id 2852
-2025-01-28 18:03:44,363 - INFO - root - fuzzy_duplicates: Deleted duplicate row with event_id 6910
-2025-01-28 18:03:44,448 - INFO - root - fuzzy_duplicates: Fuzzy duplicate removal completed successfully.
-2025-01-28 18:03:44,449 - INFO - root - Main: Finished the process at 2025-01-28 18:03:44.449600
-2025-01-28 18:03:44,450 - INFO - root - Main: Total time taken: 0:00:00.223618
-2025-01-28 21:52:06,523 - INFO - root - Main: Started the process at 2025-01-28 21:52:06.523119
-2025-01-28 21:52:06,580 - INFO - root - def __init__(): Database connection established.
-2025-01-28 21:52:06,605 - INFO - root - create_tables: 'urls' table created or already exists.
-2025-01-28 21:52:06,606 - INFO - root - create_tables: 'events' table created or already exists.
-2025-01-28 21:52:06,607 - INFO - root - create_tables: 'address' table created or already exists.
-2025-01-28 21:52:06,608 - INFO - root - create_tables: 'organizations' table created or already exists.
-2025-01-28 21:52:06,611 - INFO - root - Schema: public, Table: address
-2025-01-28 21:52:06,611 - INFO - root - Schema: public, Table: events
-2025-01-28 21:52:06,612 - INFO - root - Schema: public, Table: fb_urls
-2025-01-28 21:52:06,612 - INFO - root - Schema: public, Table: organizations
-2025-01-28 21:52:06,612 - INFO - root - Schema: public, Table: urls
-2025-01-28 21:52:06,616 - INFO - root - dedup: Deduplicated 'events' table successfully.
-2025-01-28 21:52:06,617 - INFO - root - dedup: Deduplicated 'urls' table successfully.
-2025-01-28 21:52:06,619 - INFO - root - delete_old_events: Deleted events older than 3 days.
-2025-01-28 21:52:06,620 - INFO - root - def delete_events_with_nulls(): Both start_date and start_time being null deleted successfully.
-2025-01-28 21:52:06,622 - INFO - root - delete_likely_dud_events: Deleted events with empty org_name, dance_style, and url, and no address_id.
-2025-01-28 21:52:06,623 - INFO - root - delete_likely_dud_events: Deleted events outside of British Columbia (BC).
-2025-01-28 21:52:06,624 - INFO - root - delete_likely_dud_events: Deleted events that are not in Canada (CA).
-2025-01-28 21:52:06,624 - ERROR - root - def execute_query(): {query}
-Query execution failed: (sqlalchemy.exc.InvalidRequestError) A value is required for bind parameter 'other'
-[SQL: 
-        DELETE FROM events
-        WHERE dance_style = %(dance_style)s
-            AND url = %(url)s
-            AND event_type = %(other)s
-            AND location IS NULL
-            AND description IS NULL;
-        ]
-[parameters: [{'dance_style': '', 'url': '', 'event_type': 'other'}]]
-(Background on this error at: https://sqlalche.me/e/20/cd3x)
-2025-01-28 21:52:06,625 - INFO - root - def delete_likely_dud_events(): Deleted events with empty dance_style, url, event_type 'other', and null location and description.
-2025-01-28 21:52:06,762 - INFO - root - fuzzy_duplicates: Fuzzy duplicate removal completed successfully.
-2025-01-28 21:52:06,764 - INFO - root - Main: Finished the process at 2025-01-28 21:52:06.764222
-2025-01-28 21:52:06,764 - INFO - root - Main: Total time taken: 0:00:00.241103
-2025-01-28 21:52:24,344 - INFO - 
-__main__: Starting the crawler process at 2025-01-28 21:52:24.344686
-2025-01-28 21:52:24,380 - INFO - def __init__(): Database connection established.
-2025-01-28 21:52:24,388 - INFO - def __init__(): Database connection established.
-2025-01-28 21:52:24,388 - INFO - def __init__(): Database connection established.
-2025-01-28 21:52:24,397 - INFO - Retrieved credentials for Google.
-2025-01-28 21:52:24,429 - INFO - def process_events_without_url(): Found 0 events without URLs.
-2025-01-28 21:52:24,429 - INFO - def process_events_without_url(): All events have a URL
-2025-01-28 21:52:24,430 - INFO - __main__: Finished the crawler process at 2025-01-28 21:52:24.430329
-2025-01-28 21:52:24,430 - INFO - __main__: Total time taken: 0:00:00.085643
+2025-02-02 11:44:13,327 - INFO - root - def delete_likely_dud_events(): Deleted events with empty dance_style, url, event_type 'other', and null location and description.
+2025-02-02 11:44:13,469 - INFO - root - fuzzy_duplicates: Fuzzy duplicate removal completed successfully.
+2025-02-02 11:44:13,470 - INFO - root - Main: Finished the process at 2025-02-02 11:44:13.470723
+2025-02-02 11:44:13,471 - INFO - root - Main: Total time taken: 0:00:00.260592
+2025-02-02 11:50:50,031 - INFO - root - Main: Started the process at 2025-02-02 11:50:50.031857
+2025-02-02 11:50:50,087 - INFO - root - def __init__(): Database connection established.
+2025-02-02 11:50:50,111 - INFO - root - create_tables: 'urls' table created or already exists.
+2025-02-02 11:50:50,112 - INFO - root - create_tables: 'events' table created or already exists.
+2025-02-02 11:50:50,114 - INFO - root - create_tables: 'address' table created or already exists.
+2025-02-02 11:50:50,117 - INFO - root - create_tables: 'organizations' table created or already exists.
+2025-02-02 11:50:50,120 - INFO - root - Schema: public, Table: address
+2025-02-02 11:50:50,121 - INFO - root - Schema: public, Table: events
+2025-02-02 11:50:50,121 - INFO - root - Schema: public, Table: fb_urls
+2025-02-02 11:50:50,122 - INFO - root - Schema: public, Table: organizations
+2025-02-02 11:50:50,122 - INFO - root - Schema: public, Table: urls
+2025-02-02 11:50:50,127 - INFO - root - dedup: Deduplicated 'events' table successfully.
+2025-02-02 11:50:50,129 - INFO - root - dedup: Deduplicated 'urls' table successfully.
+2025-02-02 11:50:50,131 - INFO - root - delete_old_events: Deleted events older than 3 days.
+2025-02-02 11:50:50,133 - INFO - root - def delete_events_with_nulls(): Both start_date and start_time being null deleted successfully.
+2025-02-02 11:50:50,135 - INFO - root - delete_likely_dud_events: Deleted events with empty org_name, dance_style, and url, and no address_id.
+2025-02-02 11:50:50,136 - INFO - root - delete_likely_dud_events: Deleted events outside of British Columbia (BC).
+2025-02-02 11:50:50,138 - INFO - root - delete_likely_dud_events: Deleted events that are not in Canada (CA).
+2025-02-02 11:50:50,139 - INFO - root - def delete_likely_dud_events(): Deleted events with empty dance_style, url, event_type 'other', and null location and description.
+2025-02-02 11:50:50,273 - INFO - root - fuzzy_duplicates: Fuzzy duplicate removal completed successfully.
+2025-02-02 11:50:50,275 - INFO - root - Main: Finished the process at 2025-02-02 11:50:50.275829
+2025-02-02 11:50:50,276 - INFO - root - Main: Total time taken: 0:00:00.243972
+2025-02-02 11:52:47,072 - INFO - 
+__main__: Starting the crawler process at 2025-02-02 11:52:47.072527
+2025-02-02 11:52:47,125 - INFO - def __init__(): Database connection established.
+2025-02-02 11:52:47,147 - INFO - def __init__(): Database connection established.
+2025-02-02 11:52:47,148 - INFO - def __init__(): Database connection established.
+2025-02-02 11:52:47,148 - INFO - Retrieved credentials for Google.
+2025-02-02 11:52:47,183 - INFO - def process_events_without_url(): Found 0 events without URLs.
+2025-02-02 11:52:47,184 - INFO - def process_events_without_url(): All events have a URL
+2025-02-02 11:52:47,185 - INFO - __main__: Finished the crawler process at 2025-02-02 11:52:47.185158
+2025-02-02 11:52:47,185 - INFO - __main__: Total time taken: 0:00:00.112631
 
 
-2025-01-29 10:23:20,074 - INFO - root - Main: Started the process at 2025-01-29 10:23:20.074727
-2025-01-29 10:23:20,149 - INFO - root - def __init__(): Database connection established.
-2025-01-29 10:23:20,176 - INFO - root - create_tables: 'urls' table created or already exists.
-2025-01-29 10:23:20,177 - INFO - root - create_tables: 'events' table created or already exists.
-2025-01-29 10:23:20,178 - INFO - root - create_tables: 'address' table created or already exists.
-2025-01-29 10:23:20,179 - INFO - root - create_tables: 'organizations' table created or already exists.
-2025-01-29 10:23:20,190 - INFO - root - Schema: public, Table: address
-2025-01-29 10:23:20,190 - INFO - root - Schema: public, Table: events
-2025-01-29 10:23:20,191 - INFO - root - Schema: public, Table: fb_urls
-2025-01-29 10:23:20,191 - INFO - root - Schema: public, Table: organizations
-2025-01-29 10:23:20,192 - INFO - root - Schema: public, Table: urls
-2025-01-29 10:23:20,208 - INFO - root - dedup: Deduplicated 'events' table successfully.
-2025-01-29 10:23:20,215 - INFO - root - dedup: Deduplicated 'urls' table successfully.
-2025-01-29 10:23:20,220 - INFO - root - delete_old_events: Deleted events older than 3 days.
-2025-01-29 10:23:20,221 - INFO - root - def delete_events_with_nulls(): Both start_date and start_time being null deleted successfully.
-2025-01-29 10:23:20,224 - INFO - root - delete_likely_dud_events: Deleted events with empty org_name, dance_style, and url, and no address_id.
-2025-01-29 10:23:20,226 - INFO - root - delete_likely_dud_events: Deleted events outside of British Columbia (BC).
-2025-01-29 10:23:20,228 - INFO - root - delete_likely_dud_events: Deleted events that are not in Canada (CA).
-2025-01-29 10:23:20,229 - ERROR - root - def execute_query(): {query}
-Query execution failed: (sqlalchemy.exc.InvalidRequestError) A value is required for bind parameter 'other'
-[SQL: 
-        DELETE FROM events
-        WHERE dance_style = %(dance_style)s
-            AND url = %(url)s
-            AND event_type = %(other)s
-            AND location IS NULL
-            AND description IS NULL;
-        ]
-[parameters: [{'dance_style': '', 'url': '', 'event_type': 'other'}]]
-(Background on this error at: https://sqlalche.me/e/20/cd3x)
-2025-01-29 10:23:20,229 - INFO - root - def delete_likely_dud_events(): Deleted events with empty dance_style, url, event_type 'other', and null location and description.
-2025-01-29 10:23:20,376 - INFO - root - fuzzy_duplicates: Fuzzy duplicate removal completed successfully.
-2025-01-29 10:23:20,378 - INFO - root - Main: Finished the process at 2025-01-29 10:23:20.378044
-2025-01-29 10:23:20,378 - INFO - root - Main: Total time taken: 0:00:00.303317
+2025-02-02 12:08:35,281 - INFO - 
+__main__: Starting the crawler process at 2025-02-02 12:08:35.281218
+2025-02-02 12:08:35,347 - INFO - def __init__(): Database connection established.
+2025-02-02 12:08:35,372 - INFO - def __init__(): Database connection established.
+2025-02-02 12:08:43,114 - INFO - Loaded existing session. Already logged into Facebook.
+2025-02-02 12:08:43,114 - INFO - def __init__(): Database connection established.
+2025-02-02 12:08:43,115 - INFO - Retrieved credentials for Google.

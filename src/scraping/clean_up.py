@@ -40,6 +40,7 @@ import yaml
 from googleapiclient.discovery import build
 
 from db import DatabaseHandler
+from fb import FacebookEventScraper
 from gs import GoogleSearch
 from llm import LLMHandler
 from credentials import get_credentials
@@ -50,6 +51,7 @@ class CleanUp:
         self.config = config
         self.db_handler = DatabaseHandler(config)
         self.llm_handler = LLMHandler(config_path="config/config.yaml")
+        self.fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
 
         # Establish database connection
         self.conn = self.db_handler.get_db_connection()
@@ -58,7 +60,7 @@ class CleanUp:
         logging.info("def __init__(): Database connection established.")
 
         # Retrieve Google API credentials using credentials.py
-        _, self.api_key, self.cse_id = get_credentials(self.config, 'Google')
+        _, self.api_key, self.cse_id = get_credentials('Google')
 
 
     async def process_events_without_url(self):
@@ -102,6 +104,11 @@ class CleanUp:
                 if relevant:
                     # Determine prompt type based on URL
                     prompt_type = 'fb' if 'facebook' in best_url or 'instagram' in best_url else 'default'
+
+                    # If facebook just give it the relevant text
+                    if prompt_type == 'fb':
+                        extracted_text = self.fb_scraper.extract_text_from_fb_url(self, best_url)
+
                     prompt = self.llm_handler.generate_prompt(best_url, extracted_text, prompt_type)
                     llm_response = self.llm_handler.query_llm(prompt, best_url)
 

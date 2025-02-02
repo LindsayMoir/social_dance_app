@@ -45,7 +45,7 @@ class GoogleSearch():
             self.config = yaml.safe_load(file)
 
         # Retrieve and store API credentials using credentials.py
-        _, self.api_key, self.cse_id = get_credentials(self.config, 'Google')
+        _, self.api_key, self.cse_id = get_credentials('Google')
 
     def read_keywords(self):
         """

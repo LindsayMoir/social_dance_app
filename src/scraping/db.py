@@ -60,6 +60,7 @@ Note:
 """
 
 from datetime import datetime
+from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
 import logging
 import numpy as np
@@ -83,6 +84,9 @@ class DatabaseHandler():
         """
         self.config = config
 
+        # Load .env file
+        load_dotenv()
+
         self.conn = self.get_db_connection()
         if self.conn is None:
             raise ConnectionError("DatabaseHandler: Failed to establish a database connection.")
@@ -100,13 +104,11 @@ class DatabaseHandler():
         try:
             # Read the database connection parameters from the config
             connection_string = (
-                f"postgresql://{self.config['database']['user']}:" 
-                f"{self.config['database']['password']}@"
-                f"{self.config['database']['host']}/"
-                f"{self.config['database']['name']}"
+                f"postgresql://{os.getenv('DATABASE_USER')}:" 
+                f"{os.getenv('DATABASE_PASSWORD')}@"
+                f"{os.getenv('DATABASE_HOST')}/"
+                f"{os.getenv('DATABASE_NAME')}"
             )
-
-            print(connection_string)
 
             # Create and return the SQLAlchemy engine
             engine = create_engine(connection_string, isolation_level="AUTOCOMMIT")
@@ -960,7 +962,7 @@ class DatabaseHandler():
         DELETE FROM events
         WHERE dance_style = :dance_style
             AND url = :url
-            AND event_type = :other
+            AND event_type = :event_type
             AND location IS NULL
             AND description IS NULL;
         """
@@ -1055,7 +1057,7 @@ if __name__ == "__main__":
     )
 
     start_time = datetime.now()
-    logging.info("Main: Started the process at %s", start_time)
+    logging.info("\n\nMain: Started the process at %s", start_time)
 
     # Initialize DatabaseHandler
     db_handler = DatabaseHandler(config)
