@@ -446,7 +446,7 @@ class EventSpider(scrapy.Spider):
             - If an error occurs during the HTTP request, it logs the error and stops fetching events.
         """
         # Read the API key from the security file
-        _, api_key, _ = get_credentials(self.config, 'Google')
+        _, api_key, _ = get_credentials('Google')
         
         days_ahead = config['date_range']['days_ahead']
 

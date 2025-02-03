@@ -298,7 +298,7 @@ class ReadExtract:
     async def main(self, url):
         await self.init_browser()
         text = await self.extract_event_text(url)
-        print(text)
+        logging.info(f"def main(): Extracted text: {text}")
         await self.close()
 
 

@@ -1,2 +1,2 @@
-org_name,dance_style,url,event_type,event_name,day_of_week,start_date,end_date,start_time,end_time,price,location,description
-IALE - ALCES - DAVID,"bachata, kizomba",,workshop,6th Victoria International Kizomba Fest: Sensual Edition: Bachata & Kizomba,Thursday,2025-04-17,2025-04-21,21:00,07:00,$170.67,"720 Douglas Street Victoria, BC V8W 3M7","4 days of workshops, 3 day-time socials, 4 nights of dancing, 3 afterparties, 15+ hours of workshops, Gala night."
+URL,Type_of_Event,Name_of_the_Event,Day_of_Week,Start_Date,End_Date,Start_Time,End_Time,Price,Location,Description
+https://www.google.com/calendar/event?eid=N2c2OHVudHVoYTB1M3FhMnI1dmhiMm52b2IgbGtrN2FoZXVpdHYyMzY1Z3B2Ym5zZjMxN3NAZw,other,Dance 💃🏻 circle ,Tuesday,2025-02-04,2025-02-04,17:00:00,18:00:00,,,
