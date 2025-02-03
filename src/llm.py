@@ -75,11 +75,14 @@ from db import DatabaseHandler
 
 
 class LLMHandler():
-    def __init__(self, config_path="config/config.yaml"):
-        # Initialize base class
+    def __init__(self, config_path=None):
+        
+        # Calculate the path to config.yaml
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(base_dir, 'config', 'config.yaml')
 
         # Get config
-        with open('config/config.yaml', 'r') as file:
+        with open(config_path, 'r') as file:
             self.config = yaml.safe_load(file)
 
         # Need DataBaseHandler, if it is not already in globals
@@ -175,7 +178,7 @@ class LLMHandler():
         """
         # Generate prompt, query LLM, and process the response.
         prompt = self.generate_prompt(url, extracted_text, 'default')
-        llm_response = self.query_llm(prompt, url)
+        llm_response = self.query_llm(prompt)
 
         if llm_response:
             parsed_result = self.extract_and_parse_json(llm_response, url)
@@ -226,7 +229,7 @@ class LLMHandler():
         return prompt
     
 
-    def query_llm(self, prompt, url):
+    def query_llm(self, prompt):
         """
         Query OpenAI LLM with a given prompt and return the response.
         Args:

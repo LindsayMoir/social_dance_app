@@ -322,7 +322,7 @@ class CleanUp:
                     extracted_text = self.extract_text_from_fb_url(best_url)
 
                 prompt = self.llm_handler.generate_prompt(best_url, extracted_text, prompt_type)
-                llm_response = self.llm_handler.query_llm(prompt, best_url)
+                llm_response = self.llm_handler.query_llm(prompt)
 
                 if llm_response:
                     parsed_result = self.llm_handler.extract_and_parse_json(llm_response, best_url)

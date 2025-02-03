@@ -625,7 +625,7 @@ class FacebookEventScraper():
 
             # Generate prompt and query LLM
             prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
-            llm_response = llm_handler.query_llm(prompt, url)
+            llm_response = llm_handler.query_llm(prompt)
 
             # If no events found delete the url from fb_urls table
             if "No events found" in llm_response:
@@ -830,7 +830,7 @@ class FacebookEventScraper():
 
                 if extracted_text:
                     prompt = llm_handler.generate_prompt(url, extracted_text, prompt_type)
-                    llm_response = llm_handler.query_llm(prompt, url)
+                    llm_response = llm_handler.query_llm(prompt)
 
                     if "No events found" in llm_response:
                         db_handler.delete_event_and_update_url(url, row['event_name'], row['start_date'])

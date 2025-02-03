@@ -91,7 +91,7 @@ class GoogleSearch():
         prompt = prompt + title
 
         # Assuming llm_instance is globally available or injected; adjust as needed.
-        org_name = LLMHandler().query_llm(prompt, url)
+        org_name = LLMHandler().query_llm(prompt)
         logging.info(f"def title_to_org_name(): Organization name returned by LLM is: {org_name}")
         org_name = org_name.translate(str.maketrans("", "", "'\"<>"))
         return org_name

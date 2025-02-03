@@ -73,7 +73,6 @@ from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 import yaml
 
 
-
 class DatabaseHandler():
     def __init__(self, config):
         """
@@ -208,22 +207,6 @@ class DatabaseHandler():
         """
         self.execute_query(address_table_query)
         logging.info("create_tables: 'address' table created or already exists.")
-
-        # Create the 'organizations' table
-        organizations_table_query = """
-            CREATE TABLE IF NOT EXISTS organizations (
-                org_id SERIAL PRIMARY KEY,
-                org_name TEXT,
-                web_url TEXT,
-                fb_url TEXT,
-                ig_url TEXT,
-                phone TEXT CHECK (phone ~ '^\(\d{3}\) \d{3}-\d{4}$'),
-                email TEXT,
-                address_id INTEGER
-            )
-        """
-        self.execute_query(organizations_table_query)
-        logging.info("create_tables: 'organizations' table created or already exists.")
 
         # See if this worked.
         query = """
