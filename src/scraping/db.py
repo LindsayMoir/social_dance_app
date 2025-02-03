@@ -1027,6 +1027,22 @@ class DatabaseHandler():
         except Exception as e:
             logging.error("def delete_events_with_nulls(): Failed to delete events with start_date and start_time being null: %s", e)
 
+
+    def delete_event_with_event_id(self, event_id):
+        """
+        Deletes an event from the 'events' table based on the event_id.
+        """
+        try:
+            delete_query = """
+            DELETE FROM events
+            WHERE event_id = :event_id;
+            """
+            params = {'event_id': event_id}
+            self.execute_query(delete_query, params)
+            logging.info("delete_event_with_event_id: Deleted event with event_id %d successfully.", event_id)
+        except Exception as e:
+            logging.error("delete_event_with_event_id: Failed to delete event with event_id %d: %s", event_id, e)
+
     
     def driver(self):
         """

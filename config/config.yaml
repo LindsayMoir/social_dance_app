@@ -9,8 +9,8 @@ crawling:
   depth_limit: 3
   headless: False
   max_crawl_trys: 3
-  max_website_urls: 7
-  urls_run_limit: 20
+  max_website_urls: 10
+  urls_run_limit: 10
   scroll_depth: 3
 date_range:
   months: 3
@@ -18,6 +18,8 @@ date_range:
 debug:
   after_url_updated: 'debug/after_url_updated.csv'
   before_url_updated: 'debug/before_url_updated.csv'
+fuzzywuzzy:
+  hurdle: 70
 input:
   data_keywords: 'data/other/keywords.csv'
   gs_urls: 'data/urls/gs_urls.csv'
@@ -47,7 +49,7 @@ search:
 startup:
   use_db: False
 testing:
-  status: False
+  status: True
   nof_no_url_events: 10
   drop_tables: False
 update_schedule:

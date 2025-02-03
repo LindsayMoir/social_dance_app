@@ -28,7 +28,7 @@ def get_credentials(organization):
         logging.error(f"Missing credentials for organization: {organization}")
         raise ValueError(f"Missing environment variables for organization: {organization}")
 
-    logging.info(f"Retrieved credentials for {organization}.")
+    logging.info(f"def get_credentials(): Retrieved credentials for {organization}.")
     return appid_uid, key_pw, cse_id
 
 if __name__ == "__main__":
