@@ -45,7 +45,7 @@ class GoogleSearch():
             self.config = yaml.safe_load(file)
 
         # Retrieve and store API credentials using credentials.py
-        self.api_key, self.key_pw, self.cse_id = get_credentials('Google')
+        self.appid_uid, self.key_pw, self.cse_id = get_credentials('Google')
 
         # Instantiate LLMHandler
         self.llm_handler = LLMHandler(config_path=config_path)
@@ -111,7 +111,7 @@ class GoogleSearch():
             list: A list of dictionaries containing 'org_name', 'title', 'keywords', 'url', and 'snippet' for each search result.
         """
         logging.info(f"Performing Google search for query: {query}")
-        service = build("customsearch", "v1", developerKey=self.api_key)
+        service = build("customsearch", "v1", developerKey=self.key_pw)
         response = service.cse().list(
             q=query,
             cx=self.cse_id,
