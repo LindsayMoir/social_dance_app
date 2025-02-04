@@ -1,2 +1,10 @@
-URL,Type_of_Event,Name_of_the_Event,Day_of_Week,Start_Date,End_Date,Start_Time,End_Time,Price,Location,Description
-https://www.google.com/calendar/event?eid=N2c2OHVudHVoYTB1M3FhMnI1dmhiMm52b2IgbGtrN2FoZXVpdHYyMzY1Z3B2Ym5zZjMxN3NAZw,other,Dance 💃🏻 circle ,Tuesday,2025-02-04,2025-02-04,17:00:00,18:00:00,,,
+org_name,dance_style,url,event_type,event_name,day_of_week,start_date,end_date,start_time,end_time,price,location,description
+Ali and 2 friends,,,social dance,Practica: Winter series Ali and 2 friends,Thursday,2025-01-02,2025-01-02,19:30,23:30,,,Practica: Winter series by Ali and 2 friends
+Ali and 2 friends,,,social dance,Practica: Winter series Ali and 2 friends,Thursday,2025-01-09,2025-01-09,19:30,23:30,,,Practica: Winter series by Ali and 2 friends
+Ali and 2 friends,,,social dance,Practica: Winter series Ali and 2 friends,Thursday,2025-01-16,2025-01-16,19:30,23:30,,,Practica: Winter series by Ali and 2 friends
+Ali and 2 friends,,,social dance,Practica: Winter series Ali and 2 friends,Thursday,2025-01-23,2025-01-23,19:30,23:30,,,Practica: Winter series by Ali and 2 friends
+Ali and 2 friends,,,social dance,Practica: Winter series Ali and 2 friends,Thursday,2025-01-30,2025-01-30,19:30,23:30,,,Practica: Winter series by Ali and 2 friends
+Ali and 2 friends,,,social dance,Practica: Winter series Ali and 2 friends,Thursday,2025-12-25,2025-12-25,19:30,23:30,,,Practica: Winter series by Ali and 2 friends
+Kenny Odumoso,urban kiz,,workshop,Special Edition Urbankiz Workshop,Saturday,2025-01-04,2025-01-04,19:00,23:30,,,Special Edition Urbankiz Workshop with Kenny Odumoso
+The Lalas,,,other,The Lalas: Los Angeles Burlesque Show,Friday,2025-01-24,2025-01-24,19:00,,,,The Lalas: Los Angeles Burlesque Show
+Shrek Rave,,,social dance,Shrek Rave,Friday,2025-02-28,2025-02-28,22:00,,,Victoria Wicket Hall,Shrek Rave at Victoria Wicket Hall

@@ -29,7 +29,7 @@ def get_credentials(organization):
         raise ValueError(f"Missing environment variables for organization: {organization}")
 
     logging.info(f"def get_credentials(): Retrieved credentials for {organization}.")
-    return appid_uid, key_pw, cse_id
+    return key_pw, appid_uid, cse_id
 
 if __name__ == "__main__":
     # Test the function by retrieving credentials for an organization

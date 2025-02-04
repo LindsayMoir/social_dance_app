@@ -9,6 +9,9 @@ import yaml
 
 from llm import LLMHandler
 
+# Set Streamlit page configuration for wide layout
+st.set_page_config(layout="wide")
+
 # Calculate the path to config.yaml
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 config_path = os.path.join(base_dir, 'config', 'config.yaml')
@@ -60,11 +63,24 @@ if st.button("Send"):
         print(f"Sanitized SQL Query: \n{sql_query}")
 
         try:
-            # 4) Execute the SQL with SQLAlchemy
-            df = pd.read_sql(sql_query, engine)
+            # 4) Sanitize the SQL Query
+            # Remove triple backticks, extra whitespace, or markdown syntax
+            sanitized_sql_query = sql_query.replace("```sql", "").replace("```", "").strip()
+            print(f"Sanitized SQL Query: \n{sanitized_sql_query}")
+
+            # 5) Execute the SQL with SQLAlchemy
+            with engine.connect() as conn:
+                result = conn.execute(text(sanitized_sql_query))  # Use `text()` for proper handling
+                rows = result.fetchall()
+
+            # Convert rows to a DataFrame
+            df = pd.DataFrame(rows, columns=result.keys())
+
+            # Display DataFrame with increased width and height
+            st.dataframe(df, height=600, width=1200)
 
             # Show the SQL query
-            st.markdown(f"**SQL Query**:\n```\n{sql_query}\n```")
+            st.markdown(f"**SQL Query**:\n```\n{sanitized_sql_query}\n```")
 
             # Display the DataFrame in Streamlit
             st.dataframe(df)

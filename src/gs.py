@@ -45,7 +45,11 @@ class GoogleSearch():
             self.config = yaml.safe_load(file)
 
         # Retrieve and store API credentials using credentials.py
-        _, self.api_key, self.cse_id = get_credentials('Google')
+        self.api_key, self.key_pw, self.cse_id = get_credentials('Google')
+
+        # Instantiate LLMHandler
+        self.llm_handler = LLMHandler(config_path=config_path)
+
 
     def read_keywords(self):
         """
@@ -90,8 +94,7 @@ class GoogleSearch():
             prompt = file.read()
         prompt = prompt + title
 
-        # Assuming llm_instance is globally available or injected; adjust as needed.
-        org_name = LLMHandler().query_llm(prompt)
+        org_name = self.llm_handler.query_llm(prompt)
         logging.info(f"def title_to_org_name(): Organization name returned by LLM is: {org_name}")
         org_name = org_name.translate(str.maketrans("", "", "'\"<>"))
         return org_name
