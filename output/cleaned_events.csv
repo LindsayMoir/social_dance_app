@@ -1,13 +1,2 @@
-org_name,dance_style,url,event_type,event_name,day_of_week,start_date,end_date,start_time,end_time,price,location,description,time_stamp
-Alive Tango Victoria,tango,https://alivetangovictoria.ca/classes-and-workshops/,class,Jorge Olguin Weekend with Tango,Friday,2025-02-22,2025-02-22,,,,1303 Broad Street,,2025-02-04 09:30:34.638382
-Alive Tango Victoria,tango,https://alivetangovictoria.ca/classes-and-workshops/,class,Jorge Olguin Weekend with Tango,Saturday,2025-02-23,2025-02-23,,,,1303 Broad Street,,2025-02-04 09:30:34.638382
-Alive Tango Victoria,tango,https://alivetangovictoria.ca/classes-and-workshops/,class,Jorge Olguin Weekend with Tango,Saturday,2025-03-22,2025-03-22,,,,1303 Broad Street,,2025-02-04 09:30:34.638382
-Alive Tango Victoria,tango,https://alivetangovictoria.ca/classes-and-workshops/,class,Jorge Olguin Weekend with Tango,Sunday,2025-03-23,2025-03-23,,,,1303 Broad Street,,2025-02-04 09:30:34.638382
-Alive Tango Victoria,tango,https://alivetangovictoria.ca/classes-and-workshops/,class,Jorge Olguin Weekend with Tango,Saturday,2025-05-17,2025-05-17,,,,1303 Broad Street,,2025-02-04 09:30:34.638382
-Alive Tango Victoria,tango,https://alivetangovictoria.ca/classes-and-workshops/,class,Jorge Olguin Weekend with Tango,Sunday,2025-05-18,2025-05-18,,,,1303 Broad Street,,2025-02-04 09:30:34.638382
-Alive Tango Victoria,tango,https://alivetangovictoria.ca/classes-and-workshops/,class,Jorge Olguin Weekend with Tango,Saturday,2025-06-21,2025-06-21,,,,1303 Broad Street,,2025-02-04 09:30:34.638382
-Alive Tango Victoria,tango,https://alivetangovictoria.ca/classes-and-workshops/,class,Jorge Olguin Weekend with Tango,Sunday,2025-06-22,2025-06-22,,,,1303 Broad Street,,2025-02-04 09:30:34.638382
-Alive Tango Victoria,tango,https://alivetangovictoria.ca/classes-and-workshops/,class,Jorge Olguin Weekend with Tango,Saturday,2025-07-19,2025-07-19,,,,1303 Broad Street,,2025-02-04 09:30:34.638382
-Alive Tango Victoria,tango,https://alivetangovictoria.ca/classes-and-workshops/,class,Jorge Olguin Weekend with Tango,Sunday,2025-07-20,2025-07-20,,,,1303 Broad Street,,2025-02-04 09:30:34.638382
-Alive Tango Victoria,tango,https://alivetangovictoria.ca/classes-and-workshops/,class,Jorge Olguin Weekend with Tango,Saturday,2025-08-16,2025-08-16,,,,1303 Broad Street,,2025-02-04 09:30:34.638382
-Alive Tango Victoria,tango,https://alivetangovictoria.ca/classes-and-workshops/,class,Jorge Olguin Weekend with Tango,Sunday,2025-08-17,2025-08-17,,,,1303 Broad Street,,2025-02-04 09:30:34.638382
+org_name,dance_style,url,event_type,event_name,day_of_week,start_date,end_date,start_time,end_time,price,location,description,time_stamp,address_id
+"Strictly Lindy Hop Swing Vancouver, BC",swing,https://www.facebook.com/events/2173095503511587/,social dance,Live Band Swing Dance,Saturday,2025-02-01,2025-02-01,,,,"Sapperton Community Hall, 318 Keary St, New Westminster, BC V3L 3L3, Canada","Join hosts Westside Swing Band on Saturday, February 1st, 2025 for the first live band social dance of the season at Sapperton Community Hall in New West. Swing out with friends.",2025-02-04 14:28:21.501111,1907.0

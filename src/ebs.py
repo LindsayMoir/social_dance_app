@@ -88,33 +88,33 @@ class EventbriteScraper:
             keywords_list (list): List of keywords associated with the events.
             prompt (str): The prompt to use for processing the extracted text.
         """
-        #try:
-        # Navigate to Eventbrite homepage
-        await self.read_extract.page.goto("https://www.eventbrite.com/", timeout=20000)
-        logging.info(f"def eventbrite_search(): Navigated to Eventbrite.")
+        try:
+            # Navigate to Eventbrite homepage
+            await self.read_extract.page.goto("https://www.eventbrite.com/", timeout=20000)
+            logging.info(f"def eventbrite_search(): Navigated to Eventbrite.")
 
-        # Perform search
-        await self.perform_search(query)
+            # Perform search
+            await self.perform_search(query)
 
-        # Extract event URLs
-        event_urls = await self.extract_event_urls()
-        logging.info(f"def eventbrite_search(): Total unique event URLs found: {len(event_urls)}")
+            # Extract event URLs
+            event_urls = await self.extract_event_urls()
+            logging.info(f"def eventbrite_search(): Total unique event URLs found: {len(event_urls)}")
 
-        for event_url in event_urls:
-            if event_url in self.visited_urls:
-                logging.info(f"def eventbrite_search(): URL already visited: {event_url}")
-            
-            elif len(self.visited_urls) >= self.config['crawling']['urls_run_limit']:
-                    logging.info(f"def eventbrite_search(): Reached the maximum limit of {self.config['crawling']['urls_run_limit']} URLs.")
-                    break
+            for event_url in event_urls:
+                if event_url in self.visited_urls:
+                    logging.info(f"def eventbrite_search(): URL already visited: {event_url}")
+                
+                elif len(self.visited_urls) >= self.config['crawling']['urls_run_limit']:
+                        logging.info(f"def eventbrite_search(): Reached the maximum limit of {self.config['crawling']['urls_run_limit']} URLs.")
+                        break
 
-            else:
-                logging.info(f"def eventbrite_search() Processing event URL: {event_url}")
-                self.visited_urls.add(event_url)
-                await self.process_event(event_url, org_name, keywords_list, prompt)
+                else:
+                    logging.info(f"def eventbrite_search() Processing event URL: {event_url}")
+                    self.visited_urls.add(event_url)
+                    await self.process_event(event_url, org_name, keywords_list, prompt)
 
-        # except Exception as e:
-        #     logging.error(f"def eventbrite_search(): An error occurred during Eventbrite search: {e}")
+        except Exception as e:
+            logging.error(f"def eventbrite_search(): An error occurred during Eventbrite search: {e}")
 
         return
     
@@ -218,28 +218,28 @@ class EventbriteScraper:
             keywords_list (list): List of keywords.
             prompt (str): Prompt for LLM processing.
         """
-        #try:
-        extracted_text = await self.read_extract.extract_event_text(event_url)
+        try:
+            extracted_text = await self.read_extract.extract_event_text(event_url)
 
-        if extracted_text:
-            keyword_status = self.llm_handler.check_keywords_in_text(event_url, extracted_text, org_name, keywords_list)
-            if keyword_status:
-                logging.info(f"def process_event(): Keywords found in event: {event_url}")
+            if extracted_text:
+                keyword_status = self.llm_handler.check_keywords_in_text(event_url, extracted_text, org_name, keywords_list)
+                if keyword_status:
+                    logging.info(f"def process_event(): Keywords found in event: {event_url}")
 
-                # Call the llm to process the extracted text
-                success = self.llm_handler.process_llm_response(
-                    url=event_url,
-                    extracted_text=extracted_text,
-                    org_name=org_name,
-                    keywords_list=keywords_list,
-                    prompt=prompt
-                )
+                    # Call the llm to process the extracted text
+                    success = self.llm_handler.process_llm_response(
+                        url=event_url,
+                        extracted_text=extracted_text,
+                        org_name=org_name,
+                        keywords_list=keywords_list,
+                        prompt=prompt
+                    )
+                else:
+                    logging.info(f"def process_event(): No keywords in extracted_text: {event_url}")
             else:
-                logging.info(f"def process_event(): No keywords in extracted_text: {event_url}")
-        else:
-            logging.warning(f"def process_event(): No extracted_text found for event: {event_url}")
-        #except Exception as e:
-            #logging.error(f"def process_event(): Error processing event {event_url}: {e}")
+                logging.warning(f"def process_event(): No extracted_text found for event: {event_url}")
+        except Exception as e:
+            logging.error(f"def process_event(): Error processing event {event_url}: {e}")
 
 
     async def driver(self):
@@ -250,29 +250,30 @@ class EventbriteScraper:
         Returns:
             pandas.DataFrame: A dataframe containing all search results.
         """
-        #try:
-        keywords_df = self.gs_instance.read_keywords()
-        for _, row in keywords_df.iterrows():
-            # Split the keywords and search for each keyword
-            keywords = row['keywords'].split(',')
-            for keyword in keywords:
-                query = keyword.strip()
-                org_name = ''  # Populate as needed
-                keywords_list = [kw.strip() for kw in row['keywords'].split(',')]
-                prompt = 'default'
+        try:
+            
+            keywords_df = self.gs_instance.read_keywords()
+            for _, row in keywords_df.iterrows():
+                # Split the keywords and search for each keyword
+                keywords = row['keywords'].split(',')
+                for keyword in keywords:
+                    query = keyword.strip()
+                    org_name = ''  # Populate as needed
+                    keywords_list = [kw.strip() for kw in row['keywords'].split(',')]
+                    prompt = 'default'
 
-                # Perform the search
-                logging.info(f"driver(): Searching for query: {query}")
-                await self.eventbrite_search(query, org_name, keywords_list, prompt)
+                    # Perform the search
+                    logging.info(f"driver(): Searching for query: {query}")
+                    await self.eventbrite_search(query, org_name, keywords_list, prompt)
 
-                # # Just checking one keyword to see if this works
-                break
+                    # # Just checking one keyword to see if this works
+                    break
 
-        logging.info(f"driver(): Driver completed with total {len(self.visited_urls)} processed URLs.")
+            logging.info(f"driver(): Driver completed with total {len(self.visited_urls)} processed URLs.")
 
-        # except Exception as e:
-        #     logging.error(f"def driver(): Error in driver: {e}")
-        #     return None
+        except Exception as e:
+            logging.error(f"def driver(): Error in driver: {e}")
+            return None
 
 
 async def main():

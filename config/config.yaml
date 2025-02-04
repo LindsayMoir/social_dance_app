@@ -29,7 +29,7 @@ location:
   distance: 50
   epicentre: 'Victoria, British Columbia, Canada'
 llm:
-  url_evaluator: 'gpt-4o-mini'
+  url_evaluator: 'o1-mini'
   spend_money: True
 logging:
   log_file: 'logs/log.txt'
@@ -50,8 +50,8 @@ search:
 startup:
   use_db: False
 testing:
-  status: True
+  status: False
   nof_no_url_events: 10
-  drop_tables: True
+  drop_tables: False
 update_schedule:
   true_links_hours: .01
