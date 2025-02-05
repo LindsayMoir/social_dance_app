@@ -14,6 +14,8 @@ Objectives:
 2. Ensure a single login session is reused for all operations, avoiding multiple logins.
 3. Provide an easy-to-use interface for other class libraries.
 4. Utilize the asyncio version of Playwright for asynchronous operations.
+5. Provides a place to deal with odd edge cases that may arise if you are using the logic in __main__
+    a. This will result in database updates to the events and urls tables.
 
 output (str): The extracted text content.
 """
@@ -28,6 +30,7 @@ from playwright.sync_api import sync_playwright
 import random
 import yaml
 
+from llm import LLMHandler
 from credentials import get_credentials  # Import the utility function
 
 
@@ -297,9 +300,11 @@ class ReadExtract:
 
     async def main(self, url):
         await self.init_browser()
+        logging.info(f"def main(): Initialized browser for url: {url}")
         text = await self.extract_event_text(url)
         logging.info(f"def main(): Extracted text: {text}")
         await self.close()
+        return text
 
 
 if __name__ == "__main__":
@@ -321,12 +326,27 @@ if __name__ == "__main__":
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
+    # Instantiate the classes
     read_extract = ReadExtract("config/config.yaml")
+    llm_handler = LLMHandler("config/config.yaml")
 
-    url = 'https://www.facebook.com/events/1120355202828169/'
+    # Read .csv file to deal with oddities
+    df = pd.read_csv(config['input']['edge_cases'])
 
-    # Initialize the browser and extract text
-    asyncio.run(read_extract.main(url))
+    # Iterate over the rows of the dataframe
+    for row in df.itertuples(index=True, name=None):
+
+        # Get the url, organization name, keywords
+        idx, org_name, keywords, url  = row
+
+        logging.info(f"(__main__ in rd_ext.py: idx: {idx}, url: {url}, org_name: {org_name}, keywords: {keywords})")
+
+        logging.info(f"__main__: Extracting text from {url}...")
+        # Initialize the browser and extract text
+        extracted_text = asyncio.run(read_extract.main(url))
+
+        # Process the extracted text with LLM. The url is the key into config to get the right prompt
+        llm_status = llm_handler.process_llm_response(url, extracted_text, org_name, keywords, prompt=url)
 
     # Get the end time
     end_time = datetime.now()

@@ -177,7 +177,7 @@ class LLMHandler():
             bool: True if the LLM response is successfully processed and events are written to the database, False otherwise.
         """
         # Generate prompt, query LLM, and process the response.
-        prompt = self.generate_prompt(url, extracted_text, 'default')
+        prompt = self.generate_prompt(url, extracted_text, prompt)
         llm_response = self.query_llm(prompt)
 
         if llm_response:

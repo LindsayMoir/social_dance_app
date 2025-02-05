@@ -9,8 +9,8 @@ crawling:
   depth_limit: 3
   headless: False
   max_crawl_trys: 3
-  max_website_urls: 7
-  urls_run_limit: 100
+  max_website_urls: 3
+  urls_run_limit: 10
   scroll_depth: 3
 date_range:
   months: 3
@@ -22,8 +22,8 @@ fuzzywuzzy:
   hurdle: 70
 input:
   data_keywords: 'data/other/keywords.csv'
+  edge_cases: 'data/other/edge_cases.csv'
   gs_urls: 'data/urls/gs_urls.csv'
-  keys: '/mnt/d/OneDrive/Security/keys.csv'
   urls: 'data/urls'
 location:
   distance: 50
@@ -45,6 +45,7 @@ prompts:
   single_event: 'prompts/single_event.txt'
   sql: 'prompts/sql_prompt.txt'
   title_to_org_name: 'prompts/title_to_org_name.txt'
+  https://www.bardandbanker.com/live-music: 'prompts/bard_and_banker_prompt.txt'
 search:
   gs_num_results: 10
 startup:
