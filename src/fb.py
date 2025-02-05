@@ -80,7 +80,7 @@ from playwright.sync_api import sync_playwright
 import random
 import re
 import requests
-from sqlalchemy import inspect
+from sqlalchemy import text
 import yaml
 
 # Import other classes
@@ -100,6 +100,7 @@ class FacebookEventScraper():
         # Start Playwright and log into Facebook once
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(headless=self.config['crawling']['headless'])
+
         self.context = self.browser.new_context()
         self.logged_in_page = self.context.new_page()
 
@@ -227,6 +228,9 @@ class FacebookEventScraper():
         Returns:
             str: The extracted relevant text content, or None if no relevant text is found.
         """
+        # Initialize event extracted text
+        event_extracted_text = None
+
         try:
             page = self.logged_in_page
             page.goto(link, timeout=10000)
@@ -238,7 +242,7 @@ class FacebookEventScraper():
                     more_button.wait_for_element_state("stable", timeout=3000)  # Ensure button is stable
                     more_button.click()
                     # Randomize wait time after clicking each "See more"
-                    page.wait_for_timeout(random.randint(3000, 5000))
+                    page.wait_for_timeout(random.randint(10000, 20000))
                     logging.info(f"Clicked 'See more' button in URL: {link}")
                 except Exception as e:
                     logging.warning(f"Could not click 'See more' button in URL {link}: {e}")
@@ -252,19 +256,19 @@ class FacebookEventScraper():
             extracted_text = ' '.join(soup.stripped_strings)
             logging.info(f"def extract_event_text(): Extracted raw text from {link}: {extracted_text}")
 
-            if extracted_text:
-                extracted_text = self.extract_relevant_text(extracted_text, link)
+            if extracted_text and 'facebook.com/events/' in link:
+                event_extracted_text = self.extract_relevant_text(extracted_text, link)
 
-                # Check if we got relevant text
-                if extracted_text:
-                    logging.info(f"Extracted relevant text from {link}: {extracted_text}")
-                    return extracted_text
-                else:
-                    logging.info(f"def extract_event_text(): No relevant text found in {link}.")
-                    return None
+            # Check if we got event extracted text
+            if event_extracted_text:
+                logging.info(f"Extracted relevant event text from {link}: {extracted_text}")
+                return event_extracted_text
             else:
-                logging.info(f"def extract_event_text(): No text could be extracted from {link}.")
-                return None
+                logging.info(f"def extract_event_text(): This is not an event in Facebook."
+                             f" Do a different parsing of this page: {link}.")
+                extracted_text = self.extract_shared_text(extracted_text, link)
+                logging.info(f"Extracted shared text from {link}: {extracted_text}")
+                return extracted_text
 
         except Exception as e:
             logging.error(f"def extract_event_text(): Failed to extract text from {link}: {e}")
@@ -324,6 +328,31 @@ class FacebookEventScraper():
         return extracted_text
     
 
+    def extract_shared_text(self, extracted_text, link):
+        """
+        Extracts text shared with the public from the given extracted text.
+        This function uses a regular expression to find and extract the text that appears 
+        between 'Shared with Public' and 'See more' in the provided extracted text.
+        Args:
+            extracted_text (str): The text from which to extract the shared text.
+            link (str): The link associated with the extracted text, used for logging purposes.
+        Returns:
+            str or None: The extracted text if found, otherwise None.
+        Logs:
+            A warning if 'Shared with Public' or 'See more' is not found in the extracted text.
+        """
+        # Regex to find text after 'Shared with Public' up to 'See more'
+        pattern = re.compile(r"Shared with Public\s*(.*?)\s*See more", re.IGNORECASE | re.DOTALL)
+
+        match = pattern.search(extracted_text)
+        
+        if match:
+            return match.group(1).strip()  # Extracted text between markers
+        else:
+            logging.warning(f"def extract_shared_text(): 'Shared with Public' or 'See more' not found in {link}.")
+            return None
+        
+        
     def scrape_events(self, keywords):
         """
         Logs into Facebook once, performs searches for keywords, and extracts event links and text.
@@ -619,7 +648,7 @@ class FacebookEventScraper():
             extracted_text = self.extract_text_from_fb_url(url)
             if not extracted_text:
                 db_handler.update_url(url, update_other_links, relevant, increment_crawl_trys)
-                logging.info(f"def process_fb_url(): No text extracted for Facebook URL. URL updated in urls table: {url}.")
+                logging.info(f"def process_fb_url(): No text extracted for Facebook URL: {url}.")
                 return
 
             # Generate prompt and query LLM
@@ -656,59 +685,54 @@ class FacebookEventScraper():
         2. For each url, extracts text and processes it.
         3. If valid events are found, writes them to the database; otherwise, updates the URL.
         """
-        query = """
-        SELECT * 
+        # ********Temp start
+        query =text("""
+        SELECT *
         FROM urls
-        WHERE links ILIKE :link_pattern
-        """
-        params = {'link_pattern': '%facebook%'}
-        rows = db_handler.execute_query(query, params)
+        WHERE org_names ILIKE :org_pattern
+        """)
+        params = {'org_pattern': '%dean%'}
+        fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
+        
+        if fb_urls_df.shape[0] > 0:
+            for _, row in fb_urls_df.iterrows():
+                url = row['links']
+                org_name = row['org_names']
+                keywords = row['keywords']
+                logging.info(f"def driver_fb_urls(): Processing URL: {url}")
+                if url in self.urls_visited:
+                    pass
+                else:
+                    self.urls_visited.add(url)
+                    self.process_fb_url(url, org_name, keywords)
+                    if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                        break   
 
-        if rows:
-            # Need to get column names
-            inspector = inspect(db_handler.conn)
-            table_name = 'urls'
-            column_names = [column['name'] for column in inspector.get_columns(table_name)]
-            fb_urls_df = pd.DataFrame(rows, columns=column_names)
-            logging.info(f"def driver_fb_urls(): Retrieved {len(fb_urls_df)} Facebook URLs.")
+                    # Get the event links from the facebook url
+                    fb_event_links = self.extract_event_links(url)
+
+                    # Get the event links from the event tab from the group page
+                    if "facebook.com/groups" in url:
+                        fb_group_events = self.fb_group_event_links(url)
+
+                        # Merge fb_group_events with fb_event_links
+                        if fb_group_events:
+                            if fb_event_links:
+                                fb_event_links.update(fb_group_events)
+                            else:
+                                fb_event_links = fb_group_events + url
+
+                    # Process the event links
+                    for url in fb_event_links:
+                        if url in self.urls_visited:
+                            pass
+                        else:
+                            self.urls_visited.add(url)
+                            self.process_fb_url(url, org_name, keywords)
+                            if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                                break   
         else:
             logging.warning("No rows returned from the query.")
-        
-        for _, row in fb_urls_df.iterrows():
-            url = row['links']
-            org_name = row['org_names']
-            keywords = row['keywords']
-            logging.info(f"def driver_fb_urls(): Processing URL: {url}")
-            if url in self.urls_visited:
-                continue
-            else:
-                self.urls_visited.add(url)
-                self.process_fb_url(url, org_name, keywords)
-                if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                    break   
-
-                # Get the event links from the facebook url
-                fb_event_links = self.extract_event_links(url)
-
-                # Get the event links from the event tab from the group page
-                if "facebook.com/groups" in url:
-                    fb_group_events = self.fb_group_event_links(url)
-
-                    # Merge fb_group_events with fb_event_links
-                    if fb_group_events:
-                        if fb_event_links:
-                            fb_event_links.update(fb_group_events)
-                        else:
-                            fb_event_links = fb_group_events
-
-                for url in fb_event_links:
-                    if url in self.urls_visited:
-                        continue
-                    else:
-                        self.urls_visited.add(url)
-                        self.process_fb_url(url, org_name, keywords)
-                        if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                            break   
 
 
     def fb_group_event_links(self, url):
@@ -879,11 +903,11 @@ if __name__ == "__main__":
     logging.info(f"def __main__: Running driver_fb_urls.")
     fb_scraper.driver_fb_urls()
 
-    logging.info(f"def __main__: Running driver_fb_search.")
-    fb_scraper.driver_fb_search()
+    # logging.info(f"def __main__: Running driver_fb_search.")
+    # fb_scraper.driver_fb_search()
 
-    logging.info(f"def __main__: Running driver_no_urls.")
-    fb_scraper.driver_no_urls()
+    # logging.info(f"def __main__: Running driver_no_urls.")
+    # fb_scraper.driver_no_urls()
 
     # Close the browser and stop Playwright
     fb_scraper.browser.close()

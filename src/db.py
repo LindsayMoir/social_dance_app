@@ -326,13 +326,13 @@ class DatabaseHandler():
             # Execute the update
             update_result = self.execute_query(update_query, update_params)
             if update_result:
-                logging.info("update_url: Updated URL '%s' successfully.", url)
+                logging.info("def update_url(): Updated URL '%s' successfully.", url)
                 return True
             else:
-                logging.info("update_url: Failed to update URL '%s'.", url)
+                logging.info("def update_url(): Failed to update URL '%s'.", url)
                 return False
         else:
-            logging.info("update_url: URL '%s' not found for update.", url)
+            logging.info("def update_url(): URL '%s' not found for update.", url)
             return False
         
 
