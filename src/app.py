@@ -1,7 +1,46 @@
+# app.py
+"""
+This script sets up a Streamlit application for a social dance chatbot that answers questions about dance events in Greater Victoria.
+It uses OpenAI's language model to generate SQL queries based on user input and retrieves data from a database.
+
+Modules:
+- dotenv: Loads environment variables from a .env file.
+- logging: Provides logging capabilities.
+- streamlit: Creates the web application interface.
+- openai: Interacts with OpenAI's language model.
+- pandas: Handles data manipulation and analysis.
+- os: Interacts with the operating system.
+- sqlalchemy: Manages database connections and queries.
+- yaml: Parses YAML configuration files.
+
+Classes:
+- LLMHandler: Custom class to handle interactions with the language model.
+
+Functions:
+- load_dotenv: Loads environment variables from a .env file.
+- create_engine: Creates a SQLAlchemy engine for database connections.
+- text: Prepares SQL queries for execution.
+
+Streamlit Components:
+- st.set_page_config: Configures the Streamlit page layout.
+- st.title: Sets the title of the Streamlit app.
+- st.text_input: Creates a text input box for user queries.
+- st.button: Creates a button to submit user queries.
+- st.dataframe: Displays data in a table format.
+- st.markdown: Renders Markdown text.
+
+Workflow:
+1. Load environment variables from a .env file.
+2. Load configuration settings from a YAML file.
+3. Initialize the LLMHandler with the configuration path.
+4. Create a SQLAlchemy engine using the database URL from environment variables.
+5. Set up the Streamlit interface with a title, text input, and button.
+6. Handle user input by generating and executing SQL queries using the language model.
+7. Display query results and the conversation history in the Streamlit app.
+"""
 from dotenv import load_dotenv
 import logging
 import streamlit as st
-import openai
 import pandas as pd
 import os
 from sqlalchemy import create_engine, text
@@ -63,14 +102,9 @@ if st.button("Send"):
         print(f"Sanitized SQL Query: \n{sql_query}")
 
         try:
-            # 4) Sanitize the SQL Query
-            # Remove triple backticks, extra whitespace, or markdown syntax
-            sanitized_sql_query = sql_query.replace("```sql", "").replace("```", "").strip()
-            print(f"Sanitized SQL Query: \n{sanitized_sql_query}")
-
-            # 5) Execute the SQL with SQLAlchemy
+            # Execute the SQL query
             with engine.connect() as conn:
-                result = conn.execute(text(sanitized_sql_query))  # Use `text()` for proper handling
+                result = conn.execute(text(sql_query))  # Use `text()` for proper handling
                 rows = result.fetchall()
 
             # Convert rows to a DataFrame
@@ -80,7 +114,7 @@ if st.button("Send"):
             st.dataframe(df, height=600, width=1200)
 
             # Show the SQL query
-            st.markdown(f"**SQL Query**:\n```\n{sanitized_sql_query}\n```")
+            st.markdown(f"**SQL Query**:\n```\n{sql_query}\n```")
 
             # Display the DataFrame in Streamlit
             st.dataframe(df)

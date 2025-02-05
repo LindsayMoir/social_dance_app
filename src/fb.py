@@ -687,11 +687,11 @@ class FacebookEventScraper():
         """
         # ********Temp start
         query =text("""
-        SELECT *
+        SELECT * 
         FROM urls
-        WHERE org_names ILIKE :org_pattern
+        WHERE links ILIKE :link_pattern
         """)
-        params = {'org_pattern': '%dean%'}
+        params = {'link_pattern': '%facebook%'}
         fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
         
         if fb_urls_df.shape[0] > 0:
@@ -732,7 +732,7 @@ class FacebookEventScraper():
                             if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                                 break   
         else:
-            logging.warning("No rows returned from the query.")
+            logging.warning("def driver_fb_urls(): No rows returned from the sql query.")
 
 
     def fb_group_event_links(self, url):
