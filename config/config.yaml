@@ -40,11 +40,12 @@ output:
   gs_search_results: 'output/gs_search_results.csv'
 prompts:
   allevents: 'prompts/all_events_in_prompt.txt'
+  chatbot_instructions: 'prompts/chatbot_instructions.txt'
   default: 'prompts/default.txt'
   fb: 'prompts/fb_prompt.txt'
   single_event: 'prompts/single_event.txt'
   sql: 'prompts/sql_prompt.txt'
-  title_to_org_name: 'prompts/title_to_org_name.txt'
+  title_to_source: 'prompts/title_to_source.txt'
   https://www.bardandbanker.com/live-music: 'prompts/bard_and_banker_prompt.txt'
 search:
   gs_num_results: 10

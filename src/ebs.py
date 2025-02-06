@@ -77,14 +77,14 @@ class EventbriteScraper:
         self.llm_handler = llm_handler
         self.visited_urls = set()
 
-    async def eventbrite_search(self, query, org_name, keywords_list, prompt):
+    async def eventbrite_search(self, query, source, keywords_list, prompt):
         """
         Searches Eventbrite for events based on the query, extracts event URLs,
         retrieves event details, and processes them using LLM.
 
         Parameters:
             query (str): The search query to enter in Eventbrite.
-            org_name (str): The organization name related to the events.
+            source (str): The organization name related to the events.
             keywords_list (list): List of keywords associated with the events.
             prompt (str): The prompt to use for processing the extracted text.
         """
@@ -111,7 +111,7 @@ class EventbriteScraper:
                 else:
                     logging.info(f"def eventbrite_search() Processing event URL: {event_url}")
                     self.visited_urls.add(event_url)
-                    await self.process_event(event_url, org_name, keywords_list, prompt)
+                    await self.process_event(event_url, source, keywords_list, prompt)
 
         except Exception as e:
             logging.error(f"def eventbrite_search(): An error occurred during Eventbrite search: {e}")
@@ -152,9 +152,9 @@ class EventbriteScraper:
         """
         event_urls = set()
         try:
-            event_links = await self.read_extract.page.query_selector_all("a[href*='/e/']")
+            event_link = await self.read_extract.page.query_selector_all("a[href*='/e/']")
 
-            for link in event_links:
+            for link in event_link:
                 href = await link.get_attribute("href")
                 if href:
                     href = self.ensure_absolute_url(href)
@@ -207,14 +207,14 @@ class EventbriteScraper:
         return match.group(1) if match else None
     
 
-    async def process_event(self, event_url, org_name, keywords_list, prompt):
+    async def process_event(self, event_url, source, keywords_list, prompt):
         """
         Processes an individual event URL: extracts text, processes it with LLM,
         and writes to the database.
 
         Args:
             event_url (str): Event URL.
-            org_name (str): Organization name.
+            source (str): Organization name.
             keywords_list (list): List of keywords.
             prompt (str): Prompt for LLM processing.
         """
@@ -222,7 +222,7 @@ class EventbriteScraper:
             extracted_text = await self.read_extract.extract_event_text(event_url)
 
             if extracted_text:
-                keyword_status = self.llm_handler.check_keywords_in_text(event_url, extracted_text, org_name, keywords_list)
+                keyword_status = self.llm_handler.check_keywords_in_text(event_url, extracted_text, source, keywords_list)
                 if keyword_status:
                     logging.info(f"def process_event(): Keywords found in event: {event_url}")
 
@@ -230,7 +230,7 @@ class EventbriteScraper:
                     success = self.llm_handler.process_llm_response(
                         url=event_url,
                         extracted_text=extracted_text,
-                        org_name=org_name,
+                        source=source,
                         keywords_list=keywords_list,
                         prompt=prompt
                     )
@@ -258,13 +258,13 @@ class EventbriteScraper:
                 keywords = row['keywords'].split(',')
                 for keyword in keywords:
                     query = keyword.strip()
-                    org_name = ''  # Populate as needed
+                    source = ''  # Populate as needed
                     keywords_list = [kw.strip() for kw in row['keywords'].split(',')]
                     prompt = 'default'
 
                     # Perform the search
                     logging.info(f"driver(): Searching for query: {query}")
-                    await self.eventbrite_search(query, org_name, keywords_list, prompt)
+                    await self.eventbrite_search(query, source, keywords_list, prompt)
 
                     # # Just checking one keyword to see if this works
                     break

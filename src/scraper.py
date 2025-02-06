@@ -12,12 +12,12 @@ Classes:
     EventSpider(scrapy.Spider):
         A custom Scrapy spider that:
         - Initiates crawling by fetching URLs from a database or CSV files.
-        - Parses responses to extract links, handle iframes, and manage Facebook/Instagram URLs.
+        - Parses responses to extract link, handle iframes, and manage Facebook/Instagram URLs.
         - Utilizes Playwright to extract page text content dynamically.
         - Checks for relevant keywords in text, processes URLs through a language model,
           and updates the database with event information.
         - Handles Google Calendar event fetching and updates URLs accordingly.
-        - Maintains a set of visited links to avoid duplicate processing and 
+        - Maintains a set of visited link to avoid duplicate processing and 
           respects configured crawling limits.
 
 Usage Example:
@@ -85,7 +85,7 @@ class EventSpider(scrapy.Spider):
 
     def __init__(self, config, *args, **kwargs):
         self.config = config
-        self.visited_links = set()  # To track visited URLs and avoid duplicate crawls
+        self.visited_link = set()  # To track visited URLs and avoid duplicate crawls
 
     def start_requests(self):
         """
@@ -129,149 +129,149 @@ class EventSpider(scrapy.Spider):
             urls_df = pd.concat(dataframes, ignore_index=True)
 
         for _, row in urls_df.iterrows():
-            org_name = row['org_names']
+            source = row['source']
             keywords = row['keywords']
-            url = row['links']
+            url = row['link']
             
             # We need to write the url to the database, if it is not already there
-            other_links, relevant, increment_crawl_trys = '', None, 1
-            db_handler.write_url_to_db(org_name, keywords, url, other_links, relevant, increment_crawl_trys)
+            other_link, relevant, increment_crawl_try = '', None, 1
+            db_handler.write_url_to_db(source, keywords, url, other_link, relevant, increment_crawl_try)
 
-            if url not in self.visited_links:
-                self.visited_links.add(url)  # Mark the page link as visited
+            if url not in self.visited_link:
+                self.visited_link.add(url)  # Mark the page link as visited
                 logging.info(f"Starting crawl for URL: {url}")
                 yield scrapy.Request(url=url, callback=self.parse, cb_kwargs={'keywords': keywords, 
-                                                'org_name': org_name, 
+                                                'source': source, 
                                                 'url': url})
 
-    def parse(self, response, keywords, org_name, url):
+    def parse(self, response, keywords, source, url):
         """
         Args:
             response (scrapy.http.Response): The response object to parse.
             keywords (str): A comma separated string of keywords to check for relevance.
-            org_name (str): The name of the organization to check for relevance.
+            source (str): The name of the organization to check for relevance.
             url (str): The URL of the current page being parsed.
 
         Returns:
             generator: A generator yielding scrapy.Request objects for further crawling.
 
-        This function extracts links from the main page and handles Facebook links differently. 
-        It also extracts iframe sources and updates the URL if relevant. 
-        The function checks for relevance of the links and continues crawling if they are relevant.
+        This function extracts link from the main page and handles Facebook link differently. 
+        It also extracts iframe source and updates the URL if relevant. 
+        The function checks for relevance of the link and continues crawling if they are relevant.
         """
-        # Get all of the subsidiary links on the page   
-        page_links = response.css('a::attr(href)').getall()
-        page_links = [response.urljoin(link) for link in page_links if link.startswith('http')]
-        logging.info(f"def parse(): Found {len(page_links)} links on {response.url}")
-        page_links = page_links[:config['crawling']['max_website_urls']]  # Limit the number of links
-        logging.info(f"def parse(): Limiting the number of links to {config['crawling']['max_website_urls']}. "
+        # Get all of the subsidiary link on the page   
+        page_link = response.css('a::attr(href)').getall()
+        page_link = [response.urljoin(link) for link in page_link if link.startswith('http')]
+        logging.info(f"def parse(): Found {len(page_link)} link on {response.url}")
+        page_link = page_link[:config['crawling']['max_website_urls']]  # Limit the number of link
+        logging.info(f"def parse(): Limiting the number of link to {config['crawling']['max_website_urls']}. "
                      f"on url: {response.url}")
 
-        # Extract iframe sources
-        iframe_links = response.css('iframe::attr(src)').getall()
-        iframe_links = [response.urljoin(link) for link in iframe_links if link.startswith('http')]
-        logging.info(f"def parse(): Found {len(iframe_links)}: iframe links are: {iframe_links} "
+        # Extract iframe source
+        iframe_link = response.css('iframe::attr(src)').getall()
+        iframe_link = [response.urljoin(link) for link in iframe_link if link.startswith('http')]
+        logging.info(f"def parse(): Found {len(iframe_link)}: iframe link are: {iframe_link} "
                      f"on url: {response.url}")
 
-        # Extract other Google Calendar links from the response.text using regex
+        # Extract other Google Calendar link from the response.text using regex
         calendar_pattern = re.compile(r'"gcal"\s*:\s*"([a-zA-Z0-9_.+-]+@group\.calendar\.google\.com)"') 
         calendar_emails = calendar_pattern.findall(response.text)
         logging.info(f"def parse(): Extracted Google Calendar emails: {calendar_emails}")
         
-        # Combine iframe and calendar links
-        iframe_links.extend(calendar_emails)
+        # Combine iframe and calendar link
+        iframe_link.extend(calendar_emails)
 
-        if iframe_links:
-            db_handler.update_url(url, update_other_links='calendar', relevant=True, increment_crawl_trys=0)
-            for calendar_url in iframe_links:
-                self.fetch_google_calendar_events(calendar_url, url, org_name, keywords)
+        if iframe_link:
+            db_handler.update_url(url, update_other_link='calendar', relevant=True, increment_crawl_try=0)
+            for calendar_url in iframe_link:
+                self.fetch_google_calendar_events(calendar_url, url, source, keywords)
 
-        # Put all non calendar links together
-        all_links = set(page_links + [url])
+        # Put all non calendar link together
+        all_link = set(page_link + [url])
 
-        # identify any current or future facebook links. We want those out and processed by fb.py
-        # Iterate over a copy of all_links to safely remove items during iteration
-        for link in list(all_links):
+        # identify any current or future facebook link. We want those out and processed by fb.py
+        # Iterate over a copy of all_link to safely remove items during iteration
+        for link in list(all_link):
             if 'facebook' in link or 'instagram' in link:
-                all_links.remove(link)  # Safely remove from the original set
+                all_link.remove(link)  # Safely remove from the original set
                 logging.info(f"def parse(): Found a Facebook or Instagram URL, processing: {link}")
         
-        logging.info(f"def parse() Found {len(all_links)} links on {response.url}")
+        logging.info(f"def parse() Found {len(all_link)} link on {response.url}")
 
         # Check for relevance and crawl further
-        for link in all_links:
-            if link not in self.visited_links:
-                self.visited_links.add(link)  # Mark the page link as visited
-                other_links, relevant, increment_crawl_trys = '', None, 1
-                db_handler.write_url_to_db(org_name, keywords, url, other_links, relevant, increment_crawl_trys)
-                if len(self.visited_links) >= config['crawling']['urls_run_limit']:
+        for link in all_link:
+            if link not in self.visited_link:
+                self.visited_link.add(link)  # Mark the page link as visited
+                other_link, relevant, increment_crawl_try = '', None, 1
+                db_handler.write_url_to_db(source, keywords, url, other_link, relevant, increment_crawl_try)
+                if len(self.visited_link) >= config['crawling']['urls_run_limit']:
                     logging.info(f"def parse(): Maximum URL limit reached: {config['crawling']['urls_run_limit']} Stopping further crawling.")
                     break
                 
-                self.driver(link, keywords, org_name)
+                self.driver(link, keywords, source)
                 logging.info(f"def parse() Starting crawl for URL: {link}")
                 yield response.follow(url=link, callback=self.parse, cb_kwargs={'keywords': keywords, 
-                                                                                'org_name': org_name, 
+                                                                                'source': source, 
                                                                                 'url': link})
     
     
-    def driver(self, url, keywords, org_name):
+    def driver(self, url, keywords, source):
         """
         Determine the relevance of a given URL based on its content, keywords, or organization name.
 
         Parameters:
         url (str): The URL to be evaluated.
         keywords (str): A comma separated string of keywords to check within the URL content.
-        org_name (str): The name of the organization to check within the URL content.
+        source (str): The name of the organization to check within the URL content.
 
         Returns:
         bool: True if the URL is relevant, False otherwise.
         """
-        # Process non-facebook links
+        # Process non-facebook link
         extracted_text = read_extract.extract_text_with_playwright(url)
 
         # Check keywords in the extracted text
-        keyword_status = self.check_keywords_in_text(url, extracted_text, keywords, org_name)
+        keyword_status = self.check_keywords_in_text(url, extracted_text, keywords, source)
 
         if keyword_status:
             # Call the llm to process the extracted text
             prompt = 'default'
-            llm_status = llm_handler.process_llm_response(url, extracted_text, org_name, keywords, prompt)
+            llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt)
 
             if llm_status:
                 # Mark the event link as relevant
-                update_status = db_handler.update_url(url, update_other_links='', relevant=True, increment_crawl_trys=0)
+                update_status = db_handler.update_url(url, update_other_link='', relevant=True, increment_crawl_try=0)
                 logging.info(f"def driver(): URL {url} not in url table.")
                 if update_status:
                     pass
                 else:
-                    db_handler.write_url_to_db(org_name, keywords, url, '', True, 1)
+                    db_handler.write_url_to_db(source, keywords, url, '', True, 1)
                     logging.info(f"def driver(): URL {url} marked as relevant, since there is a LLM response.")
 
             else:
                 # Mark the event link as irrelevant
-                update_status = db_handler.update_url(url, update_other_links='', relevant=False, increment_crawl_trys=0)
+                update_status = db_handler.update_url(url, update_other_link='', relevant=False, increment_crawl_try=0)
                 logging.info(f"def driver(): URL {url} not in url table.")
                 if update_status:
                     pass
                 else:
-                    db_handler.write_url_to_db(org_name, keywords, url, '', False, 1)
+                    db_handler.write_url_to_db(source, keywords, url, '', False, 1)
                     logging.info(f"def driver(): URL {url} marked as irrelevant since there is NO LLM response.")
 
         else:
-            db_handler.update_url(url, update_other_links='No', relevant=False, increment_crawl_trys=0)
+            db_handler.update_url(url, update_other_link='No', relevant=False, increment_crawl_try=0)
             logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords.")
 
         return
     
 
-    def check_keywords_in_text(self, url, extracted_text, keywords, org_name):
+    def check_keywords_in_text(self, url, extracted_text, keywords, source):
         """
         Parameters:
         url (str): The URL of the webpage being checked.
         extracted_text (str): The text extracted from the webpage.
         keywords (str, optional): A comma-separated string of keywords to check in the extracted text. Defaults to None.
-        org_name (str, optional): The name of the organization, used for further processing if keywords are found. Defaults to None.
+        source (str, optional): The name of the organization, used for further processing if keywords are found. Defaults to None.
 
         Returns:
         bool: True if the text is relevant based on the presence of keywords or 'calendar' in the URL, False otherwise.
@@ -282,7 +282,7 @@ class EventSpider(scrapy.Spider):
             if extracted_text and any(kw in extracted_text.lower() for kw in keywords_list):
                 logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
                 prompt = 'default'
-                return llm_handler.process_llm_response(url, extracted_text, org_name, keywords_list, prompt)
+                return llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
 
         if 'calendar' in url:
             logging.info(f"def check_keywords_in_text: URL {url} marked as relevant because 'calendar' is in the URL.")
@@ -292,14 +292,14 @@ class EventSpider(scrapy.Spider):
         return False
         
 
-    def fetch_google_calendar_events(self, calendar_url, url, org_name, keywords):
+    def fetch_google_calendar_events(self, calendar_url, url, source, keywords):
         """
         Fetch events from a Google Calendar and process them.
 
         Args:
             calendar_url (str): The URL of the Google Calendar to fetch events from.
             keywords (str): A comma-separated list of keywords to associate with the events.
-            org_name (str): The name of the organization associated with the events.
+            source (str): The name of the organization associated with the events.
             url (str): The URL to update after processing the events.
 
         Returns:
@@ -308,7 +308,7 @@ class EventSpider(scrapy.Spider):
         logging.info(f"def fetch_google_calendar_events(): Inputs are: "                    
                     f"calendar_url: {calendar_url}, "
                     f"URL: {url}, "
-                    f"org_name: {org_name}, "
+                    f"source: {source}, "
                     f"keywords: {keywords}")
 
         # Extract calendar IDs from the URL
@@ -328,7 +328,7 @@ class EventSpider(scrapy.Spider):
 
         # Process all valid calendar IDs
         for calendar_id in calendar_ids:
-            self.process_calendar_id(calendar_id, calendar_url, url, org_name, keywords)
+            self.process_calendar_id(calendar_id, calendar_url, url, source, keywords)
 
 
     def extract_calendar_ids(self, calendar_url):
@@ -399,7 +399,7 @@ class EventSpider(scrapy.Spider):
         return bool(calendar_id_pattern.fullmatch(calendar_id))
 
 
-    def process_calendar_id(self, calendar_id, calendar_url, url, org_name, keywords):
+    def process_calendar_id(self, calendar_id, calendar_url, url, source, keywords):
         """
         Process a single calendar ID by fetching events and updating the database.
 
@@ -407,7 +407,7 @@ class EventSpider(scrapy.Spider):
             calendar_id (str): The calendar ID to process.
             calendar_url (str): The URL of the Google Calendar.
             url (str): The original URL associated with the events.
-            org_name (str): The organization name.
+            source (str): The organization name.
             keywords (str): Keywords associated with the events.
 
         Returns:
@@ -417,14 +417,14 @@ class EventSpider(scrapy.Spider):
                      f"calendar_id: {calendar_id}, "
                      f"calendar_url: {calendar_url}, "
                      f"url: {url}, "
-                     f"org_name: {org_name}, "
+                     f"source: {source}, "
                      f"keywords: {keywords}")
         
         events_df = self.get_calendar_events(calendar_id)
         if not events_df.empty:
-            db_handler.write_events_to_db(events_df, calendar_url, org_name, keywords)
-            db_handler.update_url(calendar_url, update_other_links=url, relevant=True, increment_crawl_trys=1)
-            db_handler.update_url(url, update_other_links=calendar_url, relevant=True, increment_crawl_trys=1)
+            db_handler.write_events_to_db(events_df, calendar_url, source, keywords)
+            db_handler.update_url(calendar_url, update_other_link=url, relevant=True, increment_crawl_try=1)
+            db_handler.update_url(url, update_other_link=calendar_url, relevant=True, increment_crawl_try=1)
 
     
     def get_calendar_events(self, calendar_id):

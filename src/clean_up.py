@@ -308,10 +308,10 @@ class CleanUp:
             logging.info(f"def process_events_without_url(): Extracted text from URL: {best_url}")
 
             # 4) Check relevance
-            org_name = event_row.org_name
+            source = event_row.source
             keywords_list = event_row.dance_style.split(",") if event_row.dance_style else []
             relevant = self.llm_handler.check_keywords_in_text(
-                best_url, extracted_text, org_name, keywords_list
+                best_url, extracted_text, source, keywords_list
             )
 
             if relevant:
@@ -337,10 +337,10 @@ class CleanUp:
                             merged_row = self.merge_rows(event_row, new_row)
                             self.update_event_row(merged_row)
 
-                            org_names = merged_row["org_name"]
+                            source = merged_row["source"]
                             keywords = merged_row["dance_style"]
                             # Write URL to db
-                            self.db_handler.write_url_to_db(org_names, keywords, best_url, "", True, 1)
+                            self.db_handler.write_url_to_db(source, keywords, best_url, "", True, 1)
 
             else:
                 logging.info(f"def process_events_without_url(): Event {event_name} and {event_row.event_id} is not relevant.")

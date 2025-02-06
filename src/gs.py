@@ -79,7 +79,7 @@ class GoogleSearch():
         logging.debug(f"def build_query_string(): Built query string: {query}")
         return query
     
-    def title_to_org_name(self, title, url):
+    def title_to_source(self, title, url):
         """
         Extract organization names from a title string.
 
@@ -87,17 +87,17 @@ class GoogleSearch():
             title (str): The title string to extract organization names from.
 
         Returns:
-            org_name (str): A likely organization name extracted from the title.
+            source (str): A likely organization name extracted from the title.
         """
-        prompt_file_path = self.config['prompts']['title_to_org_name']
+        prompt_file_path = self.config['prompts']['title_to_source']
         with open(prompt_file_path, 'r') as file:
             prompt = file.read()
         prompt = prompt + title
 
-        org_name = self.llm_handler.query_llm(prompt)
-        logging.info(f"def title_to_org_name(): Organization name returned by LLM is: {org_name}")
-        org_name = org_name.translate(str.maketrans("", "", "'\"<>"))
-        return org_name
+        source = self.llm_handler.query_llm(prompt)
+        logging.info(f"def title_to_source(): Organization name returned by LLM is: {source}")
+        source = source.translate(str.maketrans("", "", "'\"<>"))
+        return source
 
     def google_search(self, query, keywords, num_results=10):
         """
@@ -108,7 +108,7 @@ class GoogleSearch():
             num_results (int, optional): The number of search results to retrieve. Defaults to 10.
 
         Returns:
-            list: A list of dictionaries containing 'org_name', 'title', 'keywords', 'url', and 'snippet' for each search result.
+            list: A list of dictionaries containing 'source', 'title', 'keywords', 'url', and 'snippet' for each search result.
         """
         logging.info(f"Performing Google search for query: {query}")
         service = build("customsearch", "v1", developerKey=self.key_pw)
@@ -124,11 +124,11 @@ class GoogleSearch():
                 title = item.get('title')
                 logging.info(f"def google_search(): Title: {title}")
                 url = item.get('link')
-                org_name = self.title_to_org_name(title, url)
+                source = self.title_to_source(title, url)
                 results.append({
-                    'org_names': org_name,
+                    'source': source,
                     'keywords': keywords,
-                    'links': url
+                    'link': url
                 })
             logging.info(f"Found {len(results)} results for query: {query}")
         else:

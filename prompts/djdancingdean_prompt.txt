@@ -1,7 +1,7 @@
 Context:
 I am building an application to save users time when searching for social dance events. 
 Extract relevant event details from the webpage's text (extracted_text) according to the instructions below. 
-The extracted_text is at the bottom of these instructions under the heading extracted_text
+The extracted_text is at the bottom of these instructions under the heading extracted_text.
 ________________________________________
 1. Event Fields to Extract:
 For each identified event, provide the following details in JSON format.
@@ -80,105 +80,8 @@ ________________________________________
 •	DO NOT return a list for a field. For example, if you found several "dance_style" (e.g. salsa, bachata, kizomba) put that in the "dance_style" field as "salsa, bachata, kizomba". Not as "[salsa, bachata, kizomba]"
 •	If no events are found, respond with: "No events found."
 ________________________________________
-Example Extracted Text
-Music | Bard and Banker | Victoria BC top of page Skip to Main Content EST. 2008 1022 Government St. Victoria, BC V8W 1Y3 250 953 9993 Reserve now Home About History Contact Food Dine Around Drink Weekly Features Happy Hour Music Events NYE 2025 Photo Album Group Bookings Guest Services Booklet Live Music at the Bard & Banker February 2025 Today Sun Mon Tue Wed Thu Fri Sat 26 27 28 29 30 31 1 2 3 4 8:30 p.m. Miguelito Valdés+band  (830pm) +1 more 5 8:30 p.m. St. Cecilia +1 more 6 9:00 p.m. The Wedding Crashers +1 more 7 9:00 p.m. Bipolar Bear +1 more 8 9:00 p.m. Pulse Radio +1 more 9 10 8:30 p.m. Max MacKrill +1 more 11 8:30 p.m. Miguelito Valdés+band  (830pm) +1 more 12 8:30 p.m. St. Cecilia +1 more 13 9:00 p.m. The Wedding Crashers +1 more 14 4:00 p.m. Vinyl Wave +1 more +2 more 15 9:00 p.m. Pulse Radio +1 more 16 8:30 p.m. JaimesonRhy +1 more 17 8:30 p.m. Max MacKrill +1 more 18 8:30 p.m. Miguelito Valdés+band  (830pm) +1 more 19 8:30 p.m. St. Cecilia +1 more 20 9:00 p.m. The Wedding Crashers +1 more 21 9:00 p.m. Strangers +1 more 22 9:00 p.m. Strangers +1 more 23 24 8:30 p.m. Max MacKrill +1 more 25 8:30 p.m. Miguelito Valdés+band  (830pm) +1 more 26 8:30 p.m. St. Cecilia +1 more 27 9:00 p.m. Bipolar Bear +1 more 28 9:00 p.m. Big Shiny Dudes +1 more 1 9:00 p.m. Cities +1 more 2 3 4 5 6 7 8 Join the Club & Get Updates on Special Events Enter Your Email Subscribe Now Thanks for submitting! Open 7 Days a week 11:00 am to 1:00 am © 2021 Bard & Banker bottom of page
-
-The first 6 events in JSON format are as follows:
-[
-{
-“source”: “Bard and Banker”,
-“dance_style””:  “bachata, cha cha, cumbia, merengue, salsa“,
-“url”: “”,
-“event_type”: “social dance”,
-“event_name”: “Miguelito Valdés+band”,
-“day_of_week”: “Tuesday”,
-“start_date”: “2025-02-04“,
-“end_date“: “2025-02-04“,
-“start_time”: “20:30“,
-“end_time“:  “”,
-“price”: “”,
-“location“: “1022 Government St. Victoria, BC V8W 1Y3“,
-“description”: “”
-},
-{
-“source”: “Bard and Banker”,
-“dance_style: “”,
-“url”: “”,
-“event_type”: “”,
-“event_name”: “St. Cecilia”,
-“day_of_week”: “Wednesday”,
-“start_date”: “2025-02-05“,
-“end_date“: “2025-02-05“,
-“start_time”: “20:30“,
-“end_time“:  “”,
-“price”: “”,
-“location“: “1022 Government St. Victoria, BC V8W 1Y3“,
-“description”: “”
-},
-{
-“source”: “Bard and Banker”,
-“dance_style: “west coast swing”
-“url”: “”,
-“event_type”: “”,
-“event_name”: “The Wedding Crashers”,
-“day_of_week”: “Thursday”,
-“start_date”: “2025-02-06“,
-“end_date“: “2025-02-06“,
-“start_time”: “20:30“,
-“end_time“:  “”,
-“price”: “”,
-“location“: “1022 Government St. Victoria, BC V8W 1Y3“,
-“description”: “”
-},
-{
-“source”: “Bard and Banker”,
-“dance_style: “”
-“url”: “”,
-“event_type”: “”,
-“event_name”: Bipoloar Bear”,
-“day_of_week”: “Friday”,
-“start_date”: “2025-02-07“,
-“end_date“: “2025-02-07“,
-“start_time”: “21:00“,
-“end_time“:  “”,
-“price”: “”,
-“location“: “1022 Government St. Victoria, BC V8W 1Y3“,
-“description”: “”
-},
-{
-“source”: “Bard and Banker”,
-“dance_style: “”
-“url”: “”,
-“event_type”: “”,
-“event_name”: Pulse Radio”,
-“day_of_week”: “Saturday”,
-“start_date”: “2025-02-08“,
-“end_date“: “2025-02-08“,
-“start_time”: “21:00“,
-“end_time“:  “”,
-“price”: “”,
-“location“: “1022 Government St. Victoria, BC V8W 1Y3“,
-“description”: “”
-},
-{
-“source”: “Bard and Banker”,
-“dance_style: “”
-“url”: “”,
-“event_type”: “”,
-“event_name”: Max MacKrill”,
-“day_of_week”: “Monday”,
-“start_date”: “2025-02-10“,
-“end_date“: “2025-02-10“,
-“start_time”: “21:00“,
-“end_time“:  “”,
-“price”: “”,
-“location“: “1022 Government St. Victoria, BC V8W 1Y3“,
-“description”: “”
-}
-]
-
-When the event_name has “Miguelito" in it, the dance_style should be set to “bachata, cha cha, cumbia, merengue, salsa“.
-Produce a complete JSON output for all of the events that you find in the below extracted_text according to the above instructions.
-
+6. Final Instructions
+•       You are only interested in the text that starts with "Shared with Public" and ends with "See more"
+•       Extract all events from the text that lies between these 2 phrases.
 ________________________________________
 extracted_text

@@ -1,0 +1,13 @@
+---
+### What Can This ChatBot Do?
+
+You can ask this ChatBot about **dance events** that are occurring **now** and in the **future** in Greater Victoria, BC, Canada.
+
+---
+### How It Works
+
+- Enter your query below and click the **Send** button.
+- If you're not happy with the results, look at the SQL query that was generated.
+- You can refine your query by continuing the dialogue with the ChatBot. It's **very flexible!**
+
+---

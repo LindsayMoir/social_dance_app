@@ -28,6 +28,7 @@ import pandas as pd
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 import random
+import re
 import yaml
 
 from llm import LLMHandler
@@ -337,16 +338,16 @@ if __name__ == "__main__":
     for row in df.itertuples(index=True, name=None):
 
         # Get the url, organization name, keywords
-        idx, org_name, keywords, url  = row
+        idx, source, keywords, url  = row
 
-        logging.info(f"(__main__ in rd_ext.py: idx: {idx}, url: {url}, org_name: {org_name}, keywords: {keywords})")
+        logging.info(f"(__main__ in rd_ext.py: idx: {idx}, url: {url}, source: {source}, keywords: {keywords})")
 
         logging.info(f"__main__: Extracting text from {url}...")
         # Initialize the browser and extract text
         extracted_text = asyncio.run(read_extract.main(url))
 
         # Process the extracted text with LLM. The url is the key into config to get the right prompt
-        llm_status = llm_handler.process_llm_response(url, extracted_text, org_name, keywords, prompt=url)
+        llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt=url)
 
     # Get the end time
     end_time = datetime.now()

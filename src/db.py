@@ -153,13 +153,13 @@ class DatabaseHandler():
         # Create the 'urls' table
         urls_table_query = """
             CREATE TABLE IF NOT EXISTS urls (
-                links TEXT PRIMARY KEY,
-                time_stamps TIMESTAMP,
-                org_names TEXT,
+                link TEXT PRIMARY KEY,
+                time_stamp TIMESTAMP,
+                source TEXT,
                 keywords TEXT,
-                other_links TEXT,
+                other_link TEXT,
                 relevant BOOLEAN,
-                crawl_trys INTEGER
+                crawl_try INTEGER
             )
         """
         self.execute_query(urls_table_query)
@@ -169,7 +169,7 @@ class DatabaseHandler():
         events_table_query = """
             CREATE TABLE IF NOT EXISTS events (
                 event_id SERIAL PRIMARY KEY,
-                org_name TEXT,
+                source TEXT,
                 dance_style TEXT,
                 url TEXT,
                 event_type TEXT,
@@ -267,15 +267,15 @@ class DatabaseHandler():
             logging.warning("close_connection: No database connection to close.")
 
 
-    def update_url(self, url, update_other_links, relevant, increment_crawl_trys):
+    def update_url(self, url, update_other_link, relevant, increment_crawl_try):
         """
         Updates an entry in the 'urls' table with the provided URL and other details.
 
         Args:
             url (str): The URL to be updated.
-            update_other_links (str): The new value for 'other_links'. If 'No', it won't be updated.
+            update_other_link (str): The new value for 'other_link'. If 'No', it won't be updated.
             relevant (bool): The new value for 'relevant'.
-            increment_crawl_trys (int): The number to increment 'crawl_trys' by.
+            increment_crawl_try (int): The number to increment 'crawl_try' by.
 
         Returns:
             bool: True if update was successful, False otherwise.
@@ -283,27 +283,27 @@ class DatabaseHandler():
         # See if url is in the urls table
         select_query = """
             SELECT * FROM urls
-            WHERE links = :url
+            WHERE link = :url
         """
         select_params = {'url': url}
         result = self.execute_query(select_query, select_params)
         if result and len(result) > 0:
 
-            # Prepare the update query with conditional 'other_links'
-            if update_other_links != 'No':
+            # Prepare the update query with conditional 'other_link'
+            if update_other_link != 'No':
                 update_query = """
                     UPDATE urls
                     SET 
-                        time_stamps = :current_time,
-                        other_links = :other_links,
-                        crawl_trys = crawl_trys + :increment,
+                        time_stamp = :current_time,
+                        other_link = :other_link,
+                        crawl_try = crawl_try + :increment,
                         relevant = :relevant
-                    WHERE links = :url
+                    WHERE link = :url
                 """
                 update_params = {
                     'current_time': datetime.now(),
-                    'other_links': update_other_links,
-                    'increment': increment_crawl_trys,
+                    'other_link': update_other_link,
+                    'increment': increment_crawl_try,
                     'relevant': relevant,
                     'url': url
                 }
@@ -311,14 +311,14 @@ class DatabaseHandler():
                 update_query = """
                     UPDATE urls
                     SET 
-                        time_stamps = :current_time,
-                        crawl_trys = crawl_trys + :increment,
+                        time_stamp = :current_time,
+                        crawl_try = crawl_try + :increment,
                         relevant = :relevant
-                    WHERE links = :url
+                    WHERE link = :url
                 """
                 update_params = {
                     'current_time': datetime.now(),
-                    'increment': increment_crawl_trys,
+                    'increment': increment_crawl_try,
                     'relevant': relevant,
                     'url': url
                 }
@@ -336,40 +336,40 @@ class DatabaseHandler():
             return False
         
 
-    def write_url_to_db(self, org_names, keywords, url, other_links, relevant, increment_crawl_trys):
+    def write_url_to_db(self, source, keywords, url, other_link, relevant, increment_crawl_try):
         """
         Inserts a new URL into the 'urls' table or updates it if it already exists.
 
         Args:
-            org_names (str): Organization names related to the URL.
+            source (str): Organization names related to the URL.
             keywords (list): Keywords related to the URL.
             url (str): The URL to be written or updated.
-            other_links (str): Other links associated with the URL.
+            other_link (str): Other link associated with the URL.
             relevant (bool): Indicates if the URL is relevant.
-            increment_crawl_trys (int): The number of times the URL has been crawled.
+            increment_crawl_try (int): The number of times the URL has been crawled.
         """
         insert_query = """
-            INSERT INTO urls (time_stamps, org_names, keywords, links, other_links, relevant, crawl_trys)
-            VALUES (:time_stamps, :org_names, :keywords, :links, :other_links, :relevant, :crawl_trys)
-            ON CONFLICT (links) DO UPDATE
+            INSERT INTO urls (time_stamp, source, keywords, link, other_link, relevant, crawl_try)
+            VALUES (:time_stamp, :source, :keywords, :link, :other_link, :relevant, :crawl_try)
+            ON CONFLICT (link) DO UPDATE
             SET 
-                time_stamps = EXCLUDED.time_stamps,
-                other_links = CASE 
-                                WHEN :other_links != 'No' THEN EXCLUDED.other_links 
-                                ELSE urls.other_links 
+                time_stamp = EXCLUDED.time_stamp,
+                other_link = CASE 
+                                WHEN :other_link != 'No' THEN EXCLUDED.other_link 
+                                ELSE urls.other_link 
                             END,
                 relevant = EXCLUDED.relevant,
-                crawl_trys = urls.crawl_trys + :increment_crawl_trys;
+                crawl_try = urls.crawl_try + :increment_crawl_try;
         """
         insert_params = {
-            'time_stamps': datetime.now(),
-            'org_names': org_names,
+            'time_stamp': datetime.now(),
+            'source': source,
             'keywords': keywords,
-            'links': url,
-            'other_links': other_links,
+            'link': url,
+            'other_link': other_link,
             'relevant': relevant,
-            'crawl_trys': increment_crawl_trys,
-            'increment_crawl_trys': increment_crawl_trys
+            'crawl_try': increment_crawl_try,
+            'increment_crawl_try': increment_crawl_try
         }
         
         try:
@@ -481,7 +481,7 @@ class DatabaseHandler():
         return df
     
 
-    def write_events_to_db(self, df, url, org_name, keywords):
+    def write_events_to_db(self, df, url, source, keywords):
         """
         Writes event data to the 'events' table in the database.
 
@@ -519,11 +519,11 @@ class DatabaseHandler():
                 keywords = ', '.join(keywords)
             df['dance_style'] = keywords
         
-        if org_name in df.columns:
-            # If df['org_name'] is null or '', use org_name from the function argument
-            df['org_name'] = df['org_name'].fillna('').replace('', org_name)
+        if source in df.columns:
+            # If df['source'] is null or '', use source from the function argument
+            df['source'] = df['source'].fillna('').replace('', source)
         else:
-            df['org_name'] = org_name
+            df['source'] = source
 
         # Update the 'url' column with the source URL if there is no URL in the DataFrame
         df['url'] = df['url'].fillna('').replace('', url)
@@ -707,7 +707,7 @@ class DatabaseHandler():
         For the 'events' table, duplicates are identified based on the combination of
         'Name_of_the_Event' and 'Start_Date'. Only the latest entry is kept.
 
-        For the 'urls' table, duplicates are identified based on the 'links' column.
+        For the 'urls' table, duplicates are identified based on the 'link' column.
         Only the latest entry is kept.
         """
         try:
@@ -722,12 +722,12 @@ class DatabaseHandler():
             self.execute_query(dedup_events_query)
             logging.info("dedup: Deduplicated 'events' table successfully.")
 
-            # Deduplicate 'urls' table based on 'links' using ctid for row identification
+            # Deduplicate 'urls' table based on 'link' using ctid for row identification
             dedup_urls_query = """
                 DELETE FROM urls a
                 USING urls b
                 WHERE a.ctid < b.ctid
-                AND a.links = b.links;
+                AND a.link = b.link;
             """
             self.execute_query(dedup_urls_query)
             logging.info("dedup: Deduplicated 'urls' table successfully.")
@@ -876,7 +876,7 @@ class DatabaseHandler():
 
     def delete_likely_dud_events(self):
         """
-        1. If the event org_name, dance_style, and url == '', delete the event, UNLESS it has an address_id then keep it.
+        1. If the event source, dance_style, and url == '', delete the event, UNLESS it has an address_id then keep it.
         2. Drop events outside of British Columbia (BC).
             a. However, not all events will have an address_id (Primary Key in address table, Foreign Key in events table).
             b. Also, not all rows in the address table will have a province_or_state.
@@ -888,23 +888,23 @@ class DatabaseHandler():
         4. Delete rows in events where dance_style and url are == '' AND event_type == 'other' AND location IS NULL and description IS NULL
         """
 
-        # 1. Delete events where org_name, dance_style, and url are empty, unless they have an address_id
+        # 1. Delete events where source, dance_style, and url are empty, unless they have an address_id
         delete_query_1 = """
         DELETE FROM events
-        WHERE org_name = :org_name
+        WHERE source = :source
         AND dance_style = :dance_style
         AND url = :url
         AND address_id IS NULL;
         """
         params = {
-            'org_name': '',
+            'source': '',
             'dance_style': '',
             'url': '',
             'event_type': 'other'
             }
 
         self.execute_query(delete_query_1, params)
-        logging.info("delete_likely_dud_events: Deleted events with empty org_name, dance_style, and url, and no address_id.")
+        logging.info("delete_likely_dud_events: Deleted events with empty source, dance_style, and url, and no address_id.")
 
         # 2. Delete events outside of British Columbia (BC)
         delete_query_2 = """
@@ -986,10 +986,10 @@ class DatabaseHandler():
             logging.info("delete_event_and_update_url: Deleted event from 'events' table.")
 
             # Update the corresponding URL from 'urls' table
-            update_other_links = 'No'
+            update_other_link = 'No'
             relevant = False
-            increment_crawl_trys = 1
-            db_handler.update_url(url, update_other_links, relevant, increment_crawl_trys)
+            increment_crawl_try = 1
+            db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
             logging.info("delete_event_and_update_url: Deleted URL from 'urls' table.")
 
         except Exception as e:

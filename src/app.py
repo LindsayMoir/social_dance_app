@@ -73,12 +73,20 @@ DATABASE_URL = os.getenv("RENDER_EXTERNAL_DB_URL")
 # 4) Create SQLAlchemy engine
 engine = create_engine(DATABASE_URL)
 
-st.title("Social Dance Chatbot")
+st.title("Let's Dance! 🕺💃")
 
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
-user_input = st.text_input("I can answer questions about what dance events are happening in Greater Victoria now and in the future. What would you like to know?")
+# Read the chatbot instructions from the specified file
+instructions_path = os.path.join(base_dir, config['prompts']['chatbot_instructions'])
+with open(instructions_path, "r") as file:
+    chatbot_instructions = file.read()
+
+# Display the instructions with Markdown
+st.markdown(chatbot_instructions)
+
+user_input = st.text_input("Ask a question:")
 
 if st.button("Send"):
     if user_input.strip():
@@ -115,9 +123,6 @@ if st.button("Send"):
 
             # Show the SQL query
             st.markdown(f"**SQL Query**:\n```\n{sql_query}\n```")
-
-            # Display the DataFrame in Streamlit
-            st.dataframe(df)
 
             st.session_state["messages"].append({"role": "assistant", "content": "Here are the results from your query."})
 

@@ -38,10 +38,10 @@ Usage Example:
         test_url = "https://example.com/event"
         search_term = "sample search term"
         extracted_text = "Sample extracted event text..."
-        org_name = "Sample Organization"
+        source = "Sample Organization"
         keywords = ["dance", "event"]
 
-        llm_handler.driver(test_url, search_term, extracted_text, org_name, keywords)
+        llm_handler.driver(test_url, search_term, extracted_text, source, keywords)
 
 Dependencies:
     - openai: For interacting with the OpenAI API to query the LLM.
@@ -91,7 +91,7 @@ class LLMHandler():
             db_handler = DatabaseHandler(self.config)
 
 
-    def driver(self, url, search_term, extracted_text, org_name, keywords_list):
+    def driver(self, url, search_term, extracted_text, source, keywords_list):
         """
         Determine the relevance of a given URL based on its content, keywords, or organization name.
 
@@ -112,26 +112,26 @@ class LLMHandler():
             if fb_status:
                 prompt = 'fb'
 
-        keyword_status = self.check_keywords_in_text(url, extracted_text, org_name, keywords_list)
+        keyword_status = self.check_keywords_in_text(url, extracted_text, source, keywords_list)
         
         if keyword_status == True or fb_status == True:
             # Call the llm to process the extracted text
-            llm_status = self.process_llm_response(url, extracted_text, org_name, keywords_list, prompt)
+            llm_status = self.process_llm_response(url, extracted_text, source, keywords_list, prompt)
 
             if llm_status:
                 # Mark the event link as relevant
-                db_handler.write_url_to_db('', keywords, url, search_term, relevant=True, increment_crawl_trys=1)
+                db_handler.write_url_to_db('', keywords, url, search_term, relevant=True, increment_crawl_try=1)
             
             else:
                 # Mark the event link as irrelevant
-                db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_trys=1)
+                db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_try=1)
 
         else:
             # Mark the event link as irrelevant
-            db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_trys=1)
+            db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_try=1)
             
 
-    def check_keywords_in_text(self, url, extracted_text, org_name, keywords_list):
+    def check_keywords_in_text(self, url, extracted_text, source, keywords_list):
         """
         Parameters:
         url (str): The URL of the webpage being checked.
@@ -150,7 +150,7 @@ class LLMHandler():
                 logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
                 if 'facebook' in url:
                     prompt = 'fb'
-                return self.process_llm_response(url, extracted_text, org_name, keywords_list, prompt)
+                return self.process_llm_response(url, extracted_text, source, keywords_list, prompt)
             
         if 'calendar' in url:
             logging.info(f"def check_keywords_in_text: URL {url} marked as relevant because 'calendar' is in the URL.")
@@ -160,7 +160,7 @@ class LLMHandler():
         return False
     
 
-    def process_llm_response(self, url, extracted_text, org_name, keywords_list, prompt):
+    def process_llm_response(self, url, extracted_text, source, keywords_list, prompt):
         """
         Generate a prompt, query a Language Learning Model (LLM), and process the response.
 
@@ -185,7 +185,7 @@ class LLMHandler():
 
             if parsed_result:
                 events_df = pd.DataFrame(parsed_result)
-                db_handler.write_events_to_db(events_df, url, org_name, keywords_list)
+                db_handler.write_events_to_db(events_df, url, source, keywords_list)
                 logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
 
                 return True
