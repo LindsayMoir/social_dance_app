@@ -1,5 +1,0 @@
-streamlit
-pandas
-sqlalchemy
-requests
-pyyaml

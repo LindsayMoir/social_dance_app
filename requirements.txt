@@ -1,0 +1,14 @@
+fastapi
+fuzzywuzzy
+numpy
+openai
+pandas
+pyap
+pydantic
+python-dotenv
+python-levenshtein
+pyyaml
+sqlalchemy
+streamlit
+requests
+uvicorn
