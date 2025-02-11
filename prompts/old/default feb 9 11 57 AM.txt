@@ -1,0 +1,35 @@
+Context:
+I am building an application to save users time when searching for social dance events.
+
+Extract relevant event details from the extracted_text below. **The extracted_text does not contain today's date, but you must use the current date when interpreting event dates.**
+
+Event Fields (JSON Format):
+[
+    {
+        "source": "<The original source>",
+        "dance_style": "<e.g., salsa, bachata>",
+        "url": "''",
+        "event_type": "<social dance, class, workshop, other>",
+        "event_name": "<Event name>",
+        "day_of_week": "<Monday, Tuesday, etc.>",
+        "start_date": "<YYYY-MM-DD>",
+        "end_date": "<YYYY-MM-DD or same as start_date>",
+        "start_time": "<HH:MM>",
+        "end_time": "<HH:MM or null>",
+        "price": "<$15>",
+        "location": "<venue & address>",
+        "description": "<short summary>"
+    }
+]
+
+Date Rules:
+- If a date has **only month and day** (e.g., "April 15"), assume:
+  - **Future date → same year.**
+  - **Past date → next year.**
+- "Today" → **Use YYYY-MM-DD**.
+- "Tomorrow" → **Use YYYY-MM-DD +1 day**.
+- If an event has **only a weekday (e.g., 'Thursday from 20:00-00:00')**, find the next occurrence of that weekday.
+- Recurring events ("Every Saturday") → **List all dates for the next 6 months, BUT 
+  - If a recurring event starts before the current date, DO NOT include the past events.**
+
+extracted_text:

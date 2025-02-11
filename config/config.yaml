@@ -23,13 +23,14 @@ fuzzywuzzy:
 input:
   data_keywords: 'data/other/keywords.csv'
   edge_cases: 'data/other/edge_cases.csv'
+  emails: 'data/other/emails.csv'
   gs_urls: 'data/urls/gs_urls.csv'
   urls: 'data/urls'
 location:
   distance: 50
   epicentre: 'Victoria, British Columbia, Canada'
 llm:
-  url_evaluator: 'o1-mini'
+  url_evaluator: 'o3-mini-2025-01-31'
   spend_money: True
 logging:
   log_file: 'logs/log.txt'
@@ -47,6 +48,10 @@ prompts:
   sql: 'prompts/sql_prompt.txt'
   title_to_source: 'prompts/title_to_source.txt'
   https://www.bardandbanker.com/live-music: 'prompts/bard_and_banker_prompt.txt'
+  https://vbds.org/other-dancing-opportunities/: 'prompts/default.txt'
+regex:
+  dancevictoria1: '~~~~~~~~~~~~~.*?Take the time to dance and laugh regularly'
+  djdancingdean: 'classes at the  Legion.*?Victoria West Coast Swing Collective Society'
 search:
   gs_num_results: 10
 startup:

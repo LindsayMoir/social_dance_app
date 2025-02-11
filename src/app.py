@@ -73,7 +73,7 @@ DATABASE_URL = os.getenv("RENDER_EXTERNAL_DB_URL")
 # 4) Create SQLAlchemy engine
 engine = create_engine(DATABASE_URL)
 
-st.title("Let's Dance! 🕺💃")
+st.markdown("# Let's Dance! 🕺💃")
 
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
@@ -86,7 +86,7 @@ with open(instructions_path, "r") as file:
 # Display the instructions with Markdown
 st.markdown(chatbot_instructions)
 
-user_input = st.text_input("Ask a question:")
+user_input = st.text_input("Ask a question, then click Send:")
 
 if st.button("Send"):
     if user_input.strip():
@@ -98,6 +98,11 @@ if st.button("Send"):
         with open(prompt_path, "r") as file:
             base_prompt = file.read()
 
+        # Read the chatbot instructions from the specified file
+        instructions_path = os.path.join(base_dir, config['prompts']['chatbot_instructions'])
+        with open(instructions_path, "r") as file:
+            chatbot_instructions = file.read()
+
         prompt = f"{base_prompt}\n\nUser Question:\n\n\"{user_input}\""
         print(f"Prompt: {prompt}")
 
@@ -107,6 +112,13 @@ if st.button("Send"):
         # 3) Sanitize the SQL Query
         # Remove triple backticks, extra whitespace, or markdown syntax
         sql_query = sql_query.replace("```sql", "").replace("```", "").strip()
+
+        # Remove everything before the SELECT keyword
+        sql_query = sql_query[sql_query.find("SELECT"):]
+
+        # Remove eerything after ';' character
+        sql_query = sql_query.split(";")[0]
+        
         print(f"Sanitized SQL Query: \n{sql_query}")
 
         try:
@@ -118,8 +130,18 @@ if st.button("Send"):
             # Convert rows to a DataFrame
             df = pd.DataFrame(rows, columns=result.keys())
 
-            # Display DataFrame with increased width and height
-            st.dataframe(df, height=600, width=1200)
+            # If 'url' column exists, configure it to be a clickable link
+            if "url" in df.columns:
+                st.dataframe(
+                    df,
+                    column_config={
+                        "url": st.column_config.LinkColumn("Event Link"),
+                    },
+                    height=600,
+                    width=1800
+                )
+            else:
+                st.dataframe(df, height=600, width=1800)
 
             # Show the SQL query
             st.markdown(f"**SQL Query**:\n```\n{sql_query}\n```")

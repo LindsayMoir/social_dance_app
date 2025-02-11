@@ -89,7 +89,7 @@ The first 6 events in JSON format are as follows:
 “source”: “Bard and Banker”,
 “dance_style””:  “bachata, cha cha, cumbia, merengue, salsa“,
 “url”: “”,
-“event_type”: “social dance”,
+“event_type”: “bachata, cha cha, cumbia, merengue, salsa”,
 “event_name”: “Miguelito Valdés+band”,
 “day_of_week”: “Tuesday”,
 “start_date”: “2025-02-04“,
@@ -177,8 +177,9 @@ The first 6 events in JSON format are as follows:
 }
 ]
 
+1. Additional Notes
 When the event_name has “Miguelito" in it, the dance_style should be set to “bachata, cha cha, cumbia, merengue, salsa“.
 Produce a complete JSON output for all of the events that you find in the below extracted_text according to the above instructions.
-
+2. Nota Benta, often Sundays have NO band playing. Please make sure that there is one playing before you create an event for it.
 ________________________________________
 extracted_text

@@ -58,7 +58,8 @@ ________________________________________
 •	Use the current date in the format YYYY-MM-DD and assume NO time zone.
 •	If a date mentions only the month and day (no year), infer the year as follows:
 	o	Future Month/Day: Assume the current year.
-	o	Past Month/Day: Assume the next year.
+	o	Past Month/Day LESS THAN 90 days ago: Assume the current year.
+	o	Past Month/Day MORE THAN 90 days ago: Assume the next year.
 •	"Today" should be interpreted as the current date.
 •	If an event starts with a day_of_week (e.g. Sunday, Monday, Tuesday, Wednesday, etc.) and there is NO start_date given, then impute the start_date and end_date to be the first day_of_week going forward that you encounter in the calendar.
 	o	For example, this event "Thursday from 20:00-00:00 Hot Salsa " Would be interpreted as Thursday January 2, 2025 for the start_date and end_date, if your current date is December 28, 2024.

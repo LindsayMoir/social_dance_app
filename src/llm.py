@@ -210,7 +210,12 @@ class LLMHandler():
         """
         # Generate the LLM prompt using the extracted text and configuration details.
         logging.info(f"def generate_prompt(): Generating prompt for URL: {url}")
-        txt_file_path = self.config['prompts'][prompt_type]
+
+        # If this errors, then prompt_type is 'default'
+        try:
+            txt_file_path = self.config['prompts'][prompt_type]
+        except KeyError:
+            txt_file_path = self.config['prompts']['default']
         logging.info(f"def generate_prompt(): prompt type: {prompt_type}, text file path: {txt_file_path}")
         
         # Get the prompt file
@@ -218,13 +223,14 @@ class LLMHandler():
             is_relevant_txt = file.read()
 
         # Generate the full prompt
+        today_date = datetime.now().strftime("%Y-%m-%d")
         prompt = (
-            f"{is_relevant_txt}"
-            f"{extracted_text}\n\n"
-            
+            f"Today's date is: {today_date}. Use this for all date calculations.\n"
+            f"{is_relevant_txt}\n"
+            f"{extracted_text}\n"
         )
 
-        logging.info(f"def generate_prompt(): \n{txt_file_path}")
+        logging.info(f"def generate_prompt(): \n{txt_file_path}\n{prompt}")
 
         return prompt
     
@@ -279,7 +285,7 @@ class LLMHandler():
                 return None
             
             # Check if the response contains JSON
-            if 'json' in result and len(result) > 100:
+            if len(result) > 100:
                 logging.info("def extract_and_parse_json(): JSON found in result.")
 
                 # Get just the JSON string from the response

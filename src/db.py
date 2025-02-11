@@ -169,20 +169,20 @@ class DatabaseHandler():
         events_table_query = """
             CREATE TABLE IF NOT EXISTS events (
                 event_id SERIAL PRIMARY KEY,
-                source TEXT,
-                dance_style TEXT,
-                url TEXT,
-                event_type TEXT,
                 event_name TEXT,
+                dance_style TEXT,
+                description TEXT,
                 day_of_week TEXT,
                 start_date DATE,
                 end_date DATE,
                 start_time TIME,
                 end_time TIME,
-                price TEXT,
+                source TEXT,
                 location TEXT,
+                price TEXT,
+                url TEXT,
+                event_type TEXT,
                 address_id INTEGER,
-                description TEXT,
                 time_stamp TIMESTAMP
             )
         """
@@ -240,6 +240,12 @@ class DatabaseHandler():
             logging.error("execute_query: No database connection available.")
             return None
 
+        # Handle NaN values in params (such as address_id)
+        if params:
+            for key, value in params.items():
+                if pd.isna(value):  # Check if the value is NaN
+                    params[key] = None  # Set to None (NULL in SQL)
+
         try:
             with self.conn.connect() as connection:
                 result = connection.execute(text(query), params or {})
@@ -249,7 +255,7 @@ class DatabaseHandler():
                 connection.commit()
                 return None
         except SQLAlchemyError as e:
-            logging.error("def execute_query(): {query}\nQuery execution failed: %s", e)
+            logging.error("def execute_query(): %s\nQuery execution failed: %s", query, e)
             return None
         
     

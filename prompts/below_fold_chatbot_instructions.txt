@@ -1,0 +1,14 @@
+---
+### How It Works
+
+- We are using AI to translate your english language question into a database query.
+- Enter your query above and click the **Send** button.
+- If you're not happy with the results, look at the SQL query that was generated.
+- You can refine your query by continuing the dialogue with the ChatBot. It's **very flexible!**
+
+---
+### NB
+
+- This is a best efforts basis:(
+- The information is as accurate as possible but ... please double check before you book your flights:)
+---

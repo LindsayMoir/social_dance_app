@@ -1,0 +1,41 @@
+Today's date is: 2025-02-09. Use this for all date calculations.
+Context:
+I am building an application to save users time when searching for social dance events.
+
+Extract relevant event details from the extracted_text below. Note that while the extracted_text does not include today's date, you must use the provided current date (2025-02-09) when interpreting and calculating event dates.
+
+Event Fields (JSON Format):
+[
+    {
+        "source": "<The original source of information for this event>",
+        "dance_style": "<choose one or multiple from: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
+        "url": "''",
+        "event_type": "<choose one: social dance, class, workshop, other>",
+        "event_name": "<event name or title>",
+        "day_of_week": "<e.g., Monday, Tuesday>",
+        "start_date": "<YYYY-MM-DD>",
+        "end_date": "<YYYY-MM-DD (or same as start_date if single-day)>",
+        "start_time": "<HH:MM>",
+        "end_time": "<HH:MM or null>",
+        "price": "<e.g., $15>",
+        "location": "<venue name and address>",
+        "description": "<short summary of event details>"
+    }
+]
+
+Date Rules:
+- For any event date provided with only a month and day (e.g., "Feb 7th"), determine the year using the current date (2025-02-09):
+   - If the month/day is later than the current date (e.g., "Feb 10"), assume the current year.
+   - If the month/day is earlier than the current date, assume the next year.
+- Interpret the words "Today" and "Tomorrow" as 2025-02-09 and 2025-02-10, respectively.
+- If an event only lists a weekday (e.g., "Thursday from 20:00-00:00") without a specific date, set the start_date to the next occurrence of that weekday after 2025-02-09.
+- IMPORTANT: **If an event specifies new start and end dates with a range (e.g., "New Start & End Dates: ..., Feb 10-Mar 3"), then:**
+   - Parse the part before the dash as the start date and the part after the dash as the end date.
+   - Use the current date (2025-02-09) to decide the year: for example, "Feb 10" should be interpreted as "2025-02-10" (since February 10 is after February 09) and "Mar 3" as "2025-03-03".
+   - When a "New Start & End Dates:" header is present, ignore any previous dates mentioned and use the new date range.
+- For recurring events (e.g., "Every Saturday"), list all occurrences within the next 6 months, but do not include dates that fall before the current date.
+
+Output a single JSON array containing all extracted events that conform to the above format and date rules.
+
+
+extracted_text:
