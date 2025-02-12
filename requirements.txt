@@ -3,6 +3,7 @@ fuzzywuzzy
 numpy
 openai
 pandas
+psycopg2-binary
 pyap
 pydantic
 python-dotenv
