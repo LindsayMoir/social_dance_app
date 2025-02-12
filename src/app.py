@@ -80,21 +80,25 @@ if st.button("Send"):
             # Create the DataFrame from the data
             df = pd.DataFrame(data["data"])
 
-            # Create a new column with HTML links
-            df['url'] = df['url'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>')
-
-            # Display the table with clickable URLs
-            st.dataframe(df, use_container_width=True, height=400)
-
-            # Apply Streamlit's ability to render HTML
-            st.write("Click on the links in the 'URL' column to open them in a new tab.")
-            st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
+            # If 'url' column exists, configure it to be a clickable link
+            if "url" in df.columns:
+                st.dataframe(
+                    df,
+                    column_config={
+                        "url": st.column_config.LinkColumn("Event Link"),
+                    },
+                    height=600,
+                    width=1800
+                )
+            else:
+                st.dataframe(df, height=600, width=1800)
 
             # Display the SQL query
             st.markdown(f"**SQL Query**:\n```\n{data['sql_query']}\n```")
-            
+
             # Display the history of the conversation
             st.session_state["messages"].append({"role": "assistant", "content": data["message"]})
+            
         except Exception as e:
             error_message = f"Error: {e}"
             st.session_state["messages"].append({"role": "assistant", "content": error_message})

@@ -60,7 +60,7 @@ testing:
   status: False
   nof_no_url_events: 10
   drop_tables: False
-  local: True
+  local: False
   fast_api_url: 'http://localhost:8080/query'
 update_schedule:
   true_links_hours: .01

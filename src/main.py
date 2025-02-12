@@ -56,6 +56,9 @@ if config['testing']['local']:
     DATABASE_URL = os.getenv("DATABASE_CONNECTION_STRING")
 else:
     DATABASE_URL = os.getenv("RENDER_EXTERNAL_DB_URL")
+
+print(f"RENDER_EXTERNAL_DB_URL: {os.getenv('RENDER_EXTERNAL_DB_URL')}")
+
 if not DATABASE_URL:
     raise ValueError("The environment variable RENDER_EXTERNAL_DB_URL is not set.")
 
