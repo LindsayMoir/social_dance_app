@@ -43,7 +43,7 @@ if config['testing']['local']:
     # Set the FastAPI backend URL
     FASTAPI_API_URL = config['testing']['fast_api_url']
 else:    
-    FASTAPI_API_URL = os.getenv("FASTAPI_API_URL")
+    FASTAPI_API_URL = os.getenv("FASTAPI_API_URL", "https://social-dance-app-ws-main.onrender.com/query")
 
 if not FASTAPI_API_URL:
     raise ValueError("The environment variable FAST_API_URL is not set.")
