@@ -31,6 +31,9 @@ from sqlalchemy import create_engine, text
 import yaml
 import logging
 
+import os
+print("Current working directory:", os.getcwd())
+
 # Import your custom LLMHandler
 from llm import LLMHandler
 
