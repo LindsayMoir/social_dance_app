@@ -39,16 +39,16 @@ with open(config_path, "r") as f:
 logging.info("app.py: config completed.")
 
 # See whether you are running local or remote
-if config(['test']['local']):
+if config['testing']['local']:
     # Set the FastAPI backend URL
-    FASTAPI_API_URL = config['local']['fast_api_url']
+    FASTAPI_API_URL = config['testing']['fast_api_url']
 else:    
     FASTAPI_API_URL = os.getenv("FAST_API_URL")
 
 if not FASTAPI_API_URL:
     raise ValueError("The environment variable FAST_API_URL is not set.")
     
-logging.info("app.py: FAST_API_URL set.")
+logging.info("app.py: FAST_API_URL is: {FASTAPI_API_URL}")
 
 st.set_page_config(layout="wide")
 st.markdown("# Let's Dance! 🕺💃")
@@ -77,11 +77,23 @@ if st.button("Send"):
             response.raise_for_status()
             data = response.json()
             
-            # Display the SQL query (if needed) and the results
-            st.markdown(f"**SQL Query**:\n```\n{data['sql_query']}\n```")
+            # Create the DataFrame from the data
             df = pd.DataFrame(data["data"])
-            st.dataframe(df)
+
+            # Create a new column with HTML links
+            df['url'] = df['url'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>')
+
+            # Display the table with clickable URLs
+            st.dataframe(df, use_container_width=True, height=400)
+
+            # Apply Streamlit's ability to render HTML
+            st.write("Click on the links in the 'URL' column to open them in a new tab.")
+            st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
+
+            # Display the SQL query
+            st.markdown(f"**SQL Query**:\n```\n{data['sql_query']}\n```")
             
+            # Display the history of the conversation
             st.session_state["messages"].append({"role": "assistant", "content": data["message"]})
         except Exception as e:
             error_message = f"Error: {e}"

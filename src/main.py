@@ -52,7 +52,7 @@ logging.info("main.py: Configuration loaded.")
 llm_handler = LLMHandler(config_path=config_path)
 
 # Get the database URL from environment variables
-if config['test']['local']:
+if config['testing']['local']:
     DATABASE_URL = os.getenv("DATABASE_CONNECTION_STRING")
 else:
     DATABASE_URL = os.getenv("RENDER_EXTERNAL_DB_URL")
