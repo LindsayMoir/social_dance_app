@@ -22,20 +22,27 @@ Error Handling:
     - Logs errors related to loading configuration, reading prompt files, and database operations.
     - Raises HTTP exceptions with appropriate status codes and error messages for client and server errors.
 """
-
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 from dotenv import load_dotenv
-import os
-from sqlalchemy import create_engine, text
-import yaml
+from fastapi import FastAPI, HTTPException
 import logging
-
 import os
+from pydantic import BaseModel
+from sqlalchemy import create_engine, text
+import sys
+import yaml
+
+# Get the absolute path of the current script
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))  # Parent directory
+
+# Add both `src/` and the project root to sys.path
+sys.path.append(current_dir)  # Ensure current directory is in path
+sys.path.append(parent_dir)   # Ensure parent directory is in path
+
+print("Updated sys.path:", sys.path)  # Debugging output
 print("Current working directory:", os.getcwd())
 
-# Import your custom LLMHandler
-from llm import LLMHandler
+from llm import LLMHandler  # Your import should now work
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO)
