@@ -46,16 +46,22 @@ except Exception as e:
     logging.error(f"Error loading configuration: {e}")
     raise e
 
+logging.info("main.py: Configuration loaded.")
+
 # Initialize the LLMHandler
 llm_handler = LLMHandler(config_path=config_path)
 
 # Get the database URL from environment variables
-DATABASE_URL = os.getenv("RENDER_EXTERNAL_DB_URL")
+if config['test']['local']:
+    DATABASE_URL = os.getenv("DATABASE_CONNECTION_STRING")
+else:
+    DATABASE_URL = os.getenv("RENDER_EXTERNAL_DB_URL")
 if not DATABASE_URL:
     raise ValueError("The environment variable RENDER_EXTERNAL_DB_URL is not set.")
 
 # Create the SQLAlchemy engine
 engine = create_engine(DATABASE_URL)
+logging.info("main.py: SQLAlchemy engine created.")
 
 # Initialize the FastAPI app
 app = FastAPI(title="Social Dance Chatbot API")

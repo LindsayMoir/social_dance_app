@@ -22,16 +22,33 @@ sys.path.append(parent_dir)
 print("Updated sys.path:", sys.path)
 print("Current working directory:", os.getcwd())
 
+# Set up basic logging
+logging.basicConfig(level=logging.INFO)
+logging.info("app.py: Streamlit app starting...")
+
 # Load environment variables and configuration
 load_dotenv()
 
+# Calculate the base directory and config path
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 config_path = os.path.join(base_dir, 'config', 'config.yaml')
+
+# Load YAML configuration
 with open(config_path, "r") as f:
     config = yaml.safe_load(f)
+logging.info("app.py: config completed.")
 
-# Set the FastAPI backend URL (set this in your .env as FASTAPI_API_URL)
-FASTAPI_API_URL = os.getenv("FASTAPI_API_URL", "http://localhost:8080/query")
+# See whether you are running local or remote
+if config(['test']['local']):
+    # Set the FastAPI backend URL
+    FASTAPI_API_URL = config['local']['fast_api_url']
+else:    
+    FASTAPI_API_URL = os.getenv("FAST_API_URL")
+
+if not FASTAPI_API_URL:
+    raise ValueError("The environment variable FAST_API_URL is not set.")
+    
+logging.info("app.py: FAST_API_URL set.")
 
 st.set_page_config(layout="wide")
 st.markdown("# Let's Dance! 🕺💃")
@@ -53,6 +70,7 @@ if st.button("Send"):
     if user_input.strip():
         # Display the user's message in the chat history
         st.session_state["messages"].append({"role": "user", "content": user_input})
+        logging.info("app.py: About to send user input to FastAPI backend.")
         try:
             # Send the query to the FastAPI backend
             response = requests.post(FASTAPI_API_URL, json={"user_input": user_input})
