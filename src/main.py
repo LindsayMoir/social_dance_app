@@ -17,7 +17,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import create_engine, text
-from llm import LLMHandler  # Import the LLMHandler module
 
 # Set up sys.path so that modules in src/ are accessible
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +25,8 @@ sys.path.append(current_dir)
 sys.path.append(parent_dir)
 print("Updated sys.path:", sys.path)
 print("Current working directory:", os.getcwd())
+
+from llm import LLMHandler  # Import the LLMHandler module
 
 # Load environment variables
 load_dotenv()
