@@ -28,6 +28,14 @@ print("Current working directory:", os.getcwd())
 
 from llm import LLMHandler  # Import the LLMHandler module
 
+# Check and see if we are running local or remote on Render
+if 'render/project' in sys.path[-1]:
+    local = False
+    print("Running on Render...")
+else:
+    local = True
+    print("Running locally...")
+
 # Load environment variables
 load_dotenv()
 
@@ -52,15 +60,15 @@ logging.info("main.py: Configuration loaded.")
 llm_handler = LLMHandler(config_path=config_path)
 
 # Get the database URL from environment variables
-if config['testing']['local']:
+if local:
     DATABASE_URL = os.getenv("DATABASE_CONNECTION_STRING")
 else:
     DATABASE_URL = os.getenv("RENDER_EXTERNAL_DB_URL")
 
-print(f"RENDER_EXTERNAL_DB_URL: {os.getenv('RENDER_EXTERNAL_DB_URL')}")
-
-if not DATABASE_URL:
-    raise ValueError("The environment variable RENDER_EXTERNAL_DB_URL is not set.")
+if DATABASE_URL:
+    logging.info(f"DATABASE_URL / database connection string is set")
+else:
+    raise ValueError("DATABASE_URL / database connections string is not set.")
 
 # Create the SQLAlchemy engine
 engine = create_engine(DATABASE_URL)

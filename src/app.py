@@ -22,6 +22,14 @@ sys.path.append(parent_dir)
 print("Updated sys.path:", sys.path)
 print("Current working directory:", os.getcwd())
 
+# Check and see if we are running local or remote on Render
+if 'render/project' in sys.path[-1]:
+    local = False
+    print("Running on Render...")
+else:
+    local = True
+    print("Running locally...")
+
 # Set up basic logging
 logging.basicConfig(level=logging.INFO)
 logging.info("app.py: Streamlit app starting...")
@@ -39,7 +47,7 @@ with open(config_path, "r") as f:
 logging.info("app.py: config completed.")
 
 # See whether you are running local or remote
-if config['testing']['local']:
+if local:
     # Set the FastAPI backend URL
     FASTAPI_API_URL = config['testing']['fast_api_url']
 else:    
