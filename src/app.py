@@ -49,7 +49,6 @@ if not FASTAPI_API_URL:
     raise ValueError("The environment variable FAST_API_URL is not set.")
 
 print(f"FASTAPI_API_URL: {os.getenv('FASTAPI_API_URL')}")
-    
 logging.info("app.py: FAST_API_URL is: {FASTAPI_API_URL}")
 
 st.set_page_config(layout="wide")
