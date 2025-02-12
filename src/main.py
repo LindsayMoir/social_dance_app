@@ -107,30 +107,36 @@ def process_query(request: QueryRequest):
     # Query the language model for a raw SQL query
     sql_query = llm_handler.query_llm(prompt)
     logging.info(f"Raw SQL Query: {sql_query}")
-    
-    # Sanitize the SQL query by removing markdown formatting
-    sanitized_query = sql_query.replace("```sql", "").replace("```", "").strip()
-    # Optionally, trim everything before the first "SELECT" and after the first ';'
-    select_index = sanitized_query.find("SELECT")
-    if select_index != -1:
-        sanitized_query = sanitized_query[select_index:]
-    sanitized_query = sanitized_query.split(";")[0]
-    logging.info(f"Sanitized SQL Query: {sanitized_query}")
-    
-    try:
-        # Execute the SQL query using SQLAlchemy
-        with engine.connect() as conn:
-            result = conn.execute(text(sanitized_query))
-            rows = result.fetchall()
-        columns = result.keys()
-        data = [dict(zip(columns, row)) for row in rows]
-    except Exception as db_err:
-        error_message = f"Database Error: {db_err}"
-        logging.error(error_message)
-        raise HTTPException(status_code=500, detail=error_message)
-    
-    return {
-        "sql_query": sanitized_query,
-        "data": data,
-        "message": "Here are the results from your query."
-    }
+
+    if sql_query:
+        # Sanitize the SQL query by removing markdown formatting
+        sanitized_query = sql_query.replace("```sql", "").replace("```", "").strip()
+        # Optionally, trim everything before the first "SELECT" and after the first ';'
+        select_index = sanitized_query.find("SELECT")
+        if (select_index != -1):
+            sanitized_query = sanitized_query[select_index:]
+        sanitized_query = sanitized_query.split(";")[0]
+        logging.info(f"Sanitized SQL Query: {sanitized_query}")
+        
+        try:
+            # Execute the SQL query using SQLAlchemy
+            with engine.connect() as conn:
+                result = conn.execute(text(sanitized_query))
+                rows = result.fetchall()
+            columns = result.keys()
+            data = [dict(zip(columns, row)) for row in rows]
+        except Exception as db_err:
+            error_message = f"Database Error: {db_err}"
+            logging.error(error_message)
+            raise HTTPException(status_code=500, detail=error_message)
+        
+        return {
+            "sql_query": sanitized_query,
+            "data": data,
+            "message": "Here are the results from your query."
+        }
+    else:
+        logging.warning("LLM did not return a valid SQL query.")
+        return {
+            "message": "The language model could not generate a valid SQL query from your input. Please try rephrasing your question."
+        }

@@ -93,6 +93,9 @@ class LLMHandler():
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         self.openai_ai_organization = os.getenv("OPENAI_ORGANIZATION")
         self.openai_ai_project = os.getenv("OPENAI_PROJECT")
+        # Set the OpenAI API key
+        openai.api_key = self.openai_api_key
+        self.client = OpenAI()
 
 
     def driver(self, url, search_term, extracted_text, source, keywords_list):
@@ -252,43 +255,24 @@ class LLMHandler():
             logging.info("def query_llm(): Spending money is set to True. Querying the LLM.")
 
             try:
-                if not self.openai_api_key:
-                    logging.error("def query_llm(): OpenAI API key not found in environment variables.")
-                    return None
-
-                openai.api_key = self.openai_api_key
-
-                response = openai.ChatCompletion.create(
+                response = self.client.chat.completions.create(
                     model=self.config['llm']['url_evaluator'],
-                    messages=[{"role": "user", "content": prompt}],
-                    api_key=self.openai_api_key,
-                    organization=self.openai_ai_organization,
-                    project=self.openai_ai_project
+                    messages=[{"role": "user", "content": prompt}]
                 )
 
                 # Extract and log the response
                 if response and response.choices:
-                    llm_response = response.choices[0].message['content'].strip()
+                    llm_response = response.choices[0].message.content.strip()
                     logging.info(f"def query_llm(): LLM response received: {llm_response}")
                     return llm_response
                 else:
                     logging.error("def query_llm(): No LLM response received.")
                     return None
+                
             except openai.OpenAIError as e:
                 logging.error(f"def query_llm(): OpenAI API call failed: {e}")
                 return None
 
-                # Extract and log the response
-                if response and response.choices:
-                    llm_response = response.choices[0].message['content'].strip()
-                    logging.info(f"def query_llm(): LLM response received: {llm_response}")
-                    return llm_response
-                else:
-                    logging.error("def query_llm(): No LLM response received.")
-                    return None
-            except openai.OpenAIError as e:
-                logging.error(f"def query_llm(): OpenAI API call failed: {e}")
-                return None
         else:
             logging.info("def query_llm(): Spending money is set to False. Skipping the LLM query.")
             return None
