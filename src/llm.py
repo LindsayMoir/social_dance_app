@@ -58,10 +58,9 @@ Note:
       configuration and keys files.
     - Logging should be configured in the main execution context to capture log messages.
 """
-
-
 from datetime import datetime
 from dotenv import load_dotenv
+load_dotenv()
 import json
 import logging
 from openai import OpenAI
@@ -89,6 +88,11 @@ class LLMHandler():
         if 'db_handler' not in globals():
             global db_handler
             db_handler = DatabaseHandler(self.config)
+
+        # Load OpenAI API keys from environment variables
+        self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        self.openai_ai_organization = os.getenv("OPENAI_ORGANIZATION")
+        self.openai_ai_project = os.getenv("OPENAI_PROJECT")
 
 
     def driver(self, url, search_term, extracted_text, source, keywords_list):
@@ -248,16 +252,35 @@ class LLMHandler():
             logging.info("def query_llm(): Spending money is set to True. Querying the LLM.")
 
             try:
-                client = OpenAI()
-                response = client.chat.completions.create(
+                if not self.openai_api_key:
+                    logging.error("def query_llm(): OpenAI API key not found in environment variables.")
+                    return None
+
+                openai.api_key = self.openai_api_key
+
+                response = openai.ChatCompletion.create(
                     model=self.config['llm']['url_evaluator'],
-                    messages=[{"role": "user", 
-                               "content": prompt}]
+                    messages=[{"role": "user", "content": prompt}],
+                    api_key=self.openai_api_key,
+                    organization=self.openai_ai_organization,
+                    project=self.openai_ai_project
                 )
 
                 # Extract and log the response
                 if response and response.choices:
-                    llm_response = response.choices[0].message.content.strip()
+                    llm_response = response.choices[0].message['content'].strip()
+                    logging.info(f"def query_llm(): LLM response received: {llm_response}")
+                    return llm_response
+                else:
+                    logging.error("def query_llm(): No LLM response received.")
+                    return None
+            except openai.OpenAIError as e:
+                logging.error(f"def query_llm(): OpenAI API call failed: {e}")
+                return None
+
+                # Extract and log the response
+                if response and response.choices:
+                    llm_response = response.choices[0].message['content'].strip()
                     logging.info(f"def query_llm(): LLM response received: {llm_response}")
                     return llm_response
                 else:
