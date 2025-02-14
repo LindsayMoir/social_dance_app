@@ -37,6 +37,13 @@ st.markdown("# Let's Dance! 🕺💃")
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
+# Load chatbot instructions from a file specified in the YAML config
+instructions_path = os.path.join(base_dir, config['prompts']['chatbot_instructions'])
+with open(instructions_path, "r") as file:
+    chatbot_instructions = file.read()
+
+st.markdown(chatbot_instructions)
+
 user_input = st.text_input("Ask a question, then click Send:")
 
 if st.button("Send"):
@@ -70,7 +77,6 @@ if st.button("Send"):
                                 st.markdown(f"**{column_name}**: {value}")
                         
                         st.markdown("<hr>", unsafe_allow_html=True)  # Add a separator between events
-                st.write("Scroll down to see more events...")
 
             else:
                 st.write("No events found based on your query.")
