@@ -1,34 +1,12 @@
 # app.py
-"""
-This script sets up a Streamlit application for the Social Dance Chatbot UI.
-It collects user queries and sends them to the FastAPI backend for processing.
-The results (SQL query and data) are then displayed in the interface.
-"""
 
 import streamlit as st
 import requests
-import pandas as pd
 import os
 import yaml
 import logging
 from dotenv import load_dotenv
 import sys
-
-# Set up sys.path so that modules in src/ are accessible
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
-sys.path.append(current_dir)
-sys.path.append(parent_dir)
-print("Updated sys.path:", sys.path)
-print("Current working directory:", os.getcwd())
-
-# Check and see if we are running local or remote on Render
-if 'render/project' in sys.path[-1]:
-    local = False
-    print("Running on Render...")
-else:
-    local = True
-    print("Running locally...")
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO)
@@ -46,18 +24,11 @@ with open(config_path, "r") as f:
     config = yaml.safe_load(f)
 logging.info("app.py: config completed.")
 
-# See whether you are running local or remote
-if local:
-    # Set the FastAPI backend URL
-    FASTAPI_API_URL = config['testing']['fast_api_url']
-else:    
-    FASTAPI_API_URL = os.getenv("FASTAPI_API_URL", "https://social-dance-app-ws-main.onrender.com/query")
+# Check whether we are running locally or on Render
+FASTAPI_API_URL = os.getenv("FASTAPI_API_URL", "https://social-dance-app-ws-main.onrender.com/query")
 
 if not FASTAPI_API_URL:
     raise ValueError("The environment variable FASTAPI_API_URL is not set.")
-
-print(f"FASTAPI_API_URL: {os.getenv('FASTAPI_API_URL')}")
-logging.info("app.py: FASTAPI_API_URL is: {FASTAPI_API_URL}")
 
 st.set_page_config(layout="wide")
 st.markdown("# Let's Dance! 🕺💃")
@@ -65,13 +36,6 @@ st.markdown("# Let's Dance! 🕺💃")
 # Initialize the chat message history in session state
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
-
-# Load chatbot instructions from a file specified in the YAML config
-instructions_path = os.path.join(base_dir, config['prompts']['chatbot_instructions'])
-with open(instructions_path, "r") as file:
-    chatbot_instructions = file.read()
-
-st.markdown(chatbot_instructions)
 
 user_input = st.text_input("Ask a question, then click Send:")
 
@@ -85,22 +49,31 @@ if st.button("Send"):
             response = requests.post(FASTAPI_API_URL, json={"user_input": user_input})
             response.raise_for_status()
             data = response.json()
-            
-            # Create the DataFrame from the data
-            df = pd.DataFrame(data["data"])
 
-            # If 'url' column exists, configure it to be a clickable link
-            if "url" in df.columns:
-                st.dataframe(
-                    df,
-                    column_config={
-                        "url": st.column_config.LinkColumn("Event Link"),
-                    },
-                    height=600,
-                    width=1800
-                )
+            # Get the event data from the response
+            events = data["data"]
+            if events:
+                # Create a scrollable container to hold the events
+                with st.container():
+                    st.markdown("<hr>", unsafe_allow_html=True)  # Add a separator line
+
+                    for event in events:
+                        event_name = event.get('event_name', 'No Name')
+                        url = event.get('url', '#')
+
+                        # Display event name as bold and hyperlink it
+                        st.markdown(f"**[ {event_name} ]({url})**")
+                        
+                        # Display other event details (one row per column)
+                        for column_name, value in event.items():
+                            if column_name != 'event_name' and column_name != 'url':
+                                st.markdown(f"**{column_name}**: {value}")
+                        
+                        st.markdown("<hr>", unsafe_allow_html=True)  # Add a separator between events
+                st.write("Scroll down to see more events...")
+
             else:
-                st.dataframe(df, height=600, width=1800)
+                st.write("No events found based on your query.")
 
             # Display the SQL query
             st.markdown(f"**SQL Query**:\n```\n{data['sql_query']}\n```")
