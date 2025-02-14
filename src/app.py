@@ -83,9 +83,6 @@ if st.button("Send"):
 
             # Display the SQL query
             st.markdown(f"**SQL Query**:\n```\n{data['sql_query']}\n```")
-
-            # Display the history of the conversation
-            st.session_state["messages"].append({"role": "assistant", "content": data["message"]})
             
         except Exception as e:
             error_message = f"Error: {e}"
