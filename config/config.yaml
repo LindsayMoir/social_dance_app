@@ -25,6 +25,7 @@ input:
   edge_cases: 'data/other/edge_cases.csv'
   emails: 'data/other/emails.csv'
   gs_urls: 'data/urls/gs_urls.csv'
+  predibase: 'data/other/duplicates_predibase.csv'
   urls: 'data/urls'
 location:
   distance: 50

@@ -93,6 +93,7 @@ else:
     st.write("Please enter a message")
 
 # Render the conversation history
+st.markdown("##### Conversation History")
 for message in st.session_state["messages"]:
     if message["role"] == "user":
         st.markdown(f"**User**: {message['content']}")
