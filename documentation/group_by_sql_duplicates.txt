@@ -16,3 +16,71 @@ SELECT Group_ID, e.*
 FROM GroupedEvents e
 ORDER BY e.start_date, e.start_time
 LIMIT 100;
+
+15 minutes window
+WITH DuplicateStartTimes AS (
+    SELECT start_date,
+           DATE_TRUNC('minute', start_time) - (EXTRACT(minute FROM start_time) % 15) * INTERVAL '1 minute' AS start_time_group,
+           DATE_TRUNC('minute', end_time) - (EXTRACT(minute FROM end_time) % 15) * INTERVAL '1 minute' AS end_time_group,
+           COUNT(*) OVER (PARTITION BY start_date,
+                                       DATE_TRUNC('minute', start_time) - (EXTRACT(minute FROM start_time) % 15) * INTERVAL '1 minute',
+                                       DATE_TRUNC('minute', end_time) - (EXTRACT(minute FROM end_time) % 15) * INTERVAL '1 minute') AS event_count
+    FROM events
+    WHERE start_date > '2025-02-13'
+),
+FilteredDuplicates AS (
+    SELECT start_date, start_time_group, end_time_group
+    FROM DuplicateStartTimes
+    WHERE event_count > 1
+),
+GroupedEvents AS (
+    SELECT e.*,
+           DENSE_RANK() OVER (ORDER BY e.start_date, d.start_time_group, d.end_time_group) AS Group_ID,
+           ROW_NUMBER() OVER (PARTITION BY e.event_id ORDER BY e.start_date, e.start_time) AS rn
+    FROM events e
+    JOIN FilteredDuplicates d
+    ON e.start_date = d.start_date
+    AND DATE_TRUNC('minute', e.start_time) - (EXTRACT(minute FROM e.start_time) % 15) * INTERVAL '1 minute' = d.start_time_group
+    AND DATE_TRUNC('minute', e.end_time) - (EXTRACT(minute FROM e.end_time) % 15) * INTERVAL '1 minute' = d.end_time_group
+)
+SELECT Group_ID, event_id, event_name, event_type, source, dance_style, url, price, location, address_id, description, time_stamp
+FROM GroupedEvents
+WHERE rn = 1
+ORDER BY Group_ID, start_date, start_time;
+
+Latest Version
+WITH DuplicateStartTimes AS (
+    SELECT start_date,
+           DATE_TRUNC('minute', start_time) - 
+           (EXTRACT(minute FROM start_time) % 15) * INTERVAL '1 minute' AS start_time_group,
+           DATE_TRUNC('minute', end_time) - 
+           (EXTRACT(minute FROM end_time) % 15) * INTERVAL '1 minute' AS end_time_group
+    FROM events
+    WHERE start_date > '2025-02-13'
+),
+FilteredDuplicates AS (
+    SELECT start_date, start_time_group, end_time_group,
+           COUNT(*) OVER (PARTITION BY start_date, start_time_group, end_time_group) AS event_count
+    FROM DuplicateStartTimes
+),
+FinalFiltered AS (
+    SELECT start_date, start_time_group, end_time_group
+    FROM FilteredDuplicates
+    WHERE event_count > 1
+),
+GroupedEvents AS (
+    SELECT e.*, 
+           DENSE_RANK() OVER (ORDER BY e.start_date, f.start_time_group, f.end_time_group) AS Group_ID,
+           ROW_NUMBER() OVER (PARTITION BY e.event_id ORDER BY e.start_date, e.start_time) AS rn
+    FROM events e
+    JOIN FinalFiltered f
+    ON e.start_date = f.start_date
+    AND DATE_TRUNC('minute', e.start_time) = f.start_time_group
+    AND DATE_TRUNC('minute', e.end_time) = f.end_time_group
+)
+SELECT Group_ID, event_id, event_name, event_type, source, dance_style, url, price, location, address_id, description, time_stamp
+FROM GroupedEvents
+WHERE rn = 1
+ORDER BY Group_ID, start_date, start_time;
+
+

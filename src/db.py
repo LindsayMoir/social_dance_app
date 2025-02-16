@@ -1033,6 +1033,33 @@ class DatabaseHandler():
             logging.error("delete_event_with_event_id: Failed to delete event with event_id %d: %s", event_id, e)
 
     
+    def delete_multiple_events(self, event_ids):
+        """
+        Deletes multiple events from the 'events' table based on a list of event_ids.
+
+        Args:
+            event_ids (list): List of event_id(s) to delete.
+
+        Returns:
+            bool: True if all deletions were successful, False otherwise.
+        """
+        if not event_ids:
+            logging.warning("delete_multiple_events: No event_ids provided for deletion.")
+            return False
+
+        success_count = 0
+        for event_id in event_ids:
+            try:
+                self.delete_event_with_event_id(event_id)
+                success_count += 1
+            except Exception as e:
+                logging.error("delete_multiple_events: Error deleting event_id %d: %s", event_id, e)
+
+        logging.info("delete_multiple_events: Deleted %d out of %d events.", success_count, len(event_ids))
+        
+        return success_count == len(event_ids)  # Return True if all deletions were successful
+
+
     def driver(self):
         """
         Main driver function to perform database operations.

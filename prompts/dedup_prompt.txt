@@ -1,23 +1,25 @@
-Context
+Context:
 You are a data analyst tasked with deduplicating event data. 
 Below are EXAMPLES to guide your understanding, followed by the actual DATA you need to classify. 
-Your goal is to label each row within a group as either a duplicate (1) or not a duplicate (0).
-
+Your goal is to label each row within a group as either a duplicate (1) or not a duplicate (0) in the DATA below.
+____________________
 Instructions:
-General: Grouping: Each row belongs to a Group_ID. Identify duplicates within each group.
+General:
+Grouping: Each event belongs to a group_id. Identify duplicates within each group.
 Labeling:
-- Label 0 indicates the row is NOT A DUPLICATE.
-- Label 1 indicates the row is a DUPLICATE.
+- Label 0 indicates the event is NOT A DUPLICATE.
+- Label 1 indicates the event is a DUPLICATE.
+
 Criteria for Non-Duplicate (Label 0):
-- Choose the row with the most complete and accurate information.
-- If multiple rows seem equally valid, prefer the one with the longest description.
-- If descriptions are similar, choose the row with the most recent time_stamp.
-Uncertainty: If unsure, label the row as 0.
-NOT A DUPLICATE: Within a Group_ID, there will be at least one but there may be multiple non-duplicate(s) (0).
+- Choose the event(s) with the most complete and accurate information.
+- There may be multiple unique event(s) within a group_id. Label each of those as 0.
+- If multiple events seem equally valid, prefer the one with the most descriptive event_name, longest description, and the most complete location.
+- If longest most descriptive event_name, description, and the most complete location are similar, choose the event with the most recent time_stamp.
+- Uncertainty: If unsure, review the semantic description of the event_name, the description, and the location. Only Label as a 1 if you are positive that this is a duplicate.
 
 Columns:
-Group_ID: Identifier for grouping possible duplicates.
-event_id: Unique identifier for each row.
+group_id: Identifier for grouping possible duplicates.
+event_id: Unique identifier for each event.
 source: Origin of the event information.
 dance_style: Type of dance (may not be accurate).
 url: Link to the event information. Identical URLs within a group sometimes suggest duplicates.
@@ -27,19 +29,19 @@ price: Event price. Matching prices suggest duplicates, but prices can be wrong 
 location: Event location. Matching locations suggest duplicates.
 address_id: Identifier for the address. Matching IDs suggest duplicates.
 description: Detailed event description. Semantically similar descriptions indicate duplicates.
-time_stamp: Timestamp of the event. Use for tie-breaking when choosing the non-duplicate row.
+time_stamp: Timestamp of the event. Use for tie-breaking when choosing the non-duplicate event.
 Label: Your prediction (0 or 1).
 
 Output Format:
 Return your results in the following JSON format:
 [
-  {"Group_ID": <group_id>, "event_id": <event_id>, "Label": <label>},
-  {"Group_ID": <group_id>, "event_id": <event_id>, "Label": <label>},
+  {"group_id": <group_id>, "event_id": <event_id>, "Label": <label>},
+  {"group_id": <group_id>, "event_id": <event_id>, "Label": <label>},
   ...
 ]
 ____________________
 EXAMPLES
-Group_ID	event_id	source	dance_style	url	event_type	event_name	price	location	address_id	description	time_stamp	Label
+group_id	event_id	source	dance_style	url	event_type	event_name	price	location	address_id	description	time_stamp	Label
 1	2481	Victoria Latin Dance Association	salsa, bachata, kizomba, merengue	https://www.google.com/calendar/event?eid=NHU0OTdicXMzOWg2OWk1b243bnFzb3NvYWhfMjAyNTAyMTVUMDMzMDAwWiAxN2RlMmNhNDNmNTI1Yzg3MDU4ZmZhZmUxZjAyMDZkYTgyYTE5ZDAwYTg1YTZhZTk3OWFkNmJiNjE4ZGNkOGFlQGc	social dance	Swing City	12	Victoria Edelweiss Club, 108 Niagara St, Victoria, BC V8V 1E9, Canada	891	http://www.victoriaedelweiss.ca/events/ ALL AGES WELCOME! 7:30pm-8:30pm - Ballroom workshop 8:30pm -10:30pm Swing, West Coast Swing, Latin, &amp; Ballroom Dancing Admissions $12 or $10 for Edelweiss Club members and students.	06:54.7	0
 1	5307	John de Pfyffer	Rumba	dancevictoria1@shaw.ca	workshop	Rumba Workshop with John	$12/$10	Victoria Edelweiss Club, 108 Niagara St	NULL	Rumba workshop. Cash only.	51:45.1	0
 1	5273	John de Pfyffer	Rumba	dancevictoria1@shaw.ca	workshop	Dance City Valentine's Rumba Workshop with John		Victoria Edelweiss Club, 108 Niagara St	NULL	NULL	38:47.6	1
@@ -59,4 +61,4 @@ Group_ID	event_id	source	dance_style	url	event_type	event_name	price	location	ad
 5	5330	John de Pfyffer	wcs	dancevictoria1@shaw.ca	social dance	WCS Collective Dance	$12	Dance Victoria, 2780 Quadra St	NULL	Workshop at 19:00; Dance from 20:00 to 22:00; Dance Floor: Medium/Hardwood	12:16.1	1
 5	5275	John de Pfyffer	Rumba	dancevictoria1@shaw.ca	workshop	WCS Rumba Workshop		Dance Victoria, 2780 Quadra St	NULL	NULL	38:47.6	1
 __________________
-DATA
+DATA:

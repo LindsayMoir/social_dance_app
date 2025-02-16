@@ -37,12 +37,14 @@ logging:
   log_file: 'logs/log.txt'
   extracted_text: 'output/extracted_text.csv'
 output:
+  dedup: 'output/dedup.csv'
   ebs_search_results: 'output/ebs_search_results.csv'
   fb_search_results: 'output/fb_search_results.csv'
   gs_search_results: 'output/gs_search_results.csv'
 prompts:
   allevents: 'prompts/all_events_in_prompt.txt'
   chatbot_instructions: 'prompts/chatbot_instructions.txt'
+  dedup: 'prompts/dedup_prompt.txt'
   default: 'prompts/default.txt'
   fb: 'prompts/fb_prompt.txt'
   single_event: 'prompts/single_event.txt'
