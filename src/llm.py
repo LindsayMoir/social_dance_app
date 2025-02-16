@@ -256,7 +256,7 @@ class LLMHandler():
 
             try:
                 response = self.client.chat.completions.create(
-                    model=self.config['llm']['url_evaluator'],
+                    model=self.config['llm']['model'],
                     messages=[{"role": "user", "content": prompt}]
                 )
 

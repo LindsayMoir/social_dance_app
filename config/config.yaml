@@ -31,7 +31,8 @@ location:
   distance: 50
   epicentre: 'Victoria, British Columbia, Canada'
 llm:
-  url_evaluator: 'o3-mini-2025-01-31'
+  model: 'o3-mini-2025-01-31'
+  provider: 'openai'
   spend_money: True
 logging:
   log_file: 'logs/log.txt'

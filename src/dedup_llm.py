@@ -210,7 +210,9 @@ class DeduplicationHandler:
         prompt = f"{self.prompt_template}\n\n{df.to_markdown()}"
         logging.info(f"def query_mistral(): Prompt: \n{prompt}")
 
-        chat_response = self.client.chat.complete(model=self.model, messages=[{"role": "user", "content": prompt}])
+        chat_response = self.client.chat.complete(model=self.model, 
+                                                  messages=[{"role": "user", "content": prompt}])
+        
         response_text = chat_response.choices[0].message.content
 
         start, end = response_text.find("["), response_text.rfind("]") + 1
