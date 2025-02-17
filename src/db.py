@@ -60,7 +60,10 @@ Note:
 """
 
 from datetime import datetime
+
 from dotenv import load_dotenv
+load_dotenv()
+
 from fuzzywuzzy import fuzz
 import logging
 import numpy as np
@@ -68,8 +71,9 @@ import os
 import pandas as pd
 import pyap
 import re  # Added missing import
-from sqlalchemy import create_engine, update, MetaData, text
-from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from sqlalchemy import create_engine, MetaData, Table, text
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 import yaml
 
 
@@ -83,13 +87,14 @@ class DatabaseHandler():
         """
         self.config = config
 
-        # Load .env file
-        load_dotenv()
-
         self.conn = self.get_db_connection()
         if self.conn is None:
             raise ConnectionError("DatabaseHandler: Failed to establish a database connection.")
         logging.info("def __init__(): Database connection established.")
+
+        self.metadata = MetaData()
+        # Reflect the existing database schema into metadata
+        self.metadata.reflect(bind=self.conn)
 
 
     def get_db_connection(self):
@@ -1060,6 +1065,36 @@ class DatabaseHandler():
         return success_count == len(event_ids)  # Return True if all deletions were successful
 
 
+    def multiple_db_inserts(self, values):
+        """
+        Inserts or updates multiple records in the events table.
+
+        Parameters:
+        values (list of dict): List of dictionaries where each dict represents a row to insert/update.
+        """
+        if not values:
+            logging.info("multiple_db_inserts(): No values to insert or update.")
+            return
+
+        try:
+            # Get reference to the 'events' table from metadata
+            events_table = Table("events", self.metadata, autoload_with=self.conn)
+
+            with self.conn.begin() as conn:
+                for row in values:
+                    stmt = insert(events_table).values(row)
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["event_id"],  # Primary key column
+                        set_={col: stmt.excluded[col] for col in row.keys() if col != "event_id"}
+                    )
+                    conn.execute(stmt)
+
+            logging.info(f"multiple_db_inserts(): Successfully inserted/updated {len(values)} rows.")
+
+        except Exception as e:
+            logging.error(f"multiple_db_inserts(): Error inserting/updating records - {e}")
+
+
     def driver(self):
         """
         Main driver function to perform database operations.
@@ -1093,6 +1128,9 @@ if __name__ == "__main__":
 
     # Initialize DatabaseHandler
     db_handler = DatabaseHandler(config)
+
+    # Create tables
+    db_handler.create_tables()
 
     # Perform deduplication and delete old events
     db_handler.driver()

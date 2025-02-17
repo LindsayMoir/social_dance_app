@@ -63,6 +63,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import json
 import logging
+from mistralai import Mistral
 from openai import OpenAI
 import os
 import openai
@@ -89,13 +90,24 @@ class LLMHandler():
             global db_handler
             db_handler = DatabaseHandler(self.config)
 
-        # Load OpenAI API keys from environment variables
-        self.openai_api_key = os.getenv("OPENAI_API_KEY")
-        self.openai_ai_organization = os.getenv("OPENAI_ORGANIZATION")
-        self.openai_ai_project = os.getenv("OPENAI_PROJECT")
-        # Set the OpenAI API key
-        openai.api_key = self.openai_api_key
-        self.client = OpenAI()
+        if self.config['llm']['provider'] == 'openai':
+            # Load OpenAI API keys from environment variables
+            self.openai_api_key = os.getenv("OPENAI_API_KEY")
+            self.openai_ai_organization = os.getenv("OPENAI_ORGANIZATION")
+            self.openai_ai_project = os.getenv("OPENAI_PROJECT")
+
+            # Set the OpenAI API key
+            openai.api_key = self.openai_api_key
+            self.client = OpenAI()
+
+        elif self.config['llm']['provider'] == 'mistral':
+            self.api_key = os.getenv("MISTRAL_API_KEY")
+            self.model = self.config['llm']['mistral_model']
+            self.client = Mistral(api_key=self.api_key)
+            logging.info("def _setup_mistral_api(): Mistral client created")
+        
+        else:
+            logging.error("def _setup_mistral_api(): No valid LLM provider specified in config.")
 
 
     def driver(self, url, search_term, extracted_text, source, keywords_list):
@@ -244,37 +256,69 @@ class LLMHandler():
 
     def query_llm(self, prompt):
         """
-        Query OpenAI LLM with a given prompt and return the response.
+        Query the configured LLM with a given prompt and return the response.
+        
         Args:
             prompt (str): The prompt to send to the LLM.
-            url (str): The URL associated with the prompt.
+
         Returns:
             str: The response from the LLM if available, otherwise None.
         """
-        if self.config['llm']['spend_money']:
-            logging.info("def query_llm(): Spending money is set to True. Querying the LLM.")
+        if not self.config['llm']['spend_money']:
+            logging.info("query_llm(): Spending money is disabled. Skipping the LLM query.")
+            return None
 
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.config['llm']['model'],
-                    messages=[{"role": "user", "content": prompt}]
-                )
+        provider = self.config['llm']['provider']
 
-                # Extract and log the response
-                if response and response.choices:
-                    llm_response = response.choices[0].message.content.strip()
-                    logging.info(f"def query_llm(): LLM response received: {llm_response}")
-                    return llm_response
-                else:
-                    logging.error("def query_llm(): No LLM response received.")
-                    return None
-                
-            except openai.OpenAIError as e:
-                logging.error(f"def query_llm(): OpenAI API call failed: {e}")
-                return None
-
+        if provider == 'openai':
+            model = self.config['llm']['openai_model']
+            logging.info(f"query_llm(): Querying {provider} LLM with model {model}.")
+            return self._query_openai(prompt, model)
+        
+        elif provider == 'mistral':
+            logging.info(f"query_llm(): Querying {provider} LLM with model {self.model}.")
+            return self._query_mistral(prompt, self.model)
+        
         else:
-            logging.info("def query_llm(): Spending money is set to False. Skipping the LLM query.")
+            logging.error("query_llm(): Invalid LLM provider specified.")
+            return None
+
+    def _query_openai(self, prompt, model):
+        """Handles querying OpenAI LLM."""
+        try:
+            response = self.client.chat.completions.create(
+                model=model, messages=[{"role": "user", "content": prompt}]
+            )
+            llm_response = response.choices[0].message.content.strip() if response and response.choices else None
+
+            if llm_response:
+                logging.info(f"_query_openai(): LLM response received: {llm_response}")
+            else:
+                logging.error("_query_openai(): No response received from OpenAI.")
+                
+            return llm_response
+
+        except Exception as e:
+            logging.error(f"_query_openai(): OpenAI API call failed: {e}")
+            return None
+
+    def _query_mistral(self, prompt, model):
+        """Handles querying Mistral LLM."""
+        try:
+            response = self.client.chat.complete(
+                model=model, messages=[{"role": "user", "content": prompt}]
+            )
+            llm_response = response.choices[0].message.content if response and response.choices else None
+
+            if llm_response:
+                logging.info(f"_query_mistral(): LLM response received: {llm_response}")
+            else:
+                logging.error("_query_mistral(): No response received from Mistral.")
+
+            return llm_response
+
+        except Exception as e:
+            logging.error(f"_query_mistral(): Mistral API call failed: {e}")
             return None
 
 

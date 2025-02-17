@@ -616,9 +616,6 @@ if __name__ == "__main__":
     llm_handler = LLMHandler(config_path="config/config.yaml")
     read_extract = ReadExtract("config/config.yaml")
 
-    # Create the database tables
-    db_handler.create_tables()
-
     # Run the crawler process
     process = CrawlerProcess(settings={
         "LOG_FILE": config['logging']['log_file'],

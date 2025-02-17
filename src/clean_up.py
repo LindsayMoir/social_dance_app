@@ -28,8 +28,8 @@ import yaml
 from googleapiclient.discovery import build
 from datetime import datetime
 from bs4 import BeautifulSoup
-
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from sqlalchemy.dialects.postgresql import insert
 
 from db import DatabaseHandler
 from llm import LLMHandler
@@ -46,7 +46,6 @@ class CleanUp:
         self.conn = self.db_handler.get_db_connection()
         if self.conn is None:
             raise ConnectionError("DatabaseHandler: Failed to establish a database connection.")
-        logging.info("def __init__(): Database connection established.")
 
         # Retrieve Google API credentials using credentials.py
         _, self.api_key, self.cse_id = get_credentials('Google')
@@ -506,6 +505,78 @@ class CleanUp:
         self.db_handler.execute_query(update_query, update_params)
 
 
+    async def fix_incorrect_dance_styles(self):
+        """
+        Asynchronously fixes incorrect dance styles in the database by:
+        1) Querying the DB for events.
+        2) Identifying and updating incorrect dance styles.
+        3) Updating the DB with the corrected dance styles.
+        """
+        events_df = self._fetch_events_from_db()
+        if events_df.empty:
+            logging.info("fix_incorrect_dance_styles(): No events found in the database.")
+            return
+
+        keywords_list = self._load_keywords()
+        events_df["update"] = False  # Add update flag column
+
+        events_df[["dance_style", "update"]] = events_df.apply(
+            lambda row: self.update_dance_style(row, keywords_list), axis=1
+        )
+
+        self._process_updated_events(events_df)
+
+
+    def _fetch_events_from_db(self):
+        """Fetch all events from the database."""
+        query = "SELECT * FROM events"
+        events_df = pd.read_sql(query, self.db_handler.conn)
+        logging.info(f"_fetch_events_from_db(): Retrieved {events_df.shape[0]} events.")
+        return events_df
+
+
+    def _load_keywords(self):
+        """Load and process dance style keywords from CSV."""
+        keywords_df = pd.read_csv(self.config['input']['data_keywords'])
+        keywords_list = sorted(set(
+            keyword.strip()
+            for keywords in keywords_df["keywords"]
+            for keyword in str(keywords).split(',')
+        ))
+        logging.info(f"_load_keywords(): Loaded {len(keywords_list)} keywords.")
+        return keywords_list
+
+
+    def update_dance_style(self, row, keywords_list):
+        """Determine if a dance style needs updating based on event name/description."""
+        event_name = row["event_name"] if isinstance(row["event_name"], str) else ""
+        description = row["description"] if isinstance(row["description"], str) else ""
+
+        matches = [keyword for keyword in keywords_list if keyword.lower() in event_name.lower() 
+                or keyword.lower() in description.lower()]
+
+        if matches:
+            return pd.Series([", ".join(matches), True])  # Update dance_style and flag for update
+        return pd.Series([row["dance_style"], row["update"]])  # Keep original values
+
+
+    def _process_updated_events(self, events_df):
+        """Filter and update only the modified rows in the database."""
+        updated_df = events_df[events_df["update"]].drop(columns=["update"])
+        
+        if updated_df.empty:
+            logging.info("fix_incorrect_dance_styles(): No updates required.")
+            return
+
+        # Ensure that address_id are integers
+        updated_df['address_id'] = updated_df['address_id'].fillna(0).astype(int)
+
+        # Convert DataFrame to list of dictionaries for multiple inserts
+        values = updated_df.to_dict(orient="records")
+        self.db_handler.multiple_db_inserts(values)
+        logging.info(f"_process_updated_events(): Updated {len(values)} records in the database.")
+
+
 # ------------------------------------------------------------------------
 # Main entry point - run asynchronously
 # ------------------------------------------------------------------------
@@ -523,8 +594,12 @@ async def main():
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
+    # Fix no urls in events
     clean_up_instance = CleanUp(config)
     await clean_up_instance.process_events_without_url()
+
+    # Fix incorrect dance_styles
+    await clean_up_instance.fix_incorrect_dance_styles()
 
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")

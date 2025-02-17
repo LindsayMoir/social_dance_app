@@ -7,10 +7,10 @@ constants:
   fuzzywuzzy_threshold: 80
 crawling:
   depth_limit: 3
-  headless: False
+  headless: True
   max_crawl_trys: 3
-  max_website_urls: 3
-  urls_run_limit: 10
+  max_website_urls: 10
+  urls_run_limit: 200
   scroll_depth: 3
 date_range:
   months: 3
@@ -31,8 +31,9 @@ location:
   distance: 50
   epicentre: 'Victoria, British Columbia, Canada'
 llm:
-  model: 'o3-mini-2025-01-31'
-  provider: 'openai'
+  mistral_model: 'mistral-large-latest'
+  openai_model: 'o3-mini-2025-01-31'
+  provider: 'mistral'
   spend_money: True
 logging:
   log_file: 'logs/log.txt'
@@ -63,7 +64,7 @@ startup:
 testing:
   status: False
   nof_no_url_events: 10
-  drop_tables: False
+  drop_tables: True
   local: False
   fast_api_url: 'http://localhost:8080/query'
 update_schedule:

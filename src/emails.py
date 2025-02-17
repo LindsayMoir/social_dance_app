@@ -27,6 +27,7 @@ Usage:
 import base64
 from dotenv import load_dotenv
 from email import message_from_bytes
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -64,6 +65,7 @@ class GmailProcessor:
     def authenticate_gmail(self):
         """
         Authenticates with Gmail API using OAuth2 and returns the service instance.
+        If the token is expired or revoked, it will automatically trigger a new authentication flow.
         """
         creds = None
 
@@ -72,21 +74,24 @@ class GmailProcessor:
                 creds = Credentials.from_authorized_user_file(self.token_path, self.scopes)
         except Exception as e:
             logging.error(f"Error loading token file: {e}")
-        
+
         if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-                logging.info("def authenticate_gmail(): Refreshed expired credentials.")
-            else:
-                logging.info("def authenticate_gmail(): No valid credentials found. Starting OAuth flow...")
+            try:
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                    logging.info("def authenticate_gmail(): Refreshed expired credentials.")
+                else:
+                    raise RefreshError("Token is invalid or expired.")  # Force a new authentication flow
+            except RefreshError as e:
+                logging.warning(f"Token refresh failed: {e}. Initiating new OAuth authentication flow.")
                 flow = InstalledAppFlow.from_client_secrets_file(self.client_secret_path, self.scopes)
                 creds = flow.run_local_server(port=0)  # Launches browser for authentication
                 logging.info("def authenticate_gmail(): OAuth authentication completed successfully.")
 
-            # Save new credentials
-            with open(self.token_path, "w") as token_file:
-                token_file.write(creds.to_json())
-                logging.info(f"Saved new token file at {self.token_path}")
+                # Save new credentials
+                with open(self.token_path, "w") as token_file:
+                    token_file.write(creds.to_json())
+                    logging.info(f"Saved new token file at {self.token_path}")
 
         logging.info("Successfully authenticated with Gmail API.")
         return build("gmail", "v1", credentials=creds)

@@ -1,20 +1,12 @@
 source,dance_style,url,event_type,event_name,day_of_week,start_date,end_date,start_time,end_time,price,location,description
-Bard and Banker,,,,Max MacKrill,Monday,2025-02-10,2025-02-10,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,"bachata, cha cha, cumbia, merengue, salsa",,social dance,Miguelito Valdés+band,Tuesday,2025-02-11,2025-02-11,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,St. Cecilia,Wednesday,2025-02-12,2025-02-12,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,The Wedding Crashers,Thursday,2025-02-13,2025-02-13,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Vinyl Wave,Friday,2025-02-14,2025-02-14,16:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Pulse Radio,Saturday,2025-02-15,2025-02-15,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,JaimesonRhy,Sunday,2025-02-16,2025-02-16,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Max MacKrill,Monday,2025-02-17,2025-02-17,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,"bachata, cha cha, cumbia, merengue, salsa",,social dance,Miguelito Valdés+band,Tuesday,2025-02-18,2025-02-18,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,St. Cecilia,Wednesday,2025-02-19,2025-02-19,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,The Wedding Crashers,Thursday,2025-02-20,2025-02-20,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Strangers,Friday,2025-02-21,2025-02-21,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Strangers,Saturday,2025-02-22,2025-02-22,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Max MacKrill,Sunday,2025-02-23,2025-02-24,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,"bachata, cha cha, cumbia, merengue, salsa",,social dance,Miguelito Valdés+band,Tuesday,2025-02-25,2025-02-25,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,St. Cecilia,Wednesday,2025-02-26,2025-02-26,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Bipolar Bear,Thursday,2025-02-27,2025-02-27,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Big Shiny Dudes,Friday,2025-02-28,2025-02-28,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Cities,Saturday,2025-03-01,2025-03-01,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
+John de Pfyffer,rumba,,workshop,Dance City Ballroom Dance,Friday,2025-02-14,2025-02-14,19:30,20:30,$12/$10 members (Cash Only),"Victoria Edelweiss Club, 108 Niagara St",Rumba workshop with John at 7:30pm
+John de Pfyffer,rumba,,social dance,Dance City Ballroom Dance,Friday,2025-02-14,2025-02-14,20:30,22:30,$12/$10 members (Cash Only),"Victoria Edelweiss Club, 108 Niagara St",Dance from 8:30 to 10:30pm
+John de Pfyffer,"west coast swing, wcs",,workshop,WCS Collective Dance,Saturday,2025-02-15,2025-02-15,19:00,20:00,$12,"Dance Victoria, 2780 Quadra St",Workshop at 7pm
+John de Pfyffer,"west coast swing, wcs",,social dance,WCS Collective Dance,Saturday,2025-02-15,2025-02-15,20:00,22:00,$12,"Dance Victoria, 2780 Quadra St",Dance from 8 to 10pm
+John de Pfyffer,,,workshop,VBDS Mardi Gras Dance,Saturday,2025-02-15,2025-02-15,19:00,19:45,$12/$10 members,"Les Passmore Centre, 186 Hampton Rd",Workshop at 7pm
+John de Pfyffer,,,social dance,VBDS Mardi Gras Dance,Saturday,2025-02-15,2025-02-15,19:45,21:45,$12/$10 members,"Les Passmore Centre, 186 Hampton Rd",Dance from 7:45 to 9:45pm
+John de Pfyffer,"west coast swing, wcs",,social dance,WCS Collective Dance,Tuesday,2025-02-18,2025-02-18,19:45,21:45,$7,"Eastern Star Hall, 3281 Harriet Rd",Free for those currently registered in a wcs class
+John de Pfyffer,swing,,workshop,Dance City Swing Dance,Friday,2025-02-21,2025-02-21,19:30,20:30,$12/$10 members (Cash only),"Victoria Edelweiss Club, 108 Niagara St",West Coast Swing with John at 7:30pm
+John de Pfyffer,swing,,social dance,Dance City Swing Dance,Friday,2025-02-21,2025-02-21,20:30,22:30,$12/$10 members (Cash only),"Victoria Edelweiss Club, 108 Niagara St",Dance from 8:30 to 10:30pm
+John de Pfyffer,"west coast swing, wcs",,workshop,WCS Collective Dance,Saturday,2025-02-22,2025-02-22,19:00,20:00,$12,"Dance Victoria, 2780 Quadra St",Workshop at 7pm
+John de Pfyffer,"west coast swing, wcs",,social dance,WCS Collective Dance,Saturday,2025-02-22,2025-02-22,20:00,22:00,$12,"Dance Victoria, 2780 Quadra St",Dance from 8 to 10pm
