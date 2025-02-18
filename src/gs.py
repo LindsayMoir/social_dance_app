@@ -63,7 +63,7 @@ class GoogleSearch():
         logging.info(f"Read {len(df)} keywords from {keywords_path}")
         return df
 
-    def build_query_string(self, row):
+    def build_query_string(self, keyword):
         """
         Construct a query string using keywords and location from configuration.
 
@@ -74,12 +74,11 @@ class GoogleSearch():
             str: A query string combining the keywords and the location.
         """
         location = self.config['location']['epicentre']
-        keywords = row['keywords']
-        query = f"{keywords} {location}"
+        query = f"{keyword} {location}"
         logging.debug(f"def build_query_string(): Built query string: {query}")
         return query
     
-    def title_to_source(self, title, url):
+    def relevant_dance_url(self, title, url, snippet):
         """
         Extract organization names from a title string.
 
@@ -89,17 +88,27 @@ class GoogleSearch():
         Returns:
             source (str): A likely organization name extracted from the title.
         """
-        prompt_file_path = self.config['prompts']['title_to_source']
+        prompt_file_path = self.config['prompts']['relevant_dance_url']
         with open(prompt_file_path, 'r') as file:
             prompt = file.read()
-        prompt = prompt + title
+        prompt = f"{prompt}\nTitle: {title}\nURL: {url}\nSnippet: {snippet}"
+        logging.info(f"def relevant_dance_url(): Prompt: \n{prompt} \nURL: {url}")
 
-        source = self.llm_handler.query_llm(prompt)
-        logging.info(f"def title_to_source(): Organization name returned by LLM is: {source}")
-        source = source.translate(str.maketrans("", "", "'\"<>"))
-        return source
+        try:
+            relevant = self.llm_handler.query_llm(prompt)
+            if relevant and relevant.lower() == 'True'.lower():
+                logging.info(f"def relevant_dance_url(): LLM's opinion on the relevance of this URL: {url} is: {relevant}")
+                return True
+            else:
+                logging.info(f"def relevant_dance_url(): LLM's opinion on the relevance of this URL: {url} is: {relevant}")
+                return False
+        
+        except Exception as e:
+            logging.error(f"def relevant_dance_url(): URL: {url} Error in LLM processing: {e}")
+            return None
+        
 
-    def google_search(self, query, keywords, num_results=10):
+    def google_search(self, query, keyword, num_results=10):
         """
         Perform a Google search using the Custom Search API and retrieve title, URL, and snippet.
 
@@ -121,18 +130,33 @@ class GoogleSearch():
         results = []
         if 'items' in response:
             for item in response['items']:
-                title = item.get('title')
-                logging.info(f"def google_search(): Title: {title}")
-                url = item.get('link')
-                source = self.title_to_source(title, url)
-                results.append({
-                    'source': source,
-                    'keywords': keywords,
-                    'link': url
-                })
-            logging.info(f"Found {len(results)} results for query: {query}")
+                title = item.get('title', 'No Title')
+                url = item.get('link', 'No URL')
+                snippet = item.get('snippet', 'No Snippet')
+
+                logging.info(f"google_search(): Title: {title}, URL: {url}")
+
+                if title.lower() != 'untitled' and title != 'No Title':
+                    try:
+                        dance_url = self.relevant_dance_url(title, url, snippet)
+                        if dance_url:
+                            results.append({
+                                'source': title,
+                                'keywords': keyword,
+                                'link': url
+                            })
+                            logging.info(f"Added result: {title}")
+                        else:
+                            logging.info(f"Skipped irrelevant result: {title}")
+                    except Exception as e:
+                        logging.error(f"Error processing item: {e}")
+                else:
+                    logging.info(f"Skipped untitled result for query: {query}")
         else:
-            logging.info(f"No results found for query: {query}")
+            logging.info(f"No items found in response for query: {query}")
+
+        logging.info(f"Found {len(results)} results for query: {query}")
+
         return results
 
 
@@ -146,9 +170,19 @@ class GoogleSearch():
         """
         all_results = []
         keywords_df = self.read_keywords()
-        for _, row in keywords_df.iterrows():
-            query = self.build_query_string(row)
-            results = self.google_search(query, row['keywords'])
+
+        # Convert to a list, strip spaces, split on commas, and remove duplicates
+        keywords_list = sorted(set(
+            keyword.strip()
+            for keywords in keywords_df["keywords"]
+            for keyword in str(keywords).split(',')
+        ))
+
+        for keyword in keywords_list:
+            query = self.build_query_string(keyword)
+            logging.info(f"def driver: {query}")
+
+            results = self.google_search(query, keyword)
             all_results.extend(results)
         logging.info(f"Driver completed with total {len(all_results)} results.")
         results_df = pd.DataFrame(all_results)

@@ -1,12 +1,2 @@
-source,dance_style,url,event_type,event_name,day_of_week,start_date,end_date,start_time,end_time,price,location,description
-John de Pfyffer,rumba,,workshop,Dance City Ballroom Dance,Friday,2025-02-14,2025-02-14,19:30,20:30,$12/$10 members (Cash Only),"Victoria Edelweiss Club, 108 Niagara St",Rumba workshop with John at 7:30pm
-John de Pfyffer,rumba,,social dance,Dance City Ballroom Dance,Friday,2025-02-14,2025-02-14,20:30,22:30,$12/$10 members (Cash Only),"Victoria Edelweiss Club, 108 Niagara St",Dance from 8:30 to 10:30pm
-John de Pfyffer,"west coast swing, wcs",,workshop,WCS Collective Dance,Saturday,2025-02-15,2025-02-15,19:00,20:00,$12,"Dance Victoria, 2780 Quadra St",Workshop at 7pm
-John de Pfyffer,"west coast swing, wcs",,social dance,WCS Collective Dance,Saturday,2025-02-15,2025-02-15,20:00,22:00,$12,"Dance Victoria, 2780 Quadra St",Dance from 8 to 10pm
-John de Pfyffer,,,workshop,VBDS Mardi Gras Dance,Saturday,2025-02-15,2025-02-15,19:00,19:45,$12/$10 members,"Les Passmore Centre, 186 Hampton Rd",Workshop at 7pm
-John de Pfyffer,,,social dance,VBDS Mardi Gras Dance,Saturday,2025-02-15,2025-02-15,19:45,21:45,$12/$10 members,"Les Passmore Centre, 186 Hampton Rd",Dance from 7:45 to 9:45pm
-John de Pfyffer,"west coast swing, wcs",,social dance,WCS Collective Dance,Tuesday,2025-02-18,2025-02-18,19:45,21:45,$7,"Eastern Star Hall, 3281 Harriet Rd",Free for those currently registered in a wcs class
-John de Pfyffer,swing,,workshop,Dance City Swing Dance,Friday,2025-02-21,2025-02-21,19:30,20:30,$12/$10 members (Cash only),"Victoria Edelweiss Club, 108 Niagara St",West Coast Swing with John at 7:30pm
-John de Pfyffer,swing,,social dance,Dance City Swing Dance,Friday,2025-02-21,2025-02-21,20:30,22:30,$12/$10 members (Cash only),"Victoria Edelweiss Club, 108 Niagara St",Dance from 8:30 to 10:30pm
-John de Pfyffer,"west coast swing, wcs",,workshop,WCS Collective Dance,Saturday,2025-02-22,2025-02-22,19:00,20:00,$12,"Dance Victoria, 2780 Quadra St",Workshop at 7pm
-John de Pfyffer,"west coast swing, wcs",,social dance,WCS Collective Dance,Saturday,2025-02-22,2025-02-22,20:00,22:00,$12,"Dance Victoria, 2780 Quadra St",Dance from 8 to 10pm
+URL,Type_of_Event,Name_of_the_Event,Day_of_Week,Start_Date,End_Date,Start_Time,End_Time,Price,Location,Description
+https://www.google.com/calendar/event?eid=MzJra3RwYnIzamxnNTQ5bDRvdTZwa2QyaXUgbnVmaXN0MGZxODFsaGgyMzhwdGtnamRobDhAZw,other,Studio closed for Family Day,,,,,,,,

@@ -245,35 +245,27 @@ class EventbriteScraper:
     async def driver(self):
         """
         Reads keywords from a DataFrame, constructs search queries,
-        performs Eventbrite searches for each query, and aggregates the results.
-
-        Returns:
-            pandas.DataFrame: A dataframe containing all search results.
+        performs Eventbrite searches for each query
         """
-        try:
-            
-            keywords_df = self.gs_instance.read_keywords()
-            for _, row in keywords_df.iterrows():
-                # Split the keywords and search for each keyword
-                keywords = row['keywords'].split(',')
-                for keyword in keywords:
-                    query = keyword.strip()
-                    source = ''  # Populate as needed
-                    keywords_list = [kw.strip() for kw in row['keywords'].split(',')]
-                    prompt = 'default'
+        keywords_df = self.gs_instance.read_keywords()
 
-                    # Perform the search
-                    logging.info(f"driver(): Searching for query: {query}")
-                    await self.eventbrite_search(query, source, keywords_list, prompt)
+        # Convert to a list, strip spaces, split on commas, and remove duplicates
+        keywords_list = sorted(set(
+            keyword.strip()
+            for keywords in keywords_df["keywords"]
+            for keyword in str(keywords).split(',')
+        ))
 
-                    # # Just checking one keyword to see if this works
-                    break
+        for keyword in keywords_list:
+            query = keyword
+            source = ''  # Populate as needed
+            prompt = 'default'
 
-            logging.info(f"driver(): Driver completed with total {len(self.visited_urls)} processed URLs.")
+            # Perform the search
+            logging.info(f"driver(): Searching for query: {query}")
+            await self.eventbrite_search(query, source, keyword, prompt)
 
-        except Exception as e:
-            logging.error(f"def driver(): Error in driver: {e}")
-            return None
+        logging.info(f"driver(): Driver completed with total {len(self.visited_urls)} processed URLs.")
 
 
 async def main():

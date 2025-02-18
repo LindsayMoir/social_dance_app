@@ -249,7 +249,7 @@ class LLMHandler():
             f"{extracted_text}\n"
         )
 
-        logging.info(f"def generate_prompt(): \n{txt_file_path}\n{prompt}")
+        logging.info(f"def generate_prompt(): \n{txt_file_path}")
 
         return prompt
     

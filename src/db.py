@@ -48,7 +48,6 @@ Dependencies:
     - logging: For logging events, errors, and informational messages.
     - os, datetime, re: Standard libraries for file operations, time, and regex.
     - pandas (pd): For data manipulation and DataFrame operations.
-    - pyap: For parsing addresses from location strings.
     - sqlalchemy: For database connection, query execution, and ORM support.
     - yaml: For loading configuration from YAML files.
 
@@ -69,7 +68,6 @@ import logging
 import numpy as np
 import os
 import pandas as pd
-import pyap
 import re  # Added missing import
 from sqlalchemy import create_engine, MetaData, Table, text
 from sqlalchemy.dialects.postgresql import insert
@@ -95,6 +93,9 @@ class DatabaseHandler():
         self.metadata = MetaData()
         # Reflect the existing database schema into metadata
         self.metadata.reflect(bind=self.conn)
+
+        # Get the engine for the address_db
+        self.address_db_engine = create_engine(os.getenv('ADDRESS_DB_CONNECTION_STRING',isolation_level="AUTOCOMMIT"))
 
 
     def get_db_connection(self):
@@ -623,45 +624,48 @@ class DatabaseHandler():
 
     def get_address_id(self, address_dict):
         """
-        Inserts a new address or retrieves the existing address_id using INSERT ... ON CONFLICT.
+        Inserts a new address or updates the existing address using INSERT ... ON CONFLICT.
 
         Args:
-            address_dict (dict): Dictionary containing address details, e.g., {'full_address': '3277 Douglas St, Saanich, BC V8Z 3K9, Canada'}
+            address_dict (dict): Dictionary containing address details.
 
         Returns:
             int or None: The address_id if successful, else None.
         """
         try:
-            # Define the INSERT query with ON CONFLICT DO NOTHING and RETURNING address_id
+            # Define the INSERT query with ON CONFLICT DO UPDATE and RETURNING address_id
             insert_query = """
-                INSERT INTO address (full_address)
-                VALUES (:full_address)
-                ON CONFLICT (full_address) DO NOTHING
+                INSERT INTO address (
+                    full_address, street_number, street_name, street_type, floor,
+                    postal_box, city, province_or_state, postal_code, country_id
+                ) VALUES (
+                    :full_address, :street_number, :street_name, :street_type, :floor,
+                    :postal_box, :city, :province_or_state, :postal_code, :country_id
+                )
+                ON CONFLICT (full_address) DO UPDATE SET
+                    street_number = EXCLUDED.street_number,
+                    street_name = EXCLUDED.street_name,
+                    street_type = EXCLUDED.street_type,
+                    floor = EXCLUDED.floor,
+                    postal_box = EXCLUDED.postal_box,
+                    city = EXCLUDED.city,
+                    province_or_state = EXCLUDED.province_or_state,
+                    postal_code = EXCLUDED.postal_code,
+                    country_id = EXCLUDED.country_id
                 RETURNING address_id;
             """
-            
+
             # Execute the INSERT query
             insert_result = self.execute_query(insert_query, address_dict)
-            
+
             if insert_result:
-                # Insert succeeded; retrieve the new address_id
+                # Insert succeeded or update occurred; retrieve the address_id
                 row = insert_result[0]
-                address_id = row[0] # address_id is the first column in the result
-                logging.info(f"get_address_id: Inserted new address_id {address_id} for address '{address_dict['full_address']}'.")
+                address_id = row[0]  # address_id is the first column in the result
+                logging.info(f"get_address_id: Inserted or updated address_id {address_id} for address '{address_dict['full_address']}'.")
                 return address_id
-            
-            # Insert did nothing because the address already exists; retrieve existing address_id
-            select_query = """
-                SELECT address_id FROM address WHERE full_address = :full_address;
-            """
-            select_result = self.execute_query(select_query, address_dict)
-            
-            if select_result:
-                row = select_result[0]
-                address_id = row[0] # address_id is the first column in the result
-                return address_id
-            
-            logging.error(f"get_address_id: Failed to insert or retrieve address_id for '{address_dict['full_address']}'.")
+
+            logging.error(f"get_address_id: Failed to insert or update address_id for '{address_dict['full_address']}'.")
             return None
 
         except SQLAlchemyError as e:
@@ -677,38 +681,95 @@ class DatabaseHandler():
         """
         # Iterate over each row in the DataFrame
         for index, row in events_df.iterrows():
-            location = row.get('location') or ''
+            location = row['location'] or ''
             location = str(location).strip()
-            if not location:
-                continue  # Skip if 'location' is empty
 
-            parsed_addresses = pyap.parse(location, country='CA')
-            if not parsed_addresses:
-                continue
+            if location:
+                # Extract postal codes using regex
+                postal_code = re.search(r'[A-Za-z]\d[A-Za-z] \d[A-Za-z]\d', location)
+                postal_code = postal_code.group() if postal_code else None
+                postal_code = postal_code.replace(' ', '') if postal_code else None
+                logging.info(f"clean_up_address: Extracted postal code '{postal_code}' from location '{location}'.")
 
-            address = parsed_addresses[0]
-            logging.debug(f"Row {index} Address Attributes: {address.__dict__}")
-            address_dict = {
-                'full_address': address.full_address or '',
-                'street_number': getattr(address, 'street_number', ''),
-                'street_name': getattr(address, 'street_name', ''),
-                'street_type': getattr(address, 'street_type', ''),
-                'floor': getattr(address, 'floor', ''),
-                'postal_box': getattr(address, 'postal_box', ''),
-                'city': getattr(address, 'city', ''),
-                'province_or_state': getattr(address, 'region1', ''),
-                'postal_code': getattr(address, 'postal_code', ''),
-                'country_id': getattr(address, 'country_id', 'CA')
-            }
-            logging.debug(f"Row {index} Address Dict: {address_dict}")
-            address_id = self.get_address_id(address_dict)
-            if address_id is None:
-                logging.info(f"clean_up_address: Failed to obtain address_id for row {index}.")
-                continue
+                # Need to figure out WHICH address is the right one. Addresses share postal codes
+                # Extract all numbers from location
+                numbers = re.findall(r'\d+', location)
 
-            events_df.at[index, 'address_id'] = address_id
+                # We can get the correct components of the address from the postal code
+                if postal_code:
+                    sql = ("""
+                        SELECT 
+                            apt_no_label,
+                            civic_no,
+                            civic_no_suffix,
+                            official_street_name,
+                            official_street_type,
+                            official_street_dir,
+                            mail_mun_name,
+                            mail_prov_abvn,
+                            mail_postal_code
+                        FROM address 
+                        "WHERE postal_code = '{postal_code}';
+                        """
+                    )
+                    result_df = pd.read_sql(sql, 
+                                            self.address_db_engine, 
+                                            params={'postal_code': postal_code})
+                    
+                    # If the civic_no is already in the address, then it will match and 
+                    # cause a break on the correct address. This will set the idx of the row. 
+                    # If not, we will be using that last address, which hopefully is not a problem:(
+                    if result_df.shape[0] > 0:
+                        for idx, row in result_df.itertuples():
+                            if row.civic_no in numbers:
+                                break
+                            else:
+                                pass
 
-        return events_df  # Moved outside of the loop
+                        # Create a properly formatted address string
+                        location = (
+                            f"{result_df.apt_no_label.values[idx]} "
+                            f"{result_df.civic_no.values[idx]} "
+                            f"{result_df.civic_no_suffix.values[idx]} "
+                            f"{result_df.official_street_name.values[idx]} "
+                            f"{result_df.official_street_type.values[idx]} "
+                            f"{result_df.official_street_dir.values[idx]}, "
+                            f"{result_df.mail_mun_name.values[idx]}, "
+                            f"{result_df.mail_prov_abvn.values[idx]}, "
+                            f"{result_df.mail_postal_code.values[idx]}, "
+                            f"CA"
+                        )
+                        # We may have double spaces, so we will replace them with single spaces
+                        location.replace('  ', ' ')
+
+                        # Update the location in the events DataFrame
+                        events_df[index, 'location'] = location
+                        logging.info(f"def clean_up_address(): Updated events_df.location to '{location}'.")
+
+                        # Write the address to the address table
+                        address_dict = {
+                            'full_address': location,
+                            'street_number': result_df.civic_no.values[idx],
+                            'street_name': result_df.official_street_name.values[idx],
+                            'street_type': result_df.official_street_type.values[idx],
+                            'floor': result_df.apt_no_label.values[idx],
+                            'postal_box': None,
+                            'city': result_df.mail_mun_name.values[idx],
+                            'province_or_state': result_df.mail_prov_abvn.values[idx],
+                            'postal_code': result_df.mail_postal_code.values[idx],
+                            'country_id': 'CA'
+                        }
+                        # Write this dictionary to the address table
+                        address_id = self.get_address_id(address_dict)
+                        events_df[index, 'address_id'] = address_id
+                    else:
+                        logging.info(f"def clean_up_address(): No address found for postal code {postal_code}.")
+                else:
+                    logging.info(f"def clean_up_address(): No postal code found for location '{location}'.")
+            else:
+                logging.info(f"def clean_up_address(): No location provided for row {index}.")
+
+        return events_df
     
 
     def dedup(self):

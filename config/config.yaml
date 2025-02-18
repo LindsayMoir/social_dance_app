@@ -7,7 +7,7 @@ constants:
   fuzzywuzzy_threshold: 80
 crawling:
   depth_limit: 3
-  headless: True
+  headless: False
   max_crawl_trys: 3
   max_website_urls: 10
   urls_run_limit: 200
@@ -49,6 +49,7 @@ prompts:
   dedup: 'prompts/dedup_prompt.txt'
   default: 'prompts/default.txt'
   fb: 'prompts/fb_prompt.txt'
+  relevant_dance_url: 'prompts/relevant_dance_url.txt'
   single_event: 'prompts/single_event.txt'
   sql: 'prompts/sql_prompt.txt'
   title_to_source: 'prompts/title_to_source.txt'
@@ -64,7 +65,7 @@ startup:
 testing:
   status: False
   nof_no_url_events: 10
-  drop_tables: True
+  drop_tables: False
   local: False
   fast_api_url: 'http://localhost:8080/query'
 update_schedule:
