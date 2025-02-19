@@ -88,14 +88,19 @@ class DatabaseHandler():
         self.conn = self.get_db_connection()
         if self.conn is None:
             raise ConnectionError("DatabaseHandler: Failed to establish a database connection.")
-        logging.info("def __init__(): Database connection established.")
+        logging.info("def __init__(): Database connection established for social_dance_db.")
 
         self.metadata = MetaData()
         # Reflect the existing database schema into metadata
         self.metadata.reflect(bind=self.conn)
 
         # Get the engine for the address_db
-        self.address_db_engine = create_engine(os.getenv('ADDRESS_DB_CONNECTION_STRING'),isolation_level="AUTOCOMMIT")
+        if os.getenv("RENDER"):
+            logging.info("Running on Render: Skipping address_db_engine initialization.")
+        else:
+            self.address_db_engine = create_engine(os.getenv("ADDRESS_DB_CONNECTION_STRING"), 
+                                                   isolation_level="AUTOCOMMIT")
+            logging.info("def __init__(): Database connection established for address_db.")
 
 
     def get_db_connection(self):
