@@ -85,22 +85,28 @@ class DatabaseHandler():
         """
         self.config = config
 
-        self.conn = self.get_db_connection()
+        if os.getenv("RENDER"):
+            logging.info("def __init__(): Running on Render.")
+            connection_string = os.getenv('RENDER_EXTERNAL_DB_URL')
+            self.conn = create_engine(connection_string, isolation_level="AUTOCOMMIT")
+            logging.info("def __init__(): Database connection established for Render social_dance_db.")
+        else:
+            # Running locally
+            logging.info("def __init__(): Running locally.")
+            self.conn = self.get_db_connection()
+            logging.info("def __init__(): Database connection established for social_dance_db.")
+
+            # Create address_db_engine
+            self.address_db_engine = create_engine(os.getenv("ADDRESS_DB_CONNECTION_STRING"), 
+                                                   isolation_level="AUTOCOMMIT")
+            logging.info("def __init__(): Database connection established for address_db.")
+
         if self.conn is None:
-            raise ConnectionError("DatabaseHandler: Failed to establish a database connection.")
-        logging.info("def __init__(): Database connection established for social_dance_db.")
+                raise ConnectionError("def __init__(): DatabaseHandler: Failed to establish a database connection.")
 
         self.metadata = MetaData()
         # Reflect the existing database schema into metadata
         self.metadata.reflect(bind=self.conn)
-
-        # Get the engine for the address_db
-        if os.getenv("RENDER"):
-            logging.info("Running on Render: Skipping address_db_engine initialization.")
-        else:
-            self.address_db_engine = create_engine(os.getenv("ADDRESS_DB_CONNECTION_STRING"), 
-                                                   isolation_level="AUTOCOMMIT")
-            logging.info("def __init__(): Database connection established for address_db.")
 
 
     def get_db_connection(self):
