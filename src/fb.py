@@ -99,6 +99,9 @@ class FacebookEventScraper():
         with open(config_path, 'r') as file:
             self.config = yaml.safe_load(file)
 
+        # Start time for manual intervention
+        self.start_time = datetime.now()
+
         # Start Playwright and log into Facebook once
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(headless=self.config['crawling']['headless'])
@@ -117,9 +120,6 @@ class FacebookEventScraper():
 
         # Create a keyboard controller
         self.keyboard = Controller()
-
-        # Start time for manual intervention
-        self.start_time = datetime.now()
     
 
     def login_to_facebook(self, page, browser):
@@ -648,15 +648,14 @@ class FacebookEventScraper():
                 logging.info(f"def process_fb_url(): No text extracted for Facebook URL: {url}.")
                 return
             
-            
             # Check and see if keywords is a list. If it is not, convert it to a list
             if not isinstance(keywords, list):
-                keywords = keywords.split(',')
+                keywords_list = keywords.split(',')
 
             # Check and see if there are any of the keywords in keywords in the extracted_text
-            found_keywords = [keyword for keyword in keywords if keyword in extracted_text]
+            found_keywords = [keyword for keyword in keywords_list if keyword in extracted_text]
             if found_keywords:
-                logging.info(f"def process_fb_url(): Found keywords: {keywords} in extracted text for URL: {url}.")
+                logging.info(f"def process_fb_url(): Found keywords: {found_keywords} in extracted text for URL: {url}.")
 
                 # Generate prompt and query LLM
                 prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
@@ -690,8 +689,10 @@ class FacebookEventScraper():
                 increment_crawl_try = 1
                 db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
                 logging.info(f"def process_fb_url(): No keywords found in extracted text for URL: {url}.")
+                return
         else:    
             logging.info(f"def process_fb_url(): No URL found for processing.")
+            return
 
 
     def driver_fb_urls(self):
@@ -816,7 +817,6 @@ class FacebookEventScraper():
                 logging.info(f"def driver_fb_search(): Extracted text data written to {output_path}.")
 
                 for url, extracted_text in extracted_text_list:
-
                     # Check if URL has already been visited and if it is a facebook url
                     if url not in self.urls_visited and 'facebook.com' in url:
                         logging.info(f"def driver_fb_search(): Processing Facebook URL: {url}")
@@ -826,22 +826,27 @@ class FacebookEventScraper():
                         if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                             break
 
-                        # Set prompt and process_llm_response
-                        prompt = 'fb'
-                        llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
-                        if llm_status:
-                            logging.info(f"def driver_fb_search(): Processed Facebook URL via process_llm_response: {url}.")
+                        # See if any of the keywords are in the extracted_text
+                        found_keywords = [keyword for keyword in keywords_list if keyword in extracted_text]
+                        if found_keywords:
+                            logging.info(f"def driver_fb_search(): Found keywords: {keywords_list} in extracted text for URL: {url}.")
+                        
+                            # Set prompt and process_llm_response
+                            prompt = 'fb'
+                            llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
+                            if llm_status:
+                                prompt = 'default'
+                                llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
+                                logging.info(f"def driver_fb_search(): Processed Facebook URL via process_llm_response: {url}.")
+                            else:
+                                logging.info(f"def driver_fb_search(): No valid events found for URL: {url}.")
+                        else:
+                            logging.info(f"def driver_fb_search(): No keywords found in extracted text for URL: {url}.")
                     else:
-                        logging.debug(
-                            "def driver_fb_search(): Processing non-Facebook URL. "
-                            "This is unlikely to happen and you should figure out why: "
-                            f"{url}"
-                        )
-                        prompt = 'default'
-                        llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
+                        logging.info(f"def driver_fb_search(): URL already visited: {url}")
             else:
                 logging.info(f"def driver_fb_search(): No extracted text found for search_url: {search_url}.")
-                return None
+                
     
     def driver_no_urls(self):
         """
@@ -869,25 +874,31 @@ class FacebookEventScraper():
                 url, extracted_text, prompt_type = self.scrape_and_process(query_text)
 
                 if extracted_text:
-                    prompt = llm_handler.generate_prompt(url, extracted_text, prompt_type)
-                    llm_response = llm_handler.query_llm(prompt)
 
-                    if "No events found" in llm_response:
-                        db_handler.delete_event_and_update_url(url, row['event_name'], row['start_date'])
-                    else:
-                        parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
-                        events_df = pd.DataFrame(parsed_result)
-                        logging.info(f"def driver_no_urls(): URL is: {url}")
-                        events_df.to_csv(self.config['debug']['before_url_updated'], index=False)
+                    # See if any of the keywords are in the extracted_text. Put keywords into a list
+                    keywords_list = keywords.split(',')
+                    found_keywords = [keyword for keyword in keywords_list if keyword in extracted_text]
+                    if found_keywords:
+                        logging.info(f"def driver_no_urls(): Found keywords: {found_keywords} in extracted text for URL: {url}.")
+                        prompt = llm_handler.generate_prompt(url, extracted_text, prompt_type)
+                        llm_response = llm_handler.query_llm(prompt)
 
-                        if events_df['url'].values[0] == '':
-                            events_df.loc[0, 'url'] = url
-                            events_df.to_csv(self.config['debug']['after_url_updated'], index=False)
+                        if "No events found" in llm_response:
+                            db_handler.delete_event_and_update_url(url, row['event_name'], row['start_date'])
+                        else:
+                            parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
+                            events_df = pd.DataFrame(parsed_result)
+                            logging.info(f"def driver_no_urls(): URL is: {url}")
+                            events_df.to_csv(self.config['debug']['before_url_updated'], index=False)
 
-                        db_handler.write_events_to_db(events_df, url, source, keywords)
-        else:
-            logging.info("def driver_no_urls(): No events without URLs found in the database.")
-            return None
+                            if events_df['url'].values[0] == '':
+                                events_df.loc[0, 'url'] = url
+                                events_df.to_csv(self.config['debug']['after_url_updated'], index=False)
+
+                            db_handler.write_events_to_db(events_df, url, source, keywords)
+            else:
+                logging.info("def driver_no_urls(): No events without URLs found in the database.")
+                return None
 
 
 if __name__ == "__main__":
