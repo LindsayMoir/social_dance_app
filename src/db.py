@@ -72,6 +72,7 @@ import re  # Added missing import
 from sqlalchemy import create_engine, MetaData, Table, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
+import sys
 import yaml
 
 
@@ -214,7 +215,6 @@ class DatabaseHandler():
                 street_number TEXT,
                 street_name TEXT,
                 street_type TEXT,
-                floor TEXT,
                 postal_box TEXT,
                 city TEXT,
                 province_or_state TEXT,
@@ -648,17 +648,16 @@ class DatabaseHandler():
             # Define the INSERT query with ON CONFLICT DO UPDATE and RETURNING address_id
             insert_query = """
                 INSERT INTO address (
-                    full_address, street_number, street_name, street_type, floor,
+                    full_address, street_number, street_name, street_type, 
                     postal_box, city, province_or_state, postal_code, country_id
                 ) VALUES (
-                    :full_address, :street_number, :street_name, :street_type, :floor,
+                    :full_address, :street_number, :street_name, :street_type,
                     :postal_box, :city, :province_or_state, :postal_code, :country_id
                 )
                 ON CONFLICT (full_address) DO UPDATE SET
                     street_number = EXCLUDED.street_number,
                     street_name = EXCLUDED.street_name,
                     street_type = EXCLUDED.street_type,
-                    floor = EXCLUDED.floor,
                     postal_box = EXCLUDED.postal_box,
                     city = EXCLUDED.city,
                     province_or_state = EXCLUDED.province_or_state,
@@ -668,12 +667,17 @@ class DatabaseHandler():
             """
 
             # Execute the INSERT query
-            insert_result = self.execute_query(text(insert_query), address_dict)
+            insert_result = self.execute_query((insert_query), address_dict)
 
             if insert_result:
                 # Insert succeeded or update occurred; retrieve the address_id
                 row = insert_result[0]
                 address_id = row[0]  # address_id is the first column in the result
+
+                # *** KEY CHANGE: Convert to Python int ***
+                if isinstance(address_id, np.int64):
+                    address_id = int(address_id)
+
                 logging.info(f"get_address_id: Inserted or updated address_id {address_id} for address '{address_dict['full_address']}'.")
                 return address_id
 
@@ -710,8 +714,7 @@ class DatabaseHandler():
                 # We can get the correct components of the address from the postal code
                 if postal_code:
                     sql = ("""
-                        SELECT 
-                            apt_no_label,
+                        SELECT
                             civic_no,
                             civic_no_suffix,
                             official_street_name,
@@ -720,19 +723,19 @@ class DatabaseHandler():
                             mail_mun_name,
                             mail_prov_abvn,
                             mail_postal_code
-                        FROM locations 
-                        WHERE mail_postal_code = :postal_code;
+                        FROM locations
+                        WHERE mail_postal_code = %s;
                         """
                     )
-                    result_df = pd.read_sql(text(sql), 
-                                            self.address_db_engine, 
-                                            params={'postal_code': postal_code})
+                    result_df = pd.read_sql((sql),
+                        self.address_db_engine,
+                        params=(postal_code,)) # params is now a list
                     
                     # If the civic_no is already in the address, then it will match and 
                     # cause a break on the correct address. This will set the idx of the row. 
                     # If not, we will be using that last address, which hopefully is not a problem:(
                     if result_df.shape[0] > 0:
-                        for idx, row in result_df.itertuples():
+                        for idx, row in result_df.iterrows():
                             if row.civic_no in numbers:
                                 break
                             else:
@@ -740,7 +743,6 @@ class DatabaseHandler():
 
                         # Create a properly formatted address string
                         location = (
-                            f"{result_df.apt_no_label.values[idx]} "
                             f"{result_df.civic_no.values[idx]} "
                             f"{result_df.civic_no_suffix.values[idx]} "
                             f"{result_df.official_street_name.values[idx]} "
@@ -751,8 +753,16 @@ class DatabaseHandler():
                             f"{result_df.mail_postal_code.values[idx]}, "
                             f"CA"
                         )
+                        # Remove any 'None' values
+                        location = location.replace('None', '')
+
                         # We may have double spaces, so we will replace them with single spaces
-                        location.replace('  ', ' ')
+                        location = location.replace('  ', ' ')
+
+                        # We may have a space before a comma, so we will remove it
+                        location = location.replace(' ,', ',')
+
+                        logging.info(f'def clean_u[_address(): for {postal_code}, location: {location}')
 
                         # Update the location in the events DataFrame
                         events_df[index, 'location'] = location
@@ -761,10 +771,9 @@ class DatabaseHandler():
                         # Write the address to the address table
                         address_dict = {
                             'full_address': location,
-                            'street_number': result_df.civic_no.values[idx],
+                            'street_number': str(result_df.civic_no.values[idx]),
                             'street_name': result_df.official_street_name.values[idx],
                             'street_type': result_df.official_street_type.values[idx],
-                            'floor': result_df.apt_no_label.values[idx],
                             'postal_box': None,
                             'city': result_df.mail_mun_name.values[idx],
                             'province_or_state': result_df.mail_prov_abvn.values[idx],

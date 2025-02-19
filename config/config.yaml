@@ -10,7 +10,7 @@ crawling:
   headless: False
   max_crawl_trys: 3
   max_website_urls: 10
-  urls_run_limit: 200
+  urls_run_limit: 500
   scroll_depth: 3
 date_range:
   months: 3

@@ -268,7 +268,7 @@ class EventSpider(scrapy.Spider):
     def check_keywords_in_text(self, url, extracted_text, keywords, source):
         """
         Parameters:
-        url (str): The URL of the webpage being checked.
+        url (str): The URL of the webpage being checked.S
         extracted_text (str): The text extracted from the webpage.
         keywords (str, optional): A comma-separated string of keywords to check in the extracted text. Defaults to None.
         source (str, optional): The name of the organization, used for further processing if keywords are found. Defaults to None.

@@ -24,7 +24,7 @@ with open(config_path, "r") as f:
     config = yaml.safe_load(f)
 logging.info("app.py: config completed.")
 
-# Check whether we are running locally or on Render
+# Get FastAPI API URL from environment variable
 FASTAPI_API_URL = os.getenv("FASTAPI_API_URL", "https://social-dance-app-ws-main.onrender.com/query")
 
 if not FASTAPI_API_URL:

@@ -28,14 +28,6 @@ print("Current working directory:", os.getcwd())
 
 from llm import LLMHandler  # Import the LLMHandler module
 
-# Check and see if we are running local or remote on Render
-if os.getenv("RENDER"):
-    local = False
-    print("Running on Render...")
-else:
-    local = True
-    print("Running locally...")
-
 # Load environment variables
 load_dotenv()
 
@@ -60,11 +52,13 @@ logging.info("main.py: Configuration loaded.")
 llm_handler = LLMHandler(config_path=config_path)
 
 # Get the DATABASE_URL from environment variables
-if local:
-    DATABASE_URL = os.getenv("DATABASE_CONNECTION_STRING")
-else:
+if os.getenv("RENDER"):
     DATABASE_URL = os.getenv("RENDER_EXTERNAL_DB_URL")
-
+    print("Running on Render...")
+else:
+    DATABASE_URL = os.getenv("DATABASE_CONNECTION_STRING")
+    print("Running locally...")
+    
 if DATABASE_URL:
     logging.info(f"DATABASE_URL / database connection string is set")
 else:
