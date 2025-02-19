@@ -77,10 +77,12 @@ from googleapiclient.discovery import build
 import logging
 import pandas as pd
 from playwright.sync_api import sync_playwright
+from pynput.keyboard import Controller, Key
 import random
 import re
 import requests
 from sqlalchemy import text
+import time
 import yaml
 
 # Import other classes
@@ -105,11 +107,19 @@ class FacebookEventScraper():
         self.logged_in_page = self.context.new_page()
 
         # Attempt to log into Facebook and store the logged-in page for reuse
-        if not self.login_to_facebook(self.logged_in_page, self.browser):
+        if self.login_to_facebook(self.logged_in_page, self.browser):
+            logging.info("Facebook login successful during initialization.")
+        else:
             logging.error("Facebook login failed during initialization.")
 
         # Set up the set for urls visited
         self.urls_visited = set()
+
+        # Create a keyboard controller
+        self.keyboard = Controller()
+
+        # Start time for manual intervention
+        self.start_time = datetime.now()
     
 
     def login_to_facebook(self, page, browser):
@@ -130,23 +140,28 @@ class FacebookEventScraper():
             context = browser.new_context(storage_state="auth.json")
             page = context.new_page()
             page.goto("https://www.facebook.com/", timeout=60000)
+
             # If this URL doesn't redirect to login, assume logged in
-            if "login" not in page.url.lower():
-                logging.info("Loaded existing session. Already logged into Facebook.")
-                self.logged_in_page = page
+            if page.is_visible("div[aria-label='Search Facebook']"):
+                logging.info("def login_to_facebook(): Successfully logged in.")
                 return True
+            
         except Exception as e:
-            logging.info("No valid saved session found. Proceeding with manual login.")
+            logging.info("def login_to_facebook(): No valid saved session found. Proceeding with manual login.")
         
         email, password, _ = get_credentials('Facebook')
 
-        page.goto("https://www.facebook.com/login", timeout=60000)
-        page.fill("input[name='email']", email)
-        page.fill("input[name='pass']", password)
-        page.click("button[name='login']")
+        page.goto("https://www.facebook.com/", timeout=30000)
+        if page.is_visible("input[name='email']") and page.is_visible("input[name='pass']"):
+            page.fill("input[name='email']", email)
+            page.fill("input[name='pass']", password)
+            page.click("button[name='login']")
+        else:
+            logging.info("Already logged in or login page not detected.")
 
         # Wait briefly for potential navigation or additional login prompts
-        page.wait_for_timeout(5000)
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(10000)  # 10 seconds
 
         # Detect and handle additional login prompts if they appear
         def check_additional_login(p):
@@ -166,8 +181,19 @@ class FacebookEventScraper():
             attempts += 1
 
         # Prompt for manual captcha/challenge resolution if necessary
-        logging.warning("Please solve any captcha or challenge in the browser, then press Enter here to continue...")
-        input("After solving captcha/challenge (if any), press Enter to continue...")
+        current_time = datetime.now()
+        elapsed_time = (current_time - self.start_time).total_seconds()
+
+        if elapsed_time <= 120:
+            logging.warning("def login_to_facebook(): Please solve any captcha or challenge in the browser, then press Enter here to continue...")
+            input("def login_to_facebook(): After solving captcha/challenge (if any), press Enter to continue...")
+        else:
+            # Simulate pressing the Enter key
+            time.sleep(5) 
+            # Simulate pressing the Enter key
+            self.keyboard.press(Key.enter)
+            self.keyboard.release(Key.enter)
+            logging.info("def login_to_facebook(): Automated Enter key press to continue after 2 minutes.")
 
         # Wait for navigation to complete after manual intervention
         page.wait_for_timeout(5000)
@@ -615,40 +641,57 @@ class FacebookEventScraper():
         increment_crawl_try = 1
 
         if url:
-
             # Extract text and update db
             extracted_text = self.extract_text_from_fb_url(url)
             if not extracted_text:
                 db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
                 logging.info(f"def process_fb_url(): No text extracted for Facebook URL: {url}.")
                 return
-
-            # Generate prompt and query LLM
-            prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
-            llm_response = llm_handler.query_llm(prompt)
-
-            # If no events found delete the url from fb_urls table
-            if "No events found" in llm_response:
-                db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
-                logging.info(f"def process_fb_url(): No valid events found for URL: {url}. URL deleted from urls table.")
             
-            else:
-                # If parsed_result extract and write to db
-                parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
-                if parsed_result:
-                    events_df = pd.DataFrame(parsed_result)
+            
+            # Check and see if keywords is a list. If it is not, convert it to a list
+            if not isinstance(keywords, list):
+                keywords = keywords.split(',')
 
-                    # If the URL field is empty, fill it with the current URL.
-                    if events_df['url'].values[0] == '':
-                        events_df.loc[0, 'url'] = url
+            # Check and see if there are any of the keywords in keywords in the extracted_text
+            found_keywords = [keyword for keyword in keywords if keyword in extracted_text]
+            if found_keywords:
+                logging.info(f"def process_fb_url(): Found keywords: {keywords} in extracted text for URL: {url}.")
 
-                    db_handler.write_events_to_db(events_df, url, source, keywords)
-                    logging.info(f"def process_fb_url(): Valid events found for Facebook URL: {url}. Events written to database.")
+                # Generate prompt and query LLM
+                prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
+                llm_response = llm_handler.query_llm(prompt)
 
-                    # Update url as relevant
-                    relevant = True
+                # If no events found delete the url from fb_urls table
+                if "No events found" in llm_response:
                     db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
-                    logging.info(f"def process_fb_url(): relevant and updated {url}")
+                    logging.info(f"def process_fb_url(): No valid events found for URL: {url}. URL deleted from urls table.")
+                
+                else:
+                    # If parsed_result extract and write to db
+                    parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
+                    if parsed_result:
+                        events_df = pd.DataFrame(parsed_result)
+
+                        # If the URL field is empty, fill it with the current URL.
+                        if events_df['url'].values[0] == '':
+                            events_df.loc[0, 'url'] = url
+
+                        db_handler.write_events_to_db(events_df, url, source, keywords)
+                        logging.info(f"def process_fb_url(): Valid events found for Facebook URL: {url}. Events written to database.")
+
+                        # Update url as relevant
+                        relevant = True
+                        db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+                        logging.info(f"def process_fb_url(): relevant and updated {url}")
+            else:
+                relevant = False
+                update_other_link = ''
+                increment_crawl_try = 1
+                db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+                logging.info(f"def process_fb_url(): No keywords found in extracted text for URL: {url}.")
+        else:    
+            logging.info(f"def process_fb_url(): No URL found for processing.")
 
 
     def driver_fb_urls(self):
@@ -665,6 +708,7 @@ class FacebookEventScraper():
         """)
         params = {'link_pattern': '%facebook%'}
         fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
+        logging.info(f"def driver_fb_urls(): Retrieved {fb_urls_df.shape[0]} Facebook URLs from the database.")
         
         if fb_urls_df.shape[0] > 0:
             for _, row in fb_urls_df.iterrows():
@@ -873,8 +917,8 @@ if __name__ == "__main__":
     # Use the scraper
     logging.info(f"def __main__: Starting Facebook event scraping.")
 
-    logging.info(f"def __main__: Running driver_fb_urls.")
-    fb_scraper.driver_fb_urls()
+    #logging.info(f"def __main__: Running driver_fb_urls.")
+    #fb_scraper.driver_fb_urls()
 
     # logging.info(f"def __main__: Running driver_fb_search.")
     fb_scraper.driver_fb_search()

@@ -95,7 +95,7 @@ class DatabaseHandler():
         self.metadata.reflect(bind=self.conn)
 
         # Get the engine for the address_db
-        self.address_db_engine = create_engine(os.getenv('ADDRESS_DB_CONNECTION_STRING',isolation_level="AUTOCOMMIT"))
+        self.address_db_engine = create_engine(os.getenv('ADDRESS_DB_CONNECTION_STRING'),isolation_level="AUTOCOMMIT")
 
 
     def get_db_connection(self):
@@ -160,12 +160,12 @@ class DatabaseHandler():
         urls_table_query = """
             CREATE TABLE IF NOT EXISTS urls (
                 link TEXT PRIMARY KEY,
-                time_stamp TIMESTAMP,
                 source TEXT,
                 keywords TEXT,
                 other_link TEXT,
                 relevant BOOLEAN,
                 crawl_try INTEGER
+                time_stamp TIMESTAMP
             )
         """
         self.execute_query(urls_table_query)
@@ -208,7 +208,8 @@ class DatabaseHandler():
                 city TEXT,
                 province_or_state TEXT,
                 postal_code TEXT,
-                country_id TEXT
+                country_id TEXT,
+                time_stamp TIMESTAMP
             )
         """
         self.execute_query(address_table_query)
@@ -656,7 +657,7 @@ class DatabaseHandler():
             """
 
             # Execute the INSERT query
-            insert_result = self.execute_query(insert_query, address_dict)
+            insert_result = self.execute_query(text(insert_query), address_dict)
 
             if insert_result:
                 # Insert succeeded or update occurred; retrieve the address_id
@@ -708,11 +709,11 @@ class DatabaseHandler():
                             mail_mun_name,
                             mail_prov_abvn,
                             mail_postal_code
-                        FROM address 
-                        "WHERE postal_code = '{postal_code}';
+                        FROM locations 
+                        WHERE mail_postal_code = '{postal_code}';
                         """
                     )
-                    result_df = pd.read_sql(sql, 
+                    result_df = pd.read_sql(text(sql), 
                                             self.address_db_engine, 
                                             params={'postal_code': postal_code})
                     
@@ -744,7 +745,7 @@ class DatabaseHandler():
 
                         # Update the location in the events DataFrame
                         events_df[index, 'location'] = location
-                        logging.info(f"def clean_up_address(): Updated events_df.location to '{location}'.")
+                        logging.info(f"def clean_up_address(): Updated events_df.location to: '{location}'.")
 
                         # Write the address to the address table
                         address_dict = {
@@ -763,11 +764,11 @@ class DatabaseHandler():
                         address_id = self.get_address_id(address_dict)
                         events_df[index, 'address_id'] = address_id
                     else:
-                        logging.info(f"def clean_up_address(): No address found for postal code {postal_code}.")
+                        logging.info(f"def clean_up_address(): No address found for postal code: {postal_code}.")
                 else:
-                    logging.info(f"def clean_up_address(): No postal code found for location '{location}'.")
+                    logging.info(f"def clean_up_address(): No postal code found for location: '{location}'.")
             else:
-                logging.info(f"def clean_up_address(): No location provided for row {index}.")
+                logging.info(f"def clean_up_address(): No location provided for row: {index}.")
 
         return events_df
     
