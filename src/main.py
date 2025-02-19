@@ -70,7 +70,7 @@ if DATABASE_URL:
 else:
     raise ValueError("DATABASE_URL / database connections string is not set.")
 
-print(f"DATABASE_URL: {DATABASE_URL}")
+logging.info(f"DATABASE_URL: {DATABASE_URL}")
 
 # Create the SQLAlchemy engine
 engine = create_engine(DATABASE_URL)
