@@ -1,0 +1,11 @@
+SELECT COUNT(*)
+FROM events
+
+SELECT source, COUNT (*) AS counted
+FROM events
+GROUP BY source
+ORDER BY counted DESC
+
+SELECT *
+FROM events
+ORDER BY source

@@ -29,7 +29,7 @@ print("Current working directory:", os.getcwd())
 from llm import LLMHandler  # Import the LLMHandler module
 
 # Check and see if we are running local or remote on Render
-if 'render/project' in sys.path[-1]:
+if os.getenv("RENDER"):
     local = False
     print("Running on Render...")
 else:
@@ -69,8 +69,6 @@ if DATABASE_URL:
     logging.info(f"DATABASE_URL / database connection string is set")
 else:
     raise ValueError("DATABASE_URL / database connections string is not set.")
-
-logging.info(f"DATABASE_URL: {DATABASE_URL}")
 
 # Create the SQLAlchemy engine
 engine = create_engine(DATABASE_URL)

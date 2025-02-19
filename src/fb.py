@@ -928,8 +928,8 @@ if __name__ == "__main__":
     # Use the scraper
     logging.info(f"def __main__: Starting Facebook event scraping.")
 
-    #logging.info(f"def __main__: Running driver_fb_urls.")
-    #fb_scraper.driver_fb_urls()
+    logging.info(f"def __main__: Running driver_fb_urls.")
+    fb_scraper.driver_fb_urls()
 
     # logging.info(f"def __main__: Running driver_fb_search.")
     fb_scraper.driver_fb_search()

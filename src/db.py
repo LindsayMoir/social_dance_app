@@ -175,7 +175,7 @@ class DatabaseHandler():
                 keywords TEXT,
                 other_link TEXT,
                 relevant BOOLEAN,
-                crawl_try INTEGER
+                crawl_try INTEGER,
                 time_stamp TIMESTAMP
             )
         """
@@ -721,7 +721,7 @@ class DatabaseHandler():
                             mail_prov_abvn,
                             mail_postal_code
                         FROM locations 
-                        WHERE mail_postal_code = '{postal_code}';
+                        WHERE mail_postal_code = :postal_code;
                         """
                     )
                     result_df = pd.read_sql(text(sql), 
