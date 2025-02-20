@@ -401,7 +401,7 @@ class DatabaseHandler():
             logging.info("def write_url_to_db(): URL '%s' inserted or updated in the 'urls' table.", url)
         except Exception as e:
             logging.error("def write_url_to_db(): Failed to insert/update URL '%s': %s", url, e)
-
+    
 
     def clean_events(self, df):
         """
@@ -586,6 +586,8 @@ class DatabaseHandler():
         # Log the number of events to be written
         logging.info(f"write_events_to_db: Number of events to write: {len(df)}")
 
+        cleaned_df.to_csv('output/cleaned_events.csv', index=False)
+
         # Write the cleaned events data to the 'events' table
         cleaned_df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
         logging.info("write_events_to_db: Events data written to the 'events' table.")
@@ -695,10 +697,11 @@ class DatabaseHandler():
         It parses the 'location' field, inserts unique addresses into the 'address' table,
         and updates the 'events' table with the corresponding address_id.
         """
+        logging.info(f"def clean_up_address(): events_df.shape at beginning of function is: {events_df.shape}")
         # Iterate over each row in the DataFrame
         for index, row in events_df.iterrows():
-            location = row['location'] or ''
-            location = str(location).strip()
+            location = row['location']
+            location = str(location).strip() if pd.notna(location) else None
 
             if location:
                 # Extract postal codes using regex
@@ -762,11 +765,8 @@ class DatabaseHandler():
                         # We may have a space before a comma, so we will remove it
                         location = location.replace(' ,', ',')
 
-                        logging.info(f'def clean_u[_address(): for {postal_code}, location: {location}')
-
-                        # Update the location in the events DataFrame
-                        events_df[index, 'location'] = location
-                        logging.info(f"def clean_up_address(): Updated events_df.location to: '{location}'.")
+                        events_df.loc[index, 'location'] = location
+                        logging.info(f"def clean_up_address(): events_df.shape after updating location is: {events_df.shape}")
 
                         # Write the address to the address table
                         address_dict = {
@@ -782,7 +782,7 @@ class DatabaseHandler():
                         }
                         # Write this dictionary to the address table
                         address_id = self.get_address_id(address_dict)
-                        events_df[index, 'address_id'] = address_id
+                        events_df.loc[index, 'address_id'] = address_id
                     else:
                         logging.info(f"def clean_up_address(): No address found for postal code: {postal_code}.")
                 else:
@@ -790,6 +790,7 @@ class DatabaseHandler():
             else:
                 logging.info(f"def clean_up_address(): No location provided for row: {index}.")
 
+        logging.info(f"def clean_up_address(): events_df.shape at end of function is: {events_df.shape}")
         return events_df
     
 

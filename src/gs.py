@@ -50,18 +50,8 @@ class GoogleSearch():
         # Instantiate LLMHandler
         self.llm_handler = LLMHandler(config_path=config_path)
 
-
-    def read_keywords(self):
-        """
-        Reads keywords from a CSV file specified in the configuration.
-
-        Returns:
-            pandas.DataFrame: A DataFrame containing the keywords read from the CSV file.
-        """
-        keywords_path = self.config['input']['data_keywords']
-        df = pd.read_csv(keywords_path)
-        logging.info(f"Read {len(df)} keywords from {keywords_path}")
-        return df
+        self.keywords_list = self.llm_handler.get_keywords()
+    
 
     def build_query_string(self, keyword):
         """
@@ -77,6 +67,7 @@ class GoogleSearch():
         query = f"{keyword} {location}"
         logging.debug(f"def build_query_string(): Built query string: {query}")
         return query
+        
     
     def relevant_dance_url(self, title, url, snippet):
         """
@@ -169,23 +160,18 @@ class GoogleSearch():
             pandas.DataFrame: A dataframe containing all search results.
         """
         all_results = []
-        keywords_df = self.read_keywords()
+        
+        for keyword in self.keywords_list:
 
-        # Convert to a list, strip spaces, split on commas, and remove duplicates
-        keywords_list = sorted(set(
-            keyword.strip()
-            for keywords in keywords_df["keywords"]
-            for keyword in str(keywords).split(',')
-        ))
-
-        for keyword in keywords_list:
             query = self.build_query_string(keyword)
             logging.info(f"def driver: {query}")
 
             results = self.google_search(query, keyword)
             all_results.extend(results)
+
         logging.info(f"Driver completed with total {len(all_results)} results.")
         results_df = pd.DataFrame(all_results)
+
         return results_df
 
 

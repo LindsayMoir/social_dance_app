@@ -9,8 +9,8 @@ crawling:
   depth_limit: 3
   headless: False
   max_crawl_trys: 3
-  max_website_urls: 10
-  urls_run_limit: 500
+  max_website_urls: 1000
+  urls_run_limit: 1000
   scroll_depth: 3
 date_range:
   months: 3
@@ -58,6 +58,7 @@ prompts:
 regex:
   dancevictoria1: '~~~~~~~~~~~~~.*?Take the time to dance and laugh regularly'
   djdancingdean: 'classes at the  Legion.*?Victoria West Coast Swing Collective Society'
+  victoriawcscollective.gmail.com: 'Newsletter for.*?Thank you to our Volunteers!!!'
 search:
   gs_num_results: 10
 startup:

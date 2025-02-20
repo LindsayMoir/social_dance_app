@@ -44,6 +44,9 @@ class ReadExtract:
         self.context = None
         self.page = None
         self.logged_in = False
+
+        llm_handler = LLMHandler("config/config.yaml")
+        self.keywords_list = llm_handler.get_keywords()
         
 
     def extract_text_with_playwright(self, url):
@@ -346,8 +349,14 @@ if __name__ == "__main__":
         # Initialize the browser and extract text
         extracted_text = asyncio.run(read_extract.main(url))
 
-        # Process the extracted text with LLM. The url is the key into config to get the right prompt
-        llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt=url)
+        # Check keywords in the extracted text
+        found_keywords = [kw for kw in read_extract.keywords_list if kw in extracted_text.lower()]
+    
+        if found_keywords:
+            logging.info(f"def driver(): Found keywords in text for URL {url}: {found_keywords}")
+
+            # Process the extracted text with LLM. The url is the key into config to get the right prompt
+            llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt=url)
 
     # Get the end time
     end_time = datetime.now()

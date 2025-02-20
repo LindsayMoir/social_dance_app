@@ -86,6 +86,7 @@ class EventSpider(scrapy.Spider):
     def __init__(self, config, *args, **kwargs):
         self.config = config
         self.visited_link = set()  # To track visited URLs and avoid duplicate crawls
+        self.keywords_list = llm_handler.get_keywords()
 
     def start_requests(self):
         """
@@ -204,6 +205,7 @@ class EventSpider(scrapy.Spider):
                 self.visited_link.add(link)  # Mark the page link as visited
                 other_link, relevant, increment_crawl_try = '', None, 1
                 db_handler.write_url_to_db(source, keywords, url, other_link, relevant, increment_crawl_try)
+
                 if len(self.visited_link) >= config['crawling']['urls_run_limit']:
                     logging.info(f"def parse(): Maximum URL limit reached: {config['crawling']['urls_run_limit']} Stopping further crawling.")
                     break
@@ -230,10 +232,12 @@ class EventSpider(scrapy.Spider):
         # Process non-facebook link
         extracted_text = read_extract.extract_text_with_playwright(url)
 
-        # Check keywords in the extracted text
-        keyword_status = self.check_keywords_in_text(url, extracted_text, keywords, source)
+        # Check for keywords in the extracted text
+        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+    
+        if found_keywords:
+            logging.info(f"def driver(): Found keywords in text for URL {url}: {found_keywords}")
 
-        if keyword_status:
             # Call the llm to process the extracted text
             prompt = 'default'
             llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt)
@@ -245,7 +249,7 @@ class EventSpider(scrapy.Spider):
                 if update_status:
                     pass
                 else:
-                    db_handler.write_url_to_db(source, keywords, url, '', True, 1)
+                    db_handler.write_url_to_db(source, found_keywords, url, '', True, 1)
                     logging.info(f"def driver(): URL {url} marked as relevant, since there is a LLM response.")
 
             else:
@@ -255,41 +259,14 @@ class EventSpider(scrapy.Spider):
                 if update_status:
                     pass
                 else:
-                    db_handler.write_url_to_db(source, keywords, url, '', False, 1)
+                    db_handler.write_url_to_db(source, found_keywords, url, '', False, 1)
                     logging.info(f"def driver(): URL {url} marked as irrelevant since there is NO LLM response.")
 
         else:
             db_handler.update_url(url, update_other_link='No', relevant=False, increment_crawl_try=0)
-            logging.info(f"def parse(): URL {url} marked as irrelevant since there are no keywords.")
+            logging.info(f"def parse(): URL {url} marked as irrelevant since there are no found_keywords.")
 
         return
-    
-
-    def check_keywords_in_text(self, url, extracted_text, keywords, source):
-        """
-        Parameters:
-        url (str): The URL of the webpage being checked.S
-        extracted_text (str): The text extracted from the webpage.
-        keywords (str, optional): A comma-separated string of keywords to check in the extracted text. Defaults to None.
-        source (str, optional): The name of the organization, used for further processing if keywords are found. Defaults to None.
-
-        Returns:
-        bool: True if the text is relevant based on the presence of keywords or 'calendar' in the URL, False otherwise.
-        """
-        # Check for keywords in the extracted text and determine relevance.
-        if keywords:
-            keywords_list = [kw.strip().lower() for kw in keywords.split(',')]
-            if extracted_text and any(kw in extracted_text.lower() for kw in keywords_list):
-                logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
-                prompt = 'default'
-                return llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
-
-        if 'calendar' in url:
-            logging.info(f"def check_keywords_in_text: URL {url} marked as relevant because 'calendar' is in the URL.")
-            return True
-
-        logging.info(f"def check_keywords_in_text: URL {url} marked as irrelevant since there are no keywords, events, or 'calendar' in URL.")
-        return False
         
 
     def fetch_google_calendar_events(self, calendar_url, url, source, keywords):
@@ -422,6 +399,7 @@ class EventSpider(scrapy.Spider):
         
         events_df = self.get_calendar_events(calendar_id)
         if not events_df.empty:
+            logging.info(f"def process_calendar_id(): Found {len(events_df)} events for calendar_id: {calendar_id}")
             db_handler.write_events_to_db(events_df, calendar_url, source, keywords)
             db_handler.update_url(calendar_url, update_other_link=url, relevant=True, increment_crawl_try=1)
             db_handler.update_url(url, update_other_link=calendar_url, relevant=True, increment_crawl_try=1)

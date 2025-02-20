@@ -109,6 +109,8 @@ class LLMHandler():
         else:
             logging.error("def _setup_mistral_api(): No valid LLM provider specified in config.")
 
+        self.keywords_list = self.get_keywords()
+
 
     def driver(self, url, search_term, extracted_text, source, keywords_list):
         """
@@ -131,52 +133,48 @@ class LLMHandler():
             if fb_status:
                 prompt = 'fb'
 
-        keyword_status = self.check_keywords_in_text(url, extracted_text, source, keywords_list)
+        # Check keywords in the extracted text
+        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+    
+        if found_keywords:
+            logging.info(f"def driver(): Found keywords in text for URL {url}: {found_keywords}")
         
-        if keyword_status == True or fb_status == True:
-            # Call the llm to process the extracted text
-            llm_status = self.process_llm_response(url, extracted_text, source, keywords_list, prompt)
+            if fb_status == True:
+                # Call the llm to process the extracted text
+                llm_status = self.process_llm_response(url, extracted_text, source, keywords_list, prompt)
 
-            if llm_status:
-                # Mark the event link as relevant
-                db_handler.write_url_to_db('', keywords, url, search_term, relevant=True, increment_crawl_try=1)
-            
+                if llm_status:
+                    # Mark the event link as relevant
+                    db_handler.write_url_to_db('', keywords, url, search_term, relevant=True, increment_crawl_try=1)
+                else:
+                    # Mark the event link as irrelevant
+                    db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_try=1)
             else:
                 # Mark the event link as irrelevant
                 db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_try=1)
-
         else:
+            logging.info(f"def driver(): No keywords found in text for URL {url}.")
             # Mark the event link as irrelevant
             db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_try=1)
-            
+    
 
-    def check_keywords_in_text(self, url, extracted_text, source, keywords_list):
+    def get_keywords(self) -> list:
         """
-        Parameters:
-        url (str): The URL of the webpage being checked.
-        extracted_text (str): The text extracted from the webpage.
-        keywords (list): A comma-separated list of keywords to check in the extracted text.
+        Reads the 'keywords.csv' file and returns a list of keywords.
 
         Returns:
-        bool: True if the text is relevant based on the presence of keywords or 'calendar' in the URL, False otherwise.
+            list: A list of keywords.
         """
-        #Set default value of prompt
-        prompt = 'default'
+        keywords_df = pd.read_csv(self.config['input']['data_keywords'])
 
-        # Check for keywords in the extracted text and determine relevance.
-        if keywords_list or 'facebook' in url:
-            if extracted_text and any(kw in extracted_text.lower() for kw in keywords_list):
-                logging.info(f"def check_keywords_in_text: Keywords found in extracted text for URL: {url}")
-                if 'facebook' in url:
-                    prompt = 'fb'
-                return self.process_llm_response(url, extracted_text, source, keywords_list, prompt)
-            
-        if 'calendar' in url:
-            logging.info(f"def check_keywords_in_text: URL {url} marked as relevant because 'calendar' is in the URL.")
-            return True
-
-        logging.info(f"def check_keywords_in_text: URL {url} marked as irrelevant since there are no keywords, events, or 'calendar' in URL.")
-        return False
+        # Convert to a list, strip spaces, split on commas, and remove duplicates
+        keywords_list = sorted(set(
+            keyword.strip()
+            for keywords in keywords_df["keywords"]
+            for keyword in str(keywords).split(',')
+        ))
+        
+        return keywords_list
     
 
     def process_llm_response(self, url, extracted_text, source, keywords_list, prompt):
@@ -432,7 +430,15 @@ if __name__ == "__main__":
     for index, row in extracted_text_df.iterrows():
         url = row['url']
         extracted_text = row['extracted_text']
-        llm.driver(url, search_term, extracted_text, '', keywords)
+        
+        # Check for keywords in extracted_text
+        found_keywords = [kw for kw in llm.keywords_list if kw in extracted_text.lower()]
+        logging.info(f"__main__: Found keywords in text for URL {url}: {found_keywords}")
+        if found_keywords:
+            llm.driver(url, search_term, extracted_text, '', keywords)
+        else:
+            logging.info(f"__main__: No keywords found in text for URL {url}.")
+            db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_try=1)
 
     # Get the end time
     end_time = datetime.now()

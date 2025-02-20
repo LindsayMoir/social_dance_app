@@ -120,6 +120,9 @@ class FacebookEventScraper():
 
         # Create a keyboard controller
         self.keyboard = Controller()
+
+        # Get keywords
+        self.keywords_list = llm_handler.get_keywords()
     
 
     def login_to_facebook(self, page, browser):
@@ -282,13 +285,26 @@ class FacebookEventScraper():
             extracted_text = ' '.join(soup.stripped_strings)
             logging.info(f"def extract_event_text(): Extracted raw text from {link}: {len(extracted_text)}")
 
-            if extracted_text and 'facebook.com/events/' in link:
-                event_extracted_text = self.extract_relevant_text(extracted_text, link)
+            # Check for keywords in the extracted text
+            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+            if found_keywords:
+                if extracted_text and 'facebook.com/events/' in link:
+                    event_extracted_text = self.extract_relevant_text(extracted_text, link)
+            else:
+                logging.info(f"def extract_event_text(): No keywords found in extracted text for URL: {link}.")
+                return None
 
             # Check if we got event extracted text
             if event_extracted_text:
                 logging.info(f"Extracted relevant event text from {link}: {extracted_text}")
-                return event_extracted_text
+                # Check for keywords in the extracted text
+                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+                if found_keywords:
+                    logging.info(f"def extract_event_text(): found_keywords: {found_keywords} in extracted text for URL: {link}.")
+                    return event_extracted_text
+                else:
+                    logging.info(f"def extract_event_text(): No keywords found in extracted text for URL: {link}.")
+                    return None         
             else:
                 logging.info(f"def extract_event_text(): No extracted_text for url: {link}")
                 return None
@@ -382,10 +398,9 @@ class FacebookEventScraper():
                         
                         extracted_text = self.extract_event_text(link)
 
-                        # Check and see if keywords are in the text.
                         if extracted_text:
-                            # Check and see if keywords is a list. If it is not, convert it to a list
-                            found_keywords = self.check_keywords_in_text(keywords, extracted_text, link)
+                            # Check for keywords in the extracted text
+                            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
                             if found_keywords:
                                 extracted_text_list.append((link, extracted_text))
                                 self.urls_visited.add(link)
@@ -414,7 +429,9 @@ class FacebookEventScraper():
                             self.urls_visited.add(second_level_link)
                             second_level_text = self.extract_event_text(second_level_link)
                             if second_level_text:  # Only add if text was successfully extracted
-                                found_keywords = self.check_keywords_in_text(keywords, extracted_text, url)
+
+                                # Check for keywords in the extracted text
+                                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
                                 if found_keywords:
                                     extracted_text_list.append((second_level_link, second_level_text))
                                     logging.debug(f"def scrape_events: Visited URL: {second_level_link}. Total visited: {len(self.urls_visited)}")
@@ -437,29 +454,6 @@ class FacebookEventScraper():
         return search_url, extracted_text_list
 
 
-    def check_keywords_in_text(self, keywords, extracted_text, url):
-        """
-        Checks if any of the specified keywords are present in the extracted text.
-        Args:
-            keywords (list or str): A list of keywords or a comma-separated string of keywords to search for.
-            extracted_text (str): The text in which to search for the keywords.
-        Returns:
-            bool: True if any of the keywords are found in the extracted text, False otherwise.
-        """
-        # Check and see if keywords is a list. If it is not, convert it to a list
-        if isinstance(keywords, str):
-            keywords_list = keywords.split(',')
-        
-        # Look for the keywords in the extracted text
-        found_keywords = [keyword for keyword in keywords_list if keyword in extracted_text]
-        if found_keywords:
-            logging.info(f"def check_keywords_in_text(): Found keywords: {found_keywords} in extracted text for URL: {url}.")
-            return True
-        else:
-            logging.info(f"def check_keywords_in_text(): No keywords in extracted text for URL: {url}.")
-            return False
-
-
     def extract_text_from_fb_url(self, url):
         """
         Extracts text content from a Facebook event URL using Playwright and BeautifulSoup.
@@ -475,6 +469,8 @@ class FacebookEventScraper():
         if fb_status:
             logging.info("def extract_text_from_fb_url(): Successfully logged into Facebook.")
             extracted_text = fb_scraper.extract_event_text(url)
+
+            eturn event_extracted_text
 
             return extracted_text
     
@@ -686,12 +682,8 @@ class FacebookEventScraper():
                 logging.info(f"def process_fb_url(): No text extracted for Facebook URL: {url}.")
                 return
             
-            # Check and see if keywords is a list. If it is not, convert it to a list
-            if not isinstance(keywords, list):
-                keywords_list = keywords.split(',')
-
-            # Check and see if there are any of the keywords in keywords in the extracted_text
-            found_keywords = self.check_keywords_in_text(keywords, extracted_text, url)
+            # Check for keywords in the extracted text
+            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]       
             if found_keywords:
                 # Generate prompt and query LLM
                 prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
@@ -862,19 +854,12 @@ class FacebookEventScraper():
                         if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                             break
 
-                        # See if any of the keywords are in the extracted_text
-                        found_keywords = self.check_keywords_in_text(keywords_list, extracted_text, url)
+                        # Check for keywords in the extracted text
+                        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]  
                         if found_keywords:
-                        
                             # Set prompt and process_llm_response
                             prompt = 'fb'
-                            llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
-                            if llm_status:
-                                prompt = 'default'
-                                llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
-                                logging.info(f"def driver_fb_search(): Processed Facebook URL via process_llm_response: {url}.")
-                            else:
-                                logging.info(f"def driver_fb_search(): No valid events found for URL: {url}.")
+                            _ = llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
                         else:
                             logging.info(f"def driver_fb_search(): No keywords found in extracted text for URL: {url}.")
                     else:
@@ -909,8 +894,8 @@ class FacebookEventScraper():
                 url, extracted_text, prompt_type = self.scrape_and_process(query_text)
 
                 if extracted_text:
-                    # See if any of the keywords are in the extracted_text. Put keywords into a list
-                    found_keywords = self.check_keywords_in_text(keywords, extracted_text, url)
+                    # Check for keywords in the extracted text
+                    found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
                     if found_keywords:
                         prompt = llm_handler.generate_prompt(url, extracted_text, prompt_type)
                         llm_response = llm_handler.query_llm(prompt)
