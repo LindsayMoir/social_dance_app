@@ -50,7 +50,6 @@ import logging
 from datetime import datetime
 import pandas as pd
 import re
-import sys
 import yaml
 
 from db import DatabaseHandler
@@ -90,33 +89,33 @@ class EventbriteScraper:
             keywords_list (list): List of keywords associated with the events.
             prompt (str): The prompt to use for processing the extracted text.
         """
-        try:
-            # Navigate to Eventbrite homepage
-            await self.read_extract.page.goto("https://www.eventbrite.com/", timeout=20000)
-            logging.info(f"def eventbrite_search(): Navigated to Eventbrite.")
+        #try:
+        # Navigate to Eventbrite homepage
+        await self.read_extract.page.goto("https://www.eventbrite.com/", timeout=20000)
+        logging.info(f"def eventbrite_search(): Navigated to Eventbrite.")
 
-            # Perform search
-            await self.perform_search(query)
+        # Perform search
+        await self.perform_search(query)
 
-            # Extract event URLs
-            event_urls = await self.extract_event_urls()
-            logging.info(f"def eventbrite_search(): Total unique event URLs found: {len(event_urls)}")
+        # Extract event URLs
+        event_urls = await self.extract_event_urls()
+        logging.info(f"def eventbrite_search(): Total unique event URLs found: {len(event_urls)}")
 
-            for event_url in event_urls:
-                if event_url in self.visited_urls:
-                    logging.info(f"def eventbrite_search(): URL already visited: {event_url}")
-                
-                elif len(self.visited_urls) >= self.config['crawling']['urls_run_limit']:
-                        logging.info(f"def eventbrite_search(): Reached the maximum limit of {self.config['crawling']['urls_run_limit']} URLs.")
-                        sys.exit()
+        for event_url in event_urls:
+            if event_url in self.visited_urls:
+                logging.info(f"def eventbrite_search(): URL already visited: {event_url}")
+            
+            elif len(self.visited_urls) >= self.config['crawling']['urls_run_limit']:
+                    logging.info(f"def eventbrite_search(): Reached the maximum limit of {self.config['crawling']['urls_run_limit']} URLs.")
+                    break
 
-                else:
-                    logging.info(f"def eventbrite_search() Processing event URL: {event_url}")
-                    self.visited_urls.add(event_url)
-                    await self.process_event(event_url, source, keywords_list, prompt)
+            else:
+                logging.info(f"def eventbrite_search() Processing event URL: {event_url}")
+                self.visited_urls.add(event_url)
+                await self.process_event(event_url, source, keywords_list, prompt)
 
-        except Exception as e:
-            logging.error(f"def eventbrite_search(): An error occurred during Eventbrite search: {e}")
+        # except Exception as e:
+        #     logging.error(f"def eventbrite_search(): An error occurred during Eventbrite search: {e}")
 
         return
     
@@ -171,7 +170,6 @@ class EventbriteScraper:
                     logging.info(f"def extract_event_urls(): Reached the maximum limit of {self.config['crawling']['max_website_urls']}"
                                  f" event URLs or {self.config['crawling']['urls_run_limit']} visited URLs."
                                  f"\nurls are: {event_urls}")
-                    sys.exit()
 
             return event_urls
         
@@ -213,7 +211,7 @@ class EventbriteScraper:
     async def process_event(self, event_url, source, keywords_list, prompt):
         """
         Processes an individual event URL: extracts text, processes it with LLM,
-        and writes to the database. Closes the tab after processing.
+        and writes to the database.
 
         Args:
             event_url (str): Event URL.
@@ -221,32 +219,37 @@ class EventbriteScraper:
             keywords_list (list): List of keywords.
             prompt (str): Prompt for LLM processing.
         """
-        page = await self.read_extract.browser.new_page()
         try:
-            await page.goto(event_url, timeout=20000)
-            extracted_text = await self.read_extract.extract_event_text(page)
-            
+            extracted_text = await self.read_extract.extract_event_text(event_url)
+
             if extracted_text:
-                # Check keywords in the extracted text
+                # Check for keywords in the extracted text
                 found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+    
                 if found_keywords:
-                    logging.info(f"def process_event(): found_keywords: {found_keywords} in event: {event_url}")
-                    
-                    # Call the LLM to process the extracted text
-                    _ = self.llm_handler.process_llm_response(url=event_url,
-                                                              extracted_text=extracted_text,
-                                                              source=source,
-                                                              keywords_list=keywords_list,
-                                                              prompt=prompt
-                    )
+                    logging.info(f"def driver(): Found keywords in text for URL {event_url}: {found_keywords}")
+                    if found_keywords:
+                        logging.info(f"def process_event(): Keywords found in event: {event_url}")
+
+                        # Call the llm to process the extracted text
+                        success = self.llm_handler.process_llm_response(
+                            url=event_url,
+                            extracted_text=extracted_text,
+                            source=source,
+                            keywords_list=keywords_list,
+                            prompt=prompt
+                        )
+                    else:
+                        logging.info(f"def process_event(): No keywords in extracted_text: {event_url}")
                 else:
-                    logging.info(f"def process_event(): No keywords in extracted_text: {event_url}")
-            else:
-                logging.warning(f"def process_event(): No extracted_text found for event: {event_url}")
+                    logging.warning(f"def process_event(): No extracted_text found for event: {event_url}")
         except Exception as e:
             logging.error(f"def process_event(): Error processing event {event_url}: {e}")
+
         finally:
-            await page.close()  # Ensure the page is closed after processing
+            if self.read_extract.page:
+                await self.read_extract.page.close()
+                logging.info(f"Closed page for URL: {event_url}")
 
 
     async def driver(self):
@@ -258,11 +261,9 @@ class EventbriteScraper:
         This needs to be removed. This is just temporary. It did not run to conclusion. It shouold 
         be self.keywords_list after this is done. I just put this on with no limits for tonight while I am sleeping
         """
-        keywords_list = ['lindy hop', 
-                         'line dance', 'merengue', 'milonga', 'night club', 'nite club', 'nite club 2', 
-                         'nite club two', 'quickstep', 'rhumba', 'rumba', 'salsa', 'samba', 'semba', 'swing', 
-                         'tango', 'tarraxa', 'tarraxinha', 'tarraxo', 'two step', 'urban kiz', 'waltz', 'wcs', 
-                         'west coast swing', 'zouk']
+        keywords_list = ['line dance', 'merengue', 'milonga', 'night club', 'nite club', 'nite club 2', 'nite club two', 
+                         'quickstep', 'rhumba', 'rumba', 'salsa', 'samba', 'semba', 'swing', 'tango', 'tarraxa', 'tarraxinha', 
+                         'tarraxo', 'two step', 'urban kiz', 'waltz', 'wcs', 'west coast swing', 'zouk']
         for keyword in keywords_list:
             query = keyword
             source = ''  # Populate as needed

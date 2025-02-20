@@ -44,9 +44,6 @@ class ReadExtract:
         self.context = None
         self.page = None
         self.logged_in = False
-
-        llm_handler = LLMHandler("config/config.yaml")
-        self.keywords_list = llm_handler.get_keywords()
         
 
     def extract_text_with_playwright(self, url):
@@ -97,11 +94,11 @@ class ReadExtract:
             self.page = await context.new_page()
             await self.page.goto("https://www.facebook.com/", timeout=60000)
             if "login" not in self.page.url.lower():
-                logging.info("def extract_text_with_playwright(): Loaded existing session. Already logged into Facebook.")
+                logging.info("def login_to_facebook(): Loaded existing session. Already logged into Facebook.")
                 self.logged_in = True
                 return True
         except Exception:
-            logging.info("def extract_text_with_playwright(): No valid saved session found. Proceeding with manual login.")
+            logging.info("def login_to_facebook(): No valid saved session found. Proceeding with manual login.")
 
         email, password, _ = get_credentials(self.config, organization)  # Use utility function
 
@@ -117,17 +114,17 @@ class ReadExtract:
         await self.page.wait_for_timeout(random.randint(4000, 6000))
 
         if "login" in self.page.url.lower():
-            logging.error("def extract_text_with_playwright(): Login failed. Please check your credentials or solve captcha challenges.")
+            logging.error("def login_to_facebook(): Login failed. Please check your credentials or solve captcha challenges.")
             return False
 
         try:
             await self.page.context.storage_state(path="auth.json")
-            logging.info("def extract_text_with_playwright(): Session state saved for future use.")
+            logging.info("def login_to_facebook(): Session state saved for future use.")
         except Exception as e:
-            logging.warning(f"def extract_text_with_playwright(): Could not save session state: {e}")
+            logging.warning(f"def login_to_facebook(): Could not save session state: {e}")
 
         self.logged_in = True
-        logging.info("def extract_text_with_playwright(): Login to Facebook successful.")
+        logging.info("def login_to_facebook(): Login to Facebook successful.")
         return True
     
 
@@ -245,55 +242,49 @@ class ReadExtract:
         # Otherwise, no login needed
         return True
 
-    
-    async def extract_event_text(self, link):
+
+    async def extract_event_text(self, link, max_retries=3):
         """
-        Asynchronously extracts text from an event page using Playwright and BeautifulSoup.
-        If the page is a Facebook event, attempts to click the "See More" button to reveal full content.
+        Extracts text from an event page with retries if extraction fails.
 
         Args:
             link (str): The event URL.
+            max_retries (int): Maximum number of retries in case of failure.
 
         Returns:
-            str: The extracted text content.
+            str: Extracted text content or None if extraction fails.
         """
         login_success = await self.login_if_required(link)
         if not login_success:
-            logging.error("def extract_event_text(): Login failed. Aborting text extraction.")
+            logging.error(f"def extract_event_text(): Login failed. Aborting extraction for {link}.")
             return None
 
-        #try:
-        await self.page.goto(link, timeout=10000)
-        # Randomize wait time between 4 to 6 seconds
-        await self.page.wait_for_timeout(random.randint(4000, 6000))
-
-        # If the link is from Facebook, attempt to click "See More" to load additional content
-        if 'facebook.com' in link.lower():
+        for attempt in range(1, max_retries + 1):
             try:
-                # Look for a button or link with text "See More"
-                more_button = await self.page.query_selector("text=See More")
-                if more_button:
-                    await more_button.click()
-                    # Randomize wait time after clicking "See More"
-                    await self.page.wait_for_timeout(random.randint(4000, 6000))
-                    logging.info("Clicked 'See More' to load additional Facebook content.")
+                await self.page.goto(link, timeout=15000)
+                await self.page.wait_for_load_state("domcontentloaded")  # Ensure the DOM is fully loaded
+                await asyncio.sleep(random.uniform(3, 6))  # Randomized delay for stability
+
+                # Extract page content
+                content = await self.page.content()
+                soup = BeautifulSoup(content, 'html.parser')
+                extracted_text = ' '.join(soup.stripped_strings)
+
+                if extracted_text.strip():  # Ensure non-empty text
+                    logging.info(f"def extract_event_text(): Successfully extracted text from {link} on attempt {attempt}.")
+                    return extracted_text
+                else:
+                    logging.warning(f"def extract_event_text(): Attempt {attempt} - No text found for {link}. Retrying...")
+
             except Exception as e:
-                logging.warning(f"Could not click 'See More' button: {e}")
+                logging.error(f"def extract_event_text(): Attempt {attempt} failed for {link}. Error: {e}")
 
-        content = await self.page.content()
-        soup = BeautifulSoup(content, 'html.parser')
-        extracted_text = ' '.join(soup.stripped_strings)
-        logging.info(f"def extract_event_text(): Extracted text from {link}.")
+            # Wait before retrying (exponential backoff)
+            await asyncio.sleep(attempt * 2)
 
-        if extracted_text:
-            return extracted_text
-        else:
-            logging.warning(f"def extract_event_text(): No text extracted from {link}.")
-            return None
-        # except Exception as e:
-        #     logging.error(f"def extract_event_text(): Failed to extract text from {link}: {e}")
-        #     return None
-        
+        logging.error(f"def extract_event_text(): Extraction failed after {max_retries} attempts for {link}.")
+        return None
+
         
     async def close(self):
         if self.browser:
@@ -349,14 +340,8 @@ if __name__ == "__main__":
         # Initialize the browser and extract text
         extracted_text = asyncio.run(read_extract.main(url))
 
-        # Check keywords in the extracted text
-        found_keywords = [kw for kw in read_extract.keywords_list if kw in extracted_text.lower()]
-    
-        if found_keywords:
-            logging.info(f"def driver(): Found keywords in text for URL {url}: {found_keywords}")
-
-            # Process the extracted text with LLM. The url is the key into config to get the right prompt
-            llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt=url)
+        # Process the extracted text with LLM. The url is the key into config to get the right prompt
+        llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt=url)
 
     # Get the end time
     end_time = datetime.now()
