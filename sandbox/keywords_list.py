@@ -13,3 +13,6 @@ keywords_list = sorted(set(
 # Print the number of keywords and first 10
 print(f"Total keywords: {len(keywords_list)}")
 print(keywords_list)
+
+python_file_name = __file__.split('/')[-1]
+print(python_file_name)

@@ -1,50 +1,3 @@
-# ebs.py
-
-"""
-Provides functionality to search for and process events on Eventbrite, 
-integrating with additional services to handle data extraction, keyword 
-detection, and LLM-based processing.
-
-The class automates:
-
-1. **Navigation** to Eventbrite's homepage.
-2. **Searching** for events by user-specified keywords.
-3. **Extracting** event URLs from search results.
-4. **Visiting** each event page to retrieve relevant text.
-5. **Processing** text data (e.g., checking keywords, using an LLM to parse 
-    event details).
-6. **Storing** the processed results in a database.
-
-Attributes:
-    config (dict):
-        Configuration dictionary containing crawling limits, logging setup, etc.
-    read_extract (ReadExtract):
-        An instance responsible for asynchronous web interactions and text extraction.
-    db_handler (DatabaseHandler):
-        Database handler for writing URLs and event information to persistent storage.
-    gs_instance (GoogleSearch):
-        Instance used for reading keyword inputs (and optionally performing Google searches).
-    llm_handler (LLMHandler):
-        Handles interactions with a Language Model for natural language processing tasks.
-    visited_urls (set):
-        A set that keeps track of event URLs already processed to avoid duplication.
-
-Usage:
-    1. Initialize the class by providing the required handlers (ReadExtract, DatabaseHandler, etc.).
-    2. Call :meth:`driver()` to begin reading keywords and performing searches on Eventbrite.
-    3. The class will internally manage navigation, extracting events, and processing each event URL.
-    4. Processed information is stored in the database via ``db_handler.write_url_to_db``.
-
-Example:
-    >>> ebs = EventbriteScraper(config, read_extract, db_handler, gs_instance, llm_handler)
-    >>> await ebs.driver()
-
-Note:
-    - All major operations are asynchronous. Ensure you run methods (like ``driver()``) 
-        within an ``asyncio`` event loop.
-    - Captcha challenges or manual interventions on Eventbrite's site may be required.
-"""
-
 import asyncio
 import logging
 from datetime import datetime
@@ -54,13 +7,12 @@ import sys
 import yaml
 
 from db import DatabaseHandler
-from gs import GoogleSearch
 from rd_ext import ReadExtract
 from llm import LLMHandler
 
 
 class EventbriteScraper:
-    def __init__(self, config, read_extract, db_handler, gs_instance, llm_handler):
+    def __init__(self, config, read_extract, db_handler, llm_handler):
         """
         Initializes the EventbriteScraper with necessary handlers.
 
@@ -68,37 +20,42 @@ class EventbriteScraper:
             config (dict): Configuration dictionary.
             read_extract (ReadExtract): Instance of ReadExtract for text extraction.
             db_handler (DatabaseHandler): Instance to handle database operations.
-            gs_instance (GoogleSearch): Instance to handle Google searches.
             llm_handler (LLMHandler): Instance to handle LLM processing.
         """
         self.config = config
         self.read_extract = read_extract
         self.db_handler = db_handler
-        self.gs_instance = gs_instance
         self.llm_handler = llm_handler
         self.visited_urls = set()
         self.keywords_list = llm_handler.get_keywords()
 
+        # Prompt user for run name and description
+        self.run_name = input("Enter run name: ").strip()
+        self.run_description = input("Enter run description: ").strip()
+
+        # Run statistics tracking
+        self.start_time = None
+        self.end_time = None
+        self.urls_contacted = 0
+        self.urls_with_extracted_text = 0
+        self.urls_with_found_keywords = 0
+        self.events_written_to_db = 0
+
     async def eventbrite_search(self, query, source, keywords_list, prompt):
-        """
-        Searches Eventbrite for events based on the query, extracts event URLs,
+        """ Searches Eventbrite for events based on the query, extracts event URLs,
         retrieves event details, and processes them using LLM.
 
         Parameters:
             query (str): The search query to enter in Eventbrite.
             source (str): The organization name related to the events.
             keywords_list (list): List of keywords associated with the events.
-            prompt (str): The prompt to use for processing the extracted text.
+            prompt (str): The prompt to use for processing the extracted text. 
         """
         try:
-            # Navigate to Eventbrite homepage
             await self.read_extract.page.goto("https://www.eventbrite.com/", timeout=20000)
             logging.info(f"def eventbrite_search(): Navigated to Eventbrite.")
 
-            # Perform search
             await self.perform_search(query)
-
-            # Extract event URLs
             event_urls = await self.extract_event_urls()
             logging.info(f"def eventbrite_search(): Total unique event URLs found: {len(event_urls)}")
 
@@ -106,10 +63,11 @@ class EventbriteScraper:
             for event_url in event_urls:
                 if event_url in self.visited_urls:
                     logging.info(f"def eventbrite_search(): URL already visited: {event_url}")
-                
-                elif len(self.visited_urls) >= self.config['crawling']['urls_run_limit']:
-                        logging.info(f"def eventbrite_search(): Reached the maximum limit of {self.config['crawling']['urls_run_limit']} URLs.")
-                        sys.exit()
+                    continue
+
+                if len(self.visited_urls) >= self.config['crawling']['urls_run_limit']:
+                    logging.info(f"def eventbrite_search(): Reached the URL limit.")
+                    sys.exit()
 
                 elif counter >= self.config['crawling']['max_website_urls']:
                     logging.info(f"def eventbrite_search(): Reached the maximum limit of {self.config['crawling']['max_website_urls']} event URLs.")
@@ -118,14 +76,13 @@ class EventbriteScraper:
                 else:
                     logging.info(f"def eventbrite_search() Processing event URL: {event_url}")
                     self.visited_urls.add(event_url)
+                    self.urls_contacted += 1  # Track URL contacts
                     counter += 1
                     await self.process_event(event_url, source, keywords_list, prompt, counter)
 
         except Exception as e:
-            logging.error(f"def eventbrite_search(): An error occurred during Eventbrite search: {e}")
+            logging.error(f"def eventbrite_search(): Error during search: {e}")
 
-        return
-    
 
     async def perform_search(self, query):
         """
@@ -151,9 +108,9 @@ class EventbriteScraper:
             logging.error("def perform_search(): Timeout while performing search on Eventbrite.")
             raise
 
+
     async def extract_event_urls(self):
-        """
-        Extracts unique event URLs from the search results.
+        """ Extracts unique event URLs from the search results.
 
         Returns:
             set: A set of unique event URLs.
@@ -183,7 +140,7 @@ class EventbriteScraper:
         except Exception as e:
             logging.error(f"def extract_event_urls():  Error extracting event URLs: {e}")
             return event_urls
-        
+
 
     def ensure_absolute_url(self, href):
         """
@@ -213,11 +170,10 @@ class EventbriteScraper:
         pattern = r'/e/[^/]+-tickets-(\d+)(?:\?|$)'
         match = re.search(pattern, url)
         return match.group(1) if match else None
-    
+        
 
     async def process_event(self, event_url, source, keywords_list, prompt, counter):
-        """
-        Processes an individual event URL: extracts text, processes it with LLM,
+        """ Processes an individual event URL: extracts text, processes it with LLM,
         and writes to the database.
 
         Args:
@@ -230,26 +186,23 @@ class EventbriteScraper:
             extracted_text = await self.read_extract.extract_event_text(event_url)
 
             if extracted_text:
+                self.urls_with_extracted_text += 1  # Count extracted text URLs
+
                 # Check for keywords in the extracted text
                 found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-    
                 if found_keywords:
+                    self.urls_with_found_keywords += 1  # Count URLs with found keywords
                     logging.info(f"def driver(): Found keywords in text for URL {event_url}: {found_keywords}")
 
-                    logging.info(f"def process_event(): Keywords found in event: {event_url}")
+                    # Process the extracted text with LLM
+                    response = self.llm_handler.process_llm_response(event_url, extracted_text, source, keywords_list, prompt)
 
-                    # Call the llm to process the extracted text
-                    _ = self.llm_handler.process_llm_response(
-                        url=event_url,
-                        extracted_text=extracted_text,
-                        source=source,
-                        keywords_list=keywords_list,
-                        prompt=prompt
-                    )
+                    if response:
+                        self.events_written_to_db += 1  # Count events written to the database
                 else:
                     logging.info(f"def process_event(): No keywords found in text for: {event_url}")
             else:
-                logging.warning(f"def process_event(): No text extracted for URL: {event_url}")
+                logging.warning(f"def process_event(): No extracted text for event: {event_url}")
 
         except Exception as e:
             logging.error(f"def process_event(): Error processing event {event_url}: {e}")
@@ -264,78 +217,89 @@ class EventbriteScraper:
 
 
     async def driver(self):
-        """
-        Reads keywords from a DataFrame, constructs search queries,
-        performs Eventbrite searches for each query
-        """
-        """
-        This needs to be removed. This is just temporary. It did not run to conclusion. It shouold 
-        be self.keywords_list after this is done. I just put this on with no limits for tonight while I am sleeping
-        """
-        keywords_list = ['quickstep', 'rhumba', 'rumba', 'salsa', 'samba', 'semba', 'swing', 'tango', 'tarraxa', 'tarraxinha', 
-                         'tarraxo', 'two step', 'urban kiz', 'waltz', 'wcs', 'west coast swing', 'zouk']
-        for keyword in keywords_list:
+        """ Reads keywords, performs searches, and processes extracted event URLs. """
+        self.start_time = datetime.now()  # Record start time
+        self.keywords_list = ['salsa']  # Remember to remove this after testing
+        for keyword in self.keywords_list:
             query = keyword
-            source = ''  # Populate as needed
+            source = ''
             prompt = 'default'
-
-            # Perform the search
             logging.info(f"driver(): Searching for query: {query}")
-            await self.eventbrite_search(query, source, keyword, prompt)
+            await self.eventbrite_search(query, source, self.keywords_list, prompt)
 
-        logging.info(f"driver(): Driver completed with total {len(self.visited_urls)} processed URLs.")
+        self.end_time = datetime.now()  # Record end time
+        logging.info(f"driver(): Completed processing {len(self.visited_urls)} unique URLs.")
+
+        # Write run statistics to the database
+        await self.write_run_statistics()
+
+
+    async def write_run_statistics(self):
+        """ Saves the run statistics to the database. """
+        elapsed_time = str(self.end_time - self.start_time)  # Convert timedelta to a string
+        python_file_name = __file__.split('/')[-1]
+
+        # Create a DataFrame for the run statistics
+        run_data = pd.DataFrame([{
+            "run_name": self.run_name,
+            "run_description": self.run_description,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "elapsed_time": elapsed_time,  # Now stored as a string
+            "python_file_name": python_file_name,
+            "unique_urls_count": len(self.visited_urls),
+            "total_url_attempts": self.urls_contacted,
+            "urls_with_extracted_text": self.urls_with_extracted_text,
+            "urls_with_found_keywords": self.urls_with_found_keywords,
+            "events_written_to_db": self.events_written_to_db,
+            "time_stamp": datetime.now()
+        }])
+
+        # Get the database connection engine
+        engine = self.db_handler.get_db_connection()
+
+        # Write the data to the "runs" table
+        try:
+            run_data.to_sql("runs", engine, if_exists="append", index=False)
+            logging.info("write_run_statistics(): Run statistics written to database successfully.")
+        except Exception as e:
+            logging.error(f"write_run_statistics(): Error writing run statistics to database: {e}")
 
 
 async def main():
-    # Load configuration
+    """ Main function to initialize and run the Eventbrite scraper. """
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-    # Configure logging
     logging.basicConfig(
         filename=config['logging']['log_file'],
         filemode='a',
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-    # Get the start time
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
-    # Initialize handlers
     db_handler = DatabaseHandler(config)
-    gs_instance = GoogleSearch(config_path="config/config.yaml")
     llm_handler = LLMHandler(config_path='config/config.yaml')
 
-    # Initialize ReadExtract and browser
     read_extract = ReadExtract(config_path='config/config.yaml')
     await read_extract.init_browser()
 
-    # Initialize EventbriteScraper
     ebs_instance = EventbriteScraper(
         config=config,
         read_extract=read_extract,
         db_handler=db_handler,
-        gs_instance=gs_instance,
         llm_handler=llm_handler
     )
 
-    # Start the driver
     await ebs_instance.driver()
-
-    # Close ReadExtract's browser
     await read_extract.close()
 
-    # Get the end time
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")
-
-    # Calculate the total time taken
-    total_time = end_time - start_time
-    logging.info(f"__main__: Total time taken: {total_time}\n\n")
-
 
 if __name__ == "__main__":
     asyncio.run(main())
