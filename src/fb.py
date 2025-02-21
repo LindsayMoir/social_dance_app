@@ -90,6 +90,23 @@ from credentials import get_credentials
 from db import DatabaseHandler
 from llm import LLMHandler
 
+# Get config
+with open('config/config.yaml', 'r') as file:
+    config = yaml.safe_load(file)
+
+# Configure logging
+logging.basicConfig(
+    filename=config['logging']['log_file'],
+    filemode='w',
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+# Instantiate the class libraries
+db_handler = DatabaseHandler(config)
+llm_handler = LLMHandler(config_path='config/config.yaml')
+
 
 class FacebookEventScraper():
     def __init__(self, config_path="config/config.yaml"):
@@ -301,15 +318,27 @@ class FacebookEventScraper():
                 found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
                 if found_keywords:
                     logging.info(f"def extract_event_text(): found_keywords: {found_keywords} in extracted text for URL: {link}.")
+                    # Close the old pages
+                    self.close_old_pages()
+                    logging.info(f"def extract_event_text(): Closed old pages.")
                     return event_extracted_text
                 else:
+                    # Close the old pages
+                    self.close_old_pages()
+                    logging.info(f"def extract_event_text(): Closed old pages.")
                     logging.info(f"def extract_event_text(): No keywords found in extracted text for URL: {link}.")
                     return None         
             else:
+                # Close the old pages
+                self.close_old_pages()
+                logging.info(f"def extract_event_text(): Closed old pages.")
                 logging.info(f"def extract_event_text(): No extracted_text for url: {link}")
                 return None
 
         except Exception as e:
+            # Close the old pages
+            self.close_old_pages()
+            logging.info(f"def driver_no_urls(): Closed old pages.")
             logging.error(f"def extract_event_text(): Failed to extract text from {link}: {e}")
             return None
     
@@ -464,14 +493,11 @@ class FacebookEventScraper():
         Returns:
             str: Extracted text content from the Facebook event page.
         """
-        fb_status = fb_scraper.login_to_facebook(self.logged_in_page, self.browser)
+        fb_status = self.login_to_facebook(self.logged_in_page, self.browser)
 
         if fb_status:
             logging.info("def extract_text_from_fb_url(): Successfully logged into Facebook.")
-            extracted_text = fb_scraper.extract_event_text(url)
-
-            eturn event_extracted_text
-
+            extracted_text = self.extract_event_text(url)
             return extracted_text
     
 
@@ -689,10 +715,10 @@ class FacebookEventScraper():
                 prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
                 llm_response = llm_handler.query_llm(prompt)
 
-                # If no events found delete the url from fb_urls table
+                # If no events found update the url from fb_urls table
                 if "No events found" in llm_response:
                     db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
-                    logging.info(f"def process_fb_url(): No valid events found for URL: {url}. URL deleted from urls table.")
+                    logging.info(f"def process_fb_url(): No valid events found for URL: {url}. Updated urls table.")
                 
                 else:
                     # If parsed_result extract and write to db
@@ -723,100 +749,58 @@ class FacebookEventScraper():
             return
 
 
-    def driver_fb_urls(self):
-        """
-        1. Gets all of the urls from fb_urls table.
-        2. For each url, extracts text and processes it.
-        3. If valid events are found, writes them to the database; otherwise, updates the URL.
-        """
-        # ********Temp start
-        query =text("""
-        SELECT * 
-        FROM urls
-        WHERE link ILIKE :link_pattern
-        """)
-        params = {'link_pattern': '%facebook%'}
-        fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
-        logging.info(f"def driver_fb_urls(): Retrieved {fb_urls_df.shape[0]} Facebook URLs from the database.")
-        
-        if fb_urls_df.shape[0] > 0:
-            for _, row in fb_urls_df.iterrows():
-                url = row['link']
-                source = row['source']
-                keywords = row['keywords']
-                logging.info(f"def driver_fb_urls(): Processing URL: {url}")
-                if url in self.urls_visited:
-                    pass
-                else:
-                    self.urls_visited.add(url)
-                    self.process_fb_url(url, source, keywords)
-                    if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                        break   
-
-                    # Get the event links from the facebook url
-                    fb_event_links = self.extract_event_links(url)
-
-                    # Get the event link from the event tab from the group page
-                    if "facebook.com/groups" in url:
-                        fb_group_events = self.fb_group_event_links(url)
-
-                        # Merge fb_group_events with fb_event_links
-                        if fb_group_events:
-                            if fb_event_links:
-                                fb_event_links.update(fb_group_events)
-                            else:
-                                fb_event_links = fb_group_events.union([url])
-
-                    # Process the event links
-                    for url in fb_event_links:
-                        if url in self.urls_visited:
-                            pass
-                        else:
-                            self.urls_visited.add(url)
-                            self.process_fb_url(url, source, keywords)
-                            if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                                break   
-        else:
-            logging.warning("def driver_fb_urls(): No rows returned from the sql query.")
-
-
     def fb_group_event_links(self, url):
 
         # Get the event link from the event tab from the group page
         fb_group_events = set()
         
-        try:
-            # Navigate to the group page's "Events" tab
-            page = self.logged_in_page
-            page.goto(url, timeout=10000)
+        #try:
+        # Navigate to the group page's "Events" tab
+        page = self.logged_in_page
+        page.goto(url, timeout=10000)
 
-            # Look for the "Events" tab and click it
-            events_tab_selector = "a[href*='/events' i]"
-            if page.is_visible(events_tab_selector):
-                page.click(events_tab_selector)
-                page.wait_for_timeout(3000)
-                logging.info(f"Navigated to the 'Events' tab for group: {url}")
+        # Look for the "Events" tab and click it
+        events_tab_selector = "a[href*='/events' i]"
+        if page.is_visible(events_tab_selector):
+            page.click(events_tab_selector)
+            page.wait_for_timeout(3000)
+            logging.info(f"Navigated to the 'Events' tab for group: {url}")
 
-                # Scroll and gather links on the "Events" tab
-                for _ in range(self.config['crawling']['scroll_depth']):
-                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    page.wait_for_timeout(2000)
+            # Scroll and gather links on the "Events" tab
+            for _ in range(self.config['crawling']['scroll_depth']):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(2000)
 
-                # Extract link matching the event URL pattern
-                content = page.content()
-                fb_group_events = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
-                logging.info(f"def fb_group_event_links(): Extracted {len(fb_group_events)} event links "
-                             f"from the 'Events' tab of group: {url}")
+            # Extract link matching the event URL pattern
+            content = page.content()
+            fb_group_events = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
+            logging.info(f"def fb_group_event_links(): Extracted {len(fb_group_events)} event links "
+                            f"from the 'Events' tab of group: {url}")
 
-            else:
-                logging.info(f"No 'Events' tab found for group: {url}")
-        except Exception as e:
-            logging.error(f"Failed to extract event links from the 'Events' tab of group: {url}. Error: {e}")
-
-        # Close the page
-        page.close()
+        else:
+            logging.info(f"No 'Events' tab found for group: {url}")
+        # except Exception as e:
+        #     logging.error(f"Failed to extract event links from the 'Events' tab of group: {url}. Error: {e}")
 
         return fb_group_events
+
+
+    def close_old_pages(self):
+        """Closes all but the 3 most recently opened pages in Playwright."""
+        if not self.browser:
+            logging.warning("close_old_pages(): No browser instance found.")
+            return
+
+        pages = self.browser.contexts[0].pages  # Get all open pages in the first context
+
+        if len(pages) > 3:
+            pages_to_close = pages[:-3]  # Select all but the last 3 pages
+            for page in pages_to_close:
+                try:
+                    page.close()
+                    logging.info(f"Closed old page: {page.url}")
+                except Exception as e:
+                    logging.error(f"Failed to close page: {e}")
 
 
     def driver_fb_search(self):
@@ -860,6 +844,8 @@ class FacebookEventScraper():
                             # Set prompt and process_llm_response
                             prompt = 'fb'
                             _ = llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
+                            self.close_old_pages()
+                            logging.info(f"def driver_fb_search(): Closed old pages.")
                         else:
                             logging.info(f"def driver_fb_search(): No keywords found in extracted text for URL: {url}.")
                     else:
@@ -913,11 +899,81 @@ class FacebookEventScraper():
                                 events_df.to_csv(self.config['debug']['after_url_updated'], index=False)
 
                             db_handler.write_events_to_db(events_df, url, source, keywords)
+                            logging.info(f"def driver_no_urls(): Wrote {events_df.shape[0]} events to the database.")
+                            self.close_old_pages()
+                            logging.info(f"def driver_no_urls(): Closed old pages.")
                 else:
                     logging.info(f"def driver_no_urls(): No extracted text for URL: {url}.")
             else:
                 logging.info("def driver_no_urls(): No events without URLs found in the database.")
+    
                 return None
+
+
+    def driver_fb_urls(self):
+        """
+        1. Gets all of the urls from fb_urls table.
+        2. For each url, extracts text and processes it.
+        3. If valid events are found, writes them to the database; otherwise, updates the URL.
+        """
+        # ********Temp start
+        query =text("""
+        SELECT * 
+        FROM urls
+        WHERE link ILIKE :link_pattern
+        """)
+        params = {'link_pattern': '%facebook%'}
+        fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
+        logging.info(f"def driver_fb_urls(): Retrieved {fb_urls_df.shape[0]} Facebook URLs from the database.")
+
+        # Checkpoint history. Write fb_urls_df to a csv file
+        fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+        
+        if fb_urls_df.shape[0] > 0:
+            for _, row in fb_urls_df.iterrows():
+                url = row['link']
+                source = row['source']
+                keywords = row['keywords']
+                logging.info(f"def driver_fb_urls(): Processing URL: {url}")
+                if url in self.urls_visited:
+                    pass
+
+                else:
+                    self.urls_visited.add(url)
+                    self.process_fb_url(url, source, keywords)
+                    if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                        break   
+
+                    # Get the event links from the facebook url
+                    fb_event_links = self.extract_event_links(url)
+
+                    # Get the event link from the event tab from the group page
+                    if "facebook.com/groups" in url:
+                        fb_group_events = self.fb_group_event_links(url)
+
+                        # Merge fb_group_events with fb_event_links
+                        if fb_group_events:
+                            if fb_event_links:
+                                fb_event_links.update(fb_group_events)
+                            else:
+                                fb_event_links = fb_group_events.union([url])
+
+                    # Process the event links
+                    for url in fb_event_links:
+                        if url in self.urls_visited:
+                            pass
+                        else:
+                            self.urls_visited.add(url)
+                            self.process_fb_url(url, source, keywords)
+                            if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                                break
+
+                # Close the old pages
+                self.close_old_pages()
+                logging.info(f"def driver_fb_search(): Closed old pages.")
+
+        else:
+            logging.warning("def driver_fb_urls(): No rows returned from the sql query.")
 
 
 if __name__ == "__main__":
@@ -935,14 +991,11 @@ if __name__ == "__main__":
         datefmt='%Y-%m-%d %H:%M:%S'
         )
     
+    fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
+    
     # Get the start time
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
-
-    # Instantiate the class libraries
-    db_handler = DatabaseHandler(config)
-    fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
-    llm_handler = LLMHandler(config_path='config/config.yaml')
 
     # Use the scraper
     logging.info(f"def __main__: Starting Facebook event scraping.")

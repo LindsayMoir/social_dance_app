@@ -1,3 +1,5 @@
+checkpoint:
+  fb_urls: 'checkpoint/fb_urls.csv'
 clean_up:
   dedup: True
   old_events: 3
@@ -7,10 +9,10 @@ constants:
   fuzzywuzzy_threshold: 80
 crawling:
   depth_limit: 3
-  headless: True
+  headless: False
   max_crawl_trys: 3
-  max_website_urls: 5
-  urls_run_limit: 100
+  max_website_urls: 10
+  urls_run_limit: 1000
   scroll_depth: 3
 date_range:
   months: 3
