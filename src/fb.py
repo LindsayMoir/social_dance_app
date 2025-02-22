@@ -77,7 +77,6 @@ from googleapiclient.discovery import build
 import logging
 import pandas as pd
 from playwright.sync_api import sync_playwright
-from pynput.keyboard import Controller, Key
 import random
 import re
 import requests
@@ -110,65 +109,50 @@ llm_handler = LLMHandler(config_path='config/config.yaml')
 
 class FacebookEventScraper():
     def __init__(self, config_path="config/config.yaml"):
-        # Initialize base class (loads config)
 
         # Get config
         with open(config_path, 'r') as file:
             self.config = yaml.safe_load(file)
 
-        # Start time for manual intervention
-        self.start_time = datetime.now()
-
         # Start Playwright and log into Facebook once
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(headless=self.config['crawling']['headless'])
 
-        self.context = self.browser.new_context()
+        # Create ONE context and ONE page for the entire session
+        self.context = self.browser.new_context(storage_state="auth.json")  
         self.logged_in_page = self.context.new_page()
 
-        # Attempt to log into Facebook and store the logged-in page for reuse
-        if self.login_to_facebook(self.logged_in_page, self.browser):
-            logging.info("Facebook login successful during initialization.")
+        # Attempt login (but don't open multiple tabs)
+        if self.login_to_facebook():
+            logging.info("Facebook login successful.")
         else:
-            logging.error("Facebook login failed during initialization.")
+            logging.error("Facebook login failed.")
 
         # Set up the set for urls visited
         self.urls_visited = set()
-
-        # Create a keyboard controller
-        self.keyboard = Controller()
 
         # Get keywords
         self.keywords_list = llm_handler.get_keywords()
     
 
-    def login_to_facebook(self, page, browser):
+    def login_to_facebook(self):
         """
-        Logs into Facebook using credentials from the configuration, handles potential additional
-        login prompts, and saves session state for future reuse. 
-        Manual intervention required for captcha challenges.
-        
-        Args:
-            page (playwright.sync_api.Page): The Playwright page instance.
-            browser (playwright.sync_api.Browser): The Playwright browser instance.
-        
-        Returns:
-            bool: True if login is successful, False otherwise.
+        Logs into Facebook using stored credentials and avoids opening multiple tabs.
         """
-        # Try to load saved authentication state if it exists
+        page = self.logged_in_page  # Reuse the same page
+
+        # Attempt to use saved session state
         try:
-            context = browser.new_context(storage_state="auth.json")
-            page = context.new_page()
             page.goto("https://www.facebook.com/", timeout=60000)
 
-            # If this URL doesn't redirect to login, assume logged in
+            # If the Facebook search bar is visible, we are already logged in
             if page.is_visible("div[aria-label='Search Facebook']"):
-                logging.info("def login_to_facebook(): Successfully logged in.")
+                logging.info("Already logged in.")
                 return True
-            
         except Exception as e:
-            logging.info("def login_to_facebook(): No valid saved session found. Proceeding with manual login.")
-        
+            logging.warning(f"Session state not found. Proceeding with manual login. Error: {e}")
+
+        # Manual login required
         email, password, _ = get_credentials('Facebook')
 
         page.goto("https://www.facebook.com/", timeout=30000)
@@ -177,63 +161,34 @@ class FacebookEventScraper():
             page.fill("input[name='pass']", password)
             page.click("button[name='login']")
         else:
-            logging.info("Already logged in or login page not detected.")
+            logging.info("Login page not detected, assuming already logged in.")
 
-        # Wait briefly for potential navigation or additional login prompts
+        # Wait for potential login redirects
         page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(10000)  # 10 seconds
+        page.wait_for_timeout(10000)
 
-        # Detect and handle additional login prompts if they appear
-        def check_additional_login(p):
-            if p.is_visible("input[name='email']") and p.is_visible("input[name='pass']"):
-                logging.info("Additional login prompt detected. Re-filling credentials.")
-                p.fill("input[name='email']", email)
-                p.fill("input[name='pass']", password)
-                p.click("button[name='login']")
-                # Wait for navigation or further prompts
-                p.wait_for_timeout(5000)
-                return True
-            return False
-
-        # Attempt to handle any subsequent login prompts up to a few times if necessary
+        # Handle extra login prompts
         attempts = 0
-        while attempts < 3 and check_additional_login(page):
+        while attempts < 3:
+            if page.is_visible("input[name='email']") and page.is_visible("input[name='pass']"):
+                logging.info("Re-entering credentials due to login prompt.")
+                page.fill("input[name='email']", email)
+                page.fill("input[name='pass']", password)
+                page.click("button[name='login']")
+                page.wait_for_timeout(5000)
+            else:
+                break
             attempts += 1
 
-        # Prompt for manual captcha/challenge resolution if necessary
-        current_time = datetime.now()
-        elapsed_time = (current_time - self.start_time).total_seconds()
-
-        if elapsed_time <= 120:
-            logging.warning("def login_to_facebook(): Please solve any captcha or challenge in the browser, then press Enter here to continue...")
-            input("def login_to_facebook(): After solving captcha/challenge (if any), press Enter to continue...")
-        else:
-            # Simulate pressing the Enter key
-            time.sleep(5) 
-            # Simulate pressing the Enter key
-            self.keyboard.press(Key.enter)
-            self.keyboard.release(Key.enter)
-            logging.info("def login_to_facebook(): Automated Enter key press to continue after 2 minutes.")
-
-        # Wait for navigation to complete after manual intervention
-        page.wait_for_timeout(5000)
-
-        # Check if login failed by examining the URL
+        # If Captcha appears, wait for user input
         if "login" in page.url.lower():
-            logging.error("Login failed. Please check your credentials or solve captcha challenges.")
-            return False
+            logging.warning("Solve the captcha or challenge in the browser, then press Enter.")
+            input("Press Enter after solving the captcha...")
 
-        # Save session state for future reuse
-        try:
-            context = page.context
-            context.storage_state(path="auth.json")
-            logging.info("Session state saved for future use.")
-        except Exception as e:
-            logging.warning(f"Could not save session state: {e}")
+        # Save session state after successful login
+        self.context.storage_state(path="auth.json")
 
-        # Mark page as logged-in for future reuse
-        self.logged_in_page = page
-        logging.info("Login to Facebook successful.")
+        logging.info("Login to Facebook successful. Session saved.")
         return True
     
 
@@ -242,26 +197,112 @@ class FacebookEventScraper():
         Extracts event links from a search page using Playwright and regex.
 
         Args:
-            page (playwright.sync_api.Page): The Playwright page instance.
             search_url (str): The Facebook events search URL.
 
         Returns:
             set: A set of extracted event links.
         """
-        # Use the stored already logged-in page
-        page = self.logged_in_page  
-        page.goto(search_url, timeout=10000)
-        page.wait_for_timeout(5000)
+        try:
+            # Check if the logged-in page is still valid; otherwise, create a new one
+            try:
+                if not self.logged_in_page or self.logged_in_page.url == "about:blank":
+                    raise Exception("Logged-in page is no longer valid.")
+                page = self.logged_in_page  # Use the logged-in page if it's valid
+            except Exception:
+                logging.warning("def extract_event_links(): Logged-in page is closed or invalid, opening a new one.")
+                page = self.context.new_page()  # Open a new page in the existing context
 
-        for _ in range(self.config['crawling']['scroll_depth']):
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            page.wait_for_timeout(2000)
+            # Randomize timeout to avoid bot detection
+            timeout_value = random.randint(8000, 12000)  # 8 to 12 seconds
+            logging.info(f"def extract_event_links(): Navigating to {search_url} with timeout {timeout_value} ms.")
+            
+            # Try navigating to the page
+            page.goto(search_url, timeout=timeout_value)
+            page.wait_for_timeout(random.randint(4000, 7000))  # Random wait before interacting
 
-        content = page.content()
-        links = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
-        logging.info(f"def extract_event_links(): Extracted {len(links)} event links from {search_url}.")
+            # Scroll down gradually
+            for _ in range(self.config['crawling']['scroll_depth']):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(random.randint(1500, 3000))  # Random scroll wait
 
-        return links
+            # Extract page content
+            content = page.content()
+            links = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
+            
+            logging.info(f"def extract_event_links(): Extracted {len(links)} event links from {search_url}.")
+            return links
+
+        except Exception as e:
+            logging.error(f"def extract_event_links(): Error extracting links from {search_url}: {e}")
+            return set()
+
+        finally:
+            # If we opened a new page, close it to prevent excessive tabs
+            if page != self.logged_in_page:
+                page.close()
+                logging.info(f"def extract_event_links(): Closed extra page for URL: {search_url}.")
+
+
+    def fb_group_event_links(self, url):
+        """
+        Extracts event links from a Facebook group's 'Events' tab.
+
+        Args:
+            url (str): The Facebook group URL.
+
+        Returns:
+            set: A set of extracted event links.
+        """
+        fb_group_events = set()
+
+        try:
+            # Ensure the logged-in page is valid
+            try:
+                if not self.logged_in_page or self.logged_in_page.url == "about:blank":
+                    raise Exception("Logged-in page is no longer valid.")
+                page = self.logged_in_page  # Reuse the logged-in page
+            except Exception:
+                logging.warning("fb_group_event_links(): Logged-in page is closed or invalid, opening a new one.")
+                page = self.context.new_page()  # Open a new page in the existing context
+
+            # Navigate to the group's page
+            timeout_value = random.randint(10000, 15000)  # Randomized timeout
+            logging.info(f"fb_group_event_links(): Navigating to {url} with timeout {timeout_value} ms.")
+            page.goto(url, timeout=timeout_value)
+            page.wait_for_timeout(random.randint(4000, 6000))  # Randomized wait
+
+            # Wait for the "Events" tab to appear
+            events_tab_selector = "a[href*='/events' i]"
+            try:
+                page.wait_for_selector(events_tab_selector, timeout=random.randint(5000, 10000))
+                logging.info(f"fb_group_event_links(): Found 'Events' tab for group: {url}. Clicking it.")
+                page.click(events_tab_selector)
+                page.wait_for_timeout(random.randint(3000, 5000))  # Randomized wait
+            except Exception:
+                logging.info(f"fb_group_event_links(): No 'Events' tab found for group: {url}.")
+                return fb_group_events  # Exit early if no Events tab exists
+
+            # Scroll and gather links on the "Events" tab
+            for _ in range(self.config['crawling']['scroll_depth']):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(random.randint(1500, 3000))  # Random scroll wait
+
+            # Extract event links
+            content = page.content()
+            fb_group_events = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
+            logging.info(f"fb_group_event_links(): Extracted {len(fb_group_events)} event links "
+                        f"from the 'Events' tab of group: {url}")
+
+        except Exception as e:
+            logging.error(f"fb_group_event_links(): Error extracting event links from {url}. Error: {e}")
+
+        finally:
+            # Close any extra pages if a new one was created
+            if page != self.logged_in_page:
+                page.close()
+                logging.info(f"fb_group_event_links(): Closed extra page for URL: {url}.")
+
+        return fb_group_events
     
 
     def extract_event_text(self, link):
@@ -274,73 +315,63 @@ class FacebookEventScraper():
         Returns:
             str: The extracted relevant text content, or None if no relevant text is found.
         """
-        # Initialize event extracted text
-        event_extracted_text = None
-
         try:
-            page = self.logged_in_page
-            page.goto(link, timeout=10000)
+            # Check if the logged-in page is still valid; otherwise, create a new one
+            try:
+                if not self.logged_in_page or self.logged_in_page.url == "about:blank":
+                    raise Exception("Logged-in page is no longer valid.")
+                page = self.logged_in_page  # Use the logged-in page if it's valid
+            except Exception:
+                logging.warning("def extract_event_text(): Logged-in page is closed or invalid, opening a new one.")
+                page = self.context.new_page()  # Open a new page in the existing context
 
-            # Look for all buttons or link with text "See more" (case insensitive) and click them
+            timeout_value = random.randint(8000, 12000)  # Random timeout to avoid bot detection
+            logging.info(f"def extract_event_text(): Navigating to {link} with timeout {timeout_value} ms.")
+            page.goto(link, timeout=timeout_value)
+
+            # Look for all buttons or links with text "See more" and click them
             more_buttons = page.query_selector_all("text=/See more/i")
-            for more_button in more_buttons:
-                try:
-                    more_button.wait_for_element_state("stable", timeout=3000)  # Ensure button is stable
-                    more_button.click()
-                    # Randomize wait time after clicking each "See more"
-                    page.wait_for_timeout(random.randint(10000, 20000))
-                    logging.info(f"Clicked 'See more' button in URL: {link}")
-                except Exception as e:
-                    logging.warning(f"Could not click 'See more' button in URL {link}: {e}")
-
-            if not more_buttons:
+            if more_buttons:
+                for more_button in more_buttons:
+                    try:
+                        more_button.wait_for_element_state("stable", timeout=random.randint(2000, 4000))  # Ensure button is stable
+                        more_button.click()
+                        page.wait_for_timeout(random.randint(4000, 8000))  # Random wait after clicking
+                        logging.info(f"Clicked 'See more' button in URL: {link}")
+                    except Exception as e:
+                        logging.warning(f"Could not click 'See more' button in URL {link}: {e}")
+            else:
                 logging.debug(f"No 'See more' buttons found in URL: {link}")
 
-            page.wait_for_timeout(5000)
+            # Randomized wait before extracting content
+            page.wait_for_timeout(random.randint(5000, 7000))
+
+            # Extract page content
             content = page.content()
             soup = BeautifulSoup(content, 'html.parser')
             extracted_text = ' '.join(soup.stripped_strings)
-            logging.info(f"def extract_event_text(): Extracted raw text from {link}: {len(extracted_text)}")
+            logging.info(f"def extract_event_text(): Extracted raw text ({len(extracted_text)} chars) from {link}")
 
             # Check for keywords in the extracted text
             found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
             if found_keywords:
                 if extracted_text and 'facebook.com/events/' in link:
                     event_extracted_text = self.extract_relevant_text(extracted_text, link)
+                    logging.info(f"Extracted relevant event text from {link}: {len(event_extracted_text)} chars.")
+                    return event_extracted_text
             else:
                 logging.info(f"def extract_event_text(): No keywords found in extracted text for URL: {link}.")
                 return None
 
-            # Check if we got event extracted text
-            if event_extracted_text:
-                logging.info(f"Extracted relevant event text from {link}: {extracted_text}")
-                # Check for keywords in the extracted text
-                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-                if found_keywords:
-                    logging.info(f"def extract_event_text(): found_keywords: {found_keywords} in extracted text for URL: {link}.")
-                    # Close the old pages
-                    self.close_old_pages()
-                    logging.info(f"def extract_event_text(): Closed old pages.")
-                    return event_extracted_text
-                else:
-                    # Close the old pages
-                    self.close_old_pages()
-                    logging.info(f"def extract_event_text(): Closed old pages.")
-                    logging.info(f"def extract_event_text(): No keywords found in extracted text for URL: {link}.")
-                    return None         
-            else:
-                # Close the old pages
-                self.close_old_pages()
-                logging.info(f"def extract_event_text(): Closed old pages.")
-                logging.info(f"def extract_event_text(): No extracted_text for url: {link}")
-                return None
-
         except Exception as e:
-            # Close the old pages
-            self.close_old_pages()
-            logging.info(f"def driver_no_urls(): Closed old pages.")
             logging.error(f"def extract_event_text(): Failed to extract text from {link}: {e}")
             return None
+
+        finally:
+            # If we opened a new page, close it to prevent excessive tabs
+            if page != self.logged_in_page:
+                page.close()
+                logging.info(f"def extract_event_text(): Closed extra page for URL: {link}.")
     
 
     def extract_relevant_text(self, content, link):
@@ -481,60 +512,6 @@ class FacebookEventScraper():
 
         # Return the last search_url processed and the list of extracted event data
         return search_url, extracted_text_list
-
-
-    def extract_text_from_fb_url(self, url):
-        """
-        Extracts text content from a Facebook event URL using Playwright and BeautifulSoup.
-
-        Args:
-            url (str): The Facebook event URL.
-
-        Returns:
-            str: Extracted text content from the Facebook event page.
-        """
-        fb_status = self.login_to_facebook(self.logged_in_page, self.browser)
-
-        if fb_status:
-            logging.info("def extract_text_from_fb_url(): Successfully logged into Facebook.")
-            extracted_text = self.extract_event_text(url)
-            return extracted_text
-    
-
-    def google_search(self, query, num_results=10):
-        """
-        Perform a Google search and extract titles and URLs of the results.
-
-        Args:
-            query (str): The search query.
-            api_key (str): Your Google API key.
-            cse_id (str): Your Custom Search Engine ID.
-            num_results (int): The number of search results to fetch (max 10 per request).
-
-        Returns:
-            list: A list of dictionaries containing 'title' and 'url' for each search result.
-        """
-        _, api_key, cse_id = get_credentials('Google')
-        service = build("customsearch", "v1", developerKey=api_key)
-        results = []
-        
-        try:
-            response = service.cse().list(
-                q=query,
-                cx=cse_id,
-                num=num_results  # Fetch up to `num_results` results (max 10 per request).
-            ).execute()
-
-            # Extract titles and link from the response
-            if 'items' in response:
-                for item in response['items']:
-                    title = item.get('title')  # Get the title of the search result
-                    url = item.get('link')  # Get the URL of the search result
-                    results.append((title, url))
-        except Exception as e:
-             print(f"An error occurred: {e}")
-
-        return results
     
     
     @staticmethod
@@ -576,79 +553,6 @@ class FacebookEventScraper():
         replacement = r'https://www.facebook.com/events/\1/'
 
         return re.sub(pattern, replacement, original_url)
-    
-
-    def scrape_and_process(self, query):
-        """
-        Scrapes Google Search results, processes them, and updates the database.
-
-        Args:
-            query (str): The search query.
-
-        Returns:
-            None
-        """
-        logging.info(f"Starting scrape and process for query: {query}.")
-        extracted_text = ''
-        results = self.google_search(query, self.config['crawling']['urls_run_limit'])
-
-        # # We have to get thru all of them before we know if we need to bail out to Facebook
-        for title, url in results:
-
-            # Check and see if url has already been visited
-            if url in self.urls_visited:
-                pass
-
-            else:
-                # Check and see if we have hit our limit for urls to visit
-                if self.config['crawling']['urls_run_limit'] > len(self.urls_visited):
-                    return url, None, 'default'
-                else:
-                    # Add to self.urls_visited
-                    self.urls_visited.add(url)
-
-                    # Check if the query is similar to the title
-                    similarity = fuzz.token_set_ratio(query, title)
-                    if similarity > self.config['constants']['fuzzywuzzy_threshold'] and 'facebook' not in url:  # 80% threshold
-                        logging.info(f"def scrape_and_process(): Relevant result found: Title: {title}, URL: {url}.")
-
-                        # Scrape text from the non-Facebook URL
-                        extracted_text = self.extract_text_from_url(url)
-                        if extracted_text:
-                            logging.info(f"def scrape_and_process(): Text extracted from url: {url}.")
-                            if 'allevents.in' in url:
-                                return url, extracted_text, 'allevents'
-                            else:
-                                return url, extracted_text, 'single_event'
-            
-        # Might be a facebook event
-        for title, url in results:
-
-            # Check and see if we have hit our limit for urls to visit
-            if config['crawling']['urls_run_limit'] > len(self.urls_visited):
-                return url, None, 'default'
-                
-            # Check if the query is similar to the title
-            similarity = fuzz.token_set_ratio(query, title)
-            if similarity > self.config['constants']['fuzzywuzzy_threshold'] and 'facebook' in url:  # 80% threshold
-                logging.info(f"Relevant result found: Title: {title}, URL: {url}.")
-
-                # Convert Facebook URL
-                url = self.convert_facebook_url(url)
-                logging.info(f"def scrape_and_process(): Extracting text from facebook url: {url}.")
-
-                # Scrape text from the Facebook URL
-                extracted_text = self.extract_text_from_fb_url(url)
-                if extracted_text:
-                    logging.info(f"def scrape_and_process(): Text extracted from facebook url: {url}."
-                                 f"Extracted text: {extracted_text}")
-                    return url, extracted_text, 'single_event'
-                else:
-                    logging.info(f"def scrape_and_process(): No relevant results found for: query: {query}.")
-                    return url, None, 'default'
-        
-        logging.info(f"def scrape_and_process(): No relevant results found for: query: {query}.")        
-        return None, None, 'default'
     
 
     def fix_facebook_event_url(self, malformed_url):
@@ -695,112 +599,66 @@ class FacebookEventScraper():
         if url.startswith("http://https") or url.startswith("https://https"):
             url = self.fix_facebook_event_url(url)
 
-        # Establish default values
+        # Default values
         update_other_link = 'No'
         relevant = False
         increment_crawl_try = 1
 
-        if url:
-            # Extract text and update db
-            extracted_text = self.extract_text_from_fb_url(url)
-            if not extracted_text:
-                db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
-                logging.info(f"def process_fb_url(): No text extracted for Facebook URL: {url}.")
-                return
-            
-            # Check for keywords in the extracted text
-            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]       
-            if found_keywords:
-                # Generate prompt and query LLM
-                prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
-                llm_response = llm_handler.query_llm(prompt)
-
-                # If no events found update the url from fb_urls table
-                if "No events found" in llm_response:
-                    db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
-                    logging.info(f"def process_fb_url(): No valid events found for URL: {url}. Updated urls table.")
-                
-                else:
-                    # If parsed_result extract and write to db
-                    parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
-                    if parsed_result:
-                        events_df = pd.DataFrame(parsed_result)
-
-                        # If the URL field is empty, fill it with the current URL.
-                        if events_df['url'].values[0] == '':
-                            events_df.loc[0, 'url'] = url
-
-                        db_handler.write_events_to_db(events_df, url, source, keywords)
-                        logging.info(f"def process_fb_url(): Valid events found for Facebook URL: {url}. Events written to database.")
-
-                        # Update url as relevant
-                        relevant = True
-                        db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
-                        logging.info(f"def process_fb_url(): relevant and updated {url}")
-            else:
-                relevant = False
-                update_other_link = ''
-                increment_crawl_try = 1
-                db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
-                logging.info(f"def process_fb_url(): No keywords found in extracted text for URL: {url}.")
-                return
-        else:    
-            logging.info(f"def process_fb_url(): No URL found for processing.")
+        if not url:
+            logging.warning(f"process_fb_url(): No valid URL provided for processing.")
             return
 
-
-    def fb_group_event_links(self, url):
-
-        # Get the event link from the event tab from the group page
-        fb_group_events = set()
-        
-        #try:
-        # Navigate to the group page's "Events" tab
-        page = self.logged_in_page
-        page.goto(url, timeout=10000)
-
-        # Look for the "Events" tab and click it
-        events_tab_selector = "a[href*='/events' i]"
-        if page.is_visible(events_tab_selector):
-            page.click(events_tab_selector)
-            page.wait_for_timeout(3000)
-            logging.info(f"Navigated to the 'Events' tab for group: {url}")
-
-            # Scroll and gather links on the "Events" tab
-            for _ in range(self.config['crawling']['scroll_depth']):
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.wait_for_timeout(2000)
-
-            # Extract link matching the event URL pattern
-            content = page.content()
-            fb_group_events = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
-            logging.info(f"def fb_group_event_links(): Extracted {len(fb_group_events)} event links "
-                            f"from the 'Events' tab of group: {url}")
-
-        else:
-            logging.info(f"No 'Events' tab found for group: {url}")
-        # except Exception as e:
-        #     logging.error(f"Failed to extract event links from the 'Events' tab of group: {url}. Error: {e}")
-
-        return fb_group_events
-
-
-    def close_old_pages(self):
-        """Closes all but the 3 most recently opened pages in Playwright."""
-        if not self.browser:
-            logging.warning("close_old_pages(): No browser instance found.")
+        # Extract text (Avoid logging in every time)
+        extracted_text = self.extract_event_text(url)
+        if not extracted_text:
+            logging.info(f"process_fb_url(): No text extracted for URL: {url}. Marking as processed.")
+            db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
             return
 
-        pages = self.browser.contexts[0].pages  # Get all open pages in the first context
+        # Check for keywords in extracted text
+        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+        if not found_keywords:
+            logging.info(f"process_fb_url(): No keywords found in text for {url}. Marking as processed.")
+            db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+            return
 
-        if len(pages) > 3:
-            pages_to_close = pages[:-3]  # Select all but the last 3 pages
-            for page in pages_to_close:
-                try:
-                    page.close()
-                    logging.info(f"Closed old page: {page.url}")
-                except Exception as e:
-                    logging.error(f"Failed to close page: {e}")
+        # Generate prompt & query LLM only if keywords were found
+        prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
+        llm_response = llm_handler.query_llm(prompt)
+
+        # If LLM says "No events found," update URL as non-relevant
+        if "No events found" in llm_response:
+            logging.info(f"process_fb_url(): LLM determined no valid events for {url}. Marking as processed.")
+            db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+            return
+
+        # Extract parsed results from LLM response
+        parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
+        if not parsed_result:
+            logging.warning(f"process_fb_url(): LLM returned an empty response for {url}. Marking as processed.")
+            db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+            return
+
+        # Convert parsed data into a DataFrame & Write to Database
+        events_df = pd.DataFrame(parsed_result)
+        if events_df.empty:
+            logging.warning(f"process_fb_url(): Parsed result was empty for {url}. No data written.")
+            db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+            return
+
+        # Ensure URL field is filled
+        if events_df['url'].values[0] == '':
+            events_df.loc[0, 'url'] = url
+
+        # Write events to DB
+        db_handler.write_events_to_db(events_df, url, source, keywords)
+        logging.info(f"process_fb_url(): Events successfully written to DB for {url}.")
+
+        # Mark URL as relevant
+        relevant = True
+        db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+        logging.info(f"process_fb_url(): URL marked as relevant and updated: {url}.")
+        return
 
 
     def driver_fb_search(self):
@@ -844,8 +702,6 @@ class FacebookEventScraper():
                             # Set prompt and process_llm_response
                             prompt = 'fb'
                             _ = llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
-                            self.close_old_pages()
-                            logging.info(f"def driver_fb_search(): Closed old pages.")
                         else:
                             logging.info(f"def driver_fb_search(): No keywords found in extracted text for URL: {url}.")
                     else:
@@ -900,8 +756,6 @@ class FacebookEventScraper():
 
                             db_handler.write_events_to_db(events_df, url, source, keywords)
                             logging.info(f"def driver_no_urls(): Wrote {events_df.shape[0]} events to the database.")
-                            self.close_old_pages()
-                            logging.info(f"def driver_no_urls(): Closed old pages.")
                 else:
                     logging.info(f"def driver_no_urls(): No extracted text for URL: {url}.")
             else:
@@ -967,11 +821,6 @@ class FacebookEventScraper():
                             self.process_fb_url(url, source, keywords)
                             if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                                 break
-
-                # Close the old pages
-                self.close_old_pages()
-                logging.info(f"def driver_fb_search(): Closed old pages.")
-
         else:
             logging.warning("def driver_fb_urls(): No rows returned from the sql query.")
 
