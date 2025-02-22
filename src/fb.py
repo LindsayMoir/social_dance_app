@@ -109,26 +109,45 @@ llm_handler = LLMHandler(config_path='config/config.yaml')
 
 class FacebookEventScraper():
     def __init__(self, config_path="config/config.yaml"):
-
-        # Get config
+        # Load configuration
         with open(config_path, 'r') as file:
             self.config = yaml.safe_load(file)
 
-        # Start Playwright and log into Facebook once
+        # Start Playwright
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(headless=self.config['crawling']['headless'])
 
-        # Create ONE context and ONE page for the entire session
-        self.context = self.browser.new_context(storage_state="auth.json")  
+        # Create a single context & page
+        self.context = self.browser.new_context(storage_state="auth.json")
         self.logged_in_page = self.context.new_page()
 
-        # Attempt login (but don't open multiple tabs)
+        # Attempt login
         if self.login_to_facebook():
             logging.info("Facebook login successful.")
         else:
             logging.error("Facebook login failed.")
 
-        # Set up the set for urls visited
+        # **Initialize Run Statistics**
+        self.run_name = input("Enter run name: ")
+        self.run_description = input("Enter run description: ")
+        self.start_time = datetime.now()
+
+        # **Tracking Variables**
+        self.unique_urls = set()  # Store unique URLs
+        self.unique_urls_count = 0  # Unique URLs processed
+        self.total_url_attempts = 0  # Total number of URL contact attempts
+        self.urls_with_extracted_text = 0  # URLs where text was successfully extracted
+        self.urls_with_found_keywords = 0  # URLs where keywords were found
+        self.events_written_to_db = 0  # Number of events successfully written to DB
+
+        # Initialize run statistics
+        self.start_time = datetime.now()
+        self.total_url_attempts = 0
+        self.urls_with_extracted_text = 0
+        self.urls_with_found_keywords = 0
+        self.events_written_to_db = 0
+
+        # URL tracking
         self.urls_visited = set()
 
         # Get keywords
@@ -203,6 +222,8 @@ class FacebookEventScraper():
             set: A set of extracted event links.
         """
         try:
+            self.total_url_attempts += 1  # Count each attempt
+
             # Check if the logged-in page is still valid; otherwise, create a new one
             try:
                 if not self.logged_in_page or self.logged_in_page.url == "about:blank":
@@ -215,7 +236,7 @@ class FacebookEventScraper():
             # Randomize timeout to avoid bot detection
             timeout_value = random.randint(8000, 12000)  # 8 to 12 seconds
             logging.info(f"def extract_event_links(): Navigating to {search_url} with timeout {timeout_value} ms.")
-            
+
             # Try navigating to the page
             page.goto(search_url, timeout=timeout_value)
             page.wait_for_timeout(random.randint(4000, 7000))  # Random wait before interacting
@@ -228,7 +249,12 @@ class FacebookEventScraper():
             # Extract page content
             content = page.content()
             links = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
-            
+
+            # Update statistics
+            if links:
+                self.urls_with_extracted_text += 1  # Count URLs where extraction was successful
+                self.unique_urls.update(links)  # Add new event URLs to the unique set
+
             logging.info(f"def extract_event_links(): Extracted {len(links)} event links from {search_url}.")
             return links
 
@@ -256,6 +282,8 @@ class FacebookEventScraper():
         fb_group_events = set()
 
         try:
+            self.total_url_attempts += 1  # Count each attempt
+
             # Ensure the logged-in page is valid
             try:
                 if not self.logged_in_page or self.logged_in_page.url == "about:blank":
@@ -290,6 +318,12 @@ class FacebookEventScraper():
             # Extract event links
             content = page.content()
             fb_group_events = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
+
+            # Update statistics
+            if fb_group_events:
+                self.urls_with_extracted_text += 1  # Count URLs where extraction was successful
+                self.unique_urls.update(fb_group_events)  # Add new event URLs to the unique set
+
             logging.info(f"fb_group_event_links(): Extracted {len(fb_group_events)} event links "
                         f"from the 'Events' tab of group: {url}")
 
@@ -316,6 +350,8 @@ class FacebookEventScraper():
             str: The extracted relevant text content, or None if no relevant text is found.
         """
         try:
+            self.total_url_attempts += 1  # Count URL contact attempts
+
             # Check if the logged-in page is still valid; otherwise, create a new one
             try:
                 if not self.logged_in_page or self.logged_in_page.url == "about:blank":
@@ -350,17 +386,25 @@ class FacebookEventScraper():
             content = page.content()
             soup = BeautifulSoup(content, 'html.parser')
             extracted_text = ' '.join(soup.stripped_strings)
-            logging.info(f"def extract_event_text(): Extracted raw text ({len(extracted_text)} chars) from {link}")
 
-            # Check for keywords in the extracted text
-            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-            if found_keywords:
-                if extracted_text and 'facebook.com/events/' in link:
-                    event_extracted_text = self.extract_relevant_text(extracted_text, link)
-                    logging.info(f"Extracted relevant event text from {link}: {len(event_extracted_text)} chars.")
-                    return event_extracted_text
+            if extracted_text:
+                self.urls_with_extracted_text += 1  # Count URLs where text was extracted
+                logging.info(f"def extract_event_text(): Extracted raw text ({len(extracted_text)} chars) from {link}")
+
+                # Check for keywords in the extracted text
+                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+                if found_keywords:
+                    self.urls_with_found_keywords += 1  # Count URLs where keywords were found
+
+                    if extracted_text and 'facebook.com/events/' in link:
+                        event_extracted_text = self.extract_relevant_text(extracted_text, link)
+                        logging.info(f"Extracted relevant event text from {link}: {len(event_extracted_text)} chars.")
+                        return event_extracted_text
+                else:
+                    logging.info(f"def extract_event_text(): No keywords found in extracted text for URL: {link}.")
+                    return None
             else:
-                logging.info(f"def extract_event_text(): No keywords found in extracted text for URL: {link}.")
+                logging.warning(f"def extract_event_text(): No text extracted from {link}.")
                 return None
 
         except Exception as e:
@@ -425,7 +469,7 @@ class FacebookEventScraper():
         extracted_text = content[day_start:gsa_end]
 
         return extracted_text
-        
+    
         
     def scrape_events(self, keywords):
         """
@@ -447,113 +491,42 @@ class FacebookEventScraper():
                 event_links = self.extract_event_links(search_url)
                 logging.info(f"def scrape_events: Used {search_url} to get {len(event_links)} event_links\n")
 
+                self.total_url_attempts += len(event_links)  # Update total URL attempts
+
                 for link in event_links:
                     if link in self.urls_visited:
                         continue  # Skip already visited URLs
                     else:
                         self.urls_visited.add(link)
+                        self.unique_urls_count += 1  # Increment unique URL count
+
                         if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                             logging.info("def scrape_events(): Reached the URL visit limit. Stopping the scraping process.")
                             return search_url, extracted_text_list
-                        
+
                         extracted_text = self.extract_event_text(link)
 
                         if extracted_text:
+                            self.urls_with_extracted_text += 1  # Increment URLs with extracted text
+
                             # Check for keywords in the extracted text
                             found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
                             if found_keywords:
+                                self.urls_with_found_keywords += 1  # Increment URLs with found keywords
                                 extracted_text_list.append((link, extracted_text))
-                                self.urls_visited.add(link)
                                 logging.debug(f"Visited URL: {link}. Total visited: {len(self.urls_visited)}")
-
-                                # Check if the limit has been reached
-                                if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                                    logging.info("def scrape_events(): Reached the URL visit limit. Stopping the scraping process.")
-                                    return search_url, extracted_text_list
                             else:
                                 logging.info(f"def scrape_events(): No keywords found in extracted text for URL: {link}.")
                         else:
                             logging.info(f"def scrape_events(): No text extracted for URL: {link}.")
 
-                    # Get second-level link
-                    second_level_links = self.extract_event_links(link)
-                    for second_level_link in second_level_links:
-                        if second_level_link in self.urls_visited:
-                            continue  # Skip already visited URLs
-                        else:
-                            self.urls_visited.add(second_level_link)
-                            if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                                logging.info("def scrape_events(): Reached the URL visit limit. Stopping the scraping process.")
-                                return search_url, extracted_text_list
-                            
-                            self.urls_visited.add(second_level_link)
-                            second_level_text = self.extract_event_text(second_level_link)
-                            if second_level_text:  # Only add if text was successfully extracted
-
-                                # Check for keywords in the extracted text
-                                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-                                if found_keywords:
-                                    extracted_text_list.append((second_level_link, second_level_text))
-                                    logging.debug(f"def scrape_events: Visited URL: {second_level_link}. Total visited: {len(self.urls_visited)}")
-                                else:
-                                    logging.info(f"def scrape_events: No keywords found in extracted text for URL: {second_level_link}.")
-                            else:
-                                logging.info(f"def scrape_events: No text extracted for URL: {second_level_link}.")
-
-                            # Check if the limit has been reached
-                            if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                                logging.info("def scrape_events: Reached the URL visit limit. Stopping the scraping process.")
-                                return search_url, extracted_text_list
+            logging.info(f"def scrape_events(): Extracted text from {len(extracted_text_list)} events.")
+            return search_url, extracted_text_list
 
         except Exception as e:
             logging.error(f"def scrape_events: Failed to scrape events: {e}")
-
-        logging.info(f"def scrape_events(): Extracted text from {len(extracted_text_list)} events.")
-
-        # Return the last search_url processed and the list of extracted event data
-        return search_url, extracted_text_list
-    
-    
-    @staticmethod
-    def extract_text_from_url(url):
-        """
-        Extracts text content from a given URL using requests and BeautifulSoup.
-
-        Args:
-            url (str): The URL of the webpage to scrape.
-
-        Returns:
-            str: Extracted text content from the webpage.
-        """
-        try:
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            text = ' '.join(soup.stripped_strings)
-            return text
-        except Exception as e:
-            logging.error(f"Failed to fetch content from {url}: {e}")
-            return None
+            return None, []
         
-
-    @staticmethod
-    def convert_facebook_url(original_url):
-        """
-        Captures the event ID from 'm.facebook.com' URLs and returns
-        'https://www.facebook.com/events/<event_id>/'.
-
-        Args:
-            original_url (str): The original Facebook URL.
-
-        Returns:
-            str: Converted Facebook URL.
-        """
-        pattern = r'^https://m\.facebook\.com/events/([^/]+)/?.*'
-        replacement = r'https://www.facebook.com/events/\1/'
-
-        return re.sub(pattern, replacement, original_url)
-    
 
     def fix_facebook_event_url(self, malformed_url):
         """
@@ -605,8 +578,10 @@ class FacebookEventScraper():
         increment_crawl_try = 1
 
         if not url:
-            logging.warning(f"process_fb_url(): No valid URL provided for processing.")
+            logging.warning("process_fb_url(): No valid URL provided for processing.")
             return
+
+        self.total_url_attempts += 1  # Increment total attempts
 
         # Extract text (Avoid logging in every time)
         extracted_text = self.extract_event_text(url)
@@ -615,12 +590,16 @@ class FacebookEventScraper():
             db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
             return
 
+        self.urls_with_extracted_text += 1  # Increment extracted text count
+
         # Check for keywords in extracted text
         found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
         if not found_keywords:
             logging.info(f"process_fb_url(): No keywords found in text for {url}. Marking as processed.")
             db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
             return
+
+        self.urls_with_found_keywords += 1  # Increment keyword match count
 
         # Generate prompt & query LLM only if keywords were found
         prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
@@ -654,12 +633,14 @@ class FacebookEventScraper():
         db_handler.write_events_to_db(events_df, url, source, keywords)
         logging.info(f"process_fb_url(): Events successfully written to DB for {url}.")
 
+        self.events_written_to_db += len(events_df)  # Increment event count
+
         # Mark URL as relevant
         relevant = True
         db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
         logging.info(f"process_fb_url(): URL marked as relevant and updated: {url}.")
         return
-
+    
 
     def driver_fb_search(self):
         """
@@ -667,8 +648,8 @@ class FacebookEventScraper():
         2. Creates search terms for Facebook searches using each keyword.
         3. Scrapes events from search results.
         4. For each extracted Facebook URL, processes it using process_fb_url.
+        5. Writes run statistics to the database.
         """
-        # Read in the keywords file
         keywords_df = pd.read_csv(self.config['input']['data_keywords'])
 
         for _, row in keywords_df.iterrows():
@@ -678,6 +659,8 @@ class FacebookEventScraper():
             # Scrape the events
             search_url, extracted_text_list = self.scrape_events(keywords_list)
             logging.info(f"def driver_fb_search(): Extracted text based on search_url: {search_url}.")
+            
+            self.total_url_attempts += len(extracted_text_list)  # Update total URL attempts
 
             if extracted_text_list:
                 # Save extracted text data to CSV
@@ -687,81 +670,40 @@ class FacebookEventScraper():
                 logging.info(f"def driver_fb_search(): Extracted text data written to {output_path}.")
 
                 for url, extracted_text in extracted_text_list:
-                    # Check if URL has already been visited and if it is a facebook url
                     if url not in self.urls_visited and 'facebook.com' in url:
                         logging.info(f"def driver_fb_search(): Processing Facebook URL: {url}")
 
-                        # Add to self.urls_visited and check to see if we are at our crawl limit
-                        self.urls_visited.add(url)
+                        self.urls_visited.add(url)  # Add to visited URLs
+
                         if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                            logging.info("def driver_fb_search(): Reached crawl limit. Stopping processing.")
                             break
 
+                        self.urls_with_extracted_text += 1  # Increment extracted text count
+
                         # Check for keywords in the extracted text
-                        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]  
+                        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
                         if found_keywords:
-                            # Set prompt and process_llm_response
+                            self.urls_with_found_keywords += 1  # Increment URLs with found keywords
+
+                            # Set prompt and process LLM response
                             prompt = 'fb'
-                            _ = llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
+                            llm_response = llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
+
+                            # If events were successfully extracted and written to the DB
+                            if llm_response:
+                                self.events_written_to_db += 1
+
                         else:
                             logging.info(f"def driver_fb_search(): No keywords found in extracted text for URL: {url}.")
                     else:
                         logging.info(f"def driver_fb_search(): URL already visited: {url}")
-            else:
-                logging.info(f"def driver_fb_search(): No extracted text found for search_url: {search_url}.")
-                
-    
-    def driver_no_urls(self):
-        """
-        Queries the database for events without URLs, scrapes the web for URLs and event data, processes the data using an LLM, 
-        and updates the database with the new information.
-        """
-        query = "SELECT * FROM events WHERE url = :url"
-        params = {'url': ''}
-        result = db_handler.execute_query(query, params)
 
-        if result:
-            rows = result.fetchall()
-            no_urls_df = pd.DataFrame(rows, columns=result.keys())
+        # Capture end time
+        self.end_time = datetime.now()
 
-            logging.info(f"def driver_no_urls(): Retrieved {len(no_urls_df)} events without URLs.")
-
-            # Reduce the number of events to process for testing
-            if config['testing']['status']:
-                no_urls_df = no_urls_df.head(self.config['crawling']['urls_run_limit'])
-
-            for _, row in no_urls_df.iterrows():
-                query_text = row['event_name']
-                source = row['source']
-                keywords = row['dance_style']
-                url, extracted_text, prompt_type = self.scrape_and_process(query_text)
-
-                if extracted_text:
-                    # Check for keywords in the extracted text
-                    found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-                    if found_keywords:
-                        prompt = llm_handler.generate_prompt(url, extracted_text, prompt_type)
-                        llm_response = llm_handler.query_llm(prompt)
-
-                        if "No events found" in llm_response:
-                            db_handler.delete_event_and_update_url(url, row['event_name'], row['start_date'])
-                        else:
-                            parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
-                            events_df = pd.DataFrame(parsed_result)
-                            logging.info(f"def driver_no_urls(): URL is: {url}")
-                            events_df.to_csv(self.config['debug']['before_url_updated'], index=False)
-
-                            if events_df['url'].values[0] == '':
-                                events_df.loc[0, 'url'] = url
-                                events_df.to_csv(self.config['debug']['after_url_updated'], index=False)
-
-                            db_handler.write_events_to_db(events_df, url, source, keywords)
-                            logging.info(f"def driver_no_urls(): Wrote {events_df.shape[0]} events to the database.")
-                else:
-                    logging.info(f"def driver_no_urls(): No extracted text for URL: {url}.")
-            else:
-                logging.info("def driver_no_urls(): No events without URLs found in the database.")
-    
-                return None
+        # Write statistics to the database
+        self.write_run_statistics()
 
 
     def driver_fb_urls(self):
@@ -825,9 +767,54 @@ class FacebookEventScraper():
             logging.warning("def driver_fb_urls(): No rows returned from the sql query.")
 
 
-if __name__ == "__main__":
+    def write_run_statistics(self):
+        """
+        Writes run statistics to the database.
+        """
+        try:
+            elapsed_time = str(self.end_time - self.start_time)
+            time_stamp = datetime.now()
 
-    # Get config
+            run_data = pd.DataFrame([{
+                "run_name": self.run_name,
+                "run_description": self.run_description,
+                "start_time": self.start_time,
+                "end_time": self.end_time,
+                "elapsed_time": elapsed_time,
+                "python_file_name": "fb.py",
+                "unique_urls_count": len(self.urls_visited),
+                "total_url_attempts": self.total_url_attempts,
+                "urls_with_extracted_text": self.urls_with_extracted_text,
+                "urls_with_found_keywords": self.urls_with_found_keywords,
+                "events_written_to_db": self.events_written_to_db,
+                "time_stamp": time_stamp
+            }])
+
+            run_data.to_sql("runs", self.db_handler.get_db_connection(), if_exists="append", index=False)
+            logging.info(f"write_run_statistics(): Run statistics written to database for {self.run_name}.")
+
+        except Exception as e:
+            logging.error(f"write_run_statistics(): Error writing run statistics: {e}")
+
+
+    def run(self):
+        """
+        Runs the Facebook scraper in the specified mode.
+
+        Args:
+            mode (str): "search" for keyword-based scraping, "urls" for URL-based processing.
+        """
+        self.driver_fb_search()
+        self.driver_fb_urls()
+
+        self.end_time = datetime.now()
+
+        # Write run statistics to the database
+        self.write_run_statistics()
+
+
+if __name__ == "__main__":
+    # Load config
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
@@ -838,34 +825,25 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt='%Y-%m-%d %H:%M:%S'
-        )
-    
-    fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
-    
-    # Get the start time
+    )
+    # Start time
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
-    # Use the scraper
-    logging.info(f"def __main__: Starting Facebook event scraping.")
+    # Initialize scraper
+    fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
 
-    logging.info(f"def __main__: Running driver_fb_urls.")
-    fb_scraper.driver_fb_urls()
+    # **Call run()
+    fb_scraper.run()
 
-    # logging.info(f"def __main__: Running driver_fb_search.")
-    fb_scraper.driver_fb_search()
-
-    # logging.info(f"def __main__: Running driver_no_urls.")
-    fb_scraper.driver_no_urls()
-
-    # Close the browser and stop Playwright
+    # Close the browser and Playwright
     fb_scraper.browser.close()
     fb_scraper.playwright.stop()
 
-    # Get the end time
+    # End time
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")
 
-    # Calculate the total time taken
-    total_time = end_time - start_time
-    logging.info(f"__main__: Total time taken: {total_time}\n\n")
+    # Elapsed time
+    elapsed_time = end_time - start_time
+    logging.info(f"__main__: Elapsed time: {elapsed_time}")
