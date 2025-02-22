@@ -43,7 +43,7 @@ with open('config/config.yaml', "r") as file:
 
 logging.basicConfig(
                     filename=config["logging"]["log_file"],
-                    filemode="a",  # Append mode to preserve logs
+                    filemode="w",  # Append mode to preserve logs
                     level=logging.INFO,
                     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
                     )

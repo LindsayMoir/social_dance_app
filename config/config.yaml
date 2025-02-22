@@ -35,7 +35,7 @@ location:
 llm:
   mistral_model: 'mistral-large-latest'
   openai_model: 'o3-mini-2025-01-31'
-  provider: 'openai'
+  provider: 'mistral'
   spend_money: True
 logging:
   log_file: 'logs/log.txt'

@@ -1,38 +1,40 @@
 # dedup_llm.py
 """
-DeduplicationHandler is a class responsible for handling the deduplication of events in a database. It initializes with a configuration file, sets up logging, connects to the database, and interfaces with the Mistral API for deduplication tasks.
+DeduplicationHandler is a class responsible for handling the deduplication of events in a database. It initializes with a configuration file, sets up logging, connects to the database, and interfaces with the llm API for deduplication tasks.
     Attributes:
         config (dict): Configuration settings loaded from a YAML file.
         db_handler (DatabaseHandler): Handler for database operations.
         db_conn_str (str): Database connection string.
         engine (sqlalchemy.engine.Engine): SQLAlchemy engine for database connection.
-        api_key (str): API key for Mistral.
-        model (str): Model name for Mistral API.
-        client (Mistral): Mistral API client.
+        api_key (str): API key for llm.
+        model (str): Model name for llm API.
+        client (llm): llm API client.
         prompt_template (str): Template for the deduplication prompt.
     Methods:
         _load_config(config_path): Loads the configuration from a YAML file.
         _setup_logging(): Configures logging settings.
         _setup_database(): Sets up the database connection.
-        _setup_mistral_api(): Initializes the Mistral API client.
-        _load_prompt(): Loads the deduplication prompt template.
+        _setup_llm_api(): Initializes the llm API client.
+        load_prompt(): Loads the deduplication prompt template.
         fetch_possible_duplicates(): Fetches possible duplicate events from the database.
-        query_mistral(df): Queries the Mistral API with event data to identify duplicates.
-        process_duplicates(): Processes and deletes duplicate events based on Mistral API response.
+        query_llm(df): Queries the llm API with event data to identify duplicates.
+        process_duplicates(): Processes and deletes duplicate events based on llm API response.
         delete_duplicates(df): Deletes duplicate events from the database.
 """
-
+from datetime import datetime
+from dotenv import load_dotenv
 import json
+from io import StringIO
 import logging
 import os
 import pandas as pd
-import yaml
-from datetime import datetime
+import re
 from sqlalchemy import create_engine, text
-from mistralai import Mistral
-from dotenv import load_dotenv
+import yaml
+
 from llm import LLMHandler
 from db import DatabaseHandler
+
 
 class DeduplicationHandler:
     def __init__(self, config_path='config/config.yaml'):
@@ -42,9 +44,8 @@ class DeduplicationHandler:
         self._load_config(config_path)
         self._setup_logging()
         self.db_handler = DatabaseHandler(self.config)
+        self.llm_handler = LLMHandler(config_path)
         self._setup_database()
-        self._setup_mistral_api()
-        self._load_prompt()
     
     def _load_config(self, config_path):
         """
@@ -80,7 +81,7 @@ class DeduplicationHandler:
         """
         logging.basicConfig(
             filename=self.config['logging']['log_file'],
-            filemode='a',
+            filemode='w',
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
             datefmt='%Y-%m-%d %H:%M:%S'
@@ -102,28 +103,8 @@ class DeduplicationHandler:
         self.db_conn_str = os.getenv("DATABASE_CONNECTION_STRING")
         self.engine = create_engine(self.db_conn_str)
 
-
-    def _setup_mistral_api(self):
-        """
-        Sets up the Mistral API client.
-
-        This method initializes the Mistral API client by retrieving the API key from
-        the environment variables and setting up the client with the specified model.
-
-        Attributes:
-            api_key (str): The API key for authenticating with the Mistral API.
-            model (str): The model name to be used with the Mistral API.
-            client (Mistral): The Mistral API client instance.
-
-        Logs:
-            Info: Logs the creation of the Mistral client.
-        """
-        self.api_key = os.getenv("MISTRAL_API_KEY")
-        self.model = "mistral-large-latest"
-        self.client = Mistral(api_key=self.api_key)
-        logging.info("def _setup_mistral_api(): Mistral client created")
     
-    def _load_prompt(self):
+    def load_prompt(self, chunk):
         """
         Loads the prompt template from a file specified in the configuration.
 
@@ -136,7 +117,12 @@ class DeduplicationHandler:
             KeyError: If the configuration does not contain the required keys.
         """
         with open(self.config['prompts']['dedup'], "r") as file:
-            self.prompt_template = file.read()
+            prompt_template = file.read()
+
+        prompt = f"{prompt_template}\n{chunk}"
+        logging.info(f"def load_prompt(): prompt is: \n{prompt}")
+
+        return prompt
     
 
     def fetch_possible_duplicates(self):
@@ -190,81 +176,169 @@ class DeduplicationHandler:
         df = pd.read_sql(text(sql), self.engine)
         logging.info(f"def fetch_possible_duplicates(): Read {len(df)} rows from the database")
         return df
-    
-    def query_mistral(self, df):
-        """
-        Queries the Mistral model with a given DataFrame and returns the response as a DataFrame.
 
-        Args:
-            df (pd.DataFrame): The input DataFrame to be included in the prompt.
 
-        Returns:
-            pd.DataFrame: The DataFrame constructed from the JSON response of the Mistral model.
-
-        Raises:
-            ValueError: If the response from the Mistral model does not contain valid JSON.
-
-        Logs:
-            The method logs the generated prompt, the extracted JSON response, and the number of rows read from the response.
-        """
-        prompt = f"{self.prompt_template}\n\n{df.to_markdown()}"
-        logging.info(f"def query_mistral(): Prompt: \n{prompt}")
-
-        chat_response = self.client.chat.complete(model=self.model, 
-                                                  messages=[{"role": "user", "content": prompt}])
-        
-        response_text = chat_response.choices[0].message.content
-
-        start, end = response_text.find("["), response_text.rfind("]") + 1
-        response_json = response_text[start:end]
-        logging.info(f"def query_mistral(): Extracted JSON: {response_json}")
-
-        response_df = pd.DataFrame(json.loads(response_json))
-        logging.info(f"def query_mistral(): Read {len(response_df)} rows from the response")
-
-        return response_df
-    
-    
     def process_duplicates(self):
         """
-        Processes duplicate entries in the dataset in chunks.
-
-        This method performs the following steps:
-        1. Fetches possible duplicate entries from the dataset.
-        2. Filters out groups with fewer than 2 rows.
-        3. Splits the dataset into chunks of 50 rows.
-        4. Queries the Mistral service in batches.
-        5. Merges the responses with the original dataset.
-        6. Saves the merged dataset to a CSV file.
-        7. Deletes the identified duplicates.
-
-        Returns:
-            None
+        Processes duplicate entries in chunks by:
+        1. Fetching duplicate entries.
+        2. Filtering groups with fewer than 2 rows.
+        3. Processing in chunks of 50 rows.
+        4. Querying LLM for deduplication.
+        5. Merging responses with the dataset.
+        6. Saving results and deleting duplicates.
         """
         df = self.fetch_possible_duplicates()
+        df = self.filter_valid_duplicates(df)
 
-        # Make sure that there are at least 2 rows in every group_id.
-        # If not, remove the group_id from the dataframe and the rows for that group_id from the dataframe.
+        if df.empty:
+            logging.warning("def process_duplicates(): No valid duplicates found. Exiting.")
+            return
+
+        response_dfs = self.process_in_chunks(df, chunk_size=50)
+
+        self.merge_and_save_results(df, response_dfs)
+
+
+    def filter_valid_duplicates(self, df):
+        """
+        Filters out groups that have fewer than 2 rows.
+        
+        Args:
+            df (DataFrame): DataFrame containing possible duplicate events.
+
+        Returns:
+            DataFrame: Filtered DataFrame containing only valid duplicate groups.
+        """
+        if df.empty:
+            logging.warning("def filter_valid_duplicates(): No duplicates found.")
+            return df
+
         df = df.groupby('group_id').filter(lambda x: len(x) > 1)
-        logging.info(f"def process_duplicates(): Number of rows after filtering: {len(df)}")
 
-        chunk_size = 50
+        if df.empty:
+            logging.warning("def filter_valid_duplicates(): No groups have more than 1 row.")
+        
+        logging.info(f"def filter_valid_duplicates(): Number of rows after filtering: {len(df)}")
+        return df
+
+
+    def process_in_chunks(self, df, chunk_size=50):
+        """
+        Processes the dataset in chunks and queries the LLM.
+
+        Args:
+            df (DataFrame): The filtered dataset containing duplicate groups.
+            chunk_size (int): Number of rows to process per batch.
+
+        Returns:
+            list: A list of DataFrames containing processed LLM responses.
+        """
         response_dfs = []
 
         for i in range(0, len(df), chunk_size):
             chunk = df.iloc[i:i + chunk_size]
-            response_chunk = self.query_mistral(chunk)
-            response_dfs.append(response_chunk)
 
-        # Merge all responses
+            if chunk.empty:
+                logging.warning(f"def process_in_chunks(): Skipping empty chunk {i}.")
+                continue
+
+            response_df = self.process_chunk_with_llm(chunk, i)
+            if response_df is not None:
+                response_dfs.append(response_df)
+
+        return response_dfs
+
+
+    def process_chunk_with_llm(self, chunk, chunk_index):
+        """
+        Queries the LLM with a batch of duplicate records and returns a DataFrame.
+
+        Args:
+            chunk (DataFrame): A batch of duplicate events to process.
+            chunk_index (int): The index of the current chunk.
+
+        Returns:
+            DataFrame or None: A DataFrame with the LLM response, or None if the response is invalid.
+        """
+        try:
+            prompt = self.load_prompt(chunk.to_markdown())
+            logging.info(f"def process_chunk_with_llm(): Prompt for chunk {chunk_index}:\n{prompt}")
+
+            response_chunk = self.llm_handler.query_llm(prompt)
+
+            if not response_chunk:
+                logging.warning(f"def process_chunk_with_llm(): Received empty response for chunk {chunk_index}.")
+                return None
+
+            # Convert response to DataFrame
+            return self.parse_llm_response(response_chunk)
+
+        except Exception as e:
+            logging.error(f"def process_chunk_with_llm(): Error processing chunk {chunk_index}: {e}")
+            return None
+
+
+    def parse_llm_response(self, response_chunk):
+        """
+        Extracts the structured JSON from the LLM response and converts it into a DataFrame.
+
+        Args:
+            response_chunk (str): The raw response from the LLM.
+
+        Returns:
+            pd.DataFrame: Cleaned DataFrame with extracted structured JSON data.
+        """
+        try:
+            # Find the JSON-like block within the response
+            json_match = re.search(r'\[\s*\{.*\}\s*\]', response_chunk, re.DOTALL)
+
+            if not json_match:
+                logging.error("def clean_response(): No valid JSON structure found in response.")
+                return pd.DataFrame()  # Return empty DataFrame if no match is found
+
+            # Extract the JSON string
+            json_str = json_match.group()
+
+            # Load JSON into a DataFrame
+            df = pd.read_json(StringIO(json_str))
+
+            # Ensure DataFrame has expected columns
+            required_columns = {"group_id", "event_id", "Label"}
+            if not required_columns.issubset(df.columns):
+                logging.error(f"def clean_response(): Extracted JSON is missing required columns: {df.columns}")
+                return pd.DataFrame()
+
+            logging.info(f"def clean_response(): Successfully extracted {len(df)} rows from response.")
+            return df
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logging.error(f"def clean_response(): Error parsing LLM response to JSON: {e}")
+            return pd.DataFrame()  # Return empty DataFrame if parsing fails
+
+
+    def merge_and_save_results(self, df, response_dfs):
+        """
+        Merges the LLM responses with the dataset, saves the results, and deletes duplicates.
+
+        Args:
+            df (DataFrame): The original dataset with duplicate records.
+            response_dfs (list): A list of DataFrames containing LLM responses.
+
+        Returns:
+            None
+        """
+        if not response_dfs:
+            logging.warning("def merge_and_save_results(): No valid responses from LLM. Skipping deduplication.")
+            return
+
         response_df = pd.concat(response_dfs, ignore_index=True)
         df = df.merge(response_df, on="event_id", how="left")
-        
-        # Save results and delete duplicates
+
         df.to_csv(self.config['output']['dedup'], index=False)
         self.delete_duplicates(df)
 
-    
+
     def delete_duplicates(self, df):
         """
         Deletes duplicate events from the database based on the provided DataFrame.
@@ -291,7 +365,6 @@ class DeduplicationHandler:
             logging.info("def delete_duplicates(): No events marked for deletion.")
 
 
-# Example usage
 if __name__ == "__main__":
     deduper = DeduplicationHandler()
     deduper.process_duplicates()

@@ -699,12 +699,6 @@ class FacebookEventScraper():
                     else:
                         logging.info(f"def driver_fb_search(): URL already visited: {url}")
 
-        # Capture end time
-        self.end_time = datetime.now()
-
-        # Write statistics to the database
-        self.write_run_statistics()
-
 
     def driver_fb_urls(self):
         """
@@ -790,7 +784,7 @@ class FacebookEventScraper():
                 "time_stamp": time_stamp
             }])
 
-            run_data.to_sql("runs", self.db_handler.get_db_connection(), if_exists="append", index=False)
+            run_data.to_sql("runs", db_handler.get_db_connection(), if_exists="append", index=False)
             logging.info(f"write_run_statistics(): Run statistics written to database for {self.run_name}.")
 
         except Exception as e:

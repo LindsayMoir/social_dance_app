@@ -27,6 +27,7 @@ from fuzzywuzzy import fuzz
 import yaml
 from googleapiclient.discovery import build
 from datetime import datetime
+import re
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from sqlalchemy.dialects.postgresql import insert
@@ -170,46 +171,46 @@ class CleanUp:
             logging.error("No logged_in_page available. Did you call login_to_facebook (async)?")
             return None
 
-        #try:
-        page = self.logged_in_page  # or create a fresh page if you prefer
-        await page.goto(link, timeout=10000)
+        try:
+            page = self.logged_in_page  # or create a fresh page if you prefer
+            await page.goto(link, timeout=10000)
 
-        # Look for "See more" buttons
-        more_buttons = await page.query_selector_all("text=/See more/i")
-        for mb in more_buttons:
-            try:
-                await mb.wait_for_element_state("stable", timeout=3000)
-                await mb.click()
-                await page.wait_for_timeout(random.randint(3000, 5000))
-                logging.info(f"Clicked 'See more' button in URL: {link}")
-            except Exception as e:
-                logging.warning(f"Could not click 'See more' in {link}: {e}")
+            # Look for "See more" buttons
+            more_buttons = await page.query_selector_all("text=/See more/i")
+            for mb in more_buttons:
+                try:
+                    await mb.wait_for_element_state("stable", timeout=3000)
+                    await mb.click()
+                    await page.wait_for_timeout(random.randint(3000, 5000))
+                    logging.info(f"Clicked 'See more' button in URL: {link}")
+                except Exception as e:
+                    logging.warning(f"Could not click 'See more' in {link}: {e}")
 
-        if not more_buttons:
-            logging.debug(f"No 'See more' buttons found in URL: {link}")
+            if not more_buttons:
+                logging.debug(f"No 'See more' buttons found in URL: {link}")
 
-        await page.wait_for_timeout(5000)
-        content = await page.content()
-        soup = BeautifulSoup(content, 'html.parser')
-        extracted_text = ' '.join(soup.stripped_strings)
-        logging.info(f"(async) raw text from {link}: {extracted_text}")
+            await page.wait_for_timeout(5000)
+            content = await page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+            extracted_text = ' '.join(soup.stripped_strings)
+            logging.info(f"(async) raw text from {link}: {extracted_text}")
 
-        if extracted_text:
-            # If you have a separate method to refine the text:
-            extracted_text = self.extract_relevant_text(extracted_text, link)
             if extracted_text:
-                logging.info(f"(async) def extract_event_text(): relevant text from {link}: {extracted_text}")
-                return extracted_text
+                # If you have a separate method to refine the text:
+                extracted_text = self.extract_relevant_text(extracted_text, link)
+                if extracted_text:
+                    logging.info(f"(async) def extract_event_text(): relevant text from {link}: {extracted_text}")
+                    return extracted_text
+                else:
+                    logging.info(f"(async) def extract_event_text(): No relevant text found in {link}.")
+                    return None
             else:
-                logging.info(f"(async) def extract_event_text(): No relevant text found in {link}.")
+                logging.info(f"(async) def extract_event_text(): No text extracted from {link}.")
                 return None
-        else:
-            logging.info(f"(async) def extract_event_text(): No text extracted from {link}.")
-            return None
 
-        # except Exception as e:
-        #     logging.error(f"(async) def extract_event_text(): Failed to extract text from {link}: {e}")
-        #     return None
+        except Exception as e:
+            logging.error(f"(async) def extract_event_text(): Failed to extract text from {link}: {e}")
+            return None
     
 
     def extract_relevant_text(self, content, link):
@@ -494,6 +495,7 @@ class CleanUp:
                 if len(str(new_val)) > len(str(orig_val)):
                     merged[col] = new_val
         return merged
+    
 
     def update_event_row(self, merged_row):
         event_id = merged_row["event_id"]
@@ -512,7 +514,7 @@ class CleanUp:
         2) Identifying and updating incorrect dance styles.
         3) Updating the DB with the corrected dance styles.
         """
-        events_df = self._fetch_events_from_db()
+        events_df = self.fetch_events_from_db()
         if events_df.empty:
             logging.info("fix_incorrect_dance_styles(): No events found in the database.")
             return
@@ -527,11 +529,50 @@ class CleanUp:
         self._process_updated_events(events_df)
 
 
-    def _fetch_events_from_db(self):
+    async def delete_events_outside_bc(self):
+        """
+        Deletes events outside of BC, Canada from the database.
+        """
+        sql = """
+            SELECT event_id, location
+            FROM events
+            WHERE location IS NOT NULL OR location = ''
+            """
+        events_df = pd.read_sql(sql, self.conn)
+        
+        event_ids_to_be_deleted = []
+        for event in events_df.itertuples():
+
+            # Mark USA for deletion
+            if event.location and "USA" in event.location:
+                event_ids_to_be_deleted.append(event.event_id)
+            # Prepare a regex pattern to match USA postal codes
+            usa_postal_code_pattern = re.compile(r"\b\d{5}(?:[-\s]\d{4})?\b")
+            if usa_postal_code_pattern.search(event.location):
+                event_ids_to_be_deleted.append(event.event_id)
+            if "Washington" in event.location:
+                event_ids_to_be_deleted.append(event.event_id)
+            if "Oregon" in event.location:
+                event_ids_to_be_deleted.append(event.event_id)
+
+            # Prepare a regex to match UK postal codes
+            uk_postal_code_pattern = re.compile(r"\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b")
+            if uk_postal_code_pattern.search(event.location):
+                event_ids_to_be_deleted.append(event.event_id)
+
+        # Have the database delete the list of event_id(s)
+        if event_ids_to_be_deleted:
+            self.db_handler.delete_multiple_events(event_ids_to_be_deleted)
+            logging.info(f"delete_events_outside_bc(): Deleted {len(event_ids_to_be_deleted)} events outside of BC.")
+        else:
+            logging.info("delete_events_outside_bc(): No events found outside of BC.")
+
+
+    def fetch_events_from_db(self):
         """Fetch all events from the database."""
         query = "SELECT * FROM events"
         events_df = pd.read_sql(query, self.db_handler.conn)
-        logging.info(f"_fetch_events_from_db(): Retrieved {events_df.shape[0]} events.")
+        logging.info(f"fetch_events_from_db(): Retrieved {events_df.shape[0]} events.")
         return events_df
 
 
@@ -586,7 +627,7 @@ async def main():
 
     logging.basicConfig(
         filename=config["logging"]["log_file"],
-        filemode="a",
+        filemode="w",
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
@@ -600,6 +641,9 @@ async def main():
 
     # Fix incorrect dance_styles
     await clean_up_instance.fix_incorrect_dance_styles()
+
+    # Delete events outside of BC, Canada
+    await clean_up_instance.delete_events_outside_bc()
 
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")

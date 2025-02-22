@@ -181,7 +181,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(
         filename=config['logging']['log_file'],
-        filemode='a',
+        filemode='w',
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     )

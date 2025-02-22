@@ -1222,7 +1222,7 @@ if __name__ == "__main__":
     # Set up logging
     logging.basicConfig(
         filename=config['logging']['log_file'],
-        filemode='a',  # Changed to append mode to preserve logs
+        filemode='w',  # Changed to append mode to preserve logs
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     )
