@@ -76,7 +76,6 @@ from db import DatabaseHandler
 
 class LLMHandler():
     def __init__(self, config_path=None):
-        
         # Calculate the path to config.yaml
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         config_path = os.path.join(base_dir, 'config', 'config.yaml')
@@ -85,30 +84,35 @@ class LLMHandler():
         with open(config_path, 'r') as file:
             self.config = yaml.safe_load(file)
 
-        # Need DataBaseHandler, if it is not already in globals
+        # Instantiate DatabaseHandler if not already in globals
         if 'db_handler' not in globals():
             global db_handler
             db_handler = DatabaseHandler(self.config)
 
-        if self.config['llm']['provider'] == 'openai':
-            # Load OpenAI API keys from environment variables
-            self.openai_api_key = os.getenv("OPENAI_API_KEY")
-            self.openai_ai_organization = os.getenv("OPENAI_ORGANIZATION")
-            self.openai_ai_project = os.getenv("OPENAI_PROJECT")
+        # Set up providers: primary and fallback list (if any)
+        # For example, config['llm']['provider'] is the primary, and you could add fallback providers in config['llm']['fallback_providers']
+        self.providers = [self.config['llm']['provider']]
+        if 'fallback_providers' in self.config['llm']:
+            self.providers.extend(self.config['llm']['fallback_providers'])
 
-            # Set the OpenAI API key
-            openai.api_key = self.openai_api_key
-            self.client = OpenAI()
-
-        elif self.config['llm']['provider'] == 'mistral':
-            self.api_key = os.getenv("MISTRAL_API_KEY")
-            self.model = self.config['llm']['mistral_model']
-            self.client = Mistral(api_key=self.api_key)
-            logging.info("def _setup_mistral_api(): Mistral client created")
-        
-        else:
-            logging.error("def _setup_mistral_api(): No valid LLM provider specified in config.")
-
+        # Initialize the clients for each provider
+        self.clients = {}
+        for provider in self.providers:
+            if provider == 'openai':
+                self.openai_api_key = os.getenv("OPENAI_API_KEY")
+                openai.api_key = self.openai_api_key
+                self.clients['openai'] = OpenAI()
+            elif provider == 'mistral':
+                self.api_key = os.getenv("MISTRAL_API_KEY")
+                self.clients['mistral'] = Mistral(api_key=self.api_key)
+            elif provider == 'deepseek':
+                # Initialize deepseek client here if applicable
+                # For example:
+                # self.clients['deepseek'] = Deepseek(api_key=os.getenv("DEEPEEK_API_KEY"))
+                pass
+            else:
+                logging.error(f"LLMHandler __init__: Invalid LLM provider specified: {provider}")
+                
         self.keywords_list = self.get_keywords()
 
 
@@ -253,71 +257,68 @@ class LLMHandler():
     
 
     def query_llm(self, prompt):
-        """
-        Query the configured LLM with a given prompt and return the response.
-        
-        Args:
-            prompt (str): The prompt to send to the LLM.
+        # Get primary provider from config
+        primary = self.config['llm']['provider']
+        # Get fallback providers (if any) from config
+        fallbacks = self.config['llm'].get('fallback_providers', [])
+        # Construct an ordered list: primary first, then fallbacks
+        providers_to_try = [primary] + fallbacks
 
-        Returns:
-            str: The response from the LLM if available, otherwise None.
-        """
-        if not self.config['llm']['spend_money']:
-            logging.info("query_llm(): Spending money is disabled. Skipping the LLM query.")
-            return None
+        for provider in providers_to_try:
+            try:
+                if provider == 'openai':
+                    model = self.config['llm']['openai_model']
+                    logging.info(f"query_llm(): Trying {provider} with model {model}.")
+                    return self._query_openai(prompt, model)
+                elif provider == 'mistral':
+                    model = self.config['llm']['mistral_model']
+                    logging.info(f"query_llm(): Trying {provider} with model {model}.")
+                    return self._query_mistral(prompt, model)
+                elif provider == 'deepseek':
+                    # Example placeholder for deepseek; you can implement this later.
+                    logging.error("query_llm(): deepseek provider not implemented yet.")
+                    continue
+                else:
+                    logging.error(f"query_llm(): Invalid provider {provider}.")
+                    continue
+            except Exception as e:
+                logging.error(f"query_llm(): Provider {provider} failed with error: {e}")
+                continue
 
-        provider = self.config['llm']['provider']
+        logging.error("query_llm(): All providers failed. Returning None.")
+        return None
 
-        if provider == 'openai':
-            model = self.config['llm']['openai_model']
-            logging.info(f"query_llm(): Querying {provider} LLM with model {model}.")
-            return self._query_openai(prompt, model)
-        
-        elif provider == 'mistral':
-            logging.info(f"query_llm(): Querying {provider} LLM with model {self.model}.")
-            return self._query_mistral(prompt, self.model)
-        
-        else:
-            logging.error("query_llm(): Invalid LLM provider specified.")
-            return None
 
     def _query_openai(self, prompt, model):
-        """Handles querying OpenAI LLM."""
         try:
-            response = self.client.chat.completions.create(
+            response = self.clients['openai'].chat.completions.create(
                 model=model, messages=[{"role": "user", "content": prompt}]
             )
             llm_response = response.choices[0].message.content.strip() if response and response.choices else None
-
             if llm_response:
-                logging.info(f"_query_openai(): LLM response received: {llm_response}")
+                logging.info(f"_query_openai(): Received response.")
             else:
-                logging.error("_query_openai(): No response received from OpenAI.")
-                
+                logging.error("_query_openai(): No response received.")
             return llm_response
-
         except Exception as e:
             logging.error(f"_query_openai(): OpenAI API call failed: {e}")
-            return None
+            raise e
+        
 
     def _query_mistral(self, prompt, model):
-        """Handles querying Mistral LLM."""
         try:
-            response = self.client.chat.complete(
+            response = self.clients['mistral'].chat.complete(
                 model=model, messages=[{"role": "user", "content": prompt}]
             )
             llm_response = response.choices[0].message.content if response and response.choices else None
-
             if llm_response:
-                logging.info(f"_query_mistral(): LLM response received: {llm_response}")
+                logging.info(f"_query_mistral(): Received response.")
             else:
-                logging.error("_query_mistral(): No response received from Mistral.")
-
+                logging.error("_query_mistral(): No response received.")
             return llm_response
-
         except Exception as e:
             logging.error(f"_query_mistral(): Mistral API call failed: {e}")
-            return None
+            raise e
 
 
     def extract_and_parse_json(self, result, url):
@@ -359,6 +360,7 @@ class LLMHandler():
                 # Extract the JSON string
                 json_string = result[start_position:end_position]
                 if len(json_string) < 100:
+                    logging.info(f"def extract_and_parse_json(): malformed json: \n{json_string}")
                     return None
 
                 # Remove single-line comments
@@ -370,7 +372,7 @@ class LLMHandler():
                 # Ensure the string is a valid JSON array
                 cleaned_str = cleaned_str.strip()
 
-                # Remove any trailing commas before the closing bracket
+                # Remove any trailing commas before the closing brackets
                 cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)
 
                 # Remove '''json from the string
