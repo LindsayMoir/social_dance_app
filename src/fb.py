@@ -127,9 +127,13 @@ class FacebookEventScraper():
         else:
             logging.error("Facebook login failed.")
 
-        # **Initialize Run Statistics**
-        self.run_name = input("Enter run name: ")
-        self.run_description = input("Enter run description: ")
+        # Run statistics tracking
+        if config['testing']['status']:
+            self.run_name = f"Test Run {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            self.run_description = "Test Run Description"
+        else:
+            self.run_name = "Facebook Event Scraper Run"
+            self.run_description = f"Production {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         self.start_time = datetime.now()
 
         # **Tracking Variables**

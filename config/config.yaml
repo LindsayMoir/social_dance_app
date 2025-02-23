@@ -1,77 +1,77 @@
 checkpoint:
-  fb_urls: 'checkpoint/fb_urls.csv'
+  fb_urls: checkpoint/fb_urls.csv
 clean_up:
-  dedup: True
+  dedup: true
   old_events: 3
 constants:
-  fb_base_url: 'https://www.facebook.com/search/events?q=events'
-  location: '%20victoria%20bc%20canada%20'
+  fb_base_url: https://www.facebook.com/search/events?q=events
   fuzzywuzzy_threshold: 80
+  location: '%20victoria%20bc%20canada%20'
 crawling:
   depth_limit: 3
-  headless: False
+  headless: true
   max_crawl_trys: 3
   max_website_urls: 3
-  urls_run_limit: 3
   scroll_depth: 3
+  urls_run_limit: 3
 date_range:
-  months: 3
   days_ahead: 365
+  months: 3
 debug:
-  after_url_updated: 'debug/after_url_updated.csv'
-  before_url_updated: 'debug/before_url_updated.csv'
+  after_url_updated: debug/after_url_updated.csv
+  before_url_updated: debug/before_url_updated.csv
 fuzzywuzzy:
   hurdle: 70
 input:
-  data_keywords: 'data/other/keywords.csv'
-  edge_cases: 'data/other/edge_cases.csv'
-  emails: 'data/other/emails.csv'
-  gs_urls: 'data/urls/gs_urls.csv'
-  predibase: 'data/other/duplicates_predibase.csv'
-  urls: 'data/urls'
+  data_keywords: data/other/keywords.csv
+  edge_cases: data/other/edge_cases.csv
+  emails: data/other/emails.csv
+  gs_urls: data/urls/gs_urls.csv
+  predibase: data/other/duplicates_predibase.csv
+  urls: data/urls
+llm:
+  mistral_model: mistral-large-latest
+  openai_model: o3-mini-2025-01-31
+  provider: mistral
+  spend_money: true
 location:
   distance: 50
-  epicentre: 'Victoria, British Columbia, Canada'
-llm:
-  mistral_model: 'mistral-large-latest'
-  openai_model: 'o3-mini-2025-01-31'
-  provider: 'mistral'
-  spend_money: True
+  epicentre: Victoria, British Columbia, Canada
 logging:
-  log_file: 'logs/log.txt'
-  extracted_text: 'output/extracted_text.csv'
+  extracted_text: output/extracted_text.csv
+  log_file: logs/log.txt
 output:
-  dedup: 'output/dedup.csv'
-  ebs_search_results: 'output/ebs_search_results.csv'
-  fb_search_results: 'output/fb_search_results.csv'
-  gs_search_results: 'output/gs_search_results.csv'
-  irrelevant_rows: 'output/irrelevant_rows.csv'
+  dedup: output/dedup.csv
+  ebs_search_results: output/ebs_search_results.csv
+  fb_search_results: output/fb_search_results.csv
+  gs_search_results: output/gs_search_results.csv
+  irrelevant_rows: output/irrelevant_rows.csv
 prompts:
-  allevents: 'prompts/all_events_in_prompt.txt'
-  chatbot_instructions: 'prompts/chatbot_instructions.txt'
-  dedup: 'prompts/dedup_prompt.txt'
-  default: 'prompts/default.txt'
-  fb: 'prompts/fb_prompt.txt'
-  irrelevant_rows: 'prompts/irrelevant_rows_prompt.txt'
-  relevant_dance_url: 'prompts/relevant_dance_url.txt'
-  single_event: 'prompts/single_event.txt'
-  sql: 'prompts/sql_prompt.txt'
-  title_to_source: 'prompts/title_to_source.txt'
-  https://www.bardandbanker.com/live-music: 'prompts/bard_and_banker_prompt.txt'
-  https://vbds.org/other-dancing-opportunities/: 'prompts/default.txt'
+  allevents: prompts/all_events_in_prompt.txt
+  chatbot_instructions: prompts/chatbot_instructions.txt
+  dedup: prompts/dedup_prompt.txt
+  default: prompts/default.txt
+  fb: prompts/fb_prompt.txt
+  https://vbds.org/other-dancing-opportunities/: prompts/default.txt
+  https://www.bardandbanker.com/live-music: prompts/bard_and_banker_prompt.txt
+  irrelevant_rows: prompts/irrelevant_rows_prompt.txt
+  relevant_dance_url: prompts/relevant_dance_url.txt
+  single_event: prompts/single_event.txt
+  sql: prompts/sql_prompt.txt
+  title_to_source: prompts/title_to_source.txt
 regex:
-  dancevictoria1: '~~~~~~~~~~~~~.*?Take the time to dance and laugh regularly'
-  djdancingdean: 'classes at the  Legion.*?Victoria West Coast Swing Collective Society'
-  victoriawcscollective.gmail.com: 'Newsletter for.*?Thank you to our Volunteers!!!'
+  dancevictoria1: ~~~~~~~~~~~~~.*?Take the time to dance and laugh regularly
+  djdancingdean: classes at the  Legion.*?Victoria West Coast Swing Collective Society
+  victoriawcscollective: Newsletter for.*?Thank you to our Volunteers!!!
 search:
   gs_num_results: 10
 startup:
-  use_db: False
+  use_db: false
 testing:
-  status: False
+  drop_tables: false
+  fast_api_url: http://localhost:8080/query
+  local: false
   nof_no_url_events: 10
-  drop_tables: False
-  local: False
-  fast_api_url: 'http://localhost:8080/query'
+  status: true
 update_schedule:
-  true_links_hours: .01
+  true_links_hours: 0.01

@@ -34,7 +34,12 @@ For date columns (DATE), use comparisons like start_date >= CURRENT_DATE or end_
 Dates:
 If the user requests today, tonight, this afternoon, this evening, this morning:
     - then start_date = CURRENT_DATE
-Do NOT include any events where start_date < CURRENT_DATE - 1 week
+yesterday means
+    - start_date = CURRENT_DATE - INTERVAL '1 day'
+1 weeks ago means
+    - - start_date = CURRENT_DATE - INTERVAL '7 days'
+Please use Pacific Standard Time (PST) when determinining when the date turns from todays date to tomorrows.
+Do NOT include any events where start_date is more than 1 week in the past.
 
 Prohibited Actions:
 Do not generate queries that include DROP, DELETE, UPDATE, INSERT, UNION, or subqueries.
@@ -45,6 +50,11 @@ Do not include '[' or ']' at the beginning or end of your response.
 Input Validation:
 Reject inputs containing SQL keywords like DROP, DELETE, ;, or special characters that could lead to injection.
 Assume that all inputs must be sanitized.
+
+Dangerous Input Examples to Avoid:
+'; DROP TABLE events;--
+1=1 UNION SELECT * FROM pg_tables
+If a malicious input is detected, reject the input and return nothing.
 
 Examples:
 Example 1:
@@ -68,7 +78,15 @@ WHERE dance_style ILIKE '%salsa%'
 ORDER BY start_date, start_time
 LIMIT 30;
 
-Dangerous Input Examples to Avoid:
-'; DROP TABLE events;--
-1=1 UNION SELECT * FROM pg_tables
-If a malicious input is detected, reject the input and return nothing.
+Example 3:
+What wcs events occurred over the last week?
+SQL Query
+SELECT event_id, source, dance_style, event_name, day_of_week, start_date, start_time, end_time, price, location, url
+FROM events
+WHERE dance_style ILIKE '%wcs%'
+  AND start_date::DATE >= (CURRENT_DATE - INTERVAL '7 days')
+ORDER BY start_date, start_time
+LIMIT 30;
+
+
+

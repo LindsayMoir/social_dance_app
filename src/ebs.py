@@ -1,14 +1,60 @@
+# ebs.py
+
+"""
+Eventbrite Scraper Script
+This script defines the EventbriteScraper class and its associated methods to scrape event data from Eventbrite,
+process the extracted text using a language model, and store the results in a database. The script also includes
+a main function to initialize and run the scraper.
+
+Classes:
+    EventbriteScraper: Handles the scraping, processing, and storing of Eventbrite event data.
+
+Functions:
+    main(): Initializes and runs the Eventbrite scraper.
+
+Usage:
+    Run this script directly to start the Eventbrite scraping process.
+
+Example:
+    $ python ebs.py
+
+Dependencies:
+    - asyncio
+    - logging
+    - datetime
+    - pandas
+    - re
+    - sys
+    - yaml
+    - db (DatabaseHandler)
+    - rd_ext (ReadExtract)
+    - llm (LLMHandler)
+
+Configuration:
+    The script reads configuration settings from 'config/config.yaml'.
+
+Logging:
+    Logs are written to the file specified in the configuration under 'logging.log_file'.
+
+Inputs:
+    - config/config.yaml: Configuration file containing settings for the scraper.
+    - keyword.csv file from llm_handler.get_keywords() method.
+
+Outputs:
+    - Logs: Detailed logs of the scraping process.
+    - Database: Run statistics and event data stored in the database.
+"""
 import asyncio
-import logging
 from datetime import datetime
+import logging
 import pandas as pd
 import re
 import sys
 import yaml
 
 from db import DatabaseHandler
-from rd_ext import ReadExtract
 from llm import LLMHandler
+from rd_ext import ReadExtract
 
 
 class EventbriteScraper:
@@ -29,11 +75,13 @@ class EventbriteScraper:
         self.visited_urls = set()
         self.keywords_list = llm_handler.get_keywords()
 
-        # Prompt user for run name and description
-        self.run_name = input("Enter run name: ").strip()
-        self.run_description = input("Enter run description: ").strip()
-
         # Run statistics tracking
+        if config['testing']['status']:
+            self.run_name = f"Test Run {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            self.run_description = "Test Run Description"
+        else:
+            self.run_name = "ebs Run"
+            self.run_description = f"Production {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         self.start_time = None
         self.end_time = None
         self.urls_contacted = 0

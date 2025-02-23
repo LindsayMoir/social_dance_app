@@ -38,6 +38,9 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 
+# Config run files
+config/run_specific_configs/
+
 # Unit test / coverage reports
 htmlcov/
 .tox/
