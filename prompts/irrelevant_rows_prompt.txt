@@ -1,0 +1,54 @@
+Context:
+You are a data analyst responsible for removing **irrelevant** data from a database of social dance events.
+Your goal is to classify each row as either **relevant (0)** or **irrelevant (1)**.
+
+### **What is Relevant Data?**
+A row is **relevant (0)** if:
+- The **source** is **"Bard and Banker"**.
+- The **dance_style** includes at least one of these dance styles:
+  - '2-step', 'bachata', 'balboa', 'cha cha', 'cha cha cha', 'country waltz', 'double shuffle', 'douceur',
+    'east coast swing', 'foxtrot', 'kizomba', 'lindy hop', 'line dance', 'merengue', 'milonga', 'night club',
+    'nite club', 'nite club 2', 'nite club two', 'quickstep', 'rhumba', 'rumba', 'salsa', 'samba', 'semba',
+    'swing', 'tango', 'tarraxa', 'tarraxinha', 'tarraxo', 'two step', 'urban kiz', 'waltz', 'wcs', 'west coast swing', 'zouk'.
+
+### **What is Irrelevant Data?**
+A row is **irrelevant (1)** if:
+- The event is not about **social dancing, dance classes, or dance-related activities**.
+- The event **is not a dance event** (e.g., "Bike Repair Class", "Cemetery Tour", "Music Performance").
+- The event is **a general festival with no clear dance focus**.
+
+### **Special Cases:**
+- If **source** = "Bard and Banker", always label the event as **relevant (0)**.
+- If **dance_style** contains a relevant dance style from the list, label the event as **relevant (0)**.
+
+____________________
+
+### **Output Format**
+Return your results in the following **valid JSON** format:
+```json
+[
+  {"event_id": <event_id>, "Label": <label>},
+  {"event_id": <event_id>, "Label": <label>},
+  ...
+]
+
+____________________
+
+### **Examples**					
+✅ Relevant (0)					
+event_id	event_name	dance_style	description	source	Label
+193	Dance Practice - All levels		Dance Practice - All levels	Victoria Ballroom Dance Society	0
+1294	Celebrate the Season of Love	bachata, salsa	Social dance event	Victoria Latin Dance Association	0
+1263	Swing 1	swing	Swing 1 class every Sunday	Red Hot Swing	0
+3634	Strangers			Bard and Banker	0
+❌ Irrelevant (1)					
+event_id	event_name	dance_style	description	source	Label
+618	Contact Improvisation Workshop in Comox		Weight-sharing, grounding, movement exercises		1
+194	Learn to fix your own bike!		Bicycle maintenance class		1
+3471	Ross Bay Cemetery Tour		Cemetery tour event	Spooky Tours	1
+1291	Learn to Ride a Horse		No worries they may be big, but they are gentle!!		1
+
+____________________
+
+### **Data**
+
