@@ -311,12 +311,13 @@ if __name__ == "__main__":
     # Configure logging
     logging.basicConfig(
         filename=config['logging']['log_file'],
-        filemode='w',
+        filemode='a',
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt='%Y-%m-%d %H:%M:%S'
         )
-    
+    logging.info("rd_ext.py starting...")
+
     # Get the start time
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")

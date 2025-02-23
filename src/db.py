@@ -1222,10 +1222,11 @@ if __name__ == "__main__":
     # Set up logging
     logging.basicConfig(
         filename=config['logging']['log_file'],
-        filemode='w',  # Changed to append mode to preserve logs
+        filemode='a',  # Changed to append mode to preserve logs
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     )
+    logging.info("db.py starting...")
 
     start_time = datetime.now()
     logging.info("\n\nMain: Started the process at %s", start_time)

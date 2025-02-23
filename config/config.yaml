@@ -34,12 +34,16 @@ llm:
   openai_model: o3-mini-2025-01-31
   provider: mistral
   spend_money: true
+  fallback_providers:
+    - mistral
+    - deepseek
 location:
   distance: 50
   epicentre: Victoria, British Columbia, Canada
 logging:
   extracted_text: output/extracted_text.csv
   log_file: logs/log.txt
+  scraper_log_file: logs/scraper_log.txt
 output:
   dedup: output/dedup.csv
   ebs_search_results: output/ebs_search_results.csv
@@ -59,6 +63,8 @@ prompts:
   single_event: prompts/single_event.txt
   sql: prompts/sql_prompt.txt
   title_to_source: prompts/title_to_source.txt
+provider:
+  mistral: true
 regex:
   dancevictoria1: ~~~~~~~~~~~~~.*?Take the time to dance and laugh regularly
   djdancingdean: classes at the  Legion.*?Victoria West Coast Swing Collective Society

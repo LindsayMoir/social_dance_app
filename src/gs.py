@@ -181,13 +181,14 @@ if __name__ == "__main__":
 
     logging.basicConfig(
         filename=config['logging']['log_file'],
-        filemode='w',
+        filemode='a',
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     )
 
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
+    logging.info("gs.py starting...")
 
     gs_instance = GoogleSearch()
     results_df = gs_instance.driver()

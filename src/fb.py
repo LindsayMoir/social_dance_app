@@ -28,7 +28,7 @@ Usage Example:
             config = yaml.safe_load(file)
         logging.basicConfig(
             filename=config['logging']['log_file'],
-            filemode='w',
+            filemode='a',
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
             datefmt='%Y-%m-%d %H:%M:%S'
@@ -96,11 +96,12 @@ with open('config/config.yaml', 'r') as file:
 # Configure logging
 logging.basicConfig(
     filename=config['logging']['log_file'],
-    filemode='w',
+    filemode='a',
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     datefmt='%Y-%m-%d %H:%M:%S'
     )
+logging.info("fb.py starting...")
 
 # Instantiate the class libraries
 db_handler = DatabaseHandler(config)
@@ -819,7 +820,7 @@ if __name__ == "__main__":
     # Configure logging
     logging.basicConfig(
         filename=config['logging']['log_file'],
-        filemode='w',
+        filemode='a',
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt='%Y-%m-%d %H:%M:%S'

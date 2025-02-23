@@ -26,7 +26,7 @@ Usage Example:
             config = yaml.safe_load(file)
         logging.basicConfig(
             filename=config['logging']['log_file'],
-            filemode='w',
+            filemode='a',
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s"
         )
@@ -350,11 +350,16 @@ class LLMHandler():
 
                 # if no end_position is found append the string with ']'
                 if end_position == 0:
-                    result = result + ']'
+                    # This means badly formed json
+                    # Find the last occurence of '}' and add ']' after that
+                    end_position = result.rfind('}') + 1
+                    result = result[:end_position] + ']'
                     end_position = result.rfind(']') + 1
 
                 # Extract the JSON string
                 json_string = result[start_position:end_position]
+                if len(json_string) < 100:
+                    return None
 
                 # Remove single-line comments
                 cleaned_str = re.sub(r'(?<!:)//.*', '', json_string)
@@ -400,10 +405,11 @@ if __name__ == "__main__":
     # Set up logging
     logging.basicConfig(
         filename=config['logging']['log_file'],
-        filemode='w',
+        filemode='a',
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
+    logging.info("llm.py starting...")
 
     # Get the start time
     start_time = datetime.now()

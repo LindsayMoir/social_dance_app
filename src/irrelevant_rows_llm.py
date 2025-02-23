@@ -80,11 +80,12 @@ class IrrelevantRowsHandler:
         """
         logging.basicConfig(
             filename=self.config['logging']['log_file'],
-            filemode='w',
+            filemode='a',
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
             datefmt='%Y-%m-%d %H:%M:%S'
         )
+        logging.info("irrelevant.py starting...")
         logging.info(f"def _setup_logging(): Logging configured and run started at time: {datetime.now()}")
 
     

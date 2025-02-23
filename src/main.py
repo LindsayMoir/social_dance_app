@@ -33,6 +33,7 @@ load_dotenv()
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO)
+logging.info("main.py starting...")
 
 # Calculate the base directory and config path
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

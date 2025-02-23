@@ -627,10 +627,11 @@ async def main():
 
     logging.basicConfig(
         filename=config["logging"]["log_file"],
-        filemode="w",
+        filemode="a",
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
+    logging.info("clean_up.py starting...")
 
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")

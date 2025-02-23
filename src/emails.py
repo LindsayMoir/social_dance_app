@@ -43,11 +43,11 @@ with open('config/config.yaml', "r") as file:
 
 logging.basicConfig(
                     filename=config["logging"]["log_file"],
-                    filemode="w",  # Append mode to preserve logs
+                    filemode="a",  # Append mode to preserve logs
                     level=logging.INFO,
                     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
                     )
-
+logging.info("emails.py starting...")
 logging.info("\n\nStarting Gmail Processor...")
 
 # Load environment variables from .env
