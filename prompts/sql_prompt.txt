@@ -34,7 +34,7 @@ For date columns (DATE), use comparisons like start_date >= CURRENT_DATE or end_
 Dates:
 If the user requests today, tonight, this afternoon, this evening, this morning:
     - then start_date = CURRENT_DATE
-Do NOT include any events where start_date < CURRENT_DATE
+Do NOT include any events where start_date < CURRENT_DATE - 1 week
 
 Prohibited Actions:
 Do not generate queries that include DROP, DELETE, UPDATE, INSERT, UNION, or subqueries.
