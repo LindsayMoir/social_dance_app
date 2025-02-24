@@ -47,7 +47,7 @@ logging.basicConfig(
                     level=logging.INFO,
                     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
                     )
-logging.info("emails.py starting...")
+
 logging.info("\n\nStarting Gmail Processor...")
 
 # Load environment variables from .env
@@ -109,8 +109,7 @@ class GmailProcessor:
         results = self.service.users().messages().list(userId="me", q=query, maxResults=1).execute()
 
         if "messages" not in results:
-            logging.warning(f"No emails found matching: {email_regex}")
-            return None
+            raise Exception(f"def fetch_latest_email(): No emails found matching: {email_regex}")
 
         message_id = results["messages"][0]["id"]
         message = self.service.users().messages().get(userId="me", id=message_id, format="raw").execute()

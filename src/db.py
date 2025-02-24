@@ -564,6 +564,9 @@ class DatabaseHandler():
                 keywords = ', '.join(keywords)
             df['dance_style'] = keywords
         
+        # Fill a blank source
+        if source == '':
+            source = url.split('.')[-2]
         if source in df.columns:
             # If df['source'] is null or '', use source from the function argument
             df['source'] = df['source'].fillna('').replace('', source)

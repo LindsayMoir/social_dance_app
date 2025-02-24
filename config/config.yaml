@@ -58,17 +58,16 @@ prompts:
   fb: prompts/fb_prompt.txt
   https://vbds.org/other-dancing-opportunities/: prompts/default.txt
   https://www.bardandbanker.com/live-music: prompts/bard_and_banker_prompt.txt
+  https://www.debrhymerband.com/shows: prompts/deb_rhymer_prompt.txt
   irrelevant_rows: prompts/irrelevant_rows_prompt.txt
   relevant_dance_url: prompts/relevant_dance_url.txt
   single_event: prompts/single_event.txt
   sql: prompts/sql_prompt.txt
   title_to_source: prompts/title_to_source.txt
-provider:
-  mistral: true
 regex:
-  dancevictoria1: ~~~~~~~~~~~~~.*?Take the time to dance and laugh regularly
+  dancevictoria1: (?s)(~~~~~~~~~~.*?Take the time to dance)
   djdancingdean: classes at the  Legion.*?Victoria West Coast Swing Collective Society
-  victoriawcscollective: Newsletter for.*?Thank you to our Volunteers!!!
+  victoriawcscollective: (?is)This Week(.*)$
 search:
   gs_num_results: 10
 startup:

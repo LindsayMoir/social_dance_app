@@ -114,6 +114,7 @@ venv.bak/
 *.log
 *.tmp
 log.txt
+scraper_log.txt
 
 # PostgreSQL Backups
 *.dump
