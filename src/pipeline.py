@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 import os
 import subprocess
 import sys
@@ -5,8 +7,8 @@ import yaml
 import datetime
 import copy
 import pandas as pd
-
 from prefect import flow, task, get_run_logger
+import re 
 
 CONFIG_PATH = "config/config.yaml"
 
@@ -641,6 +643,81 @@ def irrelevant_rows_step():
     return True
 
 # ------------------------
+# NEW: TASKS FOR DB MAINTENANCE STEP
+# ------------------------
+@flow(name="DB Maintenance Step")
+def db_maintenance_step():
+    logger = get_run_logger()
+    # Create a copy of the environment and add the local DB password from DATABASE_PASSWORD
+    env_local = os.environ.copy()
+    local_database_password = os.getenv("DATABASE_PASSWORD")
+    if not local_database_password:
+        logger.error("DATABASE_PASSWORD environment variable not set.")
+        raise Exception("Missing DATABASE_PASSWORD.")
+    env_local["PGPASSWORD"] = local_database_password
+
+    # 1. Dump the local database
+    dump_command = "pg_dump -U postgres -h localhost -F c -b -v -f local_backup.dump social_dance_db"
+    try:
+        subprocess.run(dump_command, shell=True, check=True, capture_output=True, text=True, env=env_local)
+        logger.info("Database dump completed successfully.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Database dump failed: {e.stderr}")
+        raise e
+
+    # 2. Copy the database from local to Render (command provided via env variable)
+    copy_command = (
+    f"PGPASSWORD={os.getenv('RENDER_PG_PASS')} pg_restore --no-owner --clean "
+    f"--dbname=postgresql://social_dance_db_user:{os.getenv('RENDER_PG_PASS')}"
+    f"@dpg-culu0r1u0jms73bgrcdg-a.oregon-postgres.render.com:5432/social_dance_db_eimr?sslmode=require "
+    f"-v -c local_backup.dump"
+    )  
+
+    print(f"Copy command: {copy_command}")
+    if not copy_command:
+        logger.error("COPY_DB_COMMAND environment variable not set.")
+        raise Exception("Missing COPY_DB_COMMAND.")
+    try:
+        subprocess.run(copy_command, shell=True, check=True, capture_output=True, text=True)
+        logger.info("Database copy command executed successfully.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Database copy failed: {e.stderr}")
+        raise e
+
+    # 3. Alter the time zone on the Render database.
+    RENDER_PG_PASS = os.getenv("RENDER_PG_PASS")
+    if not RENDER_PG_PASS:
+        logger.error("RENDER_PG_PASS environment variable not set.")
+        raise Exception("Missing RENDER_PG_PASS.")
+    alter_command = (
+        "psql -h dpg-culu0r1u0jms73bgrcdg-a.oregon-postgres.render.com "
+        "-U social_dance_db_user -d social_dance_db_eimr "
+        "-c \"ALTER DATABASE social_dance_db_eimr SET TIME ZONE 'PST8PDT';\""
+    )
+    env = os.environ.copy()
+    env["PGPASSWORD"] = RENDER_PG_PASS
+    try:
+        subprocess.run(alter_command, shell=True, check=True, capture_output=True, text=True, env=env)
+        logger.info("Database time zone altered successfully.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Altering time zone failed: {e.stderr}")
+        raise e
+
+    # 4. Show the time zone on the Render database.
+    show_command = (
+        "psql -h dpg-culu0r1u0jms73bgrcdg-a.oregon-postgres.render.com "
+        "-U social_dance_db_user -d social_dance_db_eimr "
+        "-c \"SHOW TIME ZONE;\""
+    )
+    try:
+        result = subprocess.run(show_command, shell=True, check=True, capture_output=True, text=True, env=env)
+        logger.info(f"Database time zone: {result.stdout.strip()}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Showing time zone failed: {e.stderr}")
+        raise e
+    
+
+# ------------------------
 # STUB FOR TEXT MESSAGING
 # ------------------------
 @task
@@ -666,13 +743,14 @@ PIPELINE_STEPS = [
     ("db", db_step),
     ("clean_up", clean_up_step),
     ("dedup_llm", dedup_llm_step),
-    ("irrelevant_rows", irrelevant_rows_step)
+    ("irrelevant_rows", irrelevant_rows_step),
+    ("db_maintenance", db_maintenance_step)
 ]
 
 def list_available_steps():
     print("Available steps:")
-    for name, _ in PIPELINE_STEPS:
-        print(f" - {name}")
+    for i, (name, _) in enumerate(PIPELINE_STEPS, start=1):
+        print(f" {i}. {name}")
 
 def run_pipeline(start_step: str, end_step: str = None):
     step_names = [name for name, _ in PIPELINE_STEPS]
@@ -698,24 +776,48 @@ def prompt_user():
     print("3. Start at one part and continue to the end")
     print("4. Start at one part and stop at a specified later part")
     mode = input("Enter option number (1-4): ").strip() or "1"
+
     list_available_steps()
+    
+    # Convert user input to step indices (0-based)
     if mode == "1":
-        start = PIPELINE_STEPS[0][0]
-        end = PIPELINE_STEPS[-1][0]
+        start_index = 0
+        end_index = len(PIPELINE_STEPS) - 1
     elif mode == "2":
-        step = input("Enter the step to run: ").strip()
-        start = step
-        end = step
+        try:
+            step_number = int(input("Enter the step number to run: ").strip())
+            start_index = step_number - 1
+            end_index = step_number - 1
+        except ValueError:
+            print("Invalid input. Running entire pipeline.")
+            start_index = 0
+            end_index = len(PIPELINE_STEPS) - 1
     elif mode == "3":
-        start = input("Enter the starting step: ").strip()
-        end = PIPELINE_STEPS[-1][0]
+        try:
+            step_number = int(input("Enter the starting step number: ").strip())
+            start_index = step_number - 1
+            end_index = len(PIPELINE_STEPS) - 1
+        except ValueError:
+            print("Invalid input. Running entire pipeline.")
+            start_index = 0
+            end_index = len(PIPELINE_STEPS) - 1
     elif mode == "4":
-        start = input("Enter the starting step: ").strip()
-        end = input("Enter the ending step: ").strip()
+        try:
+            start_number = int(input("Enter the starting step number: ").strip())
+            end_number = int(input("Enter the ending step number: ").strip())
+            start_index = start_number - 1
+            end_index = end_number - 1
+        except ValueError:
+            print("Invalid input. Running entire pipeline.")
+            start_index = 0
+            end_index = len(PIPELINE_STEPS) - 1
     else:
         print("Invalid option. Running entire pipeline.")
-        start = PIPELINE_STEPS[0][0]
-        end = PIPELINE_STEPS[-1][0]
+        start_index = 0
+        end_index = len(PIPELINE_STEPS) - 1
+
+    start = PIPELINE_STEPS[start_index][0]
+    end = PIPELINE_STEPS[end_index][0]
     print(f"Pipeline will run from '{start}' to '{end}'.")
     run_pipeline(start, end)
 

@@ -568,6 +568,26 @@ class CleanUp:
             logging.info("delete_events_outside_bc(): No events found outside of BC.")
 
 
+    async def delete_events_more_than_9_months_future(self):
+        """
+        Deletes events more than 270 days in the future from the database.
+        """
+        sql = """
+            SELECT event_id, start_date
+            FROM events
+            WHERE start_date > CURRENT_DATE + INTERVAL '270 days'
+            """
+        # Have the database delete the list of event_id(s)
+        events_df = pd.read_sql(sql, self.conn)
+        event_ids_to_be_deleted = events_df['event_id'].tolist()
+
+        if event_ids_to_be_deleted:
+            self.db_handler.delete_multiple_events(event_ids_to_be_deleted)
+            logging.info(f"delete_events_more_than_9_months_future(): Deleted {len(event_ids_to_be_deleted)}.")
+        else:
+            logging.info("delete_events_more_than_9_months_future(): No events found more than 9 months in the future.")
+
+
     def fetch_events_from_db(self):
         """Fetch all events from the database."""
         query = "SELECT * FROM events"
@@ -645,6 +665,9 @@ async def main():
 
     # Delete events outside of BC, Canada
     await clean_up_instance.delete_events_outside_bc()
+
+    # Delete events more than 9 monhts in the future
+    await clean_up_instance.delete_events_more_than_9_months_future()
 
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")
