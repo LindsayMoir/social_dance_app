@@ -52,6 +52,7 @@ def error_handling(e):
         "1. Where can I dance salsa tonight?\n"
         "2. Where can I dance tango this month? Only show me the social dance events.\n"
         "3. When does the West Coast Swing event on Saturdays start?"
+        "4. etc. etc. ..."
     )
     st.session_state["messages"].append({"role": "assistant", "content": error_message})
     logging.error(f"app.py: Error encountered - {e}")
