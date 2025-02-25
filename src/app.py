@@ -36,6 +36,10 @@ st.markdown("# Let's Dance! 🕺💃")
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
+# Initialize the submit flag in session state
+if "submit" not in st.session_state:
+    st.session_state["submit"] = False
+
 # Load chatbot instructions from a file specified in the YAML config
 instructions_path = os.path.join(base_dir, config['prompts']['chatbot_instructions'])
 with open(instructions_path, "r") as file:
@@ -50,11 +54,11 @@ def error_handling(e, custom_message=None):
     """
     if custom_message:
         error_message = (
-            f"{custom_message} "
+            f"{custom_message}\n\n"
             "I can answer questions such as:\n\n"
-            "1. Where can I dance salsa tonight?\n"
-            "2. Where can I dance tango this month? Only show me the social dance events.\n"
-            "3. When does the West Coast Swing event on Saturdays start?\n"
+            "Where can I dance salsa tonight?\n"
+            "Where can I dance tango this month? Only show me the social dance events.\n"
+            "When does the West Coast Swing event on Saturdays start?\n"
             "4. etc. etc. ..."
         )
     else:
@@ -70,9 +74,23 @@ def error_handling(e, custom_message=None):
     st.session_state["messages"].append({"role": "assistant", "content": error_message})
     logging.error(f"app.py: Error encountered - {e}")
 
-user_input = st.text_input("Ask a question, then click Send:")
+# Define a callback that sets the submit flag when Enter is pressed.
+def process_input():
+    st.session_state["submit"] = True
 
+# Use st.text_input with an on_change callback.
+user_input = st.text_input(
+    "Ask a question, then press Enter or click Send:", 
+    key="user_input", 
+    on_change=process_input
+)
+
+# Also include a Send button that triggers submission.
 if st.button("Send"):
+    st.session_state["submit"] = True
+
+# Process the input if the submit flag is set.
+if st.session_state["submit"]:
     if user_input.strip():
         # Display the user's message in the chat history
         st.session_state["messages"].append({"role": "user", "content": user_input})
@@ -118,8 +136,8 @@ if st.button("Send"):
             error_handling(e)
     else:
         st.write("Please enter a message")
-else:
-    st.write("Please enter a message")
+    # Reset the submit flag after processing.
+    st.session_state["submit"] = False
 
 # Render the conversation history from newest to oldest without a header
 for message in reversed(st.session_state["messages"]):
