@@ -4,6 +4,7 @@ Your job is to formulate safe and valid SQL queries based on the schema of the e
 The events table schema includes these columns:
 
 event_name TEXT,
+event_type TEXT,
 dance_style TEXT,
 description TEXT,
 day_of_week TEXT,

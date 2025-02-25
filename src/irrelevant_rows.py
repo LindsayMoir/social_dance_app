@@ -285,6 +285,9 @@ class IrrelevantRowsHandler:
         """
         logging.info(f"update_dance_styles(): Updating dance styles for {df.shape[0]} rows in the database.")
 
+        # Drop existing event_type column
+        df.drop(columns=["event_type"], inplace=True)
+
         # Rename column event_type_new to event_type
         df.rename(columns={"event_type_new": "event_type"}, inplace=True)
 
@@ -296,7 +299,7 @@ class IrrelevantRowsHandler:
             logging.error(f"update_dance_styles(): before_dropna {before_dropna} rows after_dropna {after_dropna}.")
 
         # Prepare data for updating rows in the database
-        for _, row in df.iterrows():
+        for idx, row in df.iterrows():
             update_query = """
             UPDATE events
             SET event_type = :event_type
@@ -307,7 +310,7 @@ class IrrelevantRowsHandler:
             "event_id": row["event_id"]
             }
             self.db_handler.execute_query(update_query, params)
-        logging.info(f"update_dance_styles(): Updated {df.shape[0]} rows (dance_style) in the database.")
+        logging.info(f"update_dance_styles(): Updated {idx} rows (dance_style) in the database.")
 
 
     def delete_irrelevant_rows(self, df):
@@ -340,4 +343,7 @@ class IrrelevantRowsHandler:
 
 if __name__ == "__main__":
     irrelevant = IrrelevantRowsHandler()
-    irrelevant.process_rows()
+    #irrelevant.process_rows()
+
+    df = pd.read_csv(irrelevant.config['output']['irrelevant_rows'])
+    irrelevant.update_dance_styles(df)
