@@ -79,10 +79,13 @@ if st.button("Send"):
                     for event in events:
                         event_name = event.get('event_name', 'No Name')
                         url = event.get('url', '#')
-
-                        # Display event name as bold and hyperlink it
-                        st.markdown(f'<a href="{url}" target="_blank"><strong>{event_name}</strong></a>', unsafe_allow_html=True)
                         
+                        # Only create a hyperlink if the url is properly formatted (starts with "http")
+                        if isinstance(url, str) and url.startswith("http"):
+                            st.markdown(f'<a href="{url}" target="_blank"><strong>{event_name}</strong></a>', unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"<strong>{event_name}</strong>")
+
                         # Display other event details (one row per column)
                         for column_name, value in event.items():
                             if column_name not in ('event_name', 'url'):
@@ -103,8 +106,7 @@ if st.button("Send"):
 else:
     st.write("Please enter a message")
 
-# Render the conversation history from newest to oldest
-st.markdown("##### Conversation History")
+# Render the conversation history from newest to oldest without a header
 for message in reversed(st.session_state["messages"]):
     if message["role"] == "user":
         st.markdown(f"**You wrote:** {message['content']}")
