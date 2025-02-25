@@ -50,7 +50,7 @@ def error_handling(e, custom_message=None):
     """
     if custom_message:
         error_message = (
-            f"{custom_message}\n"
+            f"{custom_message}\n\n"
             "I can answer questions such as:\n"
             "Where can I dance salsa tonight?\n"
             "Where can I dance tango this month? Only show me the social dance events.\n"
@@ -65,6 +65,7 @@ def error_handling(e, custom_message=None):
             "3. When does the West Coast Swing event on Saturdays start?\n"
             "4. etc. etc. ..."
         )
+    
     st.session_state["messages"].append({"role": "assistant", "content": error_message})
     logging.error(f"app.py: Error encountered - {e}")
 
@@ -107,7 +108,7 @@ if st.button("Send"):
             else:
                 # If no events are returned and a valid SQL query exists, call error_handling with a custom message BEFORE showing the SQL query.
                 if data.get('sql_query'):
-                    error_handling(Exception("No events returned"), custom_message="Sorry, I could not find those events in my database.")
+                    error_handling("No events returned", custom_message="Sorry, I could not find those events in my database.")
             
             # Display the SQL query (shown after error handling if triggered)
             st.markdown(f"**SQL Query**:\n```\n{data.get('sql_query', 'No SQL query provided')}\n```")
