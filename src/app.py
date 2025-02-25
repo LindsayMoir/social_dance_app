@@ -1,6 +1,5 @@
-# app.py 
-
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import os
 import yaml
@@ -36,10 +35,6 @@ st.markdown("# Let's Dance! 🕺💃")
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
-# Initialize the submit flag in session state
-if "submit" not in st.session_state:
-    st.session_state["submit"] = False
-
 # Load chatbot instructions from a file specified in the YAML config
 instructions_path = os.path.join(base_dir, config['prompts']['chatbot_instructions'])
 with open(instructions_path, "r") as file:
@@ -74,23 +69,39 @@ def error_handling(e, custom_message=None):
     st.session_state["messages"].append({"role": "assistant", "content": error_message})
     logging.error(f"app.py: Error encountered - {e}")
 
-# Define a callback that sets the submit flag when Enter is pressed.
-def process_input():
-    st.session_state["submit"] = True
+# Use a form so that we have a Send button.
+with st.form(key="chat_form", clear_on_submit=True):
+    user_input = st.text_input("Ask a question, then press Enter or click Send:", key="user_input")
+    submit = st.form_submit_button("Send")
 
-# Use st.text_input with an on_change callback.
-user_input = st.text_input(
-    "Ask a question, then press Enter or click Send:", 
-    key="user_input", 
-    on_change=process_input
+# Inject JS to capture Enter key on the text input and trigger the Send button.
+# Adjust the querySelector below if your placeholder text changes.
+components.html(
+    """
+    <script>
+    document.addEventListener("DOMContentLoaded", function() {
+        // Wait a little to ensure the elements are rendered
+        setTimeout(function() {
+            const inputField = window.parent.document.querySelector('input[placeholder="Ask a question, then press Enter or click Send:"]');
+            if (inputField) {
+                inputField.addEventListener("keydown", function(e) {
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        const submitButton = window.parent.document.querySelector('button[data-baseweb="button"]');
+                        if (submitButton) {
+                            submitButton.click();
+                        }
+                    }
+                });
+            }
+        }, 500);
+    });
+    </script>
+    """,
+    height=0,
 )
 
-# Also include a Send button that triggers submission.
-if st.button("Send"):
-    st.session_state["submit"] = True
-
-# Process the input if the submit flag is set.
-if st.session_state["submit"]:
+if submit:
     if user_input.strip():
         # Display the user's message in the chat history
         st.session_state["messages"].append({"role": "user", "content": user_input})
@@ -136,8 +147,6 @@ if st.session_state["submit"]:
             error_handling(e)
     else:
         st.write("Please enter a message")
-    # Reset the submit flag after processing.
-    st.session_state["submit"] = False
 
 # Render the conversation history from newest to oldest without a header
 for message in reversed(st.session_state["messages"]):
