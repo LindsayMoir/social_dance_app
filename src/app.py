@@ -50,7 +50,7 @@ def error_handling(e, custom_message=None):
     """
     if custom_message:
         error_message = (
-            f"{custom_message}\n\n"
+            f"{custom_message} "
             "I can answer questions such as:\n\n"
             "1. Where can I dance salsa tonight?\n"
             "2. Where can I dance tango this month? Only show me the social dance events.\n"

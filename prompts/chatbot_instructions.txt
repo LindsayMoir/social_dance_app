@@ -2,8 +2,8 @@
 #### What Can This ChatBot Do?
 
 You can ask this ChatBot about **dance events** that are occurring **now** and in the **future** but **NOT** in the **past** in Greater Victoria, BC, Canada.
-(2-step, bachata, balboa, cha cha, country waltz, double shuffle, douceur, east coast swing, kizomba, lindy hop, line dance, 
-merengue, milonga, nite club 2, salsa, semba, swing, tango, tarraxa, tarraxinha, tarraxo, urban kiz, west coast swing)
+(ballroom, country, kizomba, latin, swing, west coast swing, zouk)
+
 
 ---
 #### How It Works
