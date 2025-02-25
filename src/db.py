@@ -282,8 +282,12 @@ class DatabaseHandler():
         # Handle NaN values in params (such as address_id)
         if params:
             for key, value in params.items():
-                if pd.isna(value):  # Check if the value is NaN
-                    params[key] = None  # Set to None (NULL in SQL)
+                if pd.isna(value):
+                    if isinstance(value, (list, np.ndarray, pd.Series)):
+                        if pd.isna(value).any():  # Check if the value is NaN
+                            params[key] = None  # Set to None (NULL in SQL)
+                    elif pd.isna(value):  # Check if the single value is NaN
+                        params[key] = None  # Set to None (NULL in SQL)
 
         try:
             with self.conn.connect() as connection:

@@ -171,7 +171,7 @@ class IrrelevantRowsHandler:
             if chunk.empty:
                 logging.warning(f"def process_in_chunks(): Skipping empty chunk {i}.")
                 continue
-
+            
             response_df = self.process_chunk_with_llm(chunk, i)
             if response_df is not None:
                 response_dfs.append(response_df)
@@ -191,7 +191,7 @@ class IrrelevantRowsHandler:
             DataFrame or None: A DataFrame with the LLM response, or None if the response is invalid.
         """
         try:
-            prompt = self.load_prompt(chunk.to_markdown())
+            prompt = self.load_prompt(chunk.to_json(orient="records"))
             logging.info(f"def process_chunk_with_llm(): Prompt for chunk {chunk_index}:\n{prompt}")
 
             response_chunk = self.llm_handler.query_llm(prompt)
@@ -233,7 +233,7 @@ class IrrelevantRowsHandler:
             df = pd.read_json(StringIO(json_str))
 
             # Ensure DataFrame has expected columns
-            required_columns = {"event_id", "Label"}
+            required_columns = {"event_id", "Label", "event_type_new"}
             if not required_columns.issubset(df.columns):
                 logging.error(f"def clean_response(): Extracted JSON is missing required columns: {df.columns}")
                 return pd.DataFrame()
@@ -267,6 +267,47 @@ class IrrelevantRowsHandler:
         df.to_csv(self.config['output']['irrelevant_rows'], index=False)
         logging.info(f"def merge_and_save_results(): Saved {len(df)} rows to {self.config['output']['irrelevant_rows']}.")
         self.delete_irrelevant_rows(df)
+        self.update_dance_styles(df)
+
+
+    def update_dance_styles(self, df):
+        """
+        Updates the dance styles of the relevant events in the
+        database based on the LLM API response.
+
+        Args:
+            df (pandas.DataFrame): A DataFrame containing event data, where the "event_id" column
+                       contains the unique identifiers for the events, and the "event_type_new"
+                       column contains the predicted dance styles.
+
+        Returns:
+            None
+        """
+        logging.info(f"update_dance_styles(): Updating dance styles for {df.shape[0]} rows in the database.")
+
+        # Rename column event_type_new to event_type
+        df.rename(columns={"event_type_new": "event_type"}, inplace=True)
+
+        # Remove NaN values from the event_type column
+        before_dropna = df.shape[0]
+        df = df.dropna(subset=["event_type"])
+        after_dropna = df.shape[0]
+        if before_dropna != after_dropna:
+            logging.error(f"update_dance_styles(): before_dropna {before_dropna} rows after_dropna {after_dropna}.")
+
+        # Prepare data for updating rows in the database
+        for _, row in df.iterrows():
+            update_query = """
+            UPDATE events
+            SET event_type = :event_type
+            WHERE event_id = :event_id
+            """
+            params = {
+            "event_type": row["event_type"],
+            "event_id": row["event_id"]
+            }
+            self.db_handler.execute_query(update_query, params)
+        logging.info(f"update_dance_styles(): Updated {df.shape[0]} rows (dance_style) in the database.")
 
 
     def delete_irrelevant_rows(self, df):
@@ -293,6 +334,8 @@ class IrrelevantRowsHandler:
                 logging.error("def delete_irrelevant_rows(): Some selected events could not be deleted.")
         else:
             logging.info("def delete_irrelevant_rows(): No events marked for deletion.")
+
+        return None
 
 
 if __name__ == "__main__":
