@@ -26,7 +26,6 @@ logging.info("app.py: config completed.")
 
 # Get FastAPI API URL from environment variable
 FASTAPI_API_URL = os.getenv("FASTAPI_API_URL", "https://social-dance-app-ws-main.onrender.com/query")
-
 if not FASTAPI_API_URL:
     raise ValueError("The environment variable FASTAPI_API_URL is not set.")
 
@@ -43,6 +42,19 @@ with open(instructions_path, "r") as file:
     chatbot_instructions = file.read()
 
 st.markdown(chatbot_instructions)
+
+def error_handling(e):
+    """
+    Handle errors by appending a standardized error message to the chat history.
+    """
+    error_message = (
+        "Sorry, I did not quite catch that. I can answer questions such as:\n"
+        "1. Where can I dance salsa tonight?\n"
+        "2. Where can I dance tango this month? Only show me the social dance events.\n"
+        "3. When does the West Coast Swing event on Saturdays start?"
+    )
+    st.session_state["messages"].append({"role": "assistant", "content": error_message})
+    logging.error(f"app.py: Error encountered - {e}")
 
 user_input = st.text_input("Ask a question, then click Send:")
 
@@ -77,23 +89,15 @@ if st.button("Send"):
                                 st.markdown(f"**{column_name}**: {value}")
                         
                         st.markdown("<hr>", unsafe_allow_html=True)
-
             else:
-                st.write("No events found based on your query.")
+                # If no events are returned, use the error handling method.
+                error_handling(Exception("No events found based on the SQL query."))
 
             # Display the SQL query
             st.markdown(f"**SQL Query**:\n```\n{data['sql_query']}\n```")
             
         except Exception as e:
-            error_message = (
-                "Sorry, I did not quite catch that. I can answer questions such as:\n"
-                "1. Where can I dance salsa tonight?\n"
-                '2. Where can I dance bachata over the next couple of weeks. Only show me events that are social dance events. I do not want to see the classes.\n'
-                "3. When does the West Coast Swing event on Saturdays start?"
-            )
-            st.write("Please enter a message")
-            st.session_state["messages"].append({"role": "assistant", "content": error_message})
-            logging.error(f"app.py: Error encountered - {e}")
+            error_handling(e)
     else:
         st.write("Please enter a message")
 else:
