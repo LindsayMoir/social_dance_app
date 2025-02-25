@@ -103,10 +103,10 @@ if st.button("Send"):
 else:
     st.write("Please enter a message")
 
-# Render the conversation history
+# Render the conversation history from newest to oldest
 st.markdown("##### Conversation History")
-for message in st.session_state["messages"]:
+for message in reversed(st.session_state["messages"]):
     if message["role"] == "user":
-        st.markdown(f"**User**: {message['content']}")
+        st.markdown(f"**You wrote:** {message['content']}")
     else:
-        st.markdown(f"**Assistant**: {message['content']}")
+        st.markdown(message["content"])
