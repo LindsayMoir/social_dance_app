@@ -51,7 +51,7 @@ def error_handling(e, custom_message=None):
     if custom_message:
         error_message = (
             f"{custom_message}\n\n"
-            "I can answer questions such as:\n"
+            "I can answer questions such as:\n\n"
             "Where can I dance salsa tonight?\n"
             "Where can I dance tango this month? Only show me the social dance events.\n"
             "When does the West Coast Swing event on Saturdays start?\n"
@@ -59,7 +59,8 @@ def error_handling(e, custom_message=None):
         )
     else:
         error_message = (
-            "Sorry, I did not quite catch that. I can answer questions such as:\n"
+            "Sorry, I did not quite catch that.\n\n"
+            "I can answer questions such as:\n\n"
             "1. Where can I dance salsa tonight?\n"
             "2. Where can I dance tango this month? Only show me the social dance events.\n"
             "3. When does the West Coast Swing event on Saturdays start?\n"
