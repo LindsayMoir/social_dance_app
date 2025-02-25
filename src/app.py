@@ -85,13 +85,13 @@ if st.button("Send"):
                         
                         # Display other event details (one row per column)
                         for column_name, value in event.items():
-                            if column_name != 'event_name' and column_name != 'url':
+                            if column_name not in ('event_name', 'url'):
                                 st.markdown(f"**{column_name}**: {value}")
                         
                         st.markdown("<hr>", unsafe_allow_html=True)
             else:
-                # If no events are returned, use the error handling method.
-                error_handling(Exception("No events found based on the SQL query."))
+                # No events returned, use the error handling method.
+                error_handling(Exception("No events returned from the SQL query."))
 
             # Display the SQL query
             st.markdown(f"**SQL Query**:\n```\n{data['sql_query']}\n```")
