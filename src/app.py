@@ -69,7 +69,7 @@ if st.button("Send"):
                         url = event.get('url', '#')
 
                         # Display event name as bold and hyperlink it
-                        st.markdown(f"**[ {event_name} ]({url})**")
+                        st.markdown(f'<a href="{url}" target="_blank"><strong>{event_name}</strong></a>', unsafe_allow_html=True)
                         
                         # Display other event details (one row per column)
                         for column_name, value in event.items():
