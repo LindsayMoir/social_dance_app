@@ -296,7 +296,7 @@ class IrrelevantRowsHandler:
         df = df.dropna(subset=["event_type"])
         after_dropna = df.shape[0]
         if before_dropna != after_dropna:
-            logging.error(f"update_dance_styles(): before_dropna {before_dropna} rows after_dropna {after_dropna}.")
+            logging.warning(f"update_dance_styles(): before_dropna {before_dropna} rows after_dropna {after_dropna}.")
 
         # Prepare data for updating rows in the database
         for idx, row in df.iterrows():

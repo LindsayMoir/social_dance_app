@@ -13,8 +13,9 @@ Labeling:
 Criteria for Non-Duplicate (Label 0):
 - Choose the event(s) with the most complete and accurate information.
 - There may be multiple unique event(s) within a group_id. Label each of those as 0.
-- If multiple events seem equally valid, prefer the one with the most descriptive event_name, longest description, and the most complete location.
-- If longest most descriptive event_name, description, and the most complete location are similar, choose the event with the most recent time_stamp.
+- If multiple events seem equally valid, prefer the one with the url, most descriptive event_name, longest description, and the most complete location.
+- If longest most descriptive event_name, description, and the most complete location are similar, choose the event with the url. 
+    i) if the url is the same, choose the most recent time_stamp.
 - Uncertainty: If unsure, review the semantic description of the event_name, the description, and the location. Only Label as a 1 if you are positive that this is a duplicate.
 
 Columns:

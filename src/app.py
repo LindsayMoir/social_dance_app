@@ -1,4 +1,4 @@
-# app.py
+# app.py 
 
 import streamlit as st
 import requests
@@ -76,7 +76,7 @@ if st.button("Send"):
                             if column_name != 'event_name' and column_name != 'url':
                                 st.markdown(f"**{column_name}**: {value}")
                         
-                        st.markdown("<hr>", unsafe_allow_html=True)  # Add a separator between events
+                        st.markdown("<hr>", unsafe_allow_html=True)
 
             else:
                 st.write("No events found based on your query.")
@@ -85,8 +85,15 @@ if st.button("Send"):
             st.markdown(f"**SQL Query**:\n```\n{data['sql_query']}\n```")
             
         except Exception as e:
-            error_message = f"Error: {e}"
+            error_message = (
+                "Sorry, I did not quite catch that. I can answer questions such as:\n"
+                "1. Where can I dance salsa tonight?\n"
+                '2. Where can I dance bachata over the next couple of weeks. Only show me events that are social dance events. I do not want to see the classes.\n'
+                "3. When does the West Coast Swing event on Saturdays start?"
+            )
+            st.write("Please enter a message")
             st.session_state["messages"].append({"role": "assistant", "content": error_message})
+            logging.error(f"app.py: Error encountered - {e}")
     else:
         st.write("Please enter a message")
 else:

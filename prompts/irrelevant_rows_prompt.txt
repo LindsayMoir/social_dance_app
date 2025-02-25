@@ -59,7 +59,7 @@ In addition to labeling each row as relevant (0) or irrelevant (1), analyze **al
 - **class** (if the event appears to be a dance lesson or class),
 - **social dance** (if the event is a social dance gathering),
 - **workshop** (if the event is a workshop),
-- **other** (if it doesn't clearly fall into one of the above categories).
+- **other** (if it doesn't clearly fall into one of the above categories). Rehearsal(s) are **other**
 
 If an event fits multiple categories (e.g., a class that is also a social dance), list all applicable types separated by commas.
 Check each listed dance_style (above) to see if it matches any relevant dance style.
