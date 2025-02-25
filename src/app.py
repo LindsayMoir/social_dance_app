@@ -43,17 +43,28 @@ with open(instructions_path, "r") as file:
 
 st.markdown(chatbot_instructions)
 
-def error_handling(e):
+def error_handling(e, custom_message=None):
     """
     Handle errors by appending a standardized error message to the chat history.
+    If custom_message is provided, it will be used as the first line of the error message.
     """
-    error_message = (
-        "Sorry, I did not quite catch that. I can answer questions such as:\n"
-        "1. Where can I dance salsa tonight?\n"
-        "2. Where can I dance tango this month? Only show me the social dance events.\n"
-        "3. When does the West Coast Swing event on Saturdays start?"
-        "4. etc. etc. ..."
-    )
+    if custom_message:
+        error_message = (
+            f"{custom_message}\n"
+            "I can answer questions such as:\n"
+            "Where can I dance salsa tonight?\n"
+            "Where can I dance tango this month? Only show me the social dance events.\n"
+            "When does the West Coast Swing event on Saturdays start?\n"
+            "4. etc. etc. ..."
+        )
+    else:
+        error_message = (
+            "Sorry, I did not quite catch that. I can answer questions such as:\n"
+            "1. Where can I dance salsa tonight?\n"
+            "2. Where can I dance tango this month? Only show me the social dance events.\n"
+            "3. When does the West Coast Swing event on Saturdays start?\n"
+            "4. etc. etc. ..."
+        )
     st.session_state["messages"].append({"role": "assistant", "content": error_message})
     logging.error(f"app.py: Error encountered - {e}")
 
@@ -81,7 +92,7 @@ if st.button("Send"):
                         event_name = event.get('event_name', 'No Name')
                         url = event.get('url', '#')
                         
-                        # Only create a hyperlink if the url is properly formatted (starts with "http")
+                        # Only create a hyperlink if the URL is properly formatted (starts with "http")
                         if isinstance(url, str) and url.startswith("http"):
                             st.markdown(f'<a href="{url}" target="_blank"><strong>{event_name}</strong></a>', unsafe_allow_html=True)
                         else:
@@ -94,11 +105,12 @@ if st.button("Send"):
                         
                         st.markdown("<hr>", unsafe_allow_html=True)
             else:
-                # No events returned, use the error handling method.
-                error_handling(Exception("No events returned from the SQL query."))
-
-            # Display the SQL query
-            st.markdown(f"**SQL Query**:\n```\n{data['sql_query']}\n```")
+                # If no events are returned and a valid SQL query exists, call error_handling with a custom message BEFORE showing the SQL query.
+                if data.get('sql_query'):
+                    error_handling(Exception("No events returned"), custom_message="Sorry, I could not find those events in my database.")
+            
+            # Display the SQL query (shown after error handling if triggered)
+            st.markdown(f"**SQL Query**:\n```\n{data.get('sql_query', 'No SQL query provided')}\n```")
             
         except Exception as e:
             error_handling(e)
