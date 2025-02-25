@@ -98,7 +98,7 @@ if st.button("Send"):
                         if isinstance(url, str) and url.startswith("http"):
                             st.markdown(f'<a href="{url}" target="_blank"><strong>{event_name}</strong></a>', unsafe_allow_html=True)
                         else:
-                            st.markdown(f"<strong>{event_name}</strong>")
+                            st.markdown(f"**{event_name}**")
 
                         # Display other event details (one row per column)
                         for column_name, value in event.items():
