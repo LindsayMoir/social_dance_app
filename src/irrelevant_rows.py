@@ -343,7 +343,4 @@ class IrrelevantRowsHandler:
 
 if __name__ == "__main__":
     irrelevant = IrrelevantRowsHandler()
-    #irrelevant.process_rows()
-
-    df = pd.read_csv(irrelevant.config['output']['irrelevant_rows'])
-    irrelevant.update_dance_styles(df)
+    irrelevant.process_rows()
