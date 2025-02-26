@@ -26,6 +26,7 @@ def backup_and_update_config(step: str, updates: dict) -> dict:
     with open(CONFIG_PATH, "r") as f:
         original_config = yaml.safe_load(f)
     logger.info("Original config loaded.")
+    logger.info("Starting pipeline.py")
 
     # Create a deep copy to update without affecting original
     updated_config = copy.deepcopy(original_config)
