@@ -89,29 +89,14 @@ class LLMHandler():
             global db_handler
             db_handler = DatabaseHandler(self.config)
 
-        # Set up providers: primary and fallback list (if any)
-        # For example, config['llm']['provider'] is the primary, and you could add fallback providers in config['llm']['fallback_providers']
-        self.providers = [self.config['llm']['provider']]
-        if 'fallback_providers' in self.config['llm']:
-            self.providers.extend(self.config['llm']['fallback_providers'])
+        # Set up OpenAI client
+        self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        openai.api_key = self.openai_api_key
+        self.openai_client = OpenAI()
 
-        # Initialize the clients for each provider
-        self.clients = {}
-        for provider in self.providers:
-            if provider == 'openai':
-                self.openai_api_key = os.getenv("OPENAI_API_KEY")
-                openai.api_key = self.openai_api_key
-                self.clients['openai'] = OpenAI()
-            elif provider == 'mistral':
-                self.api_key = os.getenv("MISTRAL_API_KEY")
-                self.clients['mistral'] = Mistral(api_key=self.api_key)
-            elif provider == 'deepseek':
-                # Initialize deepseek client here if applicable
-                # For example:
-                # self.clients['deepseek'] = Deepseek(api_key=os.getenv("DEEPEEK_API_KEY"))
-                pass
-            else:
-                logging.error(f"LLMHandler __init__: Invalid LLM provider specified: {provider}")
+        # Set up Mistral client
+        mistral_api_key = os.environ["MISTRAL_API_KEY"]
+        self.mistral_client = Mistral(api_key=mistral_api_key)
                 
         self.keywords_list = self.get_keywords()
 
@@ -149,17 +134,21 @@ class LLMHandler():
 
                 if llm_status:
                     # Mark the event link as relevant
-                    db_handler.write_url_to_db('', keywords, url, search_term, relevant=True, increment_crawl_try=1)
+                    relevant, increment_crawl_try = True, 1
+                    db_handler.write_url_to_db('', keywords, url, relevant, increment_crawl_try)
                 else:
                     # Mark the event link as irrelevant
-                    db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_try=1)
+                    relevant, increment_crawl_try = False, 1
+                    db_handler.write_url_to_db('', keywords, url, relevant, increment_crawl_try)
             else:
                 # Mark the event link as irrelevant
-                db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_try=1)
+                relevant, increment_crawl_try = False, 1
+                db_handler.write_url_to_db('', keywords, url, relevant, increment_crawl_try)
         else:
-            logging.info(f"def driver(): No keywords found in text for URL {url}.")
+            logging.info(f"def driver(): No keywords found in text for URL {url}\n search_term {search_term}.")
             # Mark the event link as irrelevant
-            db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_try=1)
+            relevant, increment_crawl_try = False, 1
+            db_handler.write_url_to_db('', keywords, url, relevant, increment_crawl_try)
     
 
     def get_keywords(self) -> list:
@@ -257,68 +246,83 @@ class LLMHandler():
     
 
     def query_llm(self, prompt):
-        # Get primary provider from config
-        primary = self.config['llm']['provider']
-        # Get fallback providers (if any) from config
-        fallbacks = self.config['llm'].get('fallback_providers', [])
-        # Construct an ordered list: primary first, then fallbacks
-        providers_to_try = [primary] + fallbacks
+        """
+        Query the configured LLM with a given prompt and return the response.
+        
+        Args:
+            prompt (str): The prompt to send to the LLM.
 
-        for provider in providers_to_try:
+        Returns:
+            str: The response from the LLM if available, otherwise None.
+        """
+        if not self.config['llm']['spend_money']:
+            logging.info("query_llm(): Spending money is disabled. Skipping the LLM query.")
+            return None
+
+        provider = self.config['llm']['provider']
+
+        if provider == 'openai':
+            model = self.config['llm']['openai_model']
+            logging.info(f"query_llm(): Querying {provider}")
+            response = self._query_openai(prompt, model)
+            logging.info(f"def query_llm(): OpenAI response received: {response}")
+            return response
+        
+        elif provider == 'mistral':
+            logging.info(f"query_llm(): Querying {provider}")
             try:
-                if provider == 'openai':
-                    model = self.config['llm']['openai_model']
-                    logging.info(f"query_llm(): Trying {provider} with model {model}.")
-                    return self._query_openai(prompt, model)
-                elif provider == 'mistral':
-                    model = self.config['llm']['mistral_model']
-                    logging.info(f"query_llm(): Trying {provider} with model {model}.")
-                    return self._query_mistral(prompt, model)
-                elif provider == 'deepseek':
-                    # Example placeholder for deepseek; you can implement this later.
-                    logging.error("query_llm(): deepseek provider not implemented yet.")
-                    continue
-                else:
-                    logging.error(f"query_llm(): Invalid provider {provider}.")
-                    continue
+                model = self.config['llm']['mistral_model']
+                response = self._query_mistral(prompt, model)
+                logging.info(f"def query_llm(): Mistral response received: {response}")
             except Exception as e:
-                logging.error(f"query_llm(): Provider {provider} failed with error: {e}")
-                continue
+                logging.warning(f"query_llm(): Mistral query failed with error: {e}")
+                response = None
 
-        logging.error("query_llm(): All providers failed. Returning None.")
-        return None
+            # If mistral fails (or returns None), try openai as a fallback.
+            if not response:
+                logging.warning("query_llm(): Mistral failed to provide a response; falling back to OpenAI.")
+                openai_model = self.config['llm']['openai_model']
+                response = self._query_openai(prompt, openai_model)
+            return response
+        
+        else:
+            logging.error("query_llm(): Invalid LLM provider specified.")
+            return None
 
 
     def _query_openai(self, prompt, model):
+        """Handles querying OpenAI LLM."""
         try:
-            response = self.clients['openai'].chat.completions.create(
+            response = self.openai_client.chat.completions.create(
                 model=model, messages=[{"role": "user", "content": prompt}]
             )
             llm_response = response.choices[0].message.content.strip() if response and response.choices else None
+
             if llm_response:
-                logging.info(f"_query_openai(): Received response.")
+                logging.info(f"_query_openai(): LLM response received: {llm_response}")
             else:
-                logging.error("_query_openai(): No response received.")
+                logging.error("_query_openai(): No response received from OpenAI.")
+                
             return llm_response
+
         except Exception as e:
             logging.error(f"_query_openai(): OpenAI API call failed: {e}")
-            raise e
+            return None
         
 
     def _query_mistral(self, prompt, model):
-        try:
-            response = self.clients['mistral'].chat.complete(
-                model=model, messages=[{"role": "user", "content": prompt}]
-            )
-            llm_response = response.choices[0].message.content if response and response.choices else None
-            if llm_response:
-                logging.info(f"_query_mistral(): Received response.")
-            else:
-                logging.error("_query_mistral(): No response received.")
-            return llm_response
-        except Exception as e:
-            logging.error(f"_query_mistral(): Mistral API call failed: {e}")
-            raise e
+        """Handles querying Mistral LLM."""
+
+        chat_response = self.mistral_client.chat.complete(
+            model= model,
+            messages = [
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ]
+        )
+        return chat_response.choices[0].message.content
 
 
     def extract_and_parse_json(self, result, url):

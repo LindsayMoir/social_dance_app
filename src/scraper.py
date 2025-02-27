@@ -135,8 +135,8 @@ class EventSpider(scrapy.Spider):
             url = row['link']
             
             # We need to write the url to the database, if it is not already there
-            other_link, relevant, increment_crawl_try = '', None, 1
-            db_handler.write_url_to_db(source, keywords, url, other_link, relevant, increment_crawl_try)
+            relevant, increment_crawl_try = None, 1
+            db_handler.write_url_to_db(source, keywords, url, relevant, increment_crawl_try)
 
             if url not in self.visited_link:
                 self.visited_link.add(url)  # Mark the page link as visited
@@ -183,7 +183,7 @@ class EventSpider(scrapy.Spider):
         iframe_link.extend(calendar_emails)
 
         if iframe_link:
-            db_handler.update_url(url, update_other_link='calendar', relevant=True, increment_crawl_try=0)
+            db_handler.update_url(url, relevant=True, increment_crawl_try=0)
             for calendar_url in iframe_link:
                 self.fetch_google_calendar_events(calendar_url, url, source, keywords)
 
@@ -203,8 +203,8 @@ class EventSpider(scrapy.Spider):
         for link in all_link:
             if link not in self.visited_link:
                 self.visited_link.add(link)  # Mark the page link as visited
-                other_link, relevant, increment_crawl_try = '', None, 1
-                db_handler.write_url_to_db(source, keywords, url, other_link, relevant, increment_crawl_try)
+                relevant, increment_crawl_try = None, 1
+                db_handler.write_url_to_db(source, keywords, url, relevant, increment_crawl_try)
 
                 if len(self.visited_link) >= config['crawling']['urls_run_limit']:
                     logging.info(f"def parse(): Maximum URL limit reached: {config['crawling']['urls_run_limit']} Stopping further crawling.")
@@ -244,26 +244,26 @@ class EventSpider(scrapy.Spider):
 
             if llm_status:
                 # Mark the event link as relevant
-                update_status = db_handler.update_url(url, update_other_link='', relevant=True, increment_crawl_try=0)
+                update_status = db_handler.update_url(url, relevant=True, increment_crawl_try=0)
                 logging.info(f"def driver(): URL {url} not in url table.")
                 if update_status:
                     pass
                 else:
-                    db_handler.write_url_to_db(source, found_keywords, url, '', True, 1)
+                    db_handler.write_url_to_db(source, found_keywords, url, True, 1)
                     logging.info(f"def driver(): URL {url} marked as relevant, since there is a LLM response.")
 
             else:
                 # Mark the event link as irrelevant
-                update_status = db_handler.update_url(url, update_other_link='', relevant=False, increment_crawl_try=0)
+                update_status = db_handler.update_url(url, relevant=False, increment_crawl_try=0)
                 logging.info(f"def driver(): URL {url} not in url table.")
                 if update_status:
                     pass
                 else:
-                    db_handler.write_url_to_db(source, found_keywords, url, '', False, 1)
+                    db_handler.write_url_to_db(source, found_keywords, url, False, 1)
                     logging.info(f"def driver(): URL {url} marked as irrelevant since there is NO LLM response.")
 
         else:
-            db_handler.update_url(url, update_other_link='No', relevant=False, increment_crawl_try=0)
+            db_handler.update_url(url, relevant=False, increment_crawl_try=0)
             logging.info(f"def parse(): URL {url} marked as irrelevant since there are no found_keywords.")
 
         return
@@ -401,8 +401,7 @@ class EventSpider(scrapy.Spider):
         if not events_df.empty:
             logging.info(f"def process_calendar_id(): Found {len(events_df)} events for calendar_id: {calendar_id}")
             db_handler.write_events_to_db(events_df, calendar_url, source, keywords)
-            db_handler.update_url(calendar_url, update_other_link=url, relevant=True, increment_crawl_try=1)
-            db_handler.update_url(url, update_other_link=calendar_url, relevant=True, increment_crawl_try=1)
+            db_handler.update_url(calendar_url, relevant=True, increment_crawl_try=1)
 
     
     def get_calendar_events(self, calendar_id):

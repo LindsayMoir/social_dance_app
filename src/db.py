@@ -74,6 +74,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 import sys
 import yaml
+import warnings
 
 
 class DatabaseHandler():
@@ -174,7 +175,6 @@ class DatabaseHandler():
                 link TEXT PRIMARY KEY,
                 source TEXT,
                 keywords TEXT,
-                other_link TEXT,
                 relevant BOOLEAN,
                 crawl_try INTEGER,
                 time_stamp TIMESTAMP
@@ -273,7 +273,9 @@ class DatabaseHandler():
             params (dict): Optional dictionary of parameters for parameterized queries.
 
         Returns:
-            list of dict or None: A list of rows as dictionaries if the query returns rows, else None.
+            list of dict or int or None: A list of rows as dictionaries if the query returns rows,
+                                        the number of rows affected for update operations,
+                                        else None.
         """
         if self.conn is None:
             logging.error("execute_query: No database connection available.")
@@ -295,12 +297,13 @@ class DatabaseHandler():
                 if result.returns_rows:
                     rows = result.fetchall()
                     return rows
-                connection.commit()
-                return None
+                else:
+                    connection.commit()
+                    return result.rowcount  # Return the number of rows affected
         except SQLAlchemyError as e:
             logging.error("def execute_query(): %s\nQuery execution failed: %s", query, e)
             return None
-        
+
     
     def close_connection(self):
         """
@@ -316,97 +319,75 @@ class DatabaseHandler():
             logging.warning("close_connection: No database connection to close.")
 
 
-    def update_url(self, url, update_other_link, relevant, increment_crawl_try):
+    def update_url(self, link, relevant, increment_crawl_try):
         """
-        Updates an entry in the 'urls' table with the provided URL and other details.
+        Updates an entry in the 'urls' table with the provided link and other details.
 
         Args:
-            url (str): The URL to be updated.
-            update_other_link (str): The new value for 'other_link'. If 'No', it won't be updated.
+            link (str): The link to be updated.
             relevant (bool): The new value for 'relevant'.
             increment_crawl_try (int): The number to increment 'crawl_try' by.
 
         Returns:
             bool: True if update was successful, False otherwise.
         """
-        # See if url is in the urls table
+        # See if link is in the urls table
         select_query = """
             SELECT * FROM urls
-            WHERE link = :url
+            WHERE link = :link
         """
-        select_params = {'url': url}
+        select_params = {'link': link}
         result = self.execute_query(select_query, select_params)
         if result and len(result) > 0:
-
-            # Prepare the update query with conditional 'other_link'
-            if update_other_link != 'No':
-                update_query = """
-                    UPDATE urls
-                    SET 
-                        time_stamp = :current_time,
-                        other_link = :other_link,
-                        crawl_try = crawl_try + :increment,
-                        relevant = :relevant
-                    WHERE link = :url
-                """
-                update_params = {
-                    'current_time': datetime.now(),
-                    'other_link': update_other_link,
-                    'increment': increment_crawl_try,
-                    'relevant': relevant,
-                    'url': url
-                }
-            else:
-                update_query = """
-                    UPDATE urls
-                    SET 
-                        time_stamp = :current_time,
-                        crawl_try = crawl_try + :increment,
-                        relevant = :relevant
-                    WHERE link = :url
-                """
-                update_params = {
-                    'current_time': datetime.now(),
-                    'increment': increment_crawl_try,
-                    'relevant': relevant,
-                    'url': url
-                }
+            update_query = """
+                UPDATE urls
+                SET
+                    time_stamp = :current_time,
+                    crawl_try = crawl_try + :increment,
+                    relevant = :relevant
+                WHERE link = :link
+            """
+            update_params = {
+                'current_time': datetime.now(),
+                'increment': increment_crawl_try,
+                'relevant': relevant,
+                'link': link
+            }
 
             # Execute the update
-            update_result = self.execute_query(update_query, update_params)
-            if update_result:
-                logging.info("def update_url(): Updated URL '%s' successfully.", url)
-                return True
-            else:
-                logging.info("def update_url(): Failed to update URL '%s'.", url)
+            try:
+                update_result = self.execute_query(update_query, update_params)
+                if update_result is not None and update_result > 0:
+                    logging.info("def update_url(): Updated URL '%s' successfully.", link)
+                    return True
+                else:
+                    logging.error("def update_url(): Failed to update URL '%s'.", link)
+                    return False
+            except Exception as e:
+                logging.error("def update_url(): Exception occurred while updating URL '%s': %s", link, e)
                 return False
         else:
-            logging.info("def update_url(): URL '%s' not found for update.", url)
+            logging.info("def update_url(): URL '%s' not found for update.", link)
             return False
-        
 
-    def write_url_to_db(self, source, keywords, url, other_link, relevant, increment_crawl_try):
+
+    def write_url_to_db(self, source, keywords, link, relevant, increment_crawl_try):
         """
-        Inserts a new URL into the 'urls' table or updates it if it already exists.
+        Inserts a new link into the 'urls' table or updates it if it already exists.
 
         Args:
-            source (str): Organization names related to the URL.
-            keywords (list): Keywords related to the URL.
-            url (str): The URL to be written or updated.
-            other_link (str): Other link associated with the URL.
-            relevant (bool): Indicates if the URL is relevant.
-            increment_crawl_try (int): The number of times the URL has been crawled.
+            source (str): Organization names related to the link.
+            keywords (list): Keywords related to the link.
+            link (str): The link to be written or updated.
+            relevant (bool): Indicates if the link is relevant.
+            increment_crawl_try (int): The number of times the link has been crawled.
         """
         insert_query = """
-            INSERT INTO urls (time_stamp, source, keywords, link, other_link, relevant, crawl_try)
-            VALUES (:time_stamp, :source, :keywords, :link, :other_link, :relevant, :crawl_try)
+            INSERT INTO urls (time_stamp, source, keywords, link, relevant, crawl_try)
+            VALUES (:time_stamp, :source, :keywords, :link, :relevant, :crawl_try)
             ON CONFLICT (link) DO UPDATE
             SET 
                 time_stamp = EXCLUDED.time_stamp,
-                other_link = CASE 
-                                WHEN :other_link != 'No' THEN EXCLUDED.other_link 
-                                ELSE urls.other_link 
-                            END,
                 relevant = EXCLUDED.relevant,
                 crawl_try = urls.crawl_try + :increment_crawl_try;
         """
@@ -414,8 +395,7 @@ class DatabaseHandler():
             'time_stamp': datetime.now(),
             'source': source,
             'keywords': keywords,
-            'link': url,
-            'other_link': other_link,
+            'link': link,
             'relevant': relevant,
             'crawl_try': increment_crawl_try,
             'increment_crawl_try': increment_crawl_try
@@ -423,9 +403,9 @@ class DatabaseHandler():
         
         try:
             self.execute_query(insert_query, insert_params)
-            logging.info("def write_url_to_db(): URL '%s' inserted or updated in the 'urls' table.", url)
+            logging.info("def write_url_to_db(): URL '%s' inserted or updated in the 'urls' table.", link)
         except Exception as e:
-            logging.error("def write_url_to_db(): Failed to insert/update URL '%s': %s", url, e)
+            logging.error("def write_url_to_db(): Failed to insert/update URL '%s': %s", link, e)
     
 
     def clean_events(self, df):
@@ -580,13 +560,20 @@ class DatabaseHandler():
         # Update the 'url' column with the source URL if there is no URL in the DataFrame
         df['url'] = df['url'].fillna('').replace('', url)
 
-        # Ensure 'start_date' and 'start_date' are in datetime.date format
-        for col in ['start_date', 'end_date']:
-            df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
+        # Suppress warnings for date parsing
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
 
-        # Ensure 'start_time' and 'end_time' are in datetime.time format
-        for col in ['start_time', 'end_time']:
-            df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
+            # Ensure 'start_date' and 'start_date' are in datetime.date format
+            for col in ['start_date', 'end_date']:
+                df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
+
+            # Ensure 'start_time' and 'end_time' are in datetime.time format
+            for col in ['start_time', 'end_time']:
+                df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
+
+            # Turn warnings back on
+            warnings.resetwarnings()
 
         # No need to clean and convert the 'price' column to numeric format as it should remain as text
         if 'price' not in df.columns:
@@ -764,13 +751,13 @@ class DatabaseHandler():
                     
                     # If the civic_no is already in the address, then it will match and 
                     # cause a break on the correct address. This will set the idx of the row. 
-                    # If not, we will be using that last address, which hopefully is not a problem:(
+                    # if not, just give up and return the df
                     if result_df.shape[0] > 0:
                         for idx, row in result_df.iterrows():
                             if row.civic_no in numbers:
                                 break
                             else:
-                                pass
+                                return events_df
 
                         # Create a properly formatted address string
                         location = (
@@ -1108,10 +1095,9 @@ class DatabaseHandler():
             logging.info("delete_event_and_update_url: Deleted event from 'events' table.")
 
             # Update the corresponding URL from 'urls' table
-            update_other_link = 'No'
             relevant = False
             increment_crawl_try = 1
-            db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+            db_handler.update_url(url, relevant, increment_crawl_try)
             logging.info("delete_event_and_update_url: Deleted URL from 'urls' table.")
 
         except Exception as e:

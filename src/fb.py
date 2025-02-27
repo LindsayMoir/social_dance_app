@@ -578,7 +578,6 @@ class FacebookEventScraper():
             url = self.fix_facebook_event_url(url)
 
         # Default values
-        update_other_link = 'No'
         relevant = False
         increment_crawl_try = 1
 
@@ -592,7 +591,7 @@ class FacebookEventScraper():
         extracted_text = self.extract_event_text(url)
         if not extracted_text:
             logging.info(f"process_fb_url(): No text extracted for URL: {url}. Marking as processed.")
-            db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+            db_handler.update_url(url, relevant, increment_crawl_try)
             return
 
         self.urls_with_extracted_text += 1  # Increment extracted text count
@@ -601,7 +600,7 @@ class FacebookEventScraper():
         found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
         if not found_keywords:
             logging.info(f"process_fb_url(): No keywords found in text for {url}. Marking as processed.")
-            db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+            db_handler.update_url(url, relevant, increment_crawl_try)
             return
 
         self.urls_with_found_keywords += 1  # Increment keyword match count
@@ -613,21 +612,21 @@ class FacebookEventScraper():
         # If LLM says "No events found," update URL as non-relevant
         if "No events found" in llm_response:
             logging.info(f"process_fb_url(): LLM determined no valid events for {url}. Marking as processed.")
-            db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+            db_handler.update_url(url, relevant, increment_crawl_try)
             return
 
         # Extract parsed results from LLM response
         parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
         if not parsed_result:
             logging.warning(f"process_fb_url(): LLM returned an empty response for {url}. Marking as processed.")
-            db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+            db_handler.update_url(url, relevant, increment_crawl_try)
             return
 
         # Convert parsed data into a DataFrame & Write to Database
         events_df = pd.DataFrame(parsed_result)
         if events_df.empty:
             logging.warning(f"process_fb_url(): Parsed result was empty for {url}. No data written.")
-            db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+            db_handler.update_url(url, relevant, increment_crawl_try)
             return
 
         # Ensure URL field is filled
@@ -642,7 +641,7 @@ class FacebookEventScraper():
 
         # Mark URL as relevant
         relevant = True
-        db_handler.update_url(url, update_other_link, relevant, increment_crawl_try)
+        db_handler.update_url(url, relevant, increment_crawl_try)
         logging.info(f"process_fb_url(): URL marked as relevant and updated: {url}.")
         return
     

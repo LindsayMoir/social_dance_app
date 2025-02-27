@@ -85,18 +85,18 @@ class GoogleSearch():
         prompt = f"{prompt}\nTitle: {title}\nURL: {url}\nSnippet: {snippet}"
         logging.info(f"def relevant_dance_url(): Prompt: \n{prompt} \nURL: {url}")
 
-        try:
-            relevant = self.llm_handler.query_llm(prompt)
-            if relevant and relevant.lower() == 'True'.lower():
-                logging.info(f"def relevant_dance_url(): LLM's opinion on the relevance of this URL: {url} is: {relevant}")
-                return True
-            else:
-                logging.info(f"def relevant_dance_url(): LLM's opinion on the relevance of this URL: {url} is: {relevant}")
-                return False
+        #try:
+        relevant = self.llm_handler.query_llm(prompt)
+        if relevant and relevant.lower() == 'True'.lower():
+            logging.info(f"def relevant_dance_url(): LLM's opinion on the relevance of this URL: {url} is: {relevant}")
+            return True
+        else:
+            logging.info(f"def relevant_dance_url(): LLM's opinion on the relevance of this URL: {url} is: {relevant}")
+            return False
         
-        except Exception as e:
-            logging.error(f"def relevant_dance_url(): URL: {url} Error in LLM processing: {e}")
-            return None
+        # except Exception as e:
+        #     logging.error(f"def relevant_dance_url(): URL: {url} Error in LLM processing: {e}")
+        #     return None
         
 
     def google_search(self, query, keyword, num_results=10):
@@ -128,19 +128,19 @@ class GoogleSearch():
                 logging.info(f"google_search(): Title: {title}, URL: {url}")
 
                 if title.lower() != 'untitled' and title != 'No Title':
-                    try:
-                        dance_url = self.relevant_dance_url(title, url, snippet)
-                        if dance_url:
-                            results.append({
-                                'source': title,
-                                'keywords': keyword,
-                                'link': url
-                            })
-                            logging.info(f"Added result: {title}")
-                        else:
-                            logging.info(f"Skipped irrelevant result: {title}")
-                    except Exception as e:
-                        logging.error(f"Error processing item: {e}")
+                    #try:
+                    dance_url = self.relevant_dance_url(title, url, snippet)
+                    if dance_url:
+                        results.append({
+                            'source': title,
+                            'keywords': keyword,
+                            'link': url
+                        })
+                        logging.info(f"Added result: {title}")
+                    else:
+                        logging.info(f"Skipped irrelevant result: {title}")
+                    # except Exception as e:
+                    #     logging.error(f"Error processing item: {e}")
                 else:
                     logging.info(f"Skipped untitled result for query: {query}")
         else:
