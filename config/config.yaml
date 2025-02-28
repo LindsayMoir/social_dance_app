@@ -23,6 +23,7 @@ debug:
 fuzzywuzzy:
   hurdle: 70
 input:
+  countries: data/other/countries.csv
   data_keywords: data/other/keywords.csv
   edge_cases: data/other/edge_cases.csv
   emails: data/other/emails.csv

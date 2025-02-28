@@ -786,9 +786,8 @@ class DatabaseHandler():
             2) Attempting to fill in the address from the address DB.
             3) Falling back to partial updates if no DB match.
             4) If no postal code, uses Google municipality.
-            5) Writes the updated events_df to CSV.
         """
-        logging.info("clean_up_address(): Starting with events_df shape: %s", events_df.shape)
+        logging.info("def clean_up_address(): Starting with events_df shape: %s", events_df.shape)
 
         for index, row in events_df.iterrows():
             raw_location = row.get('location')
@@ -797,7 +796,7 @@ class DatabaseHandler():
                 continue
 
             location = str(raw_location).strip()
-            logging.info("Processing location '%s' (event_id: %s)", location, event_id)
+            logging.info("def clean_up_address(): Processing location '%s' (event_id: %s)", location, event_id)
 
             # 1) Try extracting a postal code via regex
             postal_code = self.extract_canadian_postal_code(location)
@@ -814,14 +813,14 @@ class DatabaseHandler():
                 updated_location, address_id = self.populate_from_db_or_fallback(location, postal_code)
                 events_df.loc[index, 'location'] = updated_location
                 events_df.loc[index, 'address_id'] = address_id
-                continue
-
-            # 4) If still no postal code, fallback to municipality from Google
-            updated_location, address_id = self.fallback_with_municipality(location)
-            if updated_location:
-                events_df.loc[index, 'location'] = updated_location
-            if address_id:
-                events_df.loc[index, 'address_id'] = address_id
+                
+            else:
+                # 4) If still no postal code, fallback to municipality from Google
+                updated_location, address_id = self.fallback_with_municipality(location)
+                if updated_location:
+                    events_df.loc[index, 'location'] = updated_location
+                if address_id:
+                    events_df.loc[index, 'address_id'] = address_id
 
         return events_df
 
@@ -840,6 +839,36 @@ class DatabaseHandler():
             if self.is_canadian_postal_code(possible_pc):
                 return possible_pc
         return None
+
+    def create_address_dict(self, full_address, street_number, street_name, street_type, postal_box, city, province_or_state, postal_code, country_id):
+        """
+        Creates an address dictionary with the given parameters.
+
+        Args:
+            full_address (str): The full address.
+            street_number (str): The street number.
+            street_name (str): The street name.
+            street_type (str): The street type.
+            postal_box (str): The postal box.
+            city (str): The city.
+            province_or_state (str): The province or state.
+            postal_code (str): The postal code.
+            country_id (str): The country ID.
+
+        Returns:
+            dict: The address dictionary.
+        """
+        return {
+            'full_address': full_address,
+            'street_number': street_number,
+            'street_name': street_name,
+            'street_type': street_type,
+            'postal_box': postal_box,
+            'city': city,
+            'province_or_state': province_or_state,
+            'postal_code': postal_code,
+            'country_id': country_id
+        }
 
     def populate_from_db_or_fallback(self, location_str, postal_code):
         """
@@ -871,17 +900,9 @@ class DatabaseHandler():
             updated_location = updated_location.replace('None', '').replace(',,', ',').strip()
             logging.info(f"updated_location is: {updated_location}")
 
-            address_dict = {
-                'full_address': updated_location,
-                'street_number': None,
-                'street_name': None,
-                'street_type': None,
-                'postal_box': None,
-                'city': municipality,
-                'province_or_state': 'BC',
-                'postal_code': postal_code,
-                'country_id': 'CA'
-            }
+            address_dict = self.create_address_dict(
+                updated_location, None, None, None, None, municipality, 'BC', postal_code, 'CA'
+            )
             logging.info(f"address_dict is: {address_dict}")
 
             address_id = self.get_address_id(address_dict)
@@ -892,17 +913,10 @@ class DatabaseHandler():
         row = df.iloc[0] if df.shape[0] == 1 else df.loc[self.match_civic_number(df, numbers)]
         updated_location = self.format_address_from_db_row(row)
 
-        address_dict = {
-            'full_address': updated_location,
-            'street_number': str(row.civic_no) if row.civic_no else None,
-            'street_name': row.official_street_name,
-            'street_type': row.official_street_type,
-            'postal_box': None,
-            'city': row.mail_mun_name,  # <─ Ensures city from DB is recorded
-            'province_or_state': row.mail_prov_abvn,
-            'postal_code': row.mail_postal_code,
-            'country_id': 'CA'
-        }
+        address_dict = self.create_address_dict(
+            updated_location, str(row.civic_no) if row.civic_no else None, row.official_street_name,
+            row.official_street_type, None, row.mail_mun_name, row.mail_prov_abvn, row.mail_postal_code, 'CA'
+        )
         address_id = self.get_address_id(address_dict)
         logging.info("Populated from DB for postal code '%s': '%s'", postal_code, updated_location)
         return updated_location, address_id
@@ -925,17 +939,9 @@ class DatabaseHandler():
         if municipality in muni_list:
             updated_location = f"{location_str}, {municipality}, BC, CA"
             updated_location = updated_location.replace('None', '').replace(',,', ',').strip()
-            address_dict = {
-                'full_address': updated_location,
-                'street_number': None,
-                'street_name': None,
-                'street_type': None,
-                'postal_box': None,
-                'city': municipality,
-                'province_or_state': 'BC',
-                'postal_code': None,
-                'country_id': 'CA'
-            }
+            address_dict = self.create_address_dict(
+                updated_location, None, None, None, None, municipality, 'BC', None, 'CA'
+            )
             address_id = self.get_address_id(address_dict)
             logging.info("Fallback with municipality: '%s'", updated_location)
             return updated_location, address_id
@@ -1391,7 +1397,7 @@ class DatabaseHandler():
             3. Reads a list of municipalities from a text file.
             4. Filters the events DataFrame to include only those rows whose 'location' field does not 
                contain any municipality name (from muni_list) or street name (from street_list), case-insensitively.
-            5. Writes the resulting DataFrame to "is_foreign.csv".
+            5. Deletes the identified events from the "events" table.
         
         Returns:
             pd.DataFrame: A DataFrame containing all columns from the events table for events that are
@@ -1414,27 +1420,39 @@ class DatabaseHandler():
             muni_list = [line.strip() for line in f if line.strip()]
         logging.info("is_foreign(): Loaded %d municipalities from file.", len(muni_list))
 
-        # 4. Filtering logic: if the location or description contains neither a municipality nor a street name, it's likely foreign.
+        # Read countries from .csv file
+        countries_df = pd.read_csv(self.config['input']['countries'])
+        countries_list = countries_df['country_names'].tolist()
+
+        # 4. Filtering logic: if the location or description does not contain a municipality, it's likely foreign.
+        # We reverse the mask at the bottom of the function to send the False values to the output.
         def is_foreign_location(row):
+
             location = row['location'] if row['location'] else ''
             description = row['description'] if row['description'] else ''
-            combined_text = f"{location} {description}".lower()
+            source = row['source'] if row['source'] else ''
+            combined_text = f"{location} {description} {source}".lower()
             muni_found = any(muni.lower() in combined_text for muni in muni_list if muni and combined_text)
-            street_found = any(street.lower() in combined_text for street in street_list if street)
-            return not (muni_found or street_found)
+            country_found = any(country.lower() in combined_text for country in countries_list)
 
-        # Create a boolean mask for events that are likely not in BC.
+            # If a municipality is found, the event is likely in BC (return False).
+            # If a country is found, the event is likely foreign (return True).
+            if muni_found:
+                return False
+            if country_found:
+                return True
+            return False  # Default to False if neither is found
+
+        # Create a boolean mask for events that are likely in foreign countries or municipalities.
         mask = events_df.apply(is_foreign_location, axis=1)
-        foreign_events_df = events_df[mask].copy()
-        logging.info("is_foreign(): Found %d events likely not in BC.", len(foreign_events_df))
+        foreign_events_df = events_df[mask].copy()  # Apply the mask to get foreign events
+        logging.info("is_foreign(): Found %d events likely in foreign countries or municipalities.", len(foreign_events_df))
 
-        # 5. Write the filtered events to a CSV file.
-        foreign_events_df.to_csv(config['output']['is_foreign'], index=False)
-        logging.info("is_foreign(): Output written to 'is_foreign.csv'.")
-
-        # except Exception as e:
-        #     logging.error("is_foreign(): Error processing data: %s", e)
-        #     return pd.DataFrame()  # Return an empty DataFrame in case of error.
+        # 5. Delete the identified events from the database.
+        if not foreign_events_df.empty:
+            event_ids = foreign_events_df['event_id'].tolist()
+            self.delete_multiple_events(event_ids)
+            logging.info("is_foreign(): Deleted %d events from the database.", len(event_ids))
 
 
     def driver(self):
@@ -1447,6 +1465,7 @@ class DatabaseHandler():
         self.delete_events_with_nulls()
         self.delete_likely_dud_events()
         self.fuzzy_duplicates()
+        self.is_foreign()
 
         # Close the database connection
         self.conn.dispose()  # Using dispose() for SQLAlchemy Engine
@@ -1477,9 +1496,6 @@ if __name__ == "__main__":
 
     # Perform deduplication and delete old events
     db_handler.driver()
-
-    # This method is not ready for prime time yet.
-    db_handler.is_foreign()
 
     end_time = datetime.now()
     logging.info("Main: Finished the process at %s", end_time)
