@@ -70,7 +70,7 @@ def get_postal_code(address, api_key):
 
 # Example usage:
 if __name__ == "__main__":
-    address = "Pro Pat Legion, 411 Gorge Rd E"
+    address = "411 Gorge Rd E, BC, V8T 2W1, CA"
     google_api_key = os.getenv("GOOGLE_KEY_PW")
     municipality = get_municipality(address, google_api_key)
     if municipality:

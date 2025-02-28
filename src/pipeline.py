@@ -735,9 +735,9 @@ def send_text_message(message: str):
 # PIPELINE EXECUTION
 # ------------------------
 PIPELINE_STEPS = [
+    ("emails", emails_step),
     ("gs", gs_step),
     ("ebs", ebs_step),
-    ("emails", emails_step),
     ("rd_ext", rd_ext_step),
     ("scraper", scraper_step),
     ("fb", fb_step),
