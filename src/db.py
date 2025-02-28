@@ -69,6 +69,7 @@ import numpy as np
 import os
 import pandas as pd
 import re  # Added missing import
+import requests
 from sqlalchemy import create_engine, MetaData, Table, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
@@ -109,6 +110,9 @@ class DatabaseHandler():
         self.metadata = MetaData()
         # Reflect the existing database schema into metadata
         self.metadata.reflect(bind=self.conn)
+
+        # Get google api key
+        self.google_api_key = os.getenv("GOOGLE_KEY_PW")
 
 
     def get_db_connection(self):
@@ -701,6 +705,72 @@ class DatabaseHandler():
         except SQLAlchemyError as e:
             logging.error(f"get_address_id: Database error: {e}")
             return None
+        
+    
+    def get_postal_code(self, address, api_key):
+        """
+        Given an address string, query the Google Geocoding API and extract the postal code.
+
+        Args:
+            address (str): The address string to geocode.
+            api_key (str): Your Google Maps Geocoding API key.
+
+        Returns:
+            str or None: The postal code if found, otherwise None.
+        """
+        endpoint = "https://maps.googleapis.com/maps/api/geocode/json"
+        params = {
+            "address": address,
+            "key": api_key
+        }
+        
+        response = requests.get(endpoint, params=params)
+        if response.status_code != 200:
+            raise Exception(f"Geocoding API request failed with status code {response.status_code}")
+        
+        data = response.json()
+        if data.get("status") != "OK":
+            raise Exception(f"Geocoding API error: {data.get('status')}")
+        
+        # Look for the postal_code component in the results.
+        for result in data.get("results", []):
+            for component in result.get("address_components", []):
+                if "postal_code" in component.get("types", []):
+                    return component.get("long_name")
+        return None
+    
+
+    def get_municipality(self, address, api_key):
+        """
+        Given an address string, query the Google Geocoding API and extract the municipality.
+
+        Args:
+            address (str): The address string to geocode.
+            api_key (str): Your Google Maps Geocoding API key.
+
+        Returns:
+            str or None: The municipality (locality) if found, otherwise None.
+        """
+        endpoint = "https://maps.googleapis.com/maps/api/geocode/json"
+        params = {
+            "address": address,
+            "key": api_key
+        }
+        
+        response = requests.get(endpoint, params=params)
+        if response.status_code != 200:
+            raise Exception(f"Geocoding API request failed with status code {response.status_code}")
+        
+        data = response.json()
+        if data.get("status") != "OK":
+            raise Exception(f"Geocoding API error: {data.get('status')}")
+        
+        # Iterate through the results to find the "locality" component (which is typically the municipality)
+        for result in data.get("results", []):
+            for component in result.get("address_components", []):
+                if "locality" in component.get("types", []):
+                    return component.get("long_name")
+        return None
 
 
     def clean_up_address(self, events_df):
@@ -726,8 +796,47 @@ class DatabaseHandler():
                 # Extract all numbers from location
                 numbers = re.findall(r'\d+', location)
 
-                # We can get the correct components of the address from the postal code
-                if postal_code:
+                # We can sometimes get the postal code from the location via google
+                if not postal_code:
+
+                    # Use google to get postal code
+                    postal_code = self.get_postal_code(location, self.google_api_key)
+                    logging.info(f"def clean_up_address(): No postal code found for location: '{location}'.")
+
+                    if not postal_code:
+                        municipality = self.get_municipality(location, self.google_api_key)
+
+                        if municipality:
+                            # 3. Read municipalities from file.
+                            with open(self.config['input']['municipalities'], 'r', encoding='utf-8') as f:
+                                muni_list = [line.strip() for line in f if line.strip()]
+                            logging.info("def clean_up_address(): Loaded %d municipalities from file.", len(muni_list))
+
+                            if municipality in muni_list:
+                                location = location + f", {municipality}, BC, CA"
+                                # Put the updated location from above in the current row in the dataframe in the location column.
+                                events_df.loc[index, 'location'] = location
+                                logging.info(f"def clean_up_address(): Updated location with municipality: {location}")
+                                # Write components of the address that we do have to the address table and get the address_id back
+                                # Use that to write the address_id into the events_df.
+                                # Write the address to the address table
+                                address_dict = {
+                                    'full_address': location,
+                                    'street_number': None,
+                                    'street_name': None,
+                                    'street_type': None,
+                                    'postal_box': None,
+                                    'city': municipality,
+                                    'province_or_state': 'BC',
+                                    'postal_code': None,
+                                    'country_id': 'CA'
+                                }
+                                # Write this dictionary to the address table
+                                address_id = self.get_address_id(address_dict)
+                                events_df.loc[index, 'address_id'] = address_id
+                                
+                # There is a postal code, so we can use it to get the address
+                else:
                     sql = ("""
                         SELECT
                             civic_no,
@@ -746,15 +855,14 @@ class DatabaseHandler():
                         self.address_db_engine,
                         params=(postal_code,)) # params is now a list
                     
-                    # If the civic_no is already in the address, then it will match and 
-                    # cause a break on the correct address. This will set the idx of the row. 
-                    # if not, just give up and return the df
+                    # If the civic_no is already in the address, then it will match the first number in numbers[0] 
                     if result_df.shape[0] > 0:
                         for idx, row in result_df.iterrows():
-                            if row.civic_no in numbers:
+                            if len(numbers) > 0 and row.civic_no == int(numbers[0]):
+                                result_df.at[idx, 'civic_no'] = int(numbers[0])
                                 break
                             else:
-                                return events_df
+                                result_df.at[idx, 'civic_no'] = None
 
                         # Create a properly formatted address string
                         location = (
@@ -797,10 +905,6 @@ class DatabaseHandler():
                         events_df.loc[index, 'address_id'] = address_id
                     else:
                         logging.info(f"def clean_up_address(): No address found for postal code: {postal_code}.")
-                else:
-                    logging.info(f"def clean_up_address(): No postal code found for location: '{location}'.")
-            else:
-                logging.info(f"def clean_up_address(): No location provided for row: {index}.")
 
         logging.info(f"def clean_up_address(): events_df.shape at end of function is: {events_df.shape}")
         return events_df
