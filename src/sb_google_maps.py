@@ -71,14 +71,14 @@ def get_postal_code(address, api_key):
 # Example usage:
 if __name__ == "__main__":
     address = "Pro Pat Legion, 411 Gorge Rd E"
-    api_key = os.getenv("GOOGLE_KEY_PW")
-    municipality = get_municipality(address, api_key)
+    google_api_key = os.getenv("GOOGLE_KEY_PW")
+    municipality = get_municipality(address, google_api_key)
     if municipality:
         print(f"The likely municipality is: {municipality}")
     else:
         print("Municipality could not be determined.")
 
-    postal_code = get_postal_code(address, api_key)
+    postal_code = get_postal_code(address, google_api_key)
     if postal_code:
         print(f"The postal code is: {postal_code}")
     else:
