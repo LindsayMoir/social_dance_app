@@ -81,7 +81,7 @@ json
 Where:
 event_id is the row’s unique ID.
 Label is 0 for relevant, 1 for irrelevant.
-event_type_new is a string (e.g., "class", "social dance", "workshop", "other", or a combination like "class, social dance").
+event_type_new is a string (e.g., "class", "social dance", "workshop", "other", "rehearsal", or a combination like "class, social dance").
 
 ---
 Examples
