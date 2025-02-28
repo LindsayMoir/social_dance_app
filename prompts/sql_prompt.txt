@@ -27,6 +27,8 @@ Preferences:
 Column order is: event_name, event_type, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, url, price, location 
 Not all columns are required for every query.
 Queries should include an ORDER BY start_date, start_time clause if no other sorting is requested.
+By default only include events that have "social dance", "other", or "workshop" in event_type. 
+    - If the user explicitly asks for "class" in event_type, yes you can include those in the request.
 
 Conditions:
 For text columns (TEXT), use ILIKE '%string%' for matching. Do not use = for these columns.
@@ -87,7 +89,7 @@ FROM events
 WHERE dance_style ILIKE '%wcs%'
   AND start_date::DATE >= (CURRENT_DATE - INTERVAL '7 days')
 ORDER BY start_date, start_time
-LIMIT 30;
+LIMIT 10;
 
 
 
