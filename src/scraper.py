@@ -233,38 +233,28 @@ class EventSpider(scrapy.Spider):
         extracted_text = read_extract.extract_text_with_playwright(url)
 
         # Check for keywords in the extracted text
-        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+        if extracted_text:
+            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
     
-        if found_keywords:
-            logging.info(f"def driver(): Found keywords in text for URL {url}: {found_keywords}")
+            if found_keywords:
+                logging.info(f"def driver(): Found keywords in text for URL {url}: {found_keywords}")
 
-            # Call the llm to process the extracted text
-            prompt = 'default'
-            llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt)
-
-            if llm_status:
-                # Mark the event link as relevant
-                update_status = db_handler.update_url(url, relevant=True, increment_crawl_try=0)
-                logging.info(f"def driver(): URL {url} not in url table.")
-                if update_status:
-                    pass
-                else:
+                # Call the llm to process the extracted text
+                prompt = 'default'
+                llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt)
+                if llm_status:
+                    # Mark the event link as relevant
                     db_handler.write_url_to_db(source, found_keywords, url, True, 1)
                     logging.info(f"def driver(): URL {url} marked as relevant, since there is a LLM response.")
-
-            else:
-                # Mark the event link as irrelevant
-                update_status = db_handler.update_url(url, relevant=False, increment_crawl_try=0)
-                logging.info(f"def driver(): URL {url} not in url table.")
-                if update_status:
-                    pass
+                    return
                 else:
-                    db_handler.write_url_to_db(source, found_keywords, url, False, 1)
-                    logging.info(f"def driver(): URL {url} marked as irrelevant since there is NO LLM response.")
-
+                    logging.info(f"def driver(): No LLM response for URL {url}, marked as irrelevant.")
+            else:
+                logging.info(f"def parse(): URL {url} marked as irrelevant since there are no found_keywords.")
         else:
-            db_handler.update_url(url, relevant=False, increment_crawl_try=0)
-            logging.info(f"def parse(): URL {url} marked as irrelevant since there are no found_keywords.")
+            logging.info(f"def parse(): URL {url} marked as irrelevant since there is no extracted_text: {extracted_text}")
+
+        db_handler.write_url_to_db(source, found_keywords, url, False, 1)
 
         return
         

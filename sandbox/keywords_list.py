@@ -15,14 +15,17 @@ keywords_list = sorted(set(
 print(f"Total keywords: {len(keywords_list)}")
 print(keywords_list)
 
-extracted_text = 'What is going on. THIS WEEK we are seeing lots of fun!!! Who knows'
+muni_list = "Victoria, Oak Bay, View Royal, Colwood, Sidney, Sooke, Vancouver, British Columbia, Canada, Saanich, Langford, Esquimalt, \
+Port Alberni, Courtenay, Cowichan, Port Hardy, Campbell River, Port Renfrew, Nanaimo, White Rock, West Vancouver, North Vancouver, \
+Richmond, Delta, Coquitlam, Langley, Maple Ridge, Pitt Meadows. Abbotsford, Bowen Island, Burnaby"
 
-# Perform regex search (convert string to actual regex)
-match = re.search('(?is)This Week(.*)$', extracted_text, re.DOTALL)
+# Convert muni_list to a sorted set
+muni_set = sorted(set(muni.strip() for muni in muni_list.split(',')))
 
-if match:
-    extracted_text = match.group(0)  # Extract the matched portion
-    print(extracted_text)
+# Print the sorted set
+print(muni_set)
 
-
-
+# Write to a text file with each muni on a new line
+with open('data/other/municipalities.txt', 'w') as file:
+    for muni in muni_set:
+        file.write(f"{muni}\n")

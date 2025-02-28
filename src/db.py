@@ -146,10 +146,7 @@ class DatabaseHandler():
         # Check if we need to drop tables as per configuration
         if self.config['testing']['drop_tables'] == True:
             drop_queries = [
-                "DROP TABLE IF EXISTS address CASCADE;",
-                "DROP TABLE IF EXISTS events CASCADE;",
-                "DROP TABLE IF EXISTS organization CASCADE;",
-                "DROP TABLE IF EXISTS urls CASCADE;"
+                "DROP TABLE IF EXISTS events CASCADE;"
             ]
         elif self.config['testing']['drop_tables'] == 'events':
             drop_queries = [
@@ -1192,6 +1189,61 @@ class DatabaseHandler():
             logging.error(f"multiple_db_inserts(): Error inserting/updating records - {e}")
 
 
+    def is_foreign(self):
+        """
+        Determines which events are likely not in British Columbia (BC) by comparing the event location
+        against a list of known municipalities and street names, returning all event columns for context.
+        
+        The method:
+            1. Loads all events from the "events" table into a DataFrame.
+            2. Loads street names from the "address" table into a DataFrame.
+            3. Reads a list of municipalities from a text file.
+            4. Filters the events DataFrame to include only those rows whose 'location' field does not 
+               contain any municipality name (from muni_list) or street name (from street_list), case-insensitively.
+            5. Writes the resulting DataFrame to "is_foreign.csv".
+        
+        Returns:
+            pd.DataFrame: A DataFrame containing all columns from the events table for events that are
+                          likely not located in BC.
+        """
+        try:
+            # 1. Load events from the database.
+            events_sql = "SELECT * FROM events"
+            events_df = pd.read_sql(events_sql, self.conn)
+            logging.info("is_foreign(): Loaded %d records from events.", len(events_df))
+
+            # 2. Load address street names.
+            address_sql = "SELECT street_name FROM address"
+            address_df = pd.read_sql(address_sql, self.conn)
+            street_list = address_df['street_name'].tolist()
+            logging.info("is_foreign(): Loaded %d street names from address.", len(street_list))
+
+            # 3. Read municipalities from file.
+            with open(self.config['input']['municipalities'], 'r', encoding='utf-8') as f:
+                muni_list = [line.strip() for line in f if line.strip()]
+            logging.info("is_foreign(): Loaded %d municipalities from file.", len(muni_list))
+
+            # 4. Filtering logic: if the location or description contains neither a municipality nor a street name, it's likely foreign.
+            def is_foreign_location(row):
+                combined_text = f"{row['location']} {row['description']}".lower()
+                muni_found = any(muni.lower() in combined_text for muni in muni_list)
+                street_found = any(street.lower() in combined_text for street in street_list)
+                return not (muni_found or street_found)
+
+            # Create a boolean mask for events that are likely not in BC.
+            mask = events_df.apply(is_foreign_location, axis=1)
+            foreign_events_df = events_df[mask].copy()
+            logging.info("is_foreign(): Found %d events likely not in BC.", len(foreign_events_df))
+
+            # 5. Write the filtered events to a CSV file.
+            foreign_events_df.to_csv(config['output']['is_foreign'], index=False)
+            logging.info("is_foreign(): Output written to 'is_foreign.csv'.")
+
+        except Exception as e:
+            logging.error("is_foreign(): Error processing data: %s", e)
+            return pd.DataFrame()  # Return an empty DataFrame in case of error.
+
+
     def driver(self):
         """
         Main driver function to perform database operations.
@@ -1231,7 +1283,8 @@ if __name__ == "__main__":
     db_handler.create_tables()
 
     # Perform deduplication and delete old events
-    db_handler.driver()
+    #db_handler.driver()
+    db_handler.is_foreign()
 
     end_time = datetime.now()
     logging.info("Main: Finished the process at %s", end_time)
