@@ -777,152 +777,272 @@ class DatabaseHandler():
         """
         Cleans up and standardizes address data from the 'events' table.
         It parses the 'location' field, inserts unique addresses into the 'address' table,
-        and updates the 'events' table with the corresponding address_id.
+        and updates events_df with the corresponding address_id and formatted location.
+        Finally, it writes the updated DataFrame to 'output/other/cleaned_events.csv'.
         """
-        logging.info(f"def clean_up_address(): events_df.shape at beginning of function is: {events_df.shape}")
-        # Iterate over each row in the DataFrame
+        logging.info(f"def clean_up_address(): Starting with events_df shape: {events_df.shape}")
+
         for index, row in events_df.iterrows():
-            location = row['location']
-            location = str(location).strip() if pd.notna(location) else None
+            raw_location = row.get('location')
+            location = str(raw_location).strip() if pd.notna(raw_location) else None
 
-            if location:
-                logging.info(f"clean_up_address: Processing location '{location}'.")
-                # Extract postal codes using regex
-                postal_code = re.search(r'[A-Za-z]\d[A-Za-z] \d[A-Za-z]\d', location)
-                postal_code = postal_code.group() if postal_code else None
-                postal_code = postal_code.replace(' ', '') if postal_code else None
-                logging.info(f"clean_up_address: Extracted postal code '{postal_code}' from location '{location}' via address_db.")
+            if not location:
+                continue
 
-                # Need to figure out WHICH address is the right one. Addresses share postal codes
-                # Extract all numbers from location
-                numbers = re.findall(r'\d+', location)
+            event_id = row.get('event_id')
+            logging.info(f"def clean_up_address(): Processing location: '{location}' (event_id: {event_id})")
 
-                # We can sometimes get the postal code from the location via google
-                if not postal_code:
+            # 1) Extract a postal code from the location using regex (A1A 1A1 form, optional space).
+            postal_match = re.search(r'[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d', location)
+            postal_code = postal_match.group().replace(' ', '') if postal_match else None
+            logging.info(f"def clean_up_address(): Extracted postal code: '{postal_code}' from location: '{location}' via regex.")
 
-                    # Use google to get postal code
-                    postal_code = self.get_postal_code(location, self.google_api_key)
+            # 2) Extract all numbers (possible civic number).
+            numbers = re.findall(r'\d+', location)
 
-                    if not postal_code:
-                        logging.info(f"def clean_up_address(): No postal code found for location: '{location}'.")
-                        
-                        municipality = self.get_municipality(location, self.google_api_key)
-                        logging.info(f"def clean_up_address(): municipality is: {municipality}")
-                        
-                        if municipality:
-                            # 3. Read municipalities from file.
-                            with open(self.config['input']['municipalities'], 'r', encoding='utf-8') as f:
-                                muni_list = [line.strip() for line in f if line.strip()]
-                            logging.info("def clean_up_address(): Loaded %d municipalities from file.", len(muni_list))
+            # 3) If no postal code from regex, try Google Geocoding to get one.
+            if not postal_code:
+                google_pc = self.get_postal_code(location, self.google_api_key)
+                if google_pc and self.is_canadian_postal_code(google_pc):
+                    logging.info(f"def clean_up_address(): postal_code from Google: '{google_pc}' for address: '{location}'")
+                    postal_code = google_pc
 
-                            if municipality in muni_list:
-                                location = location + f", {municipality}, BC, CA"
-                                # Put the updated location from above in the current row in the dataframe in the location column.
-                                events_df.loc[index, 'location'] = location
-                                logging.info(f"def clean_up_address(): Updated location with municipality: {location}, BC, and CA")
+                    # ─────────────────────────────────────────────────────────
+                    # NEW STEP: Use the postal_code to query the address DB 
+                    # immediately so we can fully populate the address data.
+                    # ─────────────────────────────────────────────────────────
+                    sql = """
+                        SELECT
+                            civic_no,
+                            civic_no_suffix,
+                            official_street_name,
+                            official_street_type,
+                            official_street_dir,
+                            mail_mun_name,
+                            mail_prov_abvn,
+                            mail_postal_code
+                        FROM locations
+                        WHERE mail_postal_code = %s;
+                    """
+                    result_df = pd.read_sql(sql, self.address_db_engine, params=(postal_code,))
+                    if result_df.shape[0] > 0:
+                        # If exactly one row is found, use that row directly.
+                        if result_df.shape[0] == 1:
+                            db_row = result_df.iloc[0]
+                        else:
+                            # If multiple rows, try to match civic number
+                            row_idx = None
+                            for i, addr_row in result_df.iterrows():
+                                if numbers and addr_row.civic_no is not None:
+                                    try:
+                                        if int(numbers[0]) == int(addr_row.civic_no):
+                                            row_idx = i
+                                            break
+                                    except ValueError:
+                                        continue
+                            if row_idx is None:
+                                row_idx = result_df.index[0]
+                            db_row = result_df.loc[row_idx]
 
-                                # Write components of the address that we do have to the address table and get the address_id back
-                                # Use that to write the address_id into the events_df.
-                                # Write the address to the address table
-                                address_dict = {
-                                    'full_address': location,
-                                    'street_number': None,
-                                    'street_name': None,
-                                    'street_type': None,
-                                    'postal_box': None,
-                                    'city': municipality,
-                                    'province_or_state': 'BC',
-                                    'postal_code': None,
-                                    'country_id': 'CA'
-                                }
-                                # Write this dictionary to the address table
-                                address_id = self.get_address_id(address_dict)
+                        updated_location = self.format_address_from_db_row(db_row)
+                        events_df.loc[index, 'location'] = updated_location
+                        logging.info(f"def clean_up_address(): Updated location from DB: '{updated_location}' (event_id: {event_id})")
 
-                                # Update the address_id in the events_df
-                                events_df.loc[index, 'address_id'] = address_id
-                                logging.info(f"def clean_up_address(): For {events_df.loc[index, 'location']}, "
-                                             f"event_id is {events_df.loc[index, 'event_id']} address_id is: {address_id}")
-                                
-                    # There is a postal code, so we can use it to get the address
+                        # Build a fully populated address dict
+                        address_dict = {
+                            'full_address': updated_location,
+                            'street_number': str(db_row.civic_no) if db_row.civic_no else None,
+                            'street_name': db_row.official_street_name,
+                            'street_type': db_row.official_street_type,
+                            'postal_box': None,
+                            'city': db_row.mail_mun_name,
+                            'province_or_state': db_row.mail_prov_abvn,
+                            'postal_code': db_row.mail_postal_code,
+                            'country_id': 'CA'
+                        }
+                        address_id = self.get_address_id(address_dict)
+                        events_df.loc[index, 'address_id'] = address_id
+                        logging.info(f"def clean_up_address(): For event_id {event_id}, set address_id: {address_id}")
+
+                        # Once we've fully populated the location from the DB, we can move on.
+                        continue
+
                     else:
-                        logging.info(f"def clean_up_address(): postal_code from google: {postal_code} for address: {location}")
-                        sql = ("""
-                            SELECT
-                                civic_no,
-                                civic_no_suffix,
-                                official_street_name,
-                                official_street_type,
-                                official_street_dir,
-                                mail_mun_name,
-                                mail_prov_abvn,
-                                mail_postal_code
-                            FROM locations
-                            WHERE mail_postal_code = %s;
-                            """
-                        )
-                        result_df = pd.read_sql((sql),
-                            self.address_db_engine,
-                            params=(postal_code,)) # params is now a list
-                        
-                        # If the civic_no is already in the address, then it will match the first number in numbers[0] 
-                        if result_df.shape[0] > 0:
-                            for idx, row in result_df.iterrows():
-                                if len(numbers) > 0 and row.civic_no == int(numbers[0]):
-                                    result_df.at[idx, 'civic_no'] = int(numbers[0])
-                                    break
-                                else:
-                                    result_df.at[idx, 'civic_no'] = None
-                                logging.info(f"def clean_up_address(): result_df.at[idx, 'civic_no'] is: {result_df.at[idx, 'civic_no']}")
+                        # If no DB match, fall back to partial approach (or you can 
+                        # keep the location as is and skip partial if you prefer).
+                        logging.info(f"def clean_up_address(): No matching address found in DB for postal code: '{postal_code}'")
+                        updated_location = f"{location}, BC, {postal_code}, CA"
+                        events_df.loc[index, 'location'] = updated_location
 
-                            # Create a properly formatted address string
-                            location = (
-                                f"{result_df.civic_no.values[idx]} "
-                                f"{result_df.civic_no_suffix.values[idx]} "
-                                f"{result_df.official_street_name.values[idx]} "
-                                f"{result_df.official_street_type.values[idx]} "
-                                f"{result_df.official_street_dir.values[idx]}, "
-                                f"{result_df.mail_mun_name.values[idx]}, "
-                                f"{result_df.mail_prov_abvn.values[idx]}, "
-                                f"{result_df.mail_postal_code.values[idx]}, "
-                                f"CA"
-                            )
-                            # Remove any 'None' values
-                            location = location.replace('None', '')
+                        address_dict = {
+                            'full_address': updated_location,
+                            'street_number': None,
+                            'street_name': None,
+                            'street_type': None,
+                            'postal_box': None,
+                            'city': None,
+                            'province_or_state': 'BC',
+                            'postal_code': postal_code,
+                            'country_id': 'CA'
+                        }
+                        address_id = self.get_address_id(address_dict)
+                        events_df.loc[index, 'address_id'] = address_id
+                        logging.info(f"def clean_up_address(): Partial fallback for event_id {event_id} with address_id: {address_id}")
+                        continue
+                    # ─────────────────────────────────────────────────────────
 
-                            # We may have double spaces, so we will replace them with single spaces
-                            location = location.replace('  ', ' ')
+                else:
+                    logging.info(f"def clean_up_address(): No valid Canadian postal code found for location: '{location}'.")
+                    # If no postal code, try to get the municipality from Google
+                    municipality = self.get_municipality(location, self.google_api_key)
+                    logging.info(f"def clean_up_address(): municipality from Google is: '{municipality}'")
 
-                            # We may have a space before a comma, so we will remove it
-                            location = location.replace(' ,', ',')
-                            logging.info(f"def clean_up_address(): location is: {location} "
-                                        f"for events_df.loc[index, 'event_id'] is: {events_df.loc[index, 'event_id']}")
+                    if municipality:
+                        # Load municipalities from file to confirm it’s in BC
+                        with open(self.config['input']['municipalities'], 'r', encoding='utf-8') as f:
+                            muni_list = [line.strip() for line in f if line.strip()]
+                        if municipality in muni_list:
+                            # Update the location to include the municipality
+                            updated_location = f"{location}, {municipality}, BC, CA"
+                            events_df.loc[index, 'location'] = updated_location
+                            logging.info(f"def clean_up_address(): Updated location with municipality: '{updated_location}'")
 
-                            events_df.loc[index, 'location'] = location
-                            logging.info(f"def clean_up_address(): events_df.shape after updating location is: {events_df.shape}")
-
-                            # Write the address to the address table
+                            # Create partial address record, including city
                             address_dict = {
-                                'full_address': location,
-                                'street_number': str(result_df.civic_no.values[idx]),
-                                'street_name': result_df.official_street_name.values[idx],
-                                'street_type': result_df.official_street_type.values[idx],
+                                'full_address': updated_location,
+                                'street_number': None,
+                                'street_name': None,
+                                'street_type': None,
                                 'postal_box': None,
-                                'city': result_df.mail_mun_name.values[idx],
-                                'province_or_state': result_df.mail_prov_abvn.values[idx],
-                                'postal_code': result_df.mail_postal_code.values[idx],
+                                'city': municipality,
+                                'province_or_state': 'BC',
+                                'postal_code': None,
                                 'country_id': 'CA'
                             }
-                            # Write this dictionary to the address table
                             address_id = self.get_address_id(address_dict)
                             events_df.loc[index, 'address_id'] = address_id
-                            logging.info(f"def clean_up_address(): For {events_df.loc[index, 'location']}, "
-                                        f"event_id is {events_df.loc[index, 'event_id']} and address_id is: {address_id}")     
-                        else:
-                            logging.info(f"def clean_up_address(): No address found for postal code: {postal_code}.")
+                            logging.info(f"def clean_up_address(): For event_id {event_id}, set address_id: {address_id}")
 
-        logging.info(f"def clean_up_address(): events_df.shape at end of function is: {events_df.shape}")
+                            # Continue to next event, since we used the municipality fallback
+                            continue
+
+            # ─────────────────────────────────────────────────────────────────
+            # 4) If we already had a postal code from regex, handle it as usual.
+            # (The code below is effectively the same logic you had for 
+            # querying the DB and falling back to partial if needed.)
+            # ─────────────────────────────────────────────────────────────────
+            if postal_code:
+                logging.info(f"def clean_up_address(): Searching address DB for postal code: '{postal_code}' (location: '{location}')")
+                sql = """
+                    SELECT
+                        civic_no,
+                        civic_no_suffix,
+                        official_street_name,
+                        official_street_type,
+                        official_street_dir,
+                        mail_mun_name,
+                        mail_prov_abvn,
+                        mail_postal_code
+                    FROM locations
+                    WHERE mail_postal_code = %s;
+                """
+                result_df = pd.read_sql(sql, self.address_db_engine, params=(postal_code,))
+                
+                if result_df.shape[0] > 0:
+                    if result_df.shape[0] == 1:
+                        db_row = result_df.iloc[0]
+                    else:
+                        row_idx = None
+                        for i, addr_row in result_df.iterrows():
+                            if numbers and addr_row.civic_no is not None:
+                                try:
+                                    if int(numbers[0]) == int(addr_row.civic_no):
+                                        row_idx = i
+                                        break
+                                except ValueError:
+                                    continue
+                        if row_idx is None:
+                            row_idx = result_df.index[0]
+                        db_row = result_df.loc[row_idx]
+
+                    updated_location = self.format_address_from_db_row(db_row)
+                    events_df.loc[index, 'location'] = updated_location
+                    logging.info(f"def clean_up_address(): Formatted address from DB: '{updated_location}' (event_id: {event_id})")
+
+                    address_dict = {
+                        'full_address': updated_location,
+                        'street_number': str(db_row.civic_no) if db_row.civic_no else None,
+                        'street_name': db_row.official_street_name,
+                        'street_type': db_row.official_street_type,
+                        'postal_box': None,
+                        'city': db_row.mail_mun_name,
+                        'province_or_state': db_row.mail_prov_abvn,
+                        'postal_code': db_row.mail_postal_code,
+                        'country_id': 'CA'
+                    }
+                    address_id = self.get_address_id(address_dict)
+                    events_df.loc[index, 'address_id'] = address_id
+                    logging.info(f"def clean_up_address(): For event_id {event_id}, set address_id: {address_id}")
+                else:
+                    logging.info(f"def clean_up_address(): No matching address found in DB for postal code: '{postal_code}'")
+                    updated_location = f"{location}, BC, {postal_code}, CA"
+                    events_df.loc[index, 'location'] = updated_location
+
+                    address_dict = {
+                        'full_address': updated_location,
+                        'street_number': None,
+                        'street_name': None,
+                        'street_type': None,
+                        'postal_box': None,
+                        'city': None,
+                        'province_or_state': 'BC',
+                        'postal_code': postal_code,
+                        'country_id': 'CA'
+                    }
+                    address_id = self.get_address_id(address_dict)
+                    events_df.loc[index, 'address_id'] = address_id
+                    logging.info(f"def clean_up_address(): Fallback partial for event_id {event_id} with address_id: {address_id}")
+
+        logging.info(f"def clean_up_address(): Final events_df shape: {events_df.shape}")
+
+        # Write the cleaned events DataFrame out to CSV.
+        output_path = "output/other/cleaned_events.csv"
+        events_df.to_csv(output_path, index=False)
+        logging.info(f"def clean_up_address(): Written cleaned events to '{output_path}'.")
+        
         return events_df
-    
+
+    def format_address_from_db_row(self, db_row):
+        """
+        Constructs a formatted address string from a single DB row, including the city (mail_mun_name).
+        """
+        parts = [
+            str(db_row.civic_no) if db_row.civic_no is not None else "",
+            str(db_row.civic_no_suffix) if db_row.civic_no_suffix else "",
+            db_row.official_street_name if db_row.official_street_name else "",
+            db_row.official_street_type if db_row.official_street_type else "",
+            db_row.official_street_dir if db_row.official_street_dir else ""
+        ]
+        street_address = " ".join(part for part in parts if part).strip()
+        formatted = (
+            f"{street_address}, "
+            f"{db_row.mail_mun_name if db_row.mail_mun_name else ''}, "
+            f"{db_row.mail_prov_abvn if db_row.mail_prov_abvn else ''}, "
+            f"{db_row.mail_postal_code if db_row.mail_postal_code else ''}, CA"
+        )
+        # Clean up formatting (extra spaces, commas)
+        formatted = re.sub(r'\s+,', ',', formatted)
+        formatted = re.sub(r',\s+,', ',', formatted)
+        formatted = re.sub(r'\s+', ' ', formatted).strip()
+        return formatted
+
+    def is_canadian_postal_code(self, postal_code):
+        """
+        Checks if a postal code matches the Canadian format: A1A 1A1 (with optional space).
+        """
+        pattern = r'^[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d$'
+        return re.match(pattern, postal_code.strip()) is not None
+
 
     def dedup(self):
         """
