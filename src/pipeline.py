@@ -148,7 +148,7 @@ def post_process_gs():
     """
     with open(CONFIG_PATH, "r") as f:
         current_config = yaml.safe_load(f)
-    file_path = current_config['output']['gs_search_results']
+    file_path = current_config['input']['gs_urls']
     logger = get_run_logger()
     if os.path.exists(file_path):
         size = os.path.getsize(file_path)
@@ -583,7 +583,7 @@ def dedup_llm_step():
     original_config = backup_and_update_config("dedup_llm", updates=COMMON_CONFIG_UPDATES)
     write_run_config.submit("dedup_llm", original_config)
     
-    max_iterations = 5
+    max_iterations = 10
     iteration = 0
     success = False
     while iteration < max_iterations and not success:
@@ -659,6 +659,26 @@ def irrelevant_rows_step():
 # ------------------------
 # NEW: TASKS FOR DB MAINTENANCE STEP
 # ------------------------
+def run_command_with_retry(command, logger, attempts=3, delay=5, env=None):
+    """
+    Runs a shell command with retries if it fails due to a "database is locked" error.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            result = subprocess.run(
+                command, shell=True, check=True, capture_output=True, text=True, env=env
+            )
+            return result
+        except subprocess.CalledProcessError as e:
+            stderr_lower = e.stderr.lower() if e.stderr else ""
+            if "database is locked" in stderr_lower:
+                logger.warning(f"Attempt {attempt} failed due to database lock. Retrying in {delay} seconds...")
+                time.sleep(delay)
+            else:
+                logger.error(f"Command failed on attempt {attempt}: {e.stderr}")
+                raise e
+    raise Exception(f"Command failed after {attempts} attempts due to persistent database lock errors.")
+
 @flow(name="DB Maintenance Step")
 def db_maintenance_step():
     logger = get_run_logger()
@@ -679,39 +699,36 @@ def db_maintenance_step():
         logger.error(f"Database dump failed: {e.stderr}")
         raise e
 
-    # 2. Copy the database from local to Render (command provided via env variable)
+    # 2. Copy the database from local to Render using pg_restore with the --if-exists flag.
+    render_pg_pass = os.getenv("RENDER_PG_PASS")
+    if not render_pg_pass:
+        logger.error("RENDER_PG_PASS environment variable not set.")
+        raise Exception("Missing RENDER_PG_PASS.")
+    
     copy_command = (
-        f"PGPASSWORD={os.getenv('RENDER_PG_PASS')} pg_restore --no-owner --clean "
-        f"--dbname=postgresql://social_dance_db_user:{os.getenv('RENDER_PG_PASS')}"
+        f"PGPASSWORD={render_pg_pass} pg_restore --no-owner --clean --if-exists "
+        f"--dbname=postgresql://social_dance_db_user:{render_pg_pass}"
         f"@dpg-culu0r1u0jms73bgrcdg-a.oregon-postgres.render.com:5432/social_dance_db_eimr?sslmode=require "
         f"-v -c local_backup.dump"
-    )  
-
-    print(f"Copy command: {copy_command}")
-    if not copy_command:
-        logger.error("COPY_DB_COMMAND environment variable not set.")
-        raise Exception("Missing COPY_DB_COMMAND.")
+    )
+    logger.info(f"Copy command: {copy_command}")
     try:
-        subprocess.run(copy_command, shell=True, check=True, capture_output=True, text=True)
+        run_command_with_retry(copy_command, logger, attempts=3, delay=5)
         logger.info("Database copy command executed successfully.")
     except subprocess.CalledProcessError as e:
         logger.error(f"Database copy failed: {e.stderr}")
         raise e
 
     # 3. Alter the time zone on the Render database.
-    RENDER_PG_PASS = os.getenv("RENDER_PG_PASS")
-    if not RENDER_PG_PASS:
-        logger.error("RENDER_PG_PASS environment variable not set.")
-        raise Exception("Missing RENDER_PG_PASS.")
     alter_command = (
         "psql -h dpg-culu0r1u0jms73bgrcdg-a.oregon-postgres.render.com "
         "-U social_dance_db_user -d social_dance_db_eimr "
         "-c \"ALTER DATABASE social_dance_db_eimr SET TIME ZONE 'PST8PDT';\""
     )
-    env = os.environ.copy()
-    env["PGPASSWORD"] = RENDER_PG_PASS
+    env_render = os.environ.copy()
+    env_render["PGPASSWORD"] = render_pg_pass
     try:
-        subprocess.run(alter_command, shell=True, check=True, capture_output=True, text=True, env=env)
+        subprocess.run(alter_command, shell=True, check=True, capture_output=True, text=True, env=env_render)
         logger.info("Database time zone altered successfully.")
     except subprocess.CalledProcessError as e:
         logger.error(f"Altering time zone failed: {e.stderr}")
@@ -724,7 +741,7 @@ def db_maintenance_step():
         "-c \"SHOW TIME ZONE;\""
     )
     try:
-        result = subprocess.run(show_command, shell=True, check=True, capture_output=True, text=True, env=env)
+        result = subprocess.run(show_command, shell=True, check=True, capture_output=True, text=True, env=env_render)
         logger.info(f"Database time zone: {result.stdout.strip()}")
     except subprocess.CalledProcessError as e:
         logger.error(f"Showing time zone failed: {e.stderr}")

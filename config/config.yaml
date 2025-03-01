@@ -72,4 +72,3 @@ testing:
   local: false
   nof_no_url_events: 10
   status: true
-

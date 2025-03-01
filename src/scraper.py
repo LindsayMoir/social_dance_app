@@ -254,7 +254,7 @@ class EventSpider(scrapy.Spider):
         else:
             logging.info(f"def parse(): URL {url} marked as irrelevant since there is no extracted_text: {extracted_text}")
 
-        db_handler.write_url_to_db(source, found_keywords, url, False, 1)
+        db_handler.write_url_to_db(source, keywords, url, False, 1)
 
         return
         
