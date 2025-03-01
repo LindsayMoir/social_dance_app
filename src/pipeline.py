@@ -8,9 +8,21 @@ import datetime
 import copy
 import pandas as pd
 from prefect import flow, task, get_run_logger
-import re 
+import re
+import argparse
 
 CONFIG_PATH = "config/config.yaml"
+
+# Define common configuration updates for all pipeline steps
+COMMON_CONFIG_UPDATES = {
+    "testing": {"drop_tables": False},
+    "crawling": {
+         "headless": True,
+         "max_website_urls": 10,
+         "urls_run_limit": 500,  # default for all steps
+    },
+    "llm": {"provider": "mistral", "spend_money": True}
+}
 
 # ------------------------
 # HELPER TASKS: Backup and Restore Config
@@ -153,7 +165,7 @@ def post_process_gs():
 
 @flow(name="GS Step")
 def gs_step():
-    original_config = backup_and_update_config("gs", updates={})
+    original_config = backup_and_update_config("gs", updates=COMMON_CONFIG_UPDATES)
     write_run_config.submit("gs", original_config)
     
     if not pre_process_gs():
@@ -218,7 +230,7 @@ def post_process_ebs():
 
 @flow(name="EBS Step")
 def ebs_step():
-    original_config = backup_and_update_config("ebs", updates={"crawling": {"headless": True}})
+    original_config = backup_and_update_config("ebs", updates=COMMON_CONFIG_UPDATES)
     write_run_config.submit("ebs", original_config)
     
     if not pre_process_ebs():
@@ -277,7 +289,7 @@ def post_process_emails():
 
 @flow(name="Emails Step")
 def emails_step():
-    original_config = backup_and_update_config("emails", updates={})
+    original_config = backup_and_update_config("emails", updates=COMMON_CONFIG_UPDATES)
     write_run_config.submit("emails", original_config)
     
     if not pre_process_emails():
@@ -337,7 +349,7 @@ def post_process_rd_ext():
 
 @flow(name="RD_EXT Step")
 def rd_ext_step():
-    original_config = backup_and_update_config("rd_ext", updates={})
+    original_config = backup_and_update_config("rd_ext", updates=COMMON_CONFIG_UPDATES)
     write_run_config.submit("rd_ext", original_config)
     
     if not pre_process_rd_ext():
@@ -389,8 +401,10 @@ def post_process_scraper():
 
 @flow(name="Scraper Step")
 def scraper_step():
-    # For scraper, update config: set crawling.headless = True.
-    original_config = backup_and_update_config("scraper", updates={"crawling": {"headless": True}})
+    # Create a copy of the common updates and override urls_run_limit for scraper.py
+    scraper_updates = copy.deepcopy(COMMON_CONFIG_UPDATES)
+    scraper_updates["crawling"]["urls_run_limit"] = 1500
+    original_config = backup_and_update_config("scraper", updates=scraper_updates)
     write_run_config.submit("scraper", original_config)
     
     if not pre_process_scraper():
@@ -433,8 +447,8 @@ def post_process_fb():
 
 @flow(name="FB Step")
 def fb_step():
-    # For fb, update config: set crawling.headless = False.
-    original_config = backup_and_update_config("fb", updates={"crawling": {"headless": False}})
+    # Enforce the common config (which sets crawling.headless True)
+    original_config = backup_and_update_config("fb", updates=COMMON_CONFIG_UPDATES)
     write_run_config.submit("fb", original_config)
     
     run_fb_script()
@@ -465,7 +479,7 @@ def run_db_script():
 
 @flow(name="DB Step")
 def db_step():
-    original_config = backup_and_update_config("db", updates={})
+    original_config = backup_and_update_config("db", updates=COMMON_CONFIG_UPDATES)
     write_run_config.submit("db", original_config)
     
     if not dummy_pre_process("db"):
@@ -501,7 +515,7 @@ def run_clean_up_script():
 
 @flow(name="Clean Up Step")
 def clean_up_step():
-    original_config = backup_and_update_config("clean_up", updates={})
+    original_config = backup_and_update_config("clean_up", updates=COMMON_CONFIG_UPDATES)
     write_run_config.submit("clean_up", original_config)
     
     if not dummy_pre_process("clean_up"):
@@ -566,8 +580,7 @@ def post_process_dedup_llm() -> bool:
 
 @flow(name="Dedup LLM Step")
 def dedup_llm_step():
-    # Pre-processing: Update config: set provider.mistral to True.
-    original_config = backup_and_update_config("dedup_llm", updates={"provider": {"mistral": True}})
+    original_config = backup_and_update_config("dedup_llm", updates=COMMON_CONFIG_UPDATES)
     write_run_config.submit("dedup_llm", original_config)
     
     max_iterations = 5
@@ -630,7 +643,7 @@ def post_process_irrelevant_rows():
 
 @flow(name="Irrelevant Rows Step")
 def irrelevant_rows_step():
-    original_config = backup_and_update_config("irrelevant_rows", updates={})
+    original_config = backup_and_update_config("irrelevant_rows", updates=COMMON_CONFIG_UPDATES)
     write_run_config.submit("irrelevant_rows", original_config)
     
     if not pre_process_irrelevant_rows():
@@ -668,10 +681,10 @@ def db_maintenance_step():
 
     # 2. Copy the database from local to Render (command provided via env variable)
     copy_command = (
-    f"PGPASSWORD={os.getenv('RENDER_PG_PASS')} pg_restore --no-owner --clean "
-    f"--dbname=postgresql://social_dance_db_user:{os.getenv('RENDER_PG_PASS')}"
-    f"@dpg-culu0r1u0jms73bgrcdg-a.oregon-postgres.render.com:5432/social_dance_db_eimr?sslmode=require "
-    f"-v -c local_backup.dump"
+        f"PGPASSWORD={os.getenv('RENDER_PG_PASS')} pg_restore --no-owner --clean "
+        f"--dbname=postgresql://social_dance_db_user:{os.getenv('RENDER_PG_PASS')}"
+        f"@dpg-culu0r1u0jms73bgrcdg-a.oregon-postgres.render.com:5432/social_dance_db_eimr?sslmode=require "
+        f"-v -c local_backup.dump"
     )  
 
     print(f"Copy command: {copy_command}")
@@ -716,7 +729,6 @@ def db_maintenance_step():
     except subprocess.CalledProcessError as e:
         logger.error(f"Showing time zone failed: {e.stderr}")
         raise e
-    
 
 # ------------------------
 # STUB FOR TEXT MESSAGING
@@ -822,5 +834,51 @@ def prompt_user():
     print(f"Pipeline will run from '{start}' to '{end}'.")
     run_pipeline(start, end)
 
+def main():
+    parser = argparse.ArgumentParser(description="Run pipeline with command line options or interactive input.")
+    parser.add_argument('--mode', choices=['1', '2', '3', '4'],
+                        help="Execution mode: 1 (entire pipeline), 2 (one step), 3 (start at a step), 4 (start and stop at specified steps).")
+    parser.add_argument('--step', type=int,
+                        help="Step number to run (required for mode 2).")
+    parser.add_argument('--start_step', type=int,
+                        help="Starting step number (required for mode 3 and 4).")
+    parser.add_argument('--end_step', type=int,
+                        help="Ending step number (required for mode 4).")
+    
+    args = parser.parse_args()
+
+    # If a mode argument is provided, use command-line options; otherwise fall back to interactive prompt.
+    if args.mode:
+        mode = args.mode
+        if mode == "1":
+            start_index = 0
+            end_index = len(PIPELINE_STEPS) - 1
+        elif mode == "2":
+            if args.step is None:
+                sys.exit("For mode 2, please provide --step argument.")
+            start_index = args.step - 1
+            end_index = args.step - 1
+        elif mode == "3":
+            if args.start_step is None:
+                sys.exit("For mode 3, please provide --start_step argument.")
+            start_index = args.start_step - 1
+            end_index = len(PIPELINE_STEPS) - 1
+        elif mode == "4":
+            if args.start_step is None or args.end_step is None:
+                sys.exit("For mode 4, please provide both --start_step and --end_step arguments.")
+            start_index = args.start_step - 1
+            end_index = args.end_step - 1
+        else:
+            print("Invalid mode. Running entire pipeline.")
+            start_index = 0
+            end_index = len(PIPELINE_STEPS) - 1
+
+        start = PIPELINE_STEPS[start_index][0]
+        end = PIPELINE_STEPS[end_index][0]
+        print(f"Pipeline will run from '{start}' to '{end}'.")
+        run_pipeline(start, end)
+    else:
+        prompt_user()
+
 if __name__ == "__main__":
-    prompt_user()
+    main()

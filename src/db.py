@@ -478,7 +478,8 @@ class DatabaseHandler():
             'dance': 'social dance',
             'dancing': 'social dance',
             'weekend': 'workshop',
-            'workshop': 'workshop'
+            'workshop': 'workshop',
+            'rehearsal': 'rehearsal'
         }
 
         # Function to determine 'Type_of_Event'
@@ -1469,6 +1470,8 @@ class DatabaseHandler():
 
         # Close the database connection
         self.conn.dispose()  # Using dispose() for SQLAlchemy Engine
+        logging.info("driver(): Database operations completed successfully.")
+        
 
 if __name__ == "__main__":
 
