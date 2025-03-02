@@ -332,8 +332,16 @@ async def main():
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
+    # Initialize the scraper components
+    read_extract = ReadExtract(config_path='config/config.yaml')
     db_handler = DatabaseHandler(config)
     llm_handler = LLMHandler(config_path='config/config.yaml')
+    ebs_instance = EventbriteScraper(
+        config=config,
+        read_extract=read_extract,
+        db_handler=db_handler,
+        llm_handler=llm_handler
+    )
 
     # Get the file name of the code that is running
     file_name = os.path.basename(__file__)
@@ -341,15 +349,8 @@ async def main():
     # Count events and urls before cleanup
     start_df = db_handler.count_events_urls_start(file_name)
 
-    read_extract = ReadExtract(config_path='config/config.yaml')
+    # Start
     await read_extract.init_browser()
-
-    ebs_instance = EventbriteScraper(
-        config=config,
-        read_extract=read_extract,
-        db_handler=db_handler,
-        llm_handler=llm_handler
-    )
 
     await ebs_instance.driver()
     await read_extract.close()

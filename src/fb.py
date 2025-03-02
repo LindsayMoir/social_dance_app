@@ -356,67 +356,71 @@ class FacebookEventScraper():
             str: The extracted relevant text content, or None if no relevant text is found.
         """
         self.total_url_attempts += 1  # Count URL contact attempts
-
-        # Check if the logged-in page is still valid; otherwise, create a new one
         try:
-            if not self.logged_in_page or self.logged_in_page.url == "about:blank":
-                raise Exception("Logged-in page is no longer valid.")
-            page = self.logged_in_page  # Use the logged-in page if it's valid
-        except Exception:
-            logging.warning("def extract_event_text(): Logged-in page is closed or invalid, opening a new one.")
-            page = self.context.new_page()  # Open a new page in the existing context
+            # Check if the logged-in page is still valid; otherwise, create a new one
+            try:
+                if not self.logged_in_page or self.logged_in_page.url == "about:blank":
+                    raise Exception("Logged-in page is no longer valid.")
+                page = self.logged_in_page  # Use the logged-in page if it's valid
+            except Exception:
+                logging.warning("def extract_event_text(): Logged-in page is closed or invalid, opening a new one.")
+                page = self.context.new_page()  # Open a new page in the existing context
 
-        timeout_value = random.randint(8000, 12000)  # Random timeout to avoid bot detection
-        logging.info(f"def extract_event_text(): Navigating to {link} with timeout {timeout_value} ms.")
-        page.goto(link, timeout=timeout_value)
+            timeout_value = random.randint(8000, 12000)  # Random timeout to avoid bot detection
+            logging.info(f"def extract_event_text(): Navigating to {link} with timeout {timeout_value} ms.")
+            page.goto(link, timeout=timeout_value)
 
-        # Look for all buttons or links with text "See more" and click them
-        more_buttons = page.query_selector_all("text=/See more/i")
-        if more_buttons:
-            for more_button in more_buttons:
-                try:
-                    more_button.wait_for_element_state("stable", timeout=random.randint(2000, 4000))  # Ensure button is stable
-                    more_button.click()
-                    page.wait_for_timeout(random.randint(4000, 8000))  # Random wait after clicking
-                    logging.info(f"Clicked 'See more' button in URL: {link}")
-                except Exception as e:
-                    logging.warning(f"Could not click 'See more' button in URL {link}: {e}")
-        else:
-            logging.debug(f"No 'See more' buttons found in URL: {link}")
-
-        # Randomized wait before extracting content
-        page.wait_for_timeout(random.randint(5000, 7000))
-
-        # Extract page content
-        content = page.content()
-        soup = BeautifulSoup(content, 'html.parser')
-        extracted_text = ' '.join(soup.stripped_strings)
-
-        if extracted_text:
-            self.urls_with_extracted_text += 1  # Count URLs where text was extracted
-            logging.info(f"def extract_event_text(): Extracted raw text ({len(extracted_text)} chars) from {link}")
-
-            # Check for keywords in the extracted text
-            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-            if found_keywords:
-                self.urls_with_found_keywords += 1  # Count URLs where keywords were found
-
-                if extracted_text and 'facebook.com/events/' in link:
-                    event_extracted_text = self.extract_relevant_text(extracted_text, link)
-                    logging.info(f"Extracted relevant event text from {link}: {len(event_extracted_text)} chars.")
-                    return event_extracted_text
+            # Look for all buttons or links with text "See more" and click them
+            more_buttons = page.query_selector_all("text=/See more/i")
+            if more_buttons:
+                for more_button in more_buttons:
+                    try:
+                        more_button.wait_for_element_state("stable", timeout=random.randint(2000, 4000))  # Ensure button is stable
+                        more_button.click()
+                        page.wait_for_timeout(random.randint(4000, 8000))  # Random wait after clicking
+                        logging.info(f"Clicked 'See more' button in URL: {link}")
+                    except Exception as e:
+                        logging.warning(f"Could not click 'See more' button in URL {link}: {e}")
             else:
-                logging.info(f"def extract_event_text(): No keywords found in extracted text for URL: {link}.")
+                logging.debug(f"No 'See more' buttons found in URL: {link}")
+
+            # Randomized wait before extracting content
+            page.wait_for_timeout(random.randint(5000, 7000))
+
+            # Extract page content
+            content = page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+            extracted_text = ' '.join(soup.stripped_strings)
+
+            if extracted_text:
+                self.urls_with_extracted_text += 1  # Count URLs where text was extracted
+                logging.info(f"def extract_event_text(): Extracted raw text ({len(extracted_text)} chars) from {link}")
+
+                # Check for keywords in the extracted text
+                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+                if found_keywords:
+                    self.urls_with_found_keywords += 1  # Count URLs where keywords were found
+
+                    if extracted_text and 'facebook.com/events/' in link:
+                        event_extracted_text = self.extract_relevant_text(extracted_text, link)
+                        if event_extracted_text:
+                            logging.info(f"def extract_event_text(): Extracted relevant event text from {link}: {len(event_extracted_text)} chars.")
+                            return event_extracted_text
+                        else:
+                            logging.warning(f"def extract_event_text(): When regex ran, returned None in {link}.")
+                            logging.info(f"def extract_event_text(): Returned original extracted_text not just event_extracted_text in {link}")
+                            return extracted_text
+                else:
+                    logging.info(f"def extract_event_text(): No keywords found in extracted text for URL: {link}.")
+                    return None
+            else:
+                logging.warning(f"def extract_event_text(): No text extracted from {link}.")
                 return None
-        else:
-            logging.warning(f"def extract_event_text(): No text extracted from {link}.")
-            return None
-        
+            
         # Force releasing any extra windows by putting a finally block in after a try and except block
-        try:
-            test = 0
         except Exception as e:
-            logging.warning(f"def extract_event_text(): Test fo a try, except, finally blck {link}: {e}")
+            logging.warning(f"def extract_event_text(): This {link}: {e} did not work. It could be for a variety of reasons. "
+                            "It could be that the page is not loading, the page is not found, or the page is not in the right format.")
             return None
 
         finally:
@@ -445,7 +449,6 @@ class FacebookEventScraper():
             or "Guests See All") are not found in the expected positions within the content.
         """
         logging.info(f"def extract_relevant_text(): Extracting relevant text from {link}.")
-        logging.info(f"def extract_relevant_text(): Content is: \n{content}")
 
         # Step 1: Find the first occurrence of "More About Discussion" (case-insensitive)
         mad_pattern = re.compile(r"More About Discussion", re.IGNORECASE)
@@ -609,6 +612,7 @@ class FacebookEventScraper():
             return
 
         self.urls_with_found_keywords += 1  # Increment keyword match count
+        logging.info(f"process_fb_url(): Keywords found in text for {url}.")
 
         # Generate prompt & query LLM only if keywords were found
         prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')

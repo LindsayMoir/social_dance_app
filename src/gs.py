@@ -193,6 +193,9 @@ if __name__ == "__main__":
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
     logging.info("gs.py starting...")
 
+    # Initialize GoogleSearch
+    gs_instance = GoogleSearch()
+
     # Initialize DatabaseHandler
     db_handler = DatabaseHandler(config)
 
@@ -202,7 +205,6 @@ if __name__ == "__main__":
     # Count events and urls before gs.py
     start_df = db_handler.count_events_urls_start(file_name)
 
-    gs_instance = GoogleSearch()
     results_df = gs_instance.driver()
 
     output_path = gs_instance.config['input']['gs_urls']

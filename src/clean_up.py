@@ -661,6 +661,9 @@ async def main():
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
+    # Initialize the CleanUp instance
+    clean_up_instance = CleanUp(config)
+
     # Initialize the database handler
     db_handler = DatabaseHandler(config)
     
@@ -671,7 +674,6 @@ async def main():
     start_df = db_handler.count_events_urls_start(file_name)
 
     # Fix no urls in events
-    clean_up_instance = CleanUp(config)
     await clean_up_instance.process_events_without_url()
 
     # Fix incorrect dance_styles

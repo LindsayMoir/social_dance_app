@@ -903,7 +903,7 @@ class DatabaseHandler():
             # Fallback if no match in DB
             municipality = self.get_municipality(location_str, self.google_api_key)
             updated_location = f"{location_str}, {municipality}, BC, {postal_code}, CA"
-            updated_location = updated_location.replace('None', '').replace(',,', ',').strip()
+            updated_location = updated_location.replace('None,', '').strip()
             logging.info(f"updated_location is: {updated_location}")
 
             address_dict = self.create_address_dict(

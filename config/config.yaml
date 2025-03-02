@@ -7,11 +7,11 @@ constants:
   location: '%20victoria%20bc%20canada%20'
 crawling:
   depth_limit: 3
-  headless: False
+  headless: True
   max_crawl_trys: 3
-  max_website_urls: 3
+  max_website_urls: 10
   scroll_depth: 3
-  urls_run_limit: 5
+  urls_run_limit: 500
 date_range:
   days_ahead: 365
   months: 3
