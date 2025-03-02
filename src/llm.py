@@ -275,7 +275,9 @@ class LLMHandler():
                 response = self._query_mistral(prompt, model)
                 logging.info(f"def query_llm(): Mistral response received: {response}")
             except Exception as e:
-                logging.warning(f"query_llm(): Mistral query failed with error: {e}")
+                e = str(e)
+                e - e.replace('error', 'rejection')
+                logging.warning(f"query_llm(): Mistral query failed: {e}")
                 response = None
 
             # If mistral fails (or returns None), try openai as a fallback.
@@ -379,6 +381,9 @@ class LLMHandler():
                 # Remove any trailing commas before the closing brackets
                 cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)
 
+                # Added cleaning: Fix invalid escape sequences by doubling backslashes that are not followed by valid escape characters
+                cleaned_str = re.sub(r'\\(?!["\\/bfnrt])', r'\\\\', cleaned_str)
+
                 # Remove '''json from the string
                 cleaned_str = cleaned_str.replace("```json", "")
                 cleaned_str = cleaned_str.replace("```", "")
@@ -427,6 +432,12 @@ if __name__ == "__main__":
     # Instantiate the database handler
     db_handler = DatabaseHandler(config)
 
+    # Get the file name of the code that is running
+    file_name = os.path.basename(__file__)
+
+    # Count events and urls before llm.py
+    start_df = db_handler.count_events_urls_start(file_name)
+
     # Get a test file
     extracted_text_df = pd.read_csv(config['output']['fb_search_results'])
 
@@ -451,6 +462,9 @@ if __name__ == "__main__":
         else:
             logging.info(f"__main__: No keywords found in text for URL {url}.")
             db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_try=1)
+
+    # Count the event and urls after llm.py
+    db_handler.count_events_urls_end(start_df, file_name)
 
     # Get the end time
     end_time = datetime.now()

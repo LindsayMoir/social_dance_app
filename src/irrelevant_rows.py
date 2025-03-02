@@ -105,7 +105,7 @@ class IrrelevantRowsHandler:
             prompt_template = file.read()
 
         prompt = f"{prompt_template}\n{chunk}"
-        logging.info(f"def load_prompt(): prompt is: \n{prompt}")
+        # logging.info(f"def load_prompt(): prompt is: \n{prompt}")
 
         return prompt
     
@@ -192,7 +192,7 @@ class IrrelevantRowsHandler:
         """
         try:
             prompt = self.load_prompt(chunk.to_json(orient="records"))
-            logging.info(f"def process_chunk_with_llm(): Prompt for chunk {chunk_index}:\n{prompt}")
+            # logging.info(f"def process_chunk_with_llm(): Prompt for chunk {chunk_index}:\n{prompt}")
 
             response_chunk = self.llm_handler.query_llm(prompt)
 
@@ -342,5 +342,30 @@ class IrrelevantRowsHandler:
 
 
 if __name__ == "__main__":
+
+    start_time = datetime.now()
+    logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
+    logging.info("irrelevant_rows.py starting...")
+
+    with open('config/config.yaml', 'r') as file:
+        config = yaml.safe_load(file)
+
+    # Initialize DatabaseHandler
+    db_handler = DatabaseHandler(config)
+
+    # Get the file name of the code that is running
+    file_name = os.path.basename(__file__)
+
+    # Count events and urls before irrelevant_rows.py
+    start_df = db_handler.count_events_urls_start(file_name)
+
     irrelevant = IrrelevantRowsHandler()
     irrelevant.process_rows()
+
+    # Count events and urls after irrelevant_rows.py
+    db_handler.count_events_urls_end(start_df, file_name)
+
+    end_time = datetime.now()
+    logging.info(f"__main__: Finished the crawler process at {end_time}")
+    total_time = end_time - start_time
+    logging.info(f"__main__: Total time taken: {total_time}\n\n")

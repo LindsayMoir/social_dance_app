@@ -7,11 +7,11 @@ constants:
   location: '%20victoria%20bc%20canada%20'
 crawling:
   depth_limit: 3
-  headless: True
+  headless: False
   max_crawl_trys: 3
-  max_website_urls: 10
+  max_website_urls: 3
   scroll_depth: 3
-  urls_run_limit: 500
+  urls_run_limit: 5
 date_range:
   days_ahead: 365
   months: 3
@@ -42,6 +42,7 @@ logging:
 output:
   dedup: output/dedup.csv
   ebs_search_results: output/ebs_search_results.csv
+  events_urls_diff: output/events_urls_diff.csv
   fb_search_results: output/fb_search_results.csv
   gs_search_results: output/gs_search_results.csv
   irrelevant_rows: output/irrelevant_rows.csv

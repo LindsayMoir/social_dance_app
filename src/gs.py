@@ -23,11 +23,14 @@ Dependencies:
 from datetime import datetime
 from googleapiclient.discovery import build
 import logging
+import os
 import pandas as pd
 import yaml
 
-# Import the LLMHandler class
+# Import the DatabaseHandler and LLMHandler class
+from db import DatabaseHandler
 from llm import LLMHandler
+
 from credentials import get_credentials
 
 class GoogleSearch():
@@ -83,7 +86,7 @@ class GoogleSearch():
         with open(prompt_file_path, 'r') as file:
             prompt = file.read()
         prompt = f"{prompt}\nTitle: {title}\nURL: {url}\nSnippet: {snippet}"
-        logging.info(f"def relevant_dance_url(): Prompt: \n{prompt} \nURL: {url}")
+        # logging.info(f"def relevant_dance_url(): Prompt: \n{prompt} \nURL: {url}")
 
         #try:
         relevant = self.llm_handler.query_llm(prompt)
@@ -190,12 +193,24 @@ if __name__ == "__main__":
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
     logging.info("gs.py starting...")
 
+    # Initialize DatabaseHandler
+    db_handler = DatabaseHandler(config)
+
+    # Get the file name of the code that is running
+    file_name = os.path.basename(__file__)
+
+    # Count events and urls before gs.py
+    start_df = db_handler.count_events_urls_start(file_name)
+
     gs_instance = GoogleSearch()
     results_df = gs_instance.driver()
 
     output_path = gs_instance.config['input']['gs_urls']
     results_df.to_csv(output_path, index=False)
     logging.info(f"Results written to {output_path}")
+
+    # Count events and urls after gs.py
+    db_handler.count_events_urls_end(start_df, file_name)
 
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")

@@ -47,6 +47,7 @@ Outputs:
 import asyncio
 from datetime import datetime
 import logging
+import os
 import pandas as pd
 import re
 import sys
@@ -334,6 +335,12 @@ async def main():
     db_handler = DatabaseHandler(config)
     llm_handler = LLMHandler(config_path='config/config.yaml')
 
+    # Get the file name of the code that is running
+    file_name = os.path.basename(__file__)
+
+    # Count events and urls before cleanup
+    start_df = db_handler.count_events_urls_start(file_name)
+
     read_extract = ReadExtract(config_path='config/config.yaml')
     await read_extract.init_browser()
 
@@ -346,6 +353,9 @@ async def main():
 
     await ebs_instance.driver()
     await read_extract.close()
+
+    # Write the final event and url counts to the .csv
+    db_handler.count_events_urls_end(start_df, file_name)
 
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")

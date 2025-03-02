@@ -1,0 +1,2 @@
+file_name,events_count_start,urls_count_start,events_count_end,urls_count_end,new_events_in_db,new_urls_in_db,time_stamp
+clean_up.py,1151,1377,1151,1377,0,0,2025-03-01 21:08:48.698671

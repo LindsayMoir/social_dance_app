@@ -577,26 +577,19 @@ def post_process_dedup_llm() -> bool:
     else:
         logger.warning("dedup_llm post-processing: 'Label' column is not all zeros.")
         return False
+    
 
 @flow(name="Dedup LLM Step")
 def dedup_llm_step():
     original_config = backup_and_update_config("dedup_llm", updates=COMMON_CONFIG_UPDATES)
     write_run_config.submit("dedup_llm", original_config)
     
-    max_iterations = 10
-    iteration = 0
-    success = False
-    while iteration < max_iterations and not success:
-        run_dedup_llm_script()
-        success = post_process_dedup_llm()
-        if success:
-            break
-        else:
-            get_run_logger().warning(f"dedup_llm step: Iteration {iteration+1} failed the post-check. Re-running dedup_llm.py.")
-            iteration += 1
-
+    # Removed loop logic since dedup_llm.py now handles iterative deduplication
+    run_dedup_llm_script()
+    success = post_process_dedup_llm()
+    
     if not success:
-        send_text_message("dedup_llm.py post-processing failed: 'Label' column not all 0 after 5 iterations.")
+        send_text_message("dedup_llm.py post-processing failed: 'Label' column not all 0 after run.")
         restore_config(original_config, "dedup_llm")
         raise Exception("dedup_llm.py post-processing failed. Pipeline stopped.")
     

@@ -1,6 +1,8 @@
 # dedup_llm.py
 """
-DeduplicationHandler is a class responsible for handling the deduplication of events in a database. It initializes with a configuration file, sets up logging, connects to the database, and interfaces with the llm API for deduplication tasks.
+DeduplicationHandler is a class responsible for handling the deduplication of events in a database.
+It initializes with a configuration file, sets up logging, connects to the database, and interfaces
+with the llm API for deduplication tasks.
     Attributes:
         config (dict): Configuration settings loaded from a YAML file.
         db_handler (DatabaseHandler): Handler for database operations.
@@ -14,7 +16,6 @@ DeduplicationHandler is a class responsible for handling the deduplication of ev
         _load_config(config_path): Loads the configuration from a YAML file.
         _setup_logging(): Configures logging settings.
         _setup_database(): Sets up the database connection.
-        _setup_llm_api(): Initializes the llm API client.
         load_prompt(): Loads the deduplication prompt template.
         fetch_possible_duplicates(): Fetches possible duplicate events from the database.
         query_llm(df): Queries the llm API with event data to identify duplicates.
@@ -50,13 +51,6 @@ class DeduplicationHandler:
     def _load_config(self, config_path):
         """
         Loads configuration from a YAML file.
-
-        Args:
-            config_path (str): The path to the YAML configuration file.
-
-        Raises:
-            FileNotFoundError: If the specified config_path does not exist.
-            yaml.YAMLError: If there is an error parsing the YAML file.
         """
         with open(config_path, 'r') as file:
             self.config = yaml.safe_load(file)
@@ -64,20 +58,6 @@ class DeduplicationHandler:
     def _setup_logging(self):
         """
         Configures the logging settings for the application.
-
-        This method sets up the logging configuration using the parameters specified
-        in the `self.config` dictionary. It configures the log file, log level, log 
-        format, and date format. Once configured, it logs an informational message 
-        indicating that logging has been set up and the run has started.
-
-        The logging configuration includes:
-        - Log file path: specified by `self.config['logging']['log_file']`
-        - File mode: 'a' (append mode)
-        - Log level: INFO
-        - Log format: "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
-        - Date format: '%Y-%m-%d %H:%M:%S'
-
-        Logs an informational message with the current date and time when logging is configured.
         """
         logging.basicConfig(
             filename=self.config['logging']['log_file'],
@@ -89,55 +69,31 @@ class DeduplicationHandler:
         logging.info("dedup.py starting...")
         logging.info(f"def _setup_logging(): Logging configured and run started at time: {datetime.now()}")
 
-
     def _setup_database(self):
         """
         Sets up the database connection for the application.
-
-        This method loads the environment variables, retrieves the database connection string,
-        and initializes the SQLAlchemy engine with the connection string.
-
-        Raises:
-            KeyError: If the 'DATABASE_CONNECTION_STRING' environment variable is not set.
         """
         load_dotenv()
         self.db_conn_str = os.getenv("DATABASE_CONNECTION_STRING")
         self.engine = create_engine(self.db_conn_str)
 
-    
     def load_prompt(self, chunk):
         """
         Loads the prompt template from a file specified in the configuration.
-
-        This method reads the content of the file path provided in the configuration
-        under the 'prompts' section with the key 'dedup' and assigns it to the 
-        `prompt_template` attribute.
-
-        Raises:
-            FileNotFoundError: If the file specified in the configuration does not exist.
-            KeyError: If the configuration does not contain the required keys.
         """
         with open(self.config['prompts']['dedup'], "r") as file:
             prompt_template = file.read()
 
         prompt = f"{prompt_template}\n{chunk}"
-        logging.info(f"def load_prompt(): prompt is: \n{prompt}")
+        # logging.info(f"def load_prompt(): prompt is: \n{prompt}")
 
         return prompt
     
-
     def fetch_possible_duplicates(self):
-        """Fetches possible duplicate events from the database based on start and end times.
-
-        This method uses a SQL query to identify events that have similar start and end times,
-        grouping them into potential duplicates. The query performs the following steps:
-        1. Identifies events with start times and end times grouped into 15-minute intervals.
-        2. Filters out groups that have more than one event.
-        3. Assigns a group ID to each event and ranks them within their group.
-
+        """
+        Fetches possible duplicate events from the database based on start and end times.
         Returns:
-            pd.DataFrame: A DataFrame containing the unique events identified as potential duplicates,
-                          with columns for group ID, event details, and other relevant information.
+            pd.DataFrame: DataFrame with potential duplicates.
         """
         sql = """
         WITH DuplicateStartTimes AS (
@@ -161,7 +117,7 @@ class DeduplicationHandler:
         ),
         GroupedEvents AS (
             SELECT e.*, 
-                DENSE_RANK() OVER (ORDER BY e.start_date, f.start_time_group, f.end_time_group) AS Group_ID,
+                DENSE_RANK() OVER (ORDER BY e.start_date, f.start_time_group, f.end_time_group) AS group_id,
                 ROW_NUMBER() OVER (PARTITION BY e.event_id ORDER BY e.start_date, e.start_time) AS rn
             FROM events e
             JOIN FinalFiltered f
@@ -169,47 +125,39 @@ class DeduplicationHandler:
             AND DATE_TRUNC('minute', e.start_time) = f.start_time_group
             AND DATE_TRUNC('minute', e.end_time) = f.end_time_group
         )
-        SELECT Group_ID, event_id, event_name, event_type, source, dance_style, url, price, location, address_id, description, time_stamp
+        SELECT group_id, event_id, event_name, event_type, source, dance_style, url, price, location, address_id, description, time_stamp
         FROM GroupedEvents
         WHERE rn = 1
-        ORDER BY Group_ID, start_date, start_time;
+        ORDER BY group_id, start_date, start_time;
         """
         df = pd.read_sql(text(sql), self.engine)
         logging.info(f"def fetch_possible_duplicates(): Read {len(df)} rows from the database")
         return df
 
-
     def process_duplicates(self):
         """
-        Processes duplicate entries in chunks by:
-        1. Fetching duplicate entries.
-        2. Filtering groups with fewer than 2 rows.
-        3. Processing in chunks of 50 rows.
-        4. Querying LLM for deduplication.
-        5. Merging responses with the dataset.
-        6. Saving results and deleting duplicates.
+        Processes duplicate entries in chunks and deletes duplicates.
+        Returns:
+            int: The number of events deleted during this run.
         """
         df = self.fetch_possible_duplicates()
         df = self.filter_valid_duplicates(df)
 
         if df.empty:
             logging.warning("def process_duplicates(): No valid duplicates found. Exiting.")
-            return
+            return 0
 
         response_dfs = self.process_in_chunks(df, chunk_size=50)
 
-        self.merge_and_save_results(df, response_dfs)
-
+        if response_dfs:
+            return self.merge_and_save_results(df, response_dfs)
+        else:
+            logging.warning("def process_duplicates(): No valid responses from LLM. Skipping deduplication.")
+            return 0
 
     def filter_valid_duplicates(self, df):
         """
         Filters out groups that have fewer than 2 rows.
-        
-        Args:
-            df (DataFrame): DataFrame containing possible duplicate events.
-
-        Returns:
-            DataFrame: Filtered DataFrame containing only valid duplicate groups.
         """
         if df.empty:
             logging.warning("def filter_valid_duplicates(): No duplicates found.")
@@ -223,17 +171,9 @@ class DeduplicationHandler:
         logging.info(f"def filter_valid_duplicates(): Number of rows after filtering: {len(df)}")
         return df
 
-
     def process_in_chunks(self, df, chunk_size=50):
         """
         Processes the dataset in chunks and queries the LLM.
-
-        Args:
-            df (DataFrame): The filtered dataset containing duplicate groups.
-            chunk_size (int): Number of rows to process per batch.
-
-        Returns:
-            list: A list of DataFrames containing processed LLM responses.
         """
         response_dfs = []
 
@@ -250,17 +190,9 @@ class DeduplicationHandler:
 
         return response_dfs
 
-
     def process_chunk_with_llm(self, chunk, chunk_index):
         """
         Queries the LLM with a batch of duplicate records and returns a DataFrame.
-
-        Args:
-            chunk (DataFrame): A batch of duplicate events to process.
-            chunk_index (int): The index of the current chunk.
-
-        Returns:
-            DataFrame or None: A DataFrame with the LLM response, or None if the response is invalid.
         """
         try:
             prompt = self.load_prompt(chunk.to_markdown())
@@ -272,39 +204,26 @@ class DeduplicationHandler:
                 logging.warning(f"def process_chunk_with_llm(): Received empty response for chunk {chunk_index}.")
                 return None
 
-            # Convert response to DataFrame
             return self.parse_llm_response(response_chunk)
 
         except Exception as e:
             logging.error(f"def process_chunk_with_llm(): Error processing chunk {chunk_index}: {e}")
             return None
 
-
     def parse_llm_response(self, response_chunk):
         """
         Extracts the structured JSON from the LLM response and converts it into a DataFrame.
-
-        Args:
-            response_chunk (str): The raw response from the LLM.
-
-        Returns:
-            pd.DataFrame: Cleaned DataFrame with extracted structured JSON data.
         """
         try:
-            # Find the JSON-like block within the response
             json_match = re.search(r'\[\s*\{.*\}\s*\]', response_chunk, re.DOTALL)
 
             if not json_match:
                 logging.error("def clean_response(): No valid JSON structure found in response.")
-                return pd.DataFrame()  # Return empty DataFrame if no match is found
+                return pd.DataFrame()
 
-            # Extract the JSON string
             json_str = json_match.group()
-
-            # Load JSON into a DataFrame
             df = pd.read_json(StringIO(json_str))
 
-            # Ensure DataFrame has expected columns
             required_columns = {"group_id", "event_id", "Label"}
             if not required_columns.issubset(df.columns):
                 logging.error(f"def clean_response(): Extracted JSON is missing required columns: {df.columns}")
@@ -315,45 +234,26 @@ class DeduplicationHandler:
 
         except (json.JSONDecodeError, ValueError) as e:
             logging.error(f"def clean_response(): Error parsing LLM response to JSON: {e}")
-            return pd.DataFrame()  # Return empty DataFrame if parsing fails
-
+            return pd.DataFrame()
 
     def merge_and_save_results(self, df, response_dfs):
         """
         Merges the LLM responses with the dataset, saves the results, and deletes duplicates.
-
-        Args:
-            df (DataFrame): The original dataset with duplicate records.
-            response_dfs (list): A list of DataFrames containing LLM responses.
-
         Returns:
-            None
+            int: The number of events deleted.
         """
-        if not response_dfs:
-            logging.warning("def merge_and_save_results(): No valid responses from LLM. Skipping deduplication.")
-            return
-
         response_df = pd.concat(response_dfs, ignore_index=True)
         df = df.merge(response_df, on="event_id", how="left")
 
         df.to_csv(self.config['output']['dedup'], index=False)
-        self.delete_duplicates(df)
-
+        deleted_count = self.delete_duplicates(df)
+        return deleted_count
 
     def delete_duplicates(self, df):
         """
         Deletes duplicate events from the database based on the provided DataFrame.
-
-        This method identifies events marked with a "Label" of 1 in the given DataFrame
-        and deletes them from the database in batches.
-
-        Args:
-            df (pandas.DataFrame): A DataFrame containing event data, where the "Label" column
-                       indicates duplicate events with a value of 1, and the "event_id"
-                       column contains the unique identifiers for the events.
-
         Returns:
-            None
+            int: The number of events that were marked for deletion.
         """
         to_be_deleted_event_list = df.loc[df["Label"] == 1, "event_id"].tolist()
         logging.info(f"def delete_duplicates(): Number of event_id(s) to be deleted is: {len(to_be_deleted_event_list)}")  
@@ -364,8 +264,33 @@ class DeduplicationHandler:
                 logging.error("def delete_duplicates(): Some selected events could not be deleted.")
         else:
             logging.info("def delete_duplicates(): No events marked for deletion.")
+        return len(to_be_deleted_event_list)
 
 
 if __name__ == "__main__":
+
+    with open('config/config.yaml', 'r') as file:
+        config = yaml.safe_load(file)
+
+    # Initialize the database handler
+    db_handler = DatabaseHandler(config)
+
+    # Get the file name of the code that is running
+    file_name = os.path.basename(__file__)
+
+    # Count events and urls before cleanup
+    start_df = db_handler.count_events_urls_start(file_name)
+
     deduper = DeduplicationHandler()
-    deduper.process_duplicates()
+    total_deleted = None
+
+    # Loop until no duplicates are flagged for deletion (i.e. total_deleted == 0)
+    while True:
+        total_deleted = deduper.process_duplicates()
+        logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
+        if total_deleted == 0:
+            logging.info("No duplicates found. Exiting deduplication loop.")
+            break
+    
+    db_handler.count_events_urls_end(start_df, file_name)
+

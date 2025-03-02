@@ -583,6 +583,12 @@ if __name__ == "__main__":
     llm_handler = LLMHandler(config_path="config/config.yaml")
     read_extract = ReadExtract("config/config.yaml")
 
+    # Get the file name of the code that is running
+    file_name = os.path.basename(__file__)
+
+    # Count events and urls before scraper.py
+    start_df = db_handler.count_events_urls_start(file_name)
+
     # Run the crawler process
     process = CrawlerProcess(settings={
         "LOG_FILE": config['logging']['log_file'],
@@ -600,6 +606,9 @@ if __name__ == "__main__":
     process.start()
 
     logging.info("__main__: Crawler process completed.")
+
+    # Count events and urls after scraper.py
+    db_handler.count_events_urls_end(start_df, file_name)
 
     # Get the end time
     end_time = datetime.now()

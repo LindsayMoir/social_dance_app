@@ -25,12 +25,14 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 import logging
 import pandas as pd
+import os
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 import random
 import re
 import yaml
 
+from db import DatabaseHandler
 from llm import LLMHandler
 from credentials import get_credentials  # Import the utility function
 
@@ -322,6 +324,15 @@ if __name__ == "__main__":
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
+    # Initialize DatabaseHandler
+    db_handler = DatabaseHandler(config)
+    
+    # Get the file name of the code that is running
+    file_name = os.path.basename(__file__)
+
+    # Count events and urls before rd_ext.py
+    start_df = db_handler.count_events_urls_start(file_name)
+
     # Instantiate the classes
     read_extract = ReadExtract("config/config.yaml")
     llm_handler = LLMHandler("config/config.yaml")
@@ -344,6 +355,9 @@ if __name__ == "__main__":
         # Process the extracted text with LLM. The url is the key into config to get the right prompt
         llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt=url)
 
+    # Count events and urls after rd_ext.py
+    db_handler.count_events_urls_end(start_df, file_name)
+
     # Get the end time
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")
@@ -351,4 +365,10 @@ if __name__ == "__main__":
     # Calculate the total time taken
     total_time = end_time - start_time
     logging.info(f"__main__: Total time taken: {total_time}\n\n")
+
+
+    
+
+
+    
 

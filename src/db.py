@@ -285,11 +285,13 @@ class DatabaseHandler():
         # Handle NaN values in params (such as address_id)
         if params:
             for key, value in params.items():
-                if pd.isna(value):
-                    if isinstance(value, (list, np.ndarray, pd.Series)):
-                        if pd.isna(value).any():  # Check if the value is NaN
-                            params[key] = None  # Set to None (NULL in SQL)
-                    elif pd.isna(value):  # Check if the single value is NaN
+                if isinstance(value, (list, np.ndarray, pd.Series)):
+                    # Check if any element in the array-like object is NaN
+                    if pd.isna(value).any():
+                        params[key] = None  # Set to None (NULL in SQL)
+                else:
+                    # For scalar values, check directly
+                    if pd.isna(value):
                         params[key] = None  # Set to None (NULL in SQL)
 
         try:
@@ -297,10 +299,13 @@ class DatabaseHandler():
                 result = connection.execute(text(query), params or {})
                 if result.returns_rows:
                     rows = result.fetchall()
+                    logging.info(f"def execute_query(): if result: for {query, params} is {result.rowcount}")
                     return rows
                 else:
                     connection.commit()
+                    logging.info(f"def execute_query(): if result for {query, params} is None: {result.rowcount}")
                     return result.rowcount  # Return the number of rows affected
+                    
         except SQLAlchemyError as e:
             logging.error("def execute_query(): %s\nQuery execution failed: %s", query, e)
             return None
@@ -732,7 +737,7 @@ class DatabaseHandler():
         
         data = response.json()
         if data.get("status") != "OK":
-            logging.warning(f"def get_postal_code(): Geocoding API error: {data.get('status')}")
+            logging.warning(f"def get_postal_code(): Geocoding API rejection: {data.get('status')}")
             return None
         
         # Look for the postal_code component in the results.
@@ -767,7 +772,7 @@ class DatabaseHandler():
         
         data = response.json()
         if data.get("status") != "OK":
-            logging.warning(f"Geocoding API error: {data.get('status')}"
+            logging.warning(f"Geocoding API rejection: {data.get('status')}"
                             f" for address '{address}'")
             return None
         
@@ -1024,7 +1029,7 @@ class DatabaseHandler():
                   AND e1.start_date = e2.start_date;
             """
             self.execute_query(dedup_events_query)
-            logging.info("dedup: Deduplicated 'events' table successfully.")
+            logging.info("def dedup(): Deduplicated events table successfully.")
 
             # Deduplicate 'urls' table based on 'link' using ctid for row identification
             dedup_urls_query = """
@@ -1037,7 +1042,7 @@ class DatabaseHandler():
             logging.info("dedup: Deduplicated 'urls' table successfully.")
 
         except Exception as e:
-            logging.error("dedup: Failed to deduplicate tables: %s", e)
+            logging.error("def dedup(): Failed to deduplicate tables: %s", e)
 
 
     def fetch_events_dataframe(self):
@@ -1456,6 +1461,89 @@ class DatabaseHandler():
             logging.info("is_foreign(): Deleted %d events from the database.", len(event_ids))
 
 
+    def count_events_urls_start(self, file_name):
+        """
+        Counts the number of events and URLs in the database at the start time and returns a DataFrame with the results.
+
+        Args:
+            file_name (str): The name of the .py file initiating the count.
+
+        Returns:
+            pd.DataFrame: A DataFrame containing the following columns:
+            - file_name (str): The name of the .py file.
+            - start_time (datetime): The timestamp when the count was initiated.
+            - events_count_start (int): The number of events in the database at the start time.
+            - urls_count_start (int): The number of URLs in the database at the start time.
+        """
+
+        # Add a df for the name of the .py file
+        file_name_df = pd.DataFrame([[file_name]], columns=["file_name"])
+
+        # Get start_time
+        start_time = datetime.now()
+        start_time_df = pd.DataFrame([[start_time]], columns=["start_time"])
+
+        # Count events in db at start
+        sql = "SELECT COUNT(*) as events_count_start FROM events"
+        events_count_start_df = pd.read_sql(sql, self.conn)
+
+        # Count events in db at start
+        sql = "SELECT COUNT(*) as urls_count_start FROM urls"
+        urls_count_start_df = pd.read_sql(sql, self.conn)
+
+        # Concatenate the above dataframes into a new dataframe called start_df
+        start_df = pd.concat([file_name_df, start_time_df, events_count_start_df, urls_count_start_df], axis=1)
+        start_df.columns = ['file_name', 'start_time_df', 'events_count_start', 'urls_count_start']
+
+        return start_df
+    
+
+    def count_events_urls_end(self, start_df, file_name):
+        """
+        Counts the number of events and URLs in the database at the end of a process, compares them with the counts at the start, 
+        and writes the results to a CSV file.
+
+        Parameters:
+        start_df (pd.DataFrame): A DataFrame containing the initial counts of events and URLs, as well as the file name and start time.
+
+        Returns:
+        None
+
+        The function performs the following steps:
+        1. Executes SQL queries to count the number of events and URLs in the database at the end of the process.
+        2. Concatenates the initial counts with the new counts into a single DataFrame.
+        3. Calculates the number of new events and URLs added to the database.
+        4. Adds a timestamp and calculates the elapsed time since the start.
+        5. Writes the resulting DataFrame to a CSV file, appending if the file already exists.
+        6. Logs the file name where the statistics were written.
+        """
+
+        # Count events in db at end
+        sql = "SELECT COUNT(*) as events_count_end FROM events"
+        events_count_end_df = pd.read_sql(sql, self.conn)
+
+        # Count events in db at end
+        sql = "SELECT COUNT(*) as urls_count_end FROM urls"
+        urls_count_end_df = pd.read_sql(sql, self.conn)
+
+        # Create the dataframe
+        results_df = pd.concat([start_df, events_count_end_df, urls_count_end_df], axis=1)
+        results_df.columns = ['file_name', 'start_time_df', 'events_count_start', 'urls_count_start', 'events_count_end', 'urls_count_end']
+        results_df['new_events_in_db'] = results_df['events_count_end'] - results_df['events_count_start']
+        results_df['new_urls_in_db'] = results_df['urls_count_end'] - results_df['urls_count_start']
+        results_df['time_stamp'] = datetime.now()
+        results_df['elapsed_time'] = results_df['time_stamp'] - results_df['start_time_df']
+
+        # Write the df to a csv file
+        output_file = self.config['output']['events_urls_diff']
+        if not os.path.isfile(output_file):
+            results_df.to_csv(output_file, index=False)
+        else:
+            results_df.to_csv(output_file, mode='a', header=False, index=False)
+
+        logging.info(f"Wrote events and urls statistics to: {file_name}")
+    
+
     def driver(self):
         """
         Main driver function to perform database operations.
@@ -1493,12 +1581,21 @@ if __name__ == "__main__":
 
     # Initialize DatabaseHandler
     db_handler = DatabaseHandler(config)
+    
+    # Get the file name of the code that is running
+    file_name = os.path.basename(__file__)
+
+    # Count events and urls before cleanup
+    start_df = db_handler.count_events_urls_start(file_name)
 
     # Create tables
     db_handler.create_tables()
 
     # Perform deduplication and delete old events
     db_handler.driver()
+
+    # Count events and urls after cleanup
+    db_handler.count_events_urls_end(start_df, file_name)
 
     end_time = datetime.now()
     logging.info("Main: Finished the process at %s", end_time)

@@ -35,6 +35,7 @@ from sqlalchemy.dialects.postgresql import insert
 from db import DatabaseHandler
 from llm import LLMHandler
 from credentials import get_credentials
+import os
 
 
 class CleanUp:
@@ -290,6 +291,7 @@ class CleanUp:
         if self.config['testing']['status']:
             no_urls_df = no_urls_df.head(self.config['testing']['nof_no_url_events'])
 
+        delete_count = 0
         # Process each event
         for event_row in no_urls_df.itertuples(index=False):
             event_name = event_row.event_name
@@ -345,7 +347,9 @@ class CleanUp:
             else:
                 logging.info(f"def process_events_without_url(): Event {event_name} and {event_row.event_id} is not relevant.")
                 self.db_handler.delete_event_with_event_id(event_row.event_id)
+                delete_count += 1
 
+        logging.info("def process_events_without_url(): Deleted {delete_count} events without URLs.")
         logging.info("def process_events_without_url(): Finished processing events without URLs.")
 
 
@@ -612,9 +616,10 @@ class CleanUp:
         """Determine if a dance style needs updating based on event name/description."""
         event_name = row["event_name"] if isinstance(row["event_name"], str) else ""
         description = row["description"] if isinstance(row["description"], str) else ""
+        source = row["source"] if isinstance(row["source"], str) else ""
 
         matches = [keyword for keyword in keywords_list if keyword.lower() in event_name.lower() 
-                or keyword.lower() in description.lower()]
+                or keyword.lower() in description.lower() or keyword.lower() in source.lower()]
 
         if matches:
             return pd.Series([", ".join(matches), True])  # Update dance_style and flag for update
@@ -656,6 +661,15 @@ async def main():
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
+    # Initialize the database handler
+    db_handler = DatabaseHandler(config)
+    
+    # Get the file name of the code that is running
+    file_name = os.path.basename(__file__)
+
+    # Count events and urls before cleanup
+    start_df = db_handler.count_events_urls_start(file_name)
+
     # Fix no urls in events
     clean_up_instance = CleanUp(config)
     await clean_up_instance.process_events_without_url()
@@ -666,8 +680,11 @@ async def main():
     # Delete events outside of BC, Canada
     await clean_up_instance.delete_events_outside_bc()
 
-    # Delete events more than 9 monhts in the future
+    # Delete events more than 9 months in the future
     await clean_up_instance.delete_events_more_than_9_months_future()
+
+    db_handler.count_events_urls_end(start_df, file_name)
+    logging.info(f"Wrote events and urls statistics to: {file_name}")
 
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")

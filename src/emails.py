@@ -41,6 +41,8 @@ import yaml
 with open('config/config.yaml', "r") as file:
     config = yaml.safe_load(file)
 
+from db import DatabaseHandler
+
 logging.basicConfig(
                     filename=config["logging"]["log_file"],
                     filemode="a",  # Append mode to preserve logs
@@ -192,4 +194,18 @@ class GmailProcessor:
 
 
 if __name__ == "__main__":
+    # Initialize DatabaseHandler
+    db_handler = DatabaseHandler(config)
+    
+    # Get the file name of the code that is running
+    file_name = os.path.basename(__file__)
+
+    # Count events and urls before emails.py
+    start_df = db_handler.count_events_urls_start(file_name)
+
     GmailProcessor.main()
+
+    # Count events and urls after emails.py
+    db_handler.count_events_urls_end(start_df, file_name)
+
+
