@@ -10,6 +10,7 @@ import pandas as pd
 from prefect import flow, task, get_run_logger
 import re
 import argparse
+import time  # needed for sleep in retry functions
 
 CONFIG_PATH = "config/config.yaml"
 
@@ -102,6 +103,47 @@ def dummy_post_process(step: str) -> bool:
     A dummy post-processing task that always returns True.
     """
     get_run_logger().info(f"{step} post-processing: no checks required.")
+    return True
+
+# ------------------------
+# NEW: TASK FOR EVENTS TABLE BACKUP AND DROP STEP
+# ------------------------
+@task
+def events_table_backup_and_drop():
+    """
+    Backs up the entire database to local_backup.dump and then drops the events table.
+    Uses the DATABASE_CONNECTION_STRING from the .env file.
+    """
+    logger = get_run_logger()
+    db_conn_str = os.getenv("DATABASE_CONNECTION_STRING")
+    if not db_conn_str:
+        logger.error("DATABASE_CONNECTION_STRING environment variable not set.")
+        raise Exception("Missing DATABASE_CONNECTION_STRING in environment.")
+
+    # Backup the database to local_backup.dump using pg_dump.
+    backup_cmd = f'pg_dump "{db_conn_str}" -F c -b -v -f local_backup.dump'
+    logger.info(f"Backing up database with command: {backup_cmd}")
+    try:
+        result_backup = subprocess.run(
+            backup_cmd, shell=True, check=True, capture_output=True, text=True
+        )
+        logger.info(f"Database backup completed: {result_backup.stdout}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Database backup failed: {e.stderr}")
+        raise e
+
+    # Drop the events table using psql.
+    drop_cmd = f'psql -d "{db_conn_str}" -c "DROP TABLE IF EXISTS events;"'
+    logger.info(f"Dropping events table with command: {drop_cmd}")
+    try:
+        result_drop = subprocess.run(
+            drop_cmd, shell=True, check=True, capture_output=True, text=True
+        )
+        logger.info(f"Events table drop result: {result_drop.stdout}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to drop events table: {e.stderr}")
+        raise e
+
     return True
 
 # ------------------------
@@ -453,7 +495,16 @@ def fb_step():
     
     run_fb_script()
     post_process_fb()
-    restore_config(original_config, "fb")
+    
+    # After fb.py runs, update the config so that llm.provider becomes 'mistral'
+    with open(CONFIG_PATH, "r") as f:
+        current_config = yaml.safe_load(f)
+    current_config['llm']['provider'] = 'mistral'
+    with open(CONFIG_PATH, "w") as f:
+        yaml.dump(current_config, f)
+    get_run_logger().info("fb_step: Updated config llm.provider to mistral for the remaining pipeline run.")
+    
+    # Do not restore the original config so that the change persists.
     return True
 
 # ------------------------
@@ -650,7 +701,7 @@ def irrelevant_rows_step():
     return True
 
 # ------------------------
-# NEW: TASKS FOR DB MAINTENANCE STEP
+# TASKS FOR DB MAINTENANCE STEP
 # ------------------------
 def run_command_with_retry(command, logger, attempts=3, delay=5, env=None):
     """
@@ -756,7 +807,9 @@ def send_text_message(message: str):
 # ------------------------
 # PIPELINE EXECUTION
 # ------------------------
+# Note: events_table_backup_and_drop is now the first step in the pipeline.
 PIPELINE_STEPS = [
+    ("events_table_backup_and_drop", events_table_backup_and_drop),
     ("emails", emails_step),
     ("gs", gs_step),
     ("ebs", ebs_step),

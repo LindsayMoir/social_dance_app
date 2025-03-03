@@ -91,7 +91,7 @@ class IrrelevantRowsHandler:
             format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
             datefmt='%Y-%m-%d %H:%M:%S'
         )
-        logging.info("irrelevant.py starting...")
+        logging.info("\n\nirrelevant_rows.py starting...")
         logging.info(f"def _setup_logging(): Logging configured and run started at time: {datetime.now()}")
 
     
@@ -355,9 +355,6 @@ if __name__ == "__main__":
 
     # Instantiate class libraries
     irrelevant = IrrelevantRowsHandler('config/config.yaml')
-
-    logging.info("irrelevant_rows.py starting...")
-    logging.info(f"__main__: Starting the crawler process at {start_time}")
 
     # Process irrelevant rows
     irrelevant.process_rows()

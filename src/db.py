@@ -299,11 +299,9 @@ class DatabaseHandler():
                 result = connection.execute(text(query), params or {})
                 if result.returns_rows:
                     rows = result.fetchall()
-                    logging.info(f"def execute_query(): if result: for {query, params} is {result.rowcount}")
                     return rows
                 else:
                     connection.commit()
-                    logging.info(f"def execute_query(): if result for {query, params} is None: {result.rowcount}")
                     return result.rowcount  # Return the number of rows affected
                     
         except SQLAlchemyError as e:
