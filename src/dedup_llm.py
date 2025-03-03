@@ -85,7 +85,7 @@ class DeduplicationHandler:
             prompt_template = file.read()
 
         prompt = f"{prompt_template}\n{chunk}"
-        # logging.info(f"def load_prompt(): prompt is: \n{prompt}")
+        # logging.info(f"def load_prompt(): prompt loaded.")
 
         return prompt
     
@@ -196,7 +196,7 @@ class DeduplicationHandler:
         """
         try:
             prompt = self.load_prompt(chunk.to_markdown())
-            logging.info(f"def process_chunk_with_llm(): Prompt for chunk {chunk_index}:\n{prompt}")
+            logging.info(f"def process_chunk_with_llm(): Prompt for chunk {chunk_index}.")
 
             response_chunk = self.llm_handler.query_llm(prompt)
 
@@ -272,7 +272,8 @@ if __name__ == "__main__":
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-    # Initialize the database handler
+    # Initialize the class libraries
+    deduper = DeduplicationHandler()
     db_handler = DatabaseHandler(config)
 
     # Get the file name of the code that is running
@@ -281,9 +282,7 @@ if __name__ == "__main__":
     # Count events and urls before cleanup
     start_df = db_handler.count_events_urls_start(file_name)
 
-    deduper = DeduplicationHandler()
     total_deleted = None
-
     # Loop until no duplicates are flagged for deletion (i.e. total_deleted == 0)
     while True:
         total_deleted = deduper.process_duplicates()

@@ -7,7 +7,7 @@ constants:
   location: '%20victoria%20bc%20canada%20'
 crawling:
   depth_limit: 3
-  headless: True
+  headless: true
   max_crawl_trys: 3
   max_website_urls: 10
   scroll_depth: 3
@@ -33,7 +33,7 @@ llm:
   mistral_model: mistral-large-latest
   openai_model: o3-mini-2025-01-31
   provider: mistral
-  spend_money: True
+  spend_money: true
 location:
   epicentre: Victoria, British Columbia, Canada
 logging:
@@ -66,10 +66,10 @@ regex:
 search:
   gs_num_results: 10
 startup:
-  use_db: False
+  use_db: false
 testing:
-  drop_tables: False
+  drop_tables: false
   fast_api_url: http://localhost:8080/query
-  local: False
+  local: false
   nof_no_url_events: 10
-  status: True
+  status: true

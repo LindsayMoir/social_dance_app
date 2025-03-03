@@ -1541,7 +1541,7 @@ class DatabaseHandler():
         else:
             results_df.to_csv(output_file, mode='a', header=False, index=False)
 
-        logging.info(f"Wrote events and urls statistics to: {file_name}")
+        logging.info(f"def count_events_urls_end(): Wrote events and urls statistics to: {file_name}")
     
 
     def driver(self):

@@ -44,6 +44,12 @@ class IrrelevantRowsHandler:
         self.db_handler = DatabaseHandler(self.config)
         self.llm_handler = LLMHandler(config_path)
 
+        # Get the file name of the code that is running
+        self.file_name = os.path.basename(__file__)
+
+        # Count events and urls before irrelevant_rows.py starts
+        self.start_df = self.db_handler.count_events_urls_start(self.file_name)
+
     
     def _load_config(self, config_path):
         """
@@ -338,32 +344,23 @@ class IrrelevantRowsHandler:
         else:
             logging.info("def delete_irrelevant_rows(): No events marked for deletion.")
 
+        # Count events and urls after irrelevant_rows.py
+        self.db_handler.count_events_urls_end(self.start_df, self.file_name)
         return None
 
 
 if __name__ == "__main__":
 
     start_time = datetime.now()
-    logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
+
+    # Instantiate class libraries
+    irrelevant = IrrelevantRowsHandler('config/config.yaml')
+
     logging.info("irrelevant_rows.py starting...")
+    logging.info(f"__main__: Starting the crawler process at {start_time}")
 
-    with open('config/config.yaml', 'r') as file:
-        config = yaml.safe_load(file)
-
-    # Initialize DatabaseHandler
-    db_handler = DatabaseHandler(config)
-
-    # Get the file name of the code that is running
-    file_name = os.path.basename(__file__)
-
-    # Count events and urls before irrelevant_rows.py
-    start_df = db_handler.count_events_urls_start(file_name)
-
-    irrelevant = IrrelevantRowsHandler()
+    # Process irrelevant rows
     irrelevant.process_rows()
-
-    # Count events and urls after irrelevant_rows.py
-    db_handler.count_events_urls_end(start_df, file_name)
 
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")
