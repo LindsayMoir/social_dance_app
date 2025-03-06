@@ -22,7 +22,6 @@ Dependencies:
 import asyncio
 import googlemaps
 import logging
-
 import pandas as pd
 from fuzzywuzzy import fuzz
 import yaml
@@ -33,8 +32,6 @@ from bs4 import BeautifulSoup
 import os
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 import random
-from sqlalchemy.dialects.postgresql import Table, insert
-import uuid
 
 from db import DatabaseHandler
 from llm import LLMHandler
@@ -50,6 +47,7 @@ class CleanUp:
 
         # Establish database connection
         self.conn = self.db_handler.get_db_connection()
+        print("Database connection established", self.conn)
         if self.conn is None:
             raise ConnectionError("DatabaseHandler: Failed to establish a database connection.")
 
@@ -595,7 +593,7 @@ class CleanUp:
         else:
             logging.info("delete_events_more_than_9_months_future(): No events found more than 9 months in the future.")
 
-
+    
     def fetch_geocode_data(self, location):
         """
         Uses the Google Maps Geocoding API to fetch the municipality (locality)
@@ -627,54 +625,61 @@ class CleanUp:
                         break
                 if municipality and geocoded_postal_code:
                     break
+        
+        # Fix postal code formatting
+        if geocoded_postal_code:
+            geocoded_postal_code = geocoded_postal_code.replace(" ", "")
 
         return municipality, geocoded_postal_code
 
-    def handle_missing_address(self, row, municipality, geocoded_postal_code, new_address_mapping):
+    def handle_missing_address(self, row, municipality, geocoded_postal_code):
         """
         Processes an event row that has no associated address (address_id is None).
 
-        If a geocoded postal code exists, append it to the event's location,
-        create a new address record (using a generated UUID), and return both an
-        event update and a new address record.
-
+        If a geocoded postal code exists, this method builds a minimal address
+        dictionary and calls get_address_id() (from DatabaseHandler) to insert or update
+        the address table and return a new address_id. Then, it returns an event update dict.
+        
         Parameters:
             row (Series): A pandas Series representing the event row.
-            municipality (str): The municipality found from geocoding.
+            municipality (str): The municipality from geocoding.
             geocoded_postal_code (str): The postal code from geocoding.
-            new_address_mapping (dict): Mapping to avoid duplicate address records.
-
+        
         Returns:
-            tuple: (event_update, new_address_record) where each is a dict,
-                   or (None, None) if no update is needed.
+            dict or None: An event update dictionary if an update is required.
         """
         if geocoded_postal_code:
-            new_location = f"{row['location']} {geocoded_postal_code}"
-            if geocoded_postal_code in new_address_mapping:
-                new_address_id = new_address_mapping[geocoded_postal_code]
-            else:
-                new_address_id = str(uuid.uuid4())
-                new_address_mapping[geocoded_postal_code] = new_address_id
-            new_address_record = {
-                "address_id": new_address_id,
+            # Build a minimal address dictionary; use the event's location as the full address.
+            address_dict = {
+                "full_address": row['location'],
+                "street_number": None,
+                "street_name": None,
+                "street_type": None,
+                "postal_box": None,
+                "city": municipality,
+                "province_or_state": None,
                 "postal_code": geocoded_postal_code,
-                "city": municipality if municipality else None
+                "country_id": None
             }
-            event_update = {
-                "event_id": row['event_id'],
-                "location": new_location,
-                "address_id": new_address_id
-            }
-            return event_update, new_address_record
-        return None, None
+            new_address_id = self.db_handler.get_address_id(address_dict)
+            if new_address_id:
+                new_location = f"{row['location']} {geocoded_postal_code}"
+                return {
+                    "event_id": row['event_id'],
+                    "location": new_location,
+                    "address_id": new_address_id
+                }
+            else:
+                logging.error(f"update_events_and_address_with_geocoded_data(): Could not get address_id for event_id {row['event_id']}")
+        return None
 
     def handle_existing_address(self, row, municipality, geocoded_postal_code):
         """
         Processes an event row that already has an associated address.
 
-        If a geocoded postal code exists, logs a message if it is different
-        from the existing postal code. If a municipality exists, returns an update
-        for the address record (updating the city column).
+        If a geocoded postal code exists, logs a message if it is different from
+        the existing postal code. If a municipality exists, returns an update for the
+        address record (updating the city column).
 
         Parameters:
             row (Series): A pandas Series representing the event row.
@@ -682,7 +687,7 @@ class CleanUp:
             geocoded_postal_code (str): The postal code from geocoding.
 
         Returns:
-            dict or None: An address update dict if an update is required, else None.
+            dict or None: An address update dictionary if an update is required, else None.
         """
         if geocoded_postal_code:
             if row['postal_code'] and row['postal_code'] != geocoded_postal_code:
@@ -697,19 +702,19 @@ class CleanUp:
                 }
         return None
 
-    async def update_events_and_address_with_geocoded_data(self):
+    def update_events_and_address_with_geocoded_data(self):
         """
         Processes events (via a LEFT JOIN with address) and uses geocoding to:
 
-          1. For events with no address (address_id is NULL) but geocoded postal_code exists:
+          1. For events with no address (address_id is NULL) but a geocoded postal_code exists:
              - Append the postal code to the event's location.
-             - Create a new address record in the address table with the geocoded postal_code
-               and municipality (as city).
+             - Build a minimal address record and call get_address_id() to insert/update
+               the address table and retrieve a new address_id.
              - Update the event row with the new address_id.
           2. For events with an existing address:
              - Log differences if the postal_code is different.
              - If a municipality exists, update the corresponding address record's city column.
-
+        
         Batch updates are performed using multiple_db_inserts().
         """
         sql = """
@@ -723,25 +728,24 @@ class CleanUp:
             LEFT JOIN
                 address a ON e.address_id = a.address_id;
         """
-        events_df = pd.read_sql(sql, self.conn)  # Expected to retrieve ~1300 rows
-
+        events_df = pd.read_sql(sql, self.conn).head()  # ***TEMP: Limit to 5 rows for testing***
         events_updates = []    # For events table updates.
-        address_updates = []   # For address table inserts/updates.
-        new_address_mapping = {}  # Avoid duplicate new address records.
+        address_updates = []   # For address table updates (for existing addresses).
 
         for idx, row in events_df.iterrows():
+            # Check that location is not blank.
             location_value = row['location']
             if location_value and str(location_value).strip():
                 municipality, geocoded_postal_code = self.fetch_geocode_data(location_value)
             else:
                 municipality, geocoded_postal_code = None, None
 
+            # Case 1: No associated address and a geocoded postal code exists.
             if (row['address_id'] is None or pd.isna(row['address_id'])) and geocoded_postal_code:
-                event_update, new_address_record = self.handle_missing_address(row, municipality, geocoded_postal_code, new_address_mapping)
+                event_update = self.handle_missing_address(row, municipality, geocoded_postal_code)
                 if event_update:
                     events_updates.append(event_update)
-                if new_address_record:
-                    address_updates.append(new_address_record)
+            # Case 2: The event has an existing address.
             elif row['address_id'] and not pd.isna(row['address_id']):
                 addr_update = self.handle_existing_address(row, municipality, geocoded_postal_code)
                 if addr_update:
@@ -756,6 +760,22 @@ class CleanUp:
             self.db_handler.multiple_db_inserts(table_name="events", values=events_updates)
         else:
             logging.info("update_events_and_address_with_geocoded_data(): No events updates to perform.")
+
+
+# Example usage in __main__:
+if __name__ == "__main__":
+    from sqlalchemy import create_engine, MetaData
+
+    engine = create_engine("postgresql://user:password@localhost/your_database")
+    conn = engine.connect()
+    metadata = MetaData(bind=engine)
+
+    # Instantiate the CleanUp class.
+    cleanup_instance = CleanUp(conn, metadata)
+    
+    # Run the update process.
+    cleanup_instance.update_events_and_address_with_geocoded_data()
+
 
 
     def fetch_events_from_db(self):

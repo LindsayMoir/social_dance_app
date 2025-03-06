@@ -672,9 +672,11 @@ class FacebookEventScraper():
         4. For each extracted Facebook URL, processes it using process_fb_url.
         5. Writes run statistics to the database.
         """
+        # Read in keywords and append a column for processed status
         keywords_df = pd.read_csv(self.config['input']['data_keywords'])
+        keywords_df['processed'] = keywords_df['processed'] = False
 
-        for _, row in keywords_df.iterrows():
+        for idx, row in keywords_df.iterrows():
             keywords_list = row['keywords'].split(',')
             source = row.get('source', '')
 
@@ -716,6 +718,11 @@ class FacebookEventScraper():
                             logging.info(f"def driver_fb_search(): No keywords found in extracted text for URL: {url}.")
                     else:
                         logging.info(f"def driver_fb_search(): URL already visited: {url}")
+
+            # Checkpoint the keywords
+            keywords_df.loc[idx, 'processed'] = True
+            keywords_df.to_csv(self.config['checkpoint']['fb_search'], index=False)
+            logging.info(f"def driver_fb_search(): Keywords checkpoint updated.")
 
 
     def driver_fb_urls(self):

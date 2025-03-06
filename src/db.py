@@ -129,6 +129,7 @@ class DatabaseHandler():
                 f"{os.getenv('DATABASE_HOST')}/"
                 f"{os.getenv('DATABASE_NAME')}"
             )
+            print("Got here, con string created", connection_string)
 
             # Create and return the SQLAlchemy engine
             engine = create_engine(connection_string, isolation_level="AUTOCOMMIT")
