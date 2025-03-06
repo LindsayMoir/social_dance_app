@@ -49,28 +49,15 @@ Note:
     - Logging is set up in the main block to record the crawler’s operation and 
       any encountered errors.
 """
-
-
 import base64
-from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, timezone
-import json
 import logging
-from openai import OpenAI
 import os
 import pandas as pd
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
-import random
 import re
 import requests
 import scrapy
 from scrapy.crawler import CrawlerProcess
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import create_engine, update, MetaData, text
-import string
-import sys
-import time
 import yaml
 
 from credentials import get_credentials
@@ -447,10 +434,10 @@ class EventSpider(scrapy.Spider):
             logging.info(f"def get_calendar_events(): No events found for calendar_id: {calendar_id}")
             return df
 
-        return self.clean_events(df)
+        return self.clean_calendar_events(df)
 
 
-    def clean_events(self, df):
+    def clean_calendar_events(self, df):
         """
         This function performs the following operations:
         1. Ensures required columns exist in the DataFrame.
@@ -530,19 +517,21 @@ class EventSpider(scrapy.Spider):
         # Dictionary to map words of interest (woi) to 'Type_of_Event'
         event_type_map = {
             'class': 'class',
+            'classes': 'class',
             'dance': 'social dance',
             'dancing': 'social dance',
             'weekend': 'workshop',
-            'workshop': 'workshop'
+            'workshop': 'workshop',
+            'rehearsal': 'rehearsal'
         }
 
         # Function to determine 'Type_of_Event'
-        def determine_event_type(name):
-            name_lower = name.lower()
-            if 'class' in name_lower and 'dance' in name_lower:
-                return 'social dance'  # Priority rule
+        def determine_event_type(name, description):
+            combined_text = f"{name} {description}".lower()
+            if 'class' in combined_text and 'dance' in combined_text:
+                return 'class, social dance'  # Priority rule
             for woi, event_type in event_type_map.items():
-                if woi in name_lower:
+                if woi in combined_text:
                     return event_type
             return 'other'  # Default if no woi match
 

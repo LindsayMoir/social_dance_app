@@ -80,7 +80,6 @@ import pandas as pd
 from playwright.sync_api import sync_playwright
 import random
 import re
-import requests
 from sqlalchemy import text
 import time
 import yaml
@@ -534,6 +533,16 @@ class FacebookEventScraper():
                             logging.info(f"def scrape_events(): No text extracted for URL: {link}.")
 
             logging.info(f"def scrape_events(): Extracted text from {len(extracted_text_list)} events.")
+
+            # Checkpoint history. Write extracted_text_list to a csv file
+            extracted_text_df = pd.DataFrame(extracted_text_list, columns=['url', 'extracted_text'])
+            output_path = self.config['checkpoint']['extracted_text']
+            if os.path.exists(output_path):
+                extracted_text_df.to_csv(output_path, mode='a', header=False, index=False)
+            else:
+                extracted_text_df.to_csv(output_path, index=False)
+            logging.info(f"def scrape_events(): Extracted text data written to {output_path}.")
+
             return search_url, extracted_text_list
 
         except Exception as e:
@@ -619,7 +628,7 @@ class FacebookEventScraper():
         llm_response = llm_handler.query_llm(prompt)
 
         # If LLM says "No events found," update URL as non-relevant
-        if "No events found" in llm_response:
+        if llm_response is None or "No events found" in llm_response:
             logging.info(f"process_fb_url(): LLM determined no valid events for {url}. Marking as processed.")
             db_handler.update_url(url, relevant, increment_crawl_try)
             return
@@ -676,12 +685,6 @@ class FacebookEventScraper():
             self.total_url_attempts += len(extracted_text_list)  # Update total URL attempts
 
             if extracted_text_list:
-                # Save extracted text data to CSV
-                extracted_text_df = pd.DataFrame(extracted_text_list, columns=['url', 'extracted_text'])
-                output_path = self.config['output']['fb_search_results']
-                extracted_text_df.to_csv(output_path, index=False)
-                logging.info(f"def driver_fb_search(): Extracted text data written to {output_path}.")
-
                 for url, extracted_text in extracted_text_list:
                     if url not in self.urls_visited and 'facebook.com' in url:
                         logging.info(f"def driver_fb_search(): Processing Facebook URL: {url}")
@@ -697,6 +700,7 @@ class FacebookEventScraper():
                         # Check for keywords in the extracted text
                         found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
                         if found_keywords:
+                            logging.info(f"def driver_fb_search(): Keywords found in text for {url}.")
                             self.urls_with_found_keywords += 1  # Increment URLs with found keywords
 
                             # Set prompt and process LLM response
@@ -706,6 +710,7 @@ class FacebookEventScraper():
                             # If events were successfully extracted and written to the DB
                             if llm_response:
                                 self.events_written_to_db += 1
+                                logging.info(f"def driver_fb_search(): Events successfully written to DB for {url}.")
 
                         else:
                             logging.info(f"def driver_fb_search(): No keywords found in extracted text for URL: {url}.")
@@ -718,8 +723,9 @@ class FacebookEventScraper():
         1. Gets all of the urls from fb_urls table.
         2. For each url, extracts text and processes it.
         3. If valid events are found, writes them to the database; otherwise, updates the URL.
+        4. Writes every processed URL—including event links—to the checkpoint CSV.
         """
-        query =text("""
+        query = text("""
         SELECT * 
         FROM urls
         WHERE link ILIKE :link_pattern
@@ -728,47 +734,83 @@ class FacebookEventScraper():
         fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
         logging.info(f"def driver_fb_urls(): Retrieved {fb_urls_df.shape[0]} Facebook URLs from the database.")
 
-        # Checkpoint history. Write fb_urls_df to a csv file
+        # Add checkpoint columns for base URLs (these columns will also be used for event links)
+        fb_urls_df['processed'] = False
+        fb_urls_df['events_processed'] = False
+
+        # Write initial checkpoint to disk
         fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
         
         if fb_urls_df.shape[0] > 0:
-            for _, row in fb_urls_df.iterrows():
-                url = row['link']
+            for idx, row in fb_urls_df.iterrows():
+                base_url = row['link']
                 source = row['source']
                 keywords = row['keywords']
-                logging.info(f"def driver_fb_urls(): Processing URL: {url}")
-                if url in self.urls_visited:
-                    pass
-
+                logging.info(f"def driver_fb_urls(): Processing URL: {base_url}")
+                if base_url in self.urls_visited:
+                    continue
                 else:
-                    self.urls_visited.add(url)
-                    self.process_fb_url(url, source, keywords)
+                    self.urls_visited.add(base_url)
+                    self.process_fb_url(base_url, source, keywords)
+
+                    # Mark the base URL as processed (base processing done)
+                    fb_urls_df.loc[fb_urls_df['link'] == base_url, 'processed'] = True
+
+                    # Overwrite the checkpoint file after processing the base URL
+                    fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+                    logging.info(f"def driver_fb_urls(): Base URL {base_url} marked as processed.")
+
+                    # Check urls_run_limit for the base URL
                     if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                        break   
+                        break
 
-                    # Get the event links from the facebook url
-                    fb_event_links = self.extract_event_links(url)
+                    # Extract event links from the base URL
+                    fb_event_links = self.extract_event_links(base_url)
 
-                    # Get the event link from the event tab from the group page
-                    if "facebook.com/groups" in url:
-                        fb_group_events = self.fb_group_event_links(url)
-
-                        # Merge fb_group_events with fb_event_links
+                    # If this is a group URL, try to extract additional event links
+                    if "facebook.com/groups" in base_url:
+                        fb_group_events = self.fb_group_event_links(base_url)
                         if fb_group_events:
                             if fb_event_links:
                                 fb_event_links.update(fb_group_events)
                             else:
-                                fb_event_links = fb_group_events.union([url])
-
-                    # Process the event links
-                    for url in fb_event_links:
-                        if url in self.urls_visited:
-                            pass
+                                fb_event_links = fb_group_events.copy()
+                    
+                    # Process each event link and update the checkpoint file
+                    for event_url in fb_event_links:
+                        if event_url in self.urls_visited:
+                            continue
                         else:
-                            self.urls_visited.add(url)
-                            self.process_fb_url(url, source, keywords)
+                            self.urls_visited.add(event_url)
+                            self.process_fb_url(event_url, source, keywords)
+
+                            # If the event URL is not already in fb_urls_df, add a new row.
+                            if event_url not in fb_urls_df['link'].values:
+                                new_row = pd.DataFrame({
+                                    'link': [event_url],
+                                    'source': [source],
+                                    'keywords': [keywords],
+                                    'processed': [True],
+                                    'events_processed': [True]
+                                })
+                                fb_urls_df = pd.concat([fb_urls_df, new_row], ignore_index=True)
+                            else:
+                                # If the event URL already exists, mark it as processed.
+                                fb_urls_df.loc[fb_urls_df['link'] == event_url, 'processed'] = True
+                                fb_urls_df.loc[fb_urls_df['link'] == event_url, 'events_processed'] = True
+                            
+                            # Write the updated dataframe to the checkpoint file.
+                            fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+                            logging.info(f"def driver_fb_urls(): Event URL {event_url} marked as processed.")
+
+                            # Check urls_run_limit for event links
                             if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                                 break
+
+                    # Mark that the base URL has finished processing event links as well.
+                    fb_urls_df.loc[fb_urls_df['link'] == base_url, 'events_processed'] = True
+                    fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+                    logging.info(f"def driver_fb_urls(): Base URL {base_url} event links marked as processed.")
         else:
             logging.warning("def driver_fb_urls(): No rows returned from the sql query.")
 

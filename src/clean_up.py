@@ -20,8 +20,9 @@ Dependencies:
 """
 
 import asyncio
+import googlemaps
 import logging
-import random
+
 import pandas as pd
 from fuzzywuzzy import fuzz
 import yaml
@@ -29,8 +30,11 @@ from googleapiclient.discovery import build
 from datetime import datetime
 import re
 from bs4 import BeautifulSoup
+import os
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-from sqlalchemy.dialects.postgresql import insert
+import random
+from sqlalchemy.dialects.postgresql import Table, insert
+import uuid
 
 from db import DatabaseHandler
 from llm import LLMHandler
@@ -592,6 +596,168 @@ class CleanUp:
             logging.info("delete_events_more_than_9_months_future(): No events found more than 9 months in the future.")
 
 
+    def fetch_geocode_data(self, location):
+        """
+        Uses the Google Maps Geocoding API to fetch the municipality (locality)
+        and postal code for a given location.
+
+        Parameters:
+            location (str): The address/location to geocode.
+
+        Returns:
+            tuple: (municipality, geocoded_postal_code) as strings (or None if not found).
+        """
+        municipality, geocoded_postal_code = None, None
+        try:
+            gmaps = googlemaps.Client(key=self.api_key)
+            geocode_result = gmaps.geocode(location)
+        except Exception as e:
+            logging.error(f"fetch_geocode_data(): Error calling geocode API: {e}")
+            return None, None
+
+        if geocode_result:
+            for result in geocode_result:
+                for component in result.get("address_components", []):
+                    types = component.get("types", [])
+                    if "locality" in types and municipality is None:
+                        municipality = component.get("long_name")
+                    if "postal_code" in types and geocoded_postal_code is None:
+                        geocoded_postal_code = component.get("long_name")
+                    if municipality and geocoded_postal_code:
+                        break
+                if municipality and geocoded_postal_code:
+                    break
+
+        return municipality, geocoded_postal_code
+
+    def handle_missing_address(self, row, municipality, geocoded_postal_code, new_address_mapping):
+        """
+        Processes an event row that has no associated address (address_id is None).
+
+        If a geocoded postal code exists, append it to the event's location,
+        create a new address record (using a generated UUID), and return both an
+        event update and a new address record.
+
+        Parameters:
+            row (Series): A pandas Series representing the event row.
+            municipality (str): The municipality found from geocoding.
+            geocoded_postal_code (str): The postal code from geocoding.
+            new_address_mapping (dict): Mapping to avoid duplicate address records.
+
+        Returns:
+            tuple: (event_update, new_address_record) where each is a dict,
+                   or (None, None) if no update is needed.
+        """
+        if geocoded_postal_code:
+            new_location = f"{row['location']} {geocoded_postal_code}"
+            if geocoded_postal_code in new_address_mapping:
+                new_address_id = new_address_mapping[geocoded_postal_code]
+            else:
+                new_address_id = str(uuid.uuid4())
+                new_address_mapping[geocoded_postal_code] = new_address_id
+            new_address_record = {
+                "address_id": new_address_id,
+                "postal_code": geocoded_postal_code,
+                "city": municipality if municipality else None
+            }
+            event_update = {
+                "event_id": row['event_id'],
+                "location": new_location,
+                "address_id": new_address_id
+            }
+            return event_update, new_address_record
+        return None, None
+
+    def handle_existing_address(self, row, municipality, geocoded_postal_code):
+        """
+        Processes an event row that already has an associated address.
+
+        If a geocoded postal code exists, logs a message if it is different
+        from the existing postal code. If a municipality exists, returns an update
+        for the address record (updating the city column).
+
+        Parameters:
+            row (Series): A pandas Series representing the event row.
+            municipality (str): The municipality from geocoding.
+            geocoded_postal_code (str): The postal code from geocoding.
+
+        Returns:
+            dict or None: An address update dict if an update is required, else None.
+        """
+        if geocoded_postal_code:
+            if row['postal_code'] and row['postal_code'] != geocoded_postal_code:
+                logging.info(
+                    f"handle_existing_address(): Existing postal_code {row['postal_code']} is different than "
+                    f"Google's geocoded_postal_code {geocoded_postal_code} for event_id {row['event_id']}"
+                )
+            if municipality:
+                return {
+                    "address_id": row['address_id'],
+                    "city": municipality
+                }
+        return None
+
+    async def update_events_and_address_with_geocoded_data(self):
+        """
+        Processes events (via a LEFT JOIN with address) and uses geocoding to:
+
+          1. For events with no address (address_id is NULL) but geocoded postal_code exists:
+             - Append the postal code to the event's location.
+             - Create a new address record in the address table with the geocoded postal_code
+               and municipality (as city).
+             - Update the event row with the new address_id.
+          2. For events with an existing address:
+             - Log differences if the postal_code is different.
+             - If a municipality exists, update the corresponding address record's city column.
+
+        Batch updates are performed using multiple_db_inserts().
+        """
+        sql = """
+            SELECT
+                e.event_id,
+                e.location,
+                e.address_id,
+                a.postal_code
+            FROM
+                events e
+            LEFT JOIN
+                address a ON e.address_id = a.address_id;
+        """
+        events_df = pd.read_sql(sql, self.conn)  # Expected to retrieve ~1300 rows
+
+        events_updates = []    # For events table updates.
+        address_updates = []   # For address table inserts/updates.
+        new_address_mapping = {}  # Avoid duplicate new address records.
+
+        for idx, row in events_df.iterrows():
+            location_value = row['location']
+            if location_value and str(location_value).strip():
+                municipality, geocoded_postal_code = self.fetch_geocode_data(location_value)
+            else:
+                municipality, geocoded_postal_code = None, None
+
+            if (row['address_id'] is None or pd.isna(row['address_id'])) and geocoded_postal_code:
+                event_update, new_address_record = self.handle_missing_address(row, municipality, geocoded_postal_code, new_address_mapping)
+                if event_update:
+                    events_updates.append(event_update)
+                if new_address_record:
+                    address_updates.append(new_address_record)
+            elif row['address_id'] and not pd.isna(row['address_id']):
+                addr_update = self.handle_existing_address(row, municipality, geocoded_postal_code)
+                if addr_update:
+                    address_updates.append(addr_update)
+
+        if address_updates:
+            self.db_handler.multiple_db_inserts(table_name="address", values=address_updates)
+        else:
+            logging.info("update_events_and_address_with_geocoded_data(): No address updates to perform.")
+
+        if events_updates:
+            self.db_handler.multiple_db_inserts(table_name="events", values=events_updates)
+        else:
+            logging.info("update_events_and_address_with_geocoded_data(): No events updates to perform.")
+
+
     def fetch_events_from_db(self):
         """Fetch all events from the database."""
         query = "SELECT * FROM events"
@@ -639,13 +805,14 @@ class CleanUp:
 
         # Convert DataFrame to list of dictionaries for multiple inserts
         values = updated_df.to_dict(orient="records")
-        self.db_handler.multiple_db_inserts(values)
+        table_name = "events"
+        self.db_handler.multiple_db_inserts(table_name, values)
         logging.info(f"_process_updated_events(): Updated {len(values)} records in the database.")
-
 
 # ------------------------------------------------------------------------
 # Main entry point - run asynchronously
 # ------------------------------------------------------------------------
+
 async def main():
     with open("config/config.yaml", "r") as file:
         config = yaml.safe_load(file)
@@ -673,17 +840,20 @@ async def main():
     # Count events and urls before cleanup
     start_df = db_handler.count_events_urls_start(file_name)
 
-    # Fix no urls in events
-    await clean_up_instance.process_events_without_url()
+    # # Fix no urls in events
+    # await clean_up_instance.process_events_without_url()
 
-    # Fix incorrect dance_styles
-    await clean_up_instance.fix_incorrect_dance_styles()
+    # # Fix incorrect dance_styles
+    # await clean_up_instance.fix_incorrect_dance_styles()
 
-    # Delete events outside of BC, Canada
-    await clean_up_instance.delete_events_outside_bc()
+    # # Delete events outside of BC, Canada
+    # await clean_up_instance.delete_events_outside_bc()
 
-    # Delete events more than 9 months in the future
-    await clean_up_instance.delete_events_more_than_9_months_future()
+    # # Delete events more than 9 months in the future
+    # await clean_up_instance.delete_events_more_than_9_months_future()
+
+    # Add municipality and sometimes postal_code to address table
+    await clean_up_instance.update_events_and_address_with_geocoded_data()
 
     db_handler.count_events_urls_end(start_df, file_name)
     logging.info(f"Wrote events and urls statistics to: {file_name}")

@@ -59,10 +59,8 @@ Note:
 """
 
 from datetime import datetime
-
 from dotenv import load_dotenv
 load_dotenv()
-
 from fuzzywuzzy import fuzz
 import logging
 import numpy as np
@@ -410,109 +408,6 @@ class DatabaseHandler():
             logging.info("def write_url_to_db(): URL '%s' inserted or updated in the 'urls' table.", link)
         except Exception as e:
             logging.error("def write_url_to_db(): Failed to insert/update URL '%s': %s", link, e)
-    
-
-    def clean_events(self, df):
-        """
-        Cleans and processes the events DataFrame.
-
-        Args:
-            df (pandas.DataFrame): The input DataFrame containing event data.
-
-        Returns:
-            pandas.DataFrame: The cleaned and processed DataFrame.
-        """
-        # Avoid modifying the original DataFrame
-        df = df.copy()
-
-        # Ensure required columns exist
-        required_columns = ['htmlLink', 'summary', 'start.date', 'end.date', 'location', 'start.dateTime', 'end.dateTime', 'description']
-        for col in required_columns:
-            if col not in df.columns:
-                df[col] = ''
-
-        # Move values from 'start.date' and 'end.date' to 'start.dateTime' and 'end.dateTime' if necessary
-        df['start.dateTime'] = df['start.dateTime'].fillna(df['start.date'])
-        df['end.dateTime'] = df['end.dateTime'].fillna(df['end.date'])
-
-        # Drop the 'start.date' and 'end.date' columns
-        df.drop(columns=['start.date', 'end.date'], inplace=True)
-
-        # Subset df to only useful columns 
-        df = df[['htmlLink', 'summary', 'location', 'start.dateTime', 'end.dateTime', 'description']]
-
-        # Extract and convert the price
-        df['Price'] = df['description'].str.extract(r'\$(\d{1,5})')[0]
-
-        # Clean the description
-        df['description'] = df['description'].apply(
-            lambda x: re.sub(r'\s{2,}', ' ', re.sub(r'<[^>]*>', ' ', str(x) if pd.notnull(x) else '')).strip()
-        ).str.replace('&#39;', "'").str.replace("you're", "you are")
-
-        # Function to split datetime into date and time
-        def split_datetime(datetime_str):
-            if 'T' in datetime_str:
-                date_str, time_str = datetime_str.split('T')
-                time_str = time_str[:8]  # Remove the timezone part
-            else:
-                date_str = datetime_str
-                time_str = None
-            return date_str, time_str
-
-        # Apply the function to extract dates and times
-        df['Start_Date'], df['Start_Time'] = zip(*df['start.dateTime'].apply(lambda x: split_datetime(x) if x else ('', '')))
-        df['End_Date'], df['End_Time'] = zip(*df['end.dateTime'].apply(lambda x: split_datetime(x) if x else ('', '')))
-
-        # Drop columns
-        df.drop(columns=['start.dateTime', 'end.dateTime'], inplace=True)
-
-        # Rename columns
-        df = df.rename(columns={
-            'htmlLink': 'URL',
-            'summary': 'Name_of_the_Event',
-            'location': 'Location',
-            'description': 'Description'
-        })
-
-        # Add 'Type_of_Event' column
-        # Dictionary to map words of interest (woi) to 'Type_of_Event'
-        event_type_map = {
-            'class': 'class',
-            'dance': 'social dance',
-            'dancing': 'social dance',
-            'weekend': 'workshop',
-            'workshop': 'workshop',
-            'rehearsal': 'rehearsal'
-        }
-
-        # Function to determine 'Type_of_Event'
-        def determine_event_type(name):
-            name_lower = name.lower()
-            if 'class' in name_lower and 'dance' in name_lower:
-                return 'social dance'  # Priority rule
-            for woi, event_type in event_type_map.items():
-                if woi in name_lower:
-                    return event_type
-            return 'other'  # Default if no woi match
-
-        # Apply the function to determine 'Type_of_Event'
-        df['Type_of_Event'] = df['Description'].apply(determine_event_type)
-
-        # Convert Start_Date and End_Date to date format
-        df['Start_Date'] = pd.to_datetime(df['Start_Date'], errors='coerce').dt.date
-        df['End_Date'] = pd.to_datetime(df['End_Date'], errors='coerce').dt.date
-
-        # Extract the day of the week from Start_Date and add it to the Day_of_Week column
-        df['Day_of_Week'] = pd.to_datetime(df['Start_Date'], errors='coerce').dt.day_name()
-
-        # Reorder the columns
-        df = df[['URL', 'Type_of_Event', 'Name_of_the_Event', 'Day_of_Week', 'Start_Date', 
-                 'End_Date', 'Start_Time', 'End_Time', 'Price', 'Location', 'Description']]
-
-        # Sort the DataFrame by Start_Date and Start_Time
-        df = df.sort_values(by=['Start_Date', 'Start_Time']).reset_index(drop=True)
-
-        return df
     
 
     def write_events_to_db(self, df, url, source, keywords):
@@ -1360,34 +1255,37 @@ class DatabaseHandler():
         return success_count == len(event_ids)  # Return True if all deletions were successful
 
 
-    def multiple_db_inserts(self, values):
+    def multiple_db_inserts(self, table_name, values):
         """
-        Inserts or updates multiple records in the events table.
+        Inserts or updates multiple records in the specified table.
 
         Parameters:
-        values (list of dict): List of dictionaries where each dict represents a row to insert/update.
+            table_name (str): The name of the table to insert/update.
+            values (list of dict): List of dictionaries where each dict represents a row to insert/update.
         """
         if not values:
             logging.info("multiple_db_inserts(): No values to insert or update.")
             return
 
         try:
-            # Get reference to the 'events' table from metadata
-            events_table = Table("events", self.metadata, autoload_with=self.conn)
-
+            table = Table(table_name, self.metadata, autoload_with=self.conn)
             with self.conn.begin() as conn:
                 for row in values:
-                    stmt = insert(events_table).values(row)
+                    stmt = insert(table).values(row)
+                    if table_name == "address":
+                        pk = "address_id"
+                    elif table_name == "events":
+                        pk = "event_id"
+                    else:
+                        raise ValueError(f"Unsupported table: {table_name}")
                     stmt = stmt.on_conflict_do_update(
-                        index_elements=["event_id"],  # Primary key column
-                        set_={col: stmt.excluded[col] for col in row.keys() if col != "event_id"}
+                        index_elements=[pk],
+                        set_={col: stmt.excluded[col] for col in row.keys() if col != pk}
                     )
                     conn.execute(stmt)
-
-            logging.info(f"multiple_db_inserts(): Successfully inserted/updated {len(values)} rows.")
-
+            logging.info(f"multiple_db_inserts(): Successfully inserted/updated {len(values)} rows in {table_name} table.")
         except Exception as e:
-            logging.error(f"multiple_db_inserts(): Error inserting/updating records - {e}")
+            logging.error(f"multiple_db_inserts(): Error inserting/updating records in {table_name} table - {e}")
 
 
     def is_foreign(self):

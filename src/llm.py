@@ -244,11 +244,11 @@ class LLMHandler():
 
         return prompt
     
-
     def query_llm(self, prompt):
         """
         Query the configured LLM with a given prompt and return the response.
-        
+        Fallback occurs between Mistral and OpenAI if one fails.
+
         Args:
             prompt (str): The prompt to send to the LLM.
 
@@ -260,57 +260,77 @@ class LLMHandler():
             return None
 
         provider = self.config['llm']['provider']
+        response = None
 
         if provider == 'openai':
-            model = self.config['llm']['openai_model']
-            logging.info(f"query_llm(): Querying {provider}")
-            response = self._query_openai(prompt, model)
-            logging.info(f"def query_llm(): OpenAI response received: {response}")
-            return response
-        
-        elif provider == 'mistral':
-            logging.info(f"query_llm(): Querying {provider}")
+            # Try OpenAI first
+            try:
+                model = self.config['llm']['openai_model']
+                logging.info("query_llm(): Querying OpenAI")
+                response = self._query_openai(prompt, model)
+                if response:
+                    logging.info(f"query_llm(): OpenAI response received: {response}")
+                    return response
+            except Exception as e:
+                error_message = str(e).replace('error', 'rejection')
+                logging.warning(f"query_llm(): OpenAI query failed: {error_message}")
+
+            # Fallback to Mistral
             try:
                 model = self.config['llm']['mistral_model']
+                logging.info("query_llm(): Falling back to Mistral")
                 response = self._query_mistral(prompt, model)
-                logging.info(f"def query_llm(): Mistral response received: {response}")
+                if response:
+                    logging.info(f"query_llm(): Mistral response received: {response}")
+                else:
+                    logging.warning("query_llm(): Mistral returned no response.")
             except Exception as e:
-                e = str(e)
-                e - e.replace('error', 'rejection')
-                logging.warning(f"query_llm(): Mistral query failed: {e}")
-                response = None
+                error_message = str(e).replace('error', 'rejection')
+                logging.warning(f"query_llm(): Mistral query failed: {error_message}")
 
-            # If mistral fails (or returns None), try openai as a fallback.
-            if not response:
-                logging.warning("query_llm(): Mistral failed to provide a response; falling back to OpenAI.")
+        elif provider == 'mistral':
+            # Try Mistral first
+            try:
+                model = self.config['llm']['mistral_model']
+                logging.info("query_llm(): Querying Mistral")
+                response = self._query_mistral(prompt, model)
+                if response:
+                    logging.info(f"query_llm(): Mistral response received: {response}")
+                    return response
+            except Exception as e:
+                error_message = str(e).replace('error', 'rejection')
+                logging.warning(f"query_llm(): Mistral query failed: {error_message}")
+
+            # Fallback to OpenAI
+            try:
                 openai_model = self.config['llm']['openai_model']
+                logging.info("query_llm(): Falling back to OpenAI")
                 response = self._query_openai(prompt, openai_model)
-            return response
-        
+                if response:
+                    logging.info(f"query_llm(): OpenAI response received: {response}")
+                else:
+                    logging.warning("query_llm(): OpenAI returned no response.")
+            except Exception as e:
+                error_message = str(e).replace('error', 'rejection')
+                logging.warning(f"query_llm(): OpenAI query failed: {error_message}")
+
         else:
             logging.error("query_llm(): Invalid LLM provider specified.")
             return None
 
+        if response is None:
+            logging.error("query_llm(): Both LLM providers failed to provide a response.")
+        return response
+
 
     def _query_openai(self, prompt, model):
         """Handles querying OpenAI LLM."""
-        try:
-            response = self.openai_client.chat.completions.create(
-                model=model, messages=[{"role": "user", "content": prompt}]
-            )
-            llm_response = response.choices[0].message.content.strip() if response and response.choices else None
 
-            if llm_response:
-                logging.info(f"_query_openai(): LLM response received: {llm_response}")
-            else:
-                logging.error("_query_openai(): No response received from OpenAI.")
-                
-            return llm_response
-
-        except Exception as e:
-            logging.error(f"_query_openai(): OpenAI API call failed: {e}")
-            return None
+        response = self.openai_client.chat.completions.create(
+            model=model, messages=[{"role": "user", "content": prompt}]
+        )
         
+        return response.choices[0].message.content.strip() if response and response.choices else None
 
     def _query_mistral(self, prompt, model):
         """Handles querying Mistral LLM."""
