@@ -207,5 +207,3 @@ if __name__ == "__main__":
 
     # Count events and urls after emails.py
     db_handler.count_events_urls_end(start_df, file_name)
-
-

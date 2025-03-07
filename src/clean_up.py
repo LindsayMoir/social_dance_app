@@ -32,6 +32,7 @@ from bs4 import BeautifulSoup
 import os
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 import random
+from sqlalchemy import text
 
 from db import DatabaseHandler
 from llm import LLMHandler
@@ -47,12 +48,14 @@ class CleanUp:
 
         # Establish database connection
         self.conn = self.db_handler.get_db_connection()
-        print("Database connection established", self.conn)
         if self.conn is None:
             raise ConnectionError("DatabaseHandler: Failed to establish a database connection.")
 
         # Retrieve Google API credentials using credentials.py
         _, self.api_key, self.cse_id = get_credentials('Google')
+
+        # Initialize Google Maps client
+        self.gmaps = googlemaps.Client(key=self.api_key)
 
         # We'll store references to the async browser/page once we init them
         self.browser = None
@@ -593,6 +596,43 @@ class CleanUp:
         else:
             logging.info("delete_events_more_than_9_months_future(): No events found more than 9 months in the future.")
 
+
+    async def cleanup_invalid_postal_codes(self):
+        """
+        Looks in the address table for any postal_code (not NULL) that is NOT formulated
+        as a valid Canadian Postal Code (format: A1A 1A1 or A1A1A1). For any such address,
+        retrieves all event_ids from the events table with that address_id, deletes those events,
+        and then deletes the address row itself.
+        """
+        # Define the regex for a valid Canadian postal code, allowing an optional space.
+        canadian_postal_code_pattern = re.compile(r'^[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d$')
+        
+        # Retrieve all addresses with a non-null postal_code.
+        address_query = "SELECT address_id, postal_code FROM address WHERE postal_code IS NOT NULL"
+        addresses_df = pd.read_sql(address_query, self.conn)
+
+        if addresses_df.shape[0] > 0:
+            for _, address_row in addresses_df.iterrows():
+                postal_code = address_row['postal_code']
+                address_id = address_row['address_id']
+                
+                # Check if the postal code does NOT match the Canadian format.
+                if not canadian_postal_code_pattern.match(postal_code):
+                    # Retrieve all event_id(s) for this address_id from the events table.
+                    event_query = "SELECT event_id FROM events WHERE address_id = %(address_id)s"
+                    events_df = pd.read_sql(event_query, self.conn, params={'address_id': address_id})
+                    
+                    # Delete each event by calling delete_event_with_event_id.
+                    for _, event_row in events_df.iterrows():
+                        event_id = event_row['event_id']
+                        self.db_handler.delete_event_with_event_id(event_id)
+                        logging.info("Deleted event with event_id %s due to invalid postal_code '%s'", event_id, postal_code)
+                    
+                    # Delete the address row associated with this invalid postal code.
+                    self.db_handler.delete_address_with_address_id(address_id)
+        else:
+            logging.info("def cleanup_invalid_postal_codes(): No invalid postal codes found in the database.")
+
     
     def fetch_geocode_data(self, location):
         """
@@ -607,8 +647,7 @@ class CleanUp:
         """
         municipality, geocoded_postal_code = None, None
         try:
-            gmaps = googlemaps.Client(key=self.api_key)
-            geocode_result = gmaps.geocode(location)
+            geocode_result = self.gmaps.geocode(location)
         except Exception as e:
             logging.error(f"fetch_geocode_data(): Error calling geocode API: {e}")
             return None, None
@@ -625,12 +664,9 @@ class CleanUp:
                         break
                 if municipality and geocoded_postal_code:
                     break
-        
-        # Fix postal code formatting
-        if geocoded_postal_code:
-            geocoded_postal_code = geocoded_postal_code.replace(" ", "")
 
         return municipality, geocoded_postal_code
+    
 
     def handle_missing_address(self, row, municipality, geocoded_postal_code):
         """
@@ -690,19 +726,27 @@ class CleanUp:
             dict or None: An address update dictionary if an update is required, else None.
         """
         if geocoded_postal_code:
-            if row['postal_code'] and row['postal_code'] != geocoded_postal_code:
+            # Reformat the postal code from the database if it doesn't contain a space and is 6 characters long.
+            db_postal_code = row['postal_code']
+            if db_postal_code and " " not in db_postal_code and len(db_postal_code) == 6:
+                db_postal_code = f"{db_postal_code[:3]} {db_postal_code[3:]}"
+            
+            if db_postal_code and db_postal_code != geocoded_postal_code:
                 logging.info(
-                    f"handle_existing_address(): Existing postal_code {row['postal_code']} is different than "
+                    f"handle_existing_address(): Existing postal_code {db_postal_code} is different than "
                     f"Google's geocoded_postal_code {geocoded_postal_code} for event_id {row['event_id']}"
                 )
             if municipality:
                 return {
                     "address_id": row['address_id'],
-                    "city": municipality
+                    "city": municipality,
+                    # Optionally, update the postal_code in the database to match the formatted geocoded postal_code:
+                    "postal_code": geocoded_postal_code
                 }
+
         return None
 
-    def update_events_and_address_with_geocoded_data(self):
+    async def update_events_and_address_with_geocoded_data(self):
         """
         Processes events (via a LEFT JOIN with address) and uses geocoding to:
 
@@ -728,7 +772,7 @@ class CleanUp:
             LEFT JOIN
                 address a ON e.address_id = a.address_id;
         """
-        events_df = pd.read_sql(sql, self.conn).head()  # ***TEMP: Limit to 5 rows for testing***
+        events_df = pd.read_sql(sql, self.conn)
         events_updates = []    # For events table updates.
         address_updates = []   # For address table updates (for existing addresses).
 
@@ -760,22 +804,6 @@ class CleanUp:
             self.db_handler.multiple_db_inserts(table_name="events", values=events_updates)
         else:
             logging.info("update_events_and_address_with_geocoded_data(): No events updates to perform.")
-
-
-# Example usage in __main__:
-if __name__ == "__main__":
-    from sqlalchemy import create_engine, MetaData
-
-    engine = create_engine("postgresql://user:password@localhost/your_database")
-    conn = engine.connect()
-    metadata = MetaData(bind=engine)
-
-    # Instantiate the CleanUp class.
-    cleanup_instance = CleanUp(conn, metadata)
-    
-    # Run the update process.
-    cleanup_instance.update_events_and_address_with_geocoded_data()
-
 
 
     def fetch_events_from_db(self):
@@ -860,20 +888,23 @@ async def main():
     # Count events and urls before cleanup
     start_df = db_handler.count_events_urls_start(file_name)
 
-    # # Fix no urls in events
-    # await clean_up_instance.process_events_without_url()
+    # Fix no urls in events
+    await clean_up_instance.process_events_without_url()
 
-    # # Fix incorrect dance_styles
-    # await clean_up_instance.fix_incorrect_dance_styles()
+    # Fix incorrect dance_styles
+    await clean_up_instance.fix_incorrect_dance_styles()
 
-    # # Delete events outside of BC, Canada
-    # await clean_up_instance.delete_events_outside_bc()
+    # Delete events outside of BC, Canada
+    await clean_up_instance.delete_events_outside_bc()
 
-    # # Delete events more than 9 months in the future
-    # await clean_up_instance.delete_events_more_than_9_months_future()
+    # Delete events more than 9 months in the future
+    await clean_up_instance.delete_events_more_than_9_months_future()
 
     # Add municipality and sometimes postal_code to address table
     await clean_up_instance.update_events_and_address_with_geocoded_data()
+
+    # Delet events with out of the country postal codes
+    await clean_up_instance.cleanup_invalid_postal_codes()
 
     db_handler.count_events_urls_end(start_df, file_name)
     logging.info(f"Wrote events and urls statistics to: {file_name}")

@@ -526,7 +526,10 @@ class EventSpider(scrapy.Spider):
         }
 
         # Function to determine 'Type_of_Event'
-        def determine_event_type(name, description):
+        def determine_event_type(row):
+            # Get the values from the row, providing empty strings if they are missing
+            name = row.get('Name') or ''
+            description = row.get('Description') or ''
             combined_text = f"{name} {description}".lower()
             if 'class' in combined_text and 'dance' in combined_text:
                 return 'class, social dance'  # Priority rule
@@ -535,8 +538,8 @@ class EventSpider(scrapy.Spider):
                     return event_type
             return 'other'  # Default if no woi match
 
-        # Apply the function to determine 'Type_of_Event'
-        df['Type_of_Event'] = df['Description'].apply(determine_event_type)
+        # Apply the function to each row
+        df['Type_of_Event'] = df.apply(determine_event_type, axis=1)
 
         # Convert Start_Date and End_Date to date format
         df['Start_Date'] = pd.to_datetime(df['Start_Date'], errors='coerce').dt.date

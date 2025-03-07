@@ -129,7 +129,6 @@ class DatabaseHandler():
                 f"{os.getenv('DATABASE_HOST')}/"
                 f"{os.getenv('DATABASE_NAME')}"
             )
-            print("Got here, con string created", connection_string)
 
             # Create and return the SQLAlchemy engine
             engine = create_engine(connection_string, isolation_level="AUTOCOMMIT")
@@ -555,6 +554,7 @@ class DatabaseHandler():
     def get_address_id(self, address_dict):
         """
         Inserts a new address or updates the existing address using INSERT ... ON CONFLICT.
+        A time_stamp column is added and set to the current datetime.
 
         Args:
             address_dict (dict): Dictionary containing address details.
@@ -562,15 +562,19 @@ class DatabaseHandler():
         Returns:
             int or None: The address_id if successful, else None.
         """
+        # Add the current datetime to the address dictionary for the time_stamp column.
+        address_dict['time_stamp'] = datetime.now()
+
         try:
-            # Define the INSERT query with ON CONFLICT DO UPDATE and RETURNING address_id
+            # Define the INSERT query with ON CONFLICT DO UPDATE and RETURNING address_id,
+            # including the time_stamp column.
             insert_query = """
                 INSERT INTO address (
                     full_address, street_number, street_name, street_type, 
-                    postal_box, city, province_or_state, postal_code, country_id
+                    postal_box, city, province_or_state, postal_code, country_id, time_stamp
                 ) VALUES (
                     :full_address, :street_number, :street_name, :street_type,
-                    :postal_box, :city, :province_or_state, :postal_code, :country_id
+                    :postal_box, :city, :province_or_state, :postal_code, :country_id, :time_stamp
                 )
                 ON CONFLICT (full_address) DO UPDATE SET
                     street_number = EXCLUDED.street_number,
@@ -580,12 +584,13 @@ class DatabaseHandler():
                     city = EXCLUDED.city,
                     province_or_state = EXCLUDED.province_or_state,
                     postal_code = EXCLUDED.postal_code,
-                    country_id = EXCLUDED.country_id
+                    country_id = EXCLUDED.country_id,
+                    time_stamp = EXCLUDED.time_stamp
                 RETURNING address_id;
             """
 
             # Execute the INSERT query
-            insert_result = self.execute_query((insert_query), address_dict)
+            insert_result = self.execute_query(insert_query, address_dict)
 
             if insert_result:
                 # Insert succeeded or update occurred; retrieve the address_id
@@ -605,7 +610,7 @@ class DatabaseHandler():
         except SQLAlchemyError as e:
             logging.error(f"get_address_id: Database error: {e}")
             return None
-        
+
     
     def get_postal_code(self, address, api_key):
         """
@@ -1289,6 +1294,24 @@ class DatabaseHandler():
             logging.error(f"multiple_db_inserts(): Error inserting/updating records in {table_name} table - {e}")
 
 
+    def delete_address_with_address_id(self, address_id):
+        """
+        Deletes an address from the 'address' table based on the address_id.
+        """
+        try:
+            # Convert address_id to native Python int
+            address_id = int(address_id)
+            delete_query = """
+                DELETE FROM address
+                WHERE address_id = :address_id;
+            """
+            params = {'address_id': address_id}
+            self.execute_query(delete_query, params)
+            logging.info("delete_address_with_address_id: Deleted address with address_id %d successfully.", address_id)
+        except Exception as e:
+            logging.error("delete_address_with_address_id: Failed to delete address with address_id %d: %s", address_id, e)
+
+
     def is_foreign(self):
         """
         Determines which events are likely not in British Columbia (BC) by comparing the event location
@@ -1299,14 +1322,13 @@ class DatabaseHandler():
             2. Loads street names from the "address" table into a DataFrame.
             3. Reads a list of municipalities from a text file.
             4. Filters the events DataFrame to include only those rows whose 'location' field does not 
-               contain any municipality name (from muni_list) or street name (from street_list), case-insensitively.
+            contain any municipality name (from muni_list) or street name (from street_list), case-insensitively.
             5. Deletes the identified events from the "events" table.
         
         Returns:
             pd.DataFrame: A DataFrame containing all columns from the events table for events that are
-                          likely not located in BC.
+                        likely not located in BC.
         """
-        #try:
         # 1. Load events from the database.
         events_sql = "SELECT * FROM events"
         events_df = pd.read_sql(events_sql, self.conn)
@@ -1327,28 +1349,30 @@ class DatabaseHandler():
         countries_df = pd.read_csv(self.config['input']['countries'])
         countries_list = countries_df['country_names'].tolist()
 
-        # 4. Filtering logic: if the location or description does not contain a municipality, it's likely foreign.
-        # We reverse the mask at the bottom of the function to send the False values to the output.
+        # 4. Filtering logic: if the location or description contains a foreign country, mark it as foreign.
         def is_foreign_location(row):
-
             location = row['location'] if row['location'] else ''
             description = row['description'] if row['description'] else ''
             source = row['source'] if row['source'] else ''
             combined_text = f"{location} {description} {source}".lower()
-            muni_found = any(muni.lower() in combined_text for muni in muni_list if muni and combined_text)
+            
+            # Check if any known foreign country appears in the text.
             country_found = any(country.lower() in combined_text for country in countries_list)
-
-            # If a municipality is found, the event is likely in BC (return False).
-            # If a country is found, the event is likely foreign (return True).
-            if muni_found:
-                return False
+            # Check if any BC municipality appears.
+            muni_found = any(muni.lower() in combined_text for muni in muni_list if muni)
+            
+            # If a foreign country is found, consider it foreign.
             if country_found:
                 return True
-            return False  # Default to False if neither is found
+            # If a BC municipality is found, it's likely not foreign.
+            if muni_found:
+                return False
+            # Default to False if neither is found.
+            return False
 
-        # Create a boolean mask for events that are likely in foreign countries or municipalities.
+        # Create a boolean mask for events that are likely foreign.
         mask = events_df.apply(is_foreign_location, axis=1)
-        foreign_events_df = events_df[mask].copy()  # Apply the mask to get foreign events
+        foreign_events_df = events_df[mask].copy()
         logging.info("is_foreign(): Found %d events likely in foreign countries or municipalities.", len(foreign_events_df))
 
         # 5. Delete the identified events from the database.
@@ -1356,6 +1380,8 @@ class DatabaseHandler():
             event_ids = foreign_events_df['event_id'].tolist()
             self.delete_multiple_events(event_ids)
             logging.info("is_foreign(): Deleted %d events from the database.", len(event_ids))
+
+        return foreign_events_df
 
 
     def count_events_urls_start(self, file_name):
@@ -1439,18 +1465,18 @@ class DatabaseHandler():
             results_df.to_csv(output_file, mode='a', header=False, index=False)
 
         logging.info(f"def count_events_urls_end(): Wrote events and urls statistics to: {file_name}")
-    
+
 
     def driver(self):
         """
         Main driver function to perform database operations.
         """
-        self.create_tables()
-        self.dedup()
-        self.delete_old_events()
-        self.delete_events_with_nulls()
-        self.delete_likely_dud_events()
-        self.fuzzy_duplicates()
+        # self.create_tables()
+        # self.dedup()
+        # self.delete_old_events()
+        # self.delete_events_with_nulls()
+        # self.delete_likely_dud_events()
+        # self.fuzzy_duplicates()
         self.is_foreign()
 
         # Close the database connection
@@ -1482,11 +1508,11 @@ if __name__ == "__main__":
     # Get the file name of the code that is running
     file_name = os.path.basename(__file__)
 
-    # Count events and urls before cleanup
-    start_df = db_handler.count_events_urls_start(file_name)
-
     # Create tables
     db_handler.create_tables()
+
+    # Count events and urls before cleanup
+    start_df = db_handler.count_events_urls_start(file_name)
 
     # Perform deduplication and delete old events
     db_handler.driver()

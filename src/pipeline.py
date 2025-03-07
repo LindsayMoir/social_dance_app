@@ -810,6 +810,7 @@ def send_text_message(message: str):
 # Note: events_table_backup_and_drop is now the first step in the pipeline.
 PIPELINE_STEPS = [
     ("events_table_backup_and_drop", events_table_backup_and_drop),
+    ("db", db_step),
     ("emails", emails_step),
     ("gs", gs_step),
     ("ebs", ebs_step),

@@ -732,14 +732,18 @@ class FacebookEventScraper():
         3. If valid events are found, writes them to the database; otherwise, updates the URL.
         4. Writes every processed URL—including event links—to the checkpoint CSV.
         """
-        query = text("""
-        SELECT * 
-        FROM urls
-        WHERE link ILIKE :link_pattern
-        """)
-        params = {'link_pattern': '%facebook%'}
-        fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
-        logging.info(f"def driver_fb_urls(): Retrieved {fb_urls_df.shape[0]} Facebook URLs from the database.")
+        # Check and see if this is a checkpoint run
+        if config['checkpoint']['fb_urls_cp_status']:
+            fb_urls_df = pd.read_csv(config['checkpoint']['fb_urls_cp'])
+        else:
+            query = text("""
+            SELECT * 
+            FROM urls
+            WHERE link ILIKE :link_pattern
+            """)
+            params = {'link_pattern': '%facebook%'}
+            fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
+            logging.info(f"def driver_fb_urls(): Retrieved {fb_urls_df.shape[0]} Facebook URLs from the database.")
 
         # Add checkpoint columns for base URLs (these columns will also be used for event links)
         fb_urls_df['processed'] = False
