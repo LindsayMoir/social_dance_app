@@ -1,54 +1,19 @@
 """
 scraper.py
 
-This module defines the EventSpider class and orchestrates a web crawling process 
-to gather and process event data from various websites. It leverages Scrapy for 
-crawling, Playwright for dynamic content extraction, BeautifulSoup for HTML 
-parsing, and integrates with OpenAI's language model via LLMHandler for event 
-processing. The module also interacts with a PostgreSQL database through 
-DatabaseHandler to read and write URL and event data.
-
-Classes:
-    EventSpider(scrapy.Spider):
-        A custom Scrapy spider that:
-        - Initiates crawling by fetching URLs from a database or CSV files.
-        - Parses responses to extract link, handle iframes, and manage Facebook/Instagram URLs.
-        - Utilizes Playwright to extract page text content dynamically.
-        - Checks for relevant keywords in text, processes URLs through a language model,
-          and updates the database with event information.
-        - Handles Google Calendar event fetching and updates URLs accordingly.
-        - Maintains a set of visited link to avoid duplicate processing and 
-          respects configured crawling limits.
-
-Usage Example:
-    Running this script directly will:
-        1. Load configuration from 'config/config.yaml'.
-        2. Configure logging based on settings.
-        3. Initialize DatabaseHandler and LLMHandler.
-        4. Create necessary database tables.
-        5. Start a Scrapy CrawlerProcess with EventSpider to begin crawling.
-        6. Log progress and timing information throughout the process.
+This module defines the EventSpider class for crawling and a ScraperManager class 
+to orchestrate the crawl-and-check process. The EventSpider handles URL extraction,
+dynamic content extraction, and Google Calendar event processing. The ScraperManager
+runs the crawler (by launching a separate process), checks if the event counts meet 
+thresholds, and if not, adjusts configuration and re-runs the crawl. After a successful 
+run, it restores any files that were moved to a temporary folder.
 
 Dependencies:
-    - Scrapy: For crawling and parsing web content.
-    - Playwright: For interacting with dynamic web pages.
-    - BeautifulSoup (bs4): For parsing HTML content.
-    - OpenAI: For querying a language model.
-    - SQLAlchemy: For database interactions.
-    - Pandas: For data manipulation and CSV I/O.
-    - requests: For HTTP requests.
-    - yaml: For configuration parsing.
-    - logging: For logging events and errors.
-    - Other standard libraries: base64, datetime, json, os, random, re, sys, time.
-    - Local modules: DatabaseHandler from db.py and LLMHandler from llm.py.
-
-Note:
-    - Ensure a valid YAML configuration file at 'config/config.yaml'.
-    - Properly configure database credentials, API keys, and crawling parameters 
-      in the configuration file.
-    - Logging is set up in the main block to record the crawler’s operation and 
-      any encountered errors.
+    - Scrapy, requests, pandas, yaml, logging, shutil, etc.
+    - Local modules: DatabaseHandler (from db.py), LLMHandler (from llm.py), 
+      ReadExtract (from rd_ext.py), and credentials (from credentials.py).
 """
+
 import base64
 from datetime import datetime, timedelta, timezone
 import logging
@@ -58,353 +23,207 @@ import re
 import requests
 import scrapy
 from scrapy.crawler import CrawlerProcess
+import shutil
+import sys
 import yaml
+import subprocess
 
 from credentials import get_credentials
 from db import DatabaseHandler
 from llm import LLMHandler
 from rd_ext import ReadExtract
 
+# --------------------------------------------------
+# Global objects initialization.
+# (These globals will be used by EventSpider.)
+# --------------------------------------------------
+with open('config/config.yaml', 'r') as file:
+    config = yaml.safe_load(file)
 
-# EventSpider class
+# Instantiate required handlers.
+db_handler = DatabaseHandler(config)
+llm_handler = LLMHandler(config_path="config/config.yaml")
+read_extract = ReadExtract("config/config.yaml")
+
+# --------------------------------------------------
+# EventSpider: Handles the crawling process
+# --------------------------------------------------
 class EventSpider(scrapy.Spider):
     name = "event_spider"
 
     def __init__(self, config, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.config = config
-        self.visited_link = set()  # To track visited URLs and avoid duplicate crawls
+        self.visited_link = set()  # Track visited URLs
         self.keywords_list = llm_handler.get_keywords()
+
 
     def start_requests(self):
         """
-        Initiates the scraping process by generating requests from URLs obtained from a database or a CSV file.
-
-        This method connects to a database to fetch URLs marked as relevant or reads them from a CSV file 
-        based on the configuration. It then iterates over the URLs, marking them as visited and yielding 
-        Scrapy requests for each URL to be processed by the `parse` method.
-
-        Raises:
-            ConnectionError: If the database connection fails.
-
-        Yields:
-            scrapy.Request: A Scrapy request object for each URL to be crawled, with additional callback 
-                            arguments including keywords, organization name, and the URL itself.
+        Generate start requests from URLs either in the DB or CSV files.
         """
-        # Connect to the database
         conn = db_handler.get_db_connection()
-
         if conn is None:
-            raise ConnectionError("Failed to connect to the databasein start_requests.")
-        else:
-            print("Connected to the database in start_requests", conn)
+            raise ConnectionError("Failed to connect to the database in start_requests.")
+        logging.info(f"def start_requests(): Connected to the database: {conn}")
 
-        if config['startup']['use_db']:
-            # Read the URLs from the database
+        if self.config['startup']['use_db']:
             query = "SELECT * FROM urls WHERE relevant = true;"
             urls_df = pd.read_sql_query(query, conn)
-
         else:
-            # Directory containing CSV files
-            urls_dir = config['input']['urls']
-
-            # List all CSV files in the directory
+            urls_dir = self.config['input']['urls']
             csv_files = [os.path.join(urls_dir, f) for f in os.listdir(urls_dir) if f.endswith('.csv')]
-
-            # Read each CSV file into a DataFrame
             dataframes = [pd.read_csv(file) for file in csv_files]
-
-            # Concatenate all DataFrames into one
             urls_df = pd.concat(dataframes, ignore_index=True)
 
         for _, row in urls_df.iterrows():
             source = row['source']
             keywords = row['keywords']
             url = row['link']
-            
-            # We need to write the url to the database, if it is not already there
-            relevant, increment_crawl_try = None, 1
-            db_handler.write_url_to_db(source, keywords, url, relevant, increment_crawl_try)
+
+            # Write the URL to the database if not already present
+            db_handler.write_url_to_db(source, keywords, url, None, 1)
 
             if url not in self.visited_link:
-                self.visited_link.add(url)  # Mark the page link as visited
-                logging.info(f"Starting crawl for URL: {url}")
-                yield scrapy.Request(url=url, callback=self.parse, cb_kwargs={'keywords': keywords, 
-                                                'source': source, 
-                                                'url': url})
+                self.visited_link.add(url)
+                logging.info(f"def start_requests(): Starting crawl for URL: {url}")
+                yield scrapy.Request(url=url, callback=self.parse,
+                                      cb_kwargs={'keywords': keywords, 'source': source, 'url': url})
+                
 
     def parse(self, response, keywords, source, url):
         """
-        Args:
-            response (scrapy.http.Response): The response object to parse.
-            keywords (str): A comma separated string of keywords to check for relevance.
-            source (str): The name of the organization to check for relevance.
-            url (str): The URL of the current page being parsed.
-
-        Returns:
-            generator: A generator yielding scrapy.Request objects for further crawling.
-
-        This function extracts link from the main page and handles Facebook link differently. 
-        It also extracts iframe source and updates the URL if relevant. 
-        The function checks for relevance of the link and continues crawling if they are relevant.
+        Parse the response to extract links, iframes, and calendar info.
         """
-        # Get all of the subsidiary link on the page   
-        page_link = response.css('a::attr(href)').getall()
-        page_link = [response.urljoin(link) for link in page_link if link.startswith('http')]
-        logging.info(f"def parse(): Found {len(page_link)} link on {response.url}")
-        page_link = page_link[:config['crawling']['max_website_urls']]  # Limit the number of link
-        logging.info(f"def parse(): Limiting the number of link to {config['crawling']['max_website_urls']}. "
-                     f"on url: {response.url}")
+        page_links = response.css('a::attr(href)').getall()
+        page_links = [response.urljoin(link) for link in page_links if link.startswith('http')]
+        logging.info(f"def parse(): Found {len(page_links)} links on {response.url}")
+        page_links = page_links[: self.config['crawling']['max_website_urls']]
+        logging.info(f"def parse(): Limiting to {self.config['crawling']['max_website_urls']} links on {response.url}")
 
-        # Extract iframe source
-        iframe_link = response.css('iframe::attr(src)').getall()
-        iframe_link = [response.urljoin(link) for link in iframe_link if link.startswith('http')]
-        logging.info(f"def parse(): Found {len(iframe_link)}: iframe link are: {iframe_link} "
-                     f"on url: {response.url}")
+        # Process iframes and extract Google Calendar emails via regex
+        iframe_links = response.css('iframe::attr(src)').getall()
+        iframe_links = [response.urljoin(link) for link in iframe_links if link.startswith('http')]
+        logging.info(f"def parse(): Found {len(iframe_links)} iframe links on {response.url}")
 
-        # Extract other Google Calendar link from the response.text using regex
-        calendar_pattern = re.compile(r'"gcal"\s*:\s*"([a-zA-Z0-9_.+-]+@group\.calendar\.google\.com)"') 
+        calendar_pattern = re.compile(r'"gcal"\s*:\s*"([a-zA-Z0-9_.+-]+@group\.calendar\.google\.com)"')
         calendar_emails = calendar_pattern.findall(response.text)
         logging.info(f"def parse(): Extracted Google Calendar emails: {calendar_emails}")
-        
-        # Combine iframe and calendar link
-        iframe_link.extend(calendar_emails)
 
-        if iframe_link:
+        iframe_links.extend(calendar_emails)
+        if iframe_links:
             db_handler.update_url(url, relevant=True, increment_crawl_try=0)
-            for calendar_url in iframe_link:
+            for calendar_url in iframe_links:
                 self.fetch_google_calendar_events(calendar_url, url, source, keywords)
 
-        # Put all non calendar link together
-        all_link = set(page_link + [url])
-
-        # identify any current or future facebook link. We want those out and processed by fb.py
-        # Iterate over a copy of all_link to safely remove items during iteration
-        for link in list(all_link):
+        # Combine main links and current URL, remove Facebook/Instagram URLs.
+        all_links = set(page_links + [url])
+        for link in list(all_links):
             if 'facebook' in link or 'instagram' in link:
-                all_link.remove(link)  # Safely remove from the original set
-                logging.info(f"def parse(): Found a Facebook or Instagram URL, processing: {link}")
-        
-        logging.info(f"def parse() Found {len(all_link)} link on {response.url}")
+                all_links.remove(link)
+                logging.info(f"def parse(): Removed Facebook/Instagram URL: {link}")
 
-        # Check for relevance and crawl further
-        for link in all_link:
+        logging.info(f"def parse(): {len(all_links)} links remain on {response.url}")
+
+        for link in all_links:
             if link not in self.visited_link:
-                self.visited_link.add(link)  # Mark the page link as visited
-                relevant, increment_crawl_try = None, 1
-                db_handler.write_url_to_db(source, keywords, url, relevant, increment_crawl_try)
-
-                if len(self.visited_link) >= config['crawling']['urls_run_limit']:
-                    logging.info(f"def parse(): Maximum URL limit reached: {config['crawling']['urls_run_limit']} Stopping further crawling.")
+                self.visited_link.add(link)
+                db_handler.write_url_to_db(source, keywords, link, None, 1)
+                if len(self.visited_link) >= self.config['crawling']['urls_run_limit']:
+                    logging.info(f"def parse(): Reached maximum URL limit: {self.config['crawling']['urls_run_limit']}. Stopping further crawl.")
                     break
-                
                 self.driver(link, keywords, source)
-                logging.info(f"def parse() Starting crawl for URL: {link}")
-                yield response.follow(url=link, callback=self.parse, cb_kwargs={'keywords': keywords, 
-                                                                                'source': source, 
-                                                                                'url': link})
-    
-    
+                logging.info(f"def parse(): Crawling next URL: {link}")
+                yield response.follow(url=link, callback=self.parse,
+                                      cb_kwargs={'keywords': keywords, 'source': source, 'url': link})
+                
+
     def driver(self, url, keywords, source):
         """
-        Determine the relevance of a given URL based on its content, keywords, or organization name.
-
-        Parameters:
-        url (str): The URL to be evaluated.
-        keywords (str): A comma separated string of keywords to check within the URL content.
-        source (str): The name of the organization to check within the URL content.
-
-        Returns:
-        bool: True if the URL is relevant, False otherwise.
+        Evaluate URL relevance by extracting text and checking keywords.
         """
-        # Process non-facebook link
         extracted_text = read_extract.extract_text_with_playwright(url)
-
-        # Check for keywords in the extracted text
         if extracted_text:
             found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-    
             if found_keywords:
-                logging.info(f"def driver(): Found keywords in text for URL {url}: {found_keywords}")
-
-                # Call the llm to process the extracted text
+                logging.info(f"def driver(): Found keywords for URL {url}: {found_keywords}")
                 prompt = 'default'
                 llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt)
                 if llm_status:
-                    # Mark the event link as relevant
                     db_handler.write_url_to_db(source, found_keywords, url, True, 1)
-                    logging.info(f"def driver(): URL {url} marked as relevant, since there is a LLM response.")
+                    logging.info(f"def driver(): URL {url} marked as relevant (LLM positive).")
                     return
                 else:
-                    logging.info(f"def driver(): No LLM response for URL {url}, marked as irrelevant.")
+                    logging.info(f"def driver(): URL {url} marked as irrelevant (LLM negative).")
             else:
-                logging.info(f"def parse(): URL {url} marked as irrelevant since there are no found_keywords.")
+                logging.info(f"def driver(): URL {url} marked as irrelevant (no keywords found).")
         else:
-            logging.info(f"def parse(): URL {url} marked as irrelevant since there is no extracted_text: {extracted_text}")
-
+            logging.info(f"def driver(): URL {url} marked as irrelevant (no extracted text).")
         db_handler.write_url_to_db(source, keywords, url, False, 1)
 
-        return
-        
 
     def fetch_google_calendar_events(self, calendar_url, url, source, keywords):
         """
-        Fetch events from a Google Calendar and process them.
-
-        Args:
-            calendar_url (str): The URL of the Google Calendar to fetch events from.
-            keywords (str): A comma-separated list of keywords to associate with the events.
-            source (str): The name of the organization associated with the events.
-            url (str): The URL to update after processing the events.
-
-        Returns:
-            None
+        Fetch and process events from a Google Calendar.
         """
-        logging.info(f"def fetch_google_calendar_events(): Inputs are: "                    
-                    f"calendar_url: {calendar_url}, "
-                    f"URL: {url}, "
-                    f"source: {source}, "
-                    f"keywords: {keywords}")
-
-        # Extract calendar IDs from the URL
+        logging.info(f"def fetch_google_calendar_events(): Inputs - calendar_url: {calendar_url}, URL: {url}, source: {source}, keywords: {keywords}")
         calendar_ids = self.extract_calendar_ids(calendar_url)
-
-        # If no calendar ID was extracted, check if it's already a valid Gmail or Group Calendar ID
         if not calendar_ids:
-            if self.is_valid_calendar_id(calendar_url):  
+            if self.is_valid_calendar_id(calendar_url):
                 calendar_ids = [calendar_url]
             else:
                 decoded_calendar_id = self.decode_calendar_id(calendar_url)
                 if decoded_calendar_id:
                     calendar_ids = [decoded_calendar_id]
                 else:
-                    logging.error(f"fetch_google_calendar_events(): Failed to extract a valid Calendar ID from {calendar_url}")
-                    return  # Exit function if no valid ID is found
-
-        # Process all valid calendar IDs
+                    logging.error(f"def fetch_google_calendar_events(): Failed to extract valid Calendar ID from {calendar_url}")
+                    return
         for calendar_id in calendar_ids:
             self.process_calendar_id(calendar_id, calendar_url, url, source, keywords)
 
 
     def extract_calendar_ids(self, calendar_url):
-        """
-        Extract calendar IDs from the calendar URL.
-
-        Args:
-            calendar_url (str): The URL containing calendar IDs.
-
-        Returns:
-            list: A list of extracted calendar IDs.
-        """
-        calendar_id_pattern = r'src=([^&]+%40group.calendar.google.com)'
-        calendar_ids = re.findall(calendar_id_pattern, calendar_url)
-        return [id.replace('%40', '@') for id in calendar_ids]
+        pattern = r'src=([^&]+%40group.calendar.google.com)'
+        ids = re.findall(pattern, calendar_url)
+        return [id.replace('%40', '@') for id in ids]
     
 
     def decode_calendar_id(self, calendar_url):
-        """
-        Decode a calendar ID from the calendar URL using base64 if necessary.
-
-        Args:
-            calendar_url (str): The URL containing the calendar ID.
-
-        Returns:
-            str or None: The decoded calendar ID if successful, None otherwise.
-        """
         try:
-            # Extract possible calendar ID from `src=` parameter
             start_idx = calendar_url.find("src=") + 4
             end_idx = calendar_url.find("&", start_idx)
             calendar_id = calendar_url[start_idx:end_idx] if end_idx != -1 else calendar_url[start_idx:]
-
-            # If it's already a valid calendar ID, return it
             if self.is_valid_calendar_id(calendar_id):
                 return calendar_id
-
-            # Attempt base64 decoding
-            padded_calendar_id = calendar_id + '=' * (4 - len(calendar_id) % 4)
-            decoded_bytes = base64.b64decode(padded_calendar_id)
-            decoded_id = decoded_bytes.decode('utf-8', errors='ignore')
-
-            if self.is_valid_calendar_id(decoded_id):
-                return decoded_id
-
-            logging.error(f"decode_calendar_id(): Decoded ID is not a valid Google Calendar ID: {decoded_id}")
+            padded_id = calendar_id + '=' * (4 - len(calendar_id) % 4)
+            decoded = base64.b64decode(padded_id).decode('utf-8', errors='ignore')
+            if self.is_valid_calendar_id(decoded):
+                return decoded
+            logging.error(f"def decode_calendar_id(): Decoded ID is not valid: {decoded}")
             return None
-
-        except (UnicodeDecodeError, base64.binascii.Error, IndexError) as e:
-            logging.error(f"decode_calendar_id(): Failed to decode calendar ID from {calendar_url} with exception: {e}")
+        except Exception as e:
+            logging.error(f"def decode_calendar_id(): Exception for {calendar_url} - {e}")
             return None
         
 
     def is_valid_calendar_id(self, calendar_id):
-        """
-        Checks if a given string is a valid Google Calendar ID.
-        Google Calendar IDs can be:
-        - A Gmail address (e.g., victoriawcs@gmail.com)
-        - A group calendar ID (e.g., 17de2ca43f...@group.calendar.google.com)
-
-        Args:
-            calendar_id (str): The Calendar ID to validate.
-
-        Returns:
-            bool: True if the ID is valid, False otherwise.
-        """
-        calendar_id_pattern = re.compile(r'^[a-zA-Z0-9_.+-]+@(group\.calendar\.google\.com|gmail\.com)$')
-        return bool(calendar_id_pattern.fullmatch(calendar_id))
-
+        pattern = re.compile(r'^[a-zA-Z0-9_.+-]+@(group\.calendar\.google\.com|gmail\.com)$')
+        return bool(pattern.fullmatch(calendar_id))
+    
 
     def process_calendar_id(self, calendar_id, calendar_url, url, source, keywords):
-        """
-        Process a single calendar ID by fetching events and updating the database.
-
-        Args:
-            calendar_id (str): The calendar ID to process.
-            calendar_url (str): The URL of the Google Calendar.
-            url (str): The original URL associated with the events.
-            source (str): The organization name.
-            keywords (str): Keywords associated with the events.
-
-        Returns:
-            None
-        """
-        logging.info(f"def process_calendar_id(): Inputs are: "
-                     f"calendar_id: {calendar_id}, "
-                     f"calendar_url: {calendar_url}, "
-                     f"url: {url}, "
-                     f"source: {source}, "
-                     f"keywords: {keywords}")
-        
+        logging.info(f"def process_calendar_id(): Processing calendar_id: {calendar_id} from {calendar_url}")
         events_df = self.get_calendar_events(calendar_id)
         if not events_df.empty:
             logging.info(f"def process_calendar_id(): Found {len(events_df)} events for calendar_id: {calendar_id}")
             db_handler.write_events_to_db(events_df, calendar_url, source, keywords)
             db_handler.update_url(calendar_url, relevant=True, increment_crawl_try=1)
 
-    
+
     def get_calendar_events(self, calendar_id):
-        """
-        Args:
-            calendar_id (str): The ID of the Google Calendar from which to fetch events.
-
-        Returns:
-            pd.DataFrame: A DataFrame containing the events fetched from the Google Calendar.
-                            If no events are found, an empty DataFrame is returned.
-
-        Raises:
-            requests.exceptions.RequestException: If there is an issue with the HTTP request.
-
-        Notes:
-            - The function reads the API key from a CSV file specified in the configuration.
-            - The date range for fetching events is determined by the 'days_ahead' value in the configuration.
-            - The function handles pagination to fetch all events if there are multiple pages of results.
-            - If an error occurs during the HTTP request, it logs the error and stops fetching events.
-        """
-        # Read the API key from the security file
         _, api_key, _ = get_credentials('Google')
-        
-        days_ahead = config['date_range']['days_ahead']
-
-        url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
+        days_ahead = self.config['date_range']['days_ahead']
+        api_url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
         params = {
             "key": api_key,
             "singleEvents": "true",
@@ -413,108 +232,48 @@ class EventSpider(scrapy.Spider):
             "fields": "items, nextPageToken",
             "maxResults": 100
         }
-
         all_events = []
         while True:
-            response = requests.get(url, params=params)
+            response = requests.get(api_url, params=params)
             if response.status_code == 200:
                 data = response.json()
                 all_events.extend(data.get("items", []))
-                next_page_token = data.get("nextPageToken")
-                if not next_page_token:
+                if not data.get("nextPageToken"):
                     break
-                params["pageToken"] = next_page_token
+                params["pageToken"] = data.get("nextPageToken")
             else:
-                logging.error(f"def get_calendar_events(): Error: {response.status_code} - {response.text} "
-                              f"for calendar_id: {calendar_id}")
+                logging.error(f"def get_calendar_events(): Error {response.status_code} for calendar_id: {calendar_id}")
                 break
-
         df = pd.json_normalize(all_events)
         if df.empty:
             logging.info(f"def get_calendar_events(): No events found for calendar_id: {calendar_id}")
             return df
-
         return self.clean_calendar_events(df)
-
+    
 
     def clean_calendar_events(self, df):
-        """
-        This function performs the following operations:
-        1. Ensures required columns exist in the DataFrame.
-        2. Moves values from 'start.date' and 'end.date' to 'start.dateTime' and 'end.dateTime' if necessary.
-        3. Drops the 'start.date' and 'end.date' columns.
-        4. Subsets the DataFrame to only useful columns.
-        5. Extracts and converts the price from the 'description' column.
-        6. Cleans the 'description' column by removing HTML tags and unnecessary whitespace.
-        7. Splits 'start.dateTime' and 'end.dateTime' into separate date and time columns.
-        8. Renames columns to more descriptive names.
-        9. Adds a 'Type_of_Event' column based on keywords in the 'Description' column.
-        10. Converts 'Start_Date' and 'End_Date' to date format.
-        11. Extracts the day of the week from 'Start_Date' and adds it to the 'Day_of_Week' column.
-        12. Reorders the columns for better readability.
-        13. Sorts the DataFrame by 'Start_Date' and 'Start_Time'.
-
-        Parameters:
-        df (pandas.DataFrame): The input DataFrame containing event data.
-
-        Returns:
-        pandas.DataFrame: The cleaned and processed DataFrame with relevant event information.
-        """
-        # Avoid modifying the original DataFrame
         df = df.copy()
-
-        # Ensure required columns exist
         required_columns = ['htmlLink', 'summary', 'start.date', 'end.date', 'location', 'start.dateTime', 'end.dateTime', 'description']
         for col in required_columns:
             if col not in df.columns:
                 df[col] = ''
-
-        # Move values from 'start.date' and 'end.date' to 'start.dateTime' and 'end.dateTime' if necessary
         df['start.dateTime'] = df['start.dateTime'].fillna(df['start.date'])
         df['end.dateTime'] = df['end.dateTime'].fillna(df['end.date'])
-
-        # Drop the 'start.date' and 'end.date' columns
         df.drop(columns=['start.date', 'end.date'], inplace=True)
-
-        # Subset df to only useful columns 
         df = df[['htmlLink', 'summary', 'location', 'start.dateTime', 'end.dateTime', 'description']]
-
-        # Extract and convert the price
         df['Price'] = pd.to_numeric(df['description'].str.extract(r'\$(\d{1,5})')[0], errors='coerce')
-
-        # Clean the description
-        # Remove HTML tags and unnecessary whitespace
-        df['description'] = df['description'].apply(
-            lambda x: re.sub(r'\s{2,}', ' ', re.sub(r'<[^>]*>', ' ', str(x) if pd.notnull(x) else '')).strip()
-        ).str.replace('&#39;', "'").str.replace("you're", "you are")
-
-        # Function to split datetime into date and time
-        def split_datetime(datetime_str):
-            if 'T' in datetime_str:
-                date_str, time_str = datetime_str.split('T')
-                time_str = time_str[:8]  # Remove the timezone part
-            else:
-                date_str = datetime_str
-                time_str = None
-            return date_str, time_str
-
-        # Apply the function to extract dates and times
+        df['description'] = df['description'].apply(lambda x: re.sub(r'\s{2,}', ' ', re.sub(r'<[^>]*>', ' ', str(x))).strip()
+                                                    ).str.replace('&#39;', "'").str.replace("you're", "you are")
+        def split_datetime(dt_str):
+            if 'T' in dt_str:
+                date_str, time_str = dt_str.split('T')
+                return date_str, time_str[:8]
+            return dt_str, None
         df['Start_Date'], df['Start_Time'] = zip(*df['start.dateTime'].apply(lambda x: split_datetime(x) if x else ('', '')))
         df['End_Date'], df['End_Time'] = zip(*df['end.dateTime'].apply(lambda x: split_datetime(x) if x else ('', '')))
-
-        # Drop columns
         df.drop(columns=['start.dateTime', 'end.dateTime'], inplace=True)
-
-        # Rename columns
-        df = df.rename(columns={
-            'htmlLink': 'URL',
-            'summary': 'Name_of_the_Event',
-            'location': 'Location',
-            'description': 'Description'
-        })
-
-        # Add 'Type_of_Event' column
-        # Dictionary to map words of interest (woi) to 'Type_of_Event'
+        df = df.rename(columns={'htmlLink': 'URL', 'summary': 'Name_of_the_Event', 'location': 'Location',
+                                  'description': 'Description'})
         event_type_map = {
             'class': 'class',
             'classes': 'class',
@@ -524,88 +283,234 @@ class EventSpider(scrapy.Spider):
             'workshop': 'workshop',
             'rehearsal': 'rehearsal'
         }
-
-        # Function to determine 'Type_of_Event'
         def determine_event_type(row):
-            # Get the values from the row, providing empty strings if they are missing
-            name = row.get('Name') or ''
+            name = row.get('Name_of_the_Event') or ''
             description = row.get('Description') or ''
-            combined_text = f"{name} {description}".lower()
-            if 'class' in combined_text and 'dance' in combined_text:
-                return 'class, social dance'  # Priority rule
-            for woi, event_type in event_type_map.items():
-                if woi in combined_text:
+            combined = f"{name} {description}".lower()
+            if 'class' in combined and 'dance' in combined:
+                return 'class, social dance'
+            for word, event_type in event_type_map.items():
+                if word in combined:
                     return event_type
-            return 'other'  # Default if no woi match
-
-        # Apply the function to each row
+            return 'other'
         df['Type_of_Event'] = df.apply(determine_event_type, axis=1)
-
-        # Convert Start_Date and End_Date to date format
         df['Start_Date'] = pd.to_datetime(df['Start_Date'], errors='coerce').dt.date
         df['End_Date'] = pd.to_datetime(df['End_Date'], errors='coerce').dt.date
-
-        # Extract the day of the week from Start_Date and add it to the Day_of_Week column
         df['Day_of_Week'] = pd.to_datetime(df['Start_Date']).dt.day_name()
-
-        # Reorder the columns
         df = df[['URL', 'Type_of_Event', 'Name_of_the_Event', 'Day_of_Week', 'Start_Date', 
-                'End_Date', 'Start_Time', 'End_Time', 'Price', 'Location', 'Description']]
-
-        # Sort the DataFrame by Start_Date and Start_Time
+                 'End_Date', 'Start_Time', 'End_Time', 'Price', 'Location', 'Description']]
         df = df.sort_values(by=['Start_Date', 'Start_Time']).reset_index(drop=True)
-
-        # Return the collected events as a pandas dataframe
-
         return df
-    
-   
-# Run the crawler
-if __name__ == "__main__":
 
-    # Get the start time
+# --------------------------------------------------
+# ScraperManager: Orchestrates crawler runs, re-run checks, and restores temp files.
+# --------------------------------------------------
+class ScraperManager:
+    def __init__(self, config, db_handler):
+        self.config = config
+        self.db_handler = db_handler
+    
+
+    def subset_calendar_urls(self, calendar_df, group_df, threshold=100):
+        # Define the important sources
+        important_sources = {
+            "Salsa Caliente",
+            "Red Hot Swing",
+            "Victoria Latin Dance Association",
+            "Victoria West Coast Swing Collective"
+        }
+        # Get sources present in group_df that are important and have less than threshold events.
+        underperforming = group_df[
+            (group_df['source'].isin(important_sources)) & (group_df['counted'] < threshold)
+        ]['source'].tolist()
+
+        # Also, for any important source not present in group_df at all, add them.
+        for src in important_sources:
+            if src not in group_df['source'].tolist():
+                underperforming.append(src)
+
+        subset_df = calendar_df[calendar_df['source'].isin(underperforming)]
+        logging.info(f"def subset_calendar_urls(): Found {len(underperforming)} important sources under threshold or missing: {underperforming}")
+        return subset_df
+
+
+    def move_existing_urls_to_temp(self, urls_dir):
+        temp_dir = os.path.join(urls_dir, "temp")
+        os.makedirs(temp_dir, exist_ok=True)
+        for filename in os.listdir(urls_dir):
+            if filename.endswith(".csv"):
+                src = os.path.join(urls_dir, filename)
+                dst = os.path.join(temp_dir, filename)
+                shutil.move(src, dst)
+                logging.info(f"def move_existing_urls_to_temp(): Moved {filename} to {temp_dir}.")
+        logging.info(f"def move_existing_urls_to_temp(): Completed moving CSV files from {urls_dir} to {temp_dir}.")
+
+
+    def write_calendar_urls(self, calendar_df, urls_dir):
+        output_file = os.path.join(urls_dir, "calendar_urls_subset.csv")
+        calendar_df.to_csv(output_file, index=False)
+        logging.info(f"def write_calendar_urls(): Wrote subset calendar URLs to {output_file}.")
+        return output_file
+    
+
+    def run_crawler(self):
+        """
+        Runs the crawler by launching the 'scraper_crawl.py' script in a separate process.
+        """
+        logging.info("def run_crawler(): Launching crawl subprocess.")
+        result = subprocess.run([sys.executable, 'src/scraper_crawl.py'], capture_output=True, text=True)
+        if result.returncode != 0:
+            logging.error(f"def run_crawler(): Crawl subprocess failed with error: {result.stderr}")
+            raise Exception("Crawl subprocess failed.")
+        else:
+            logging.info(f"def run_crawler(): Crawl subprocess completed successfully: {result.stdout}")
+
+
+    def scraper_check_and_rerun(self, max_attempts=4, event_threshold=100):
+        """
+        Attempts to run the web scraper multiple times to ensure sufficient events are captured for important sources.
+        Parameters:
+        max_attempts (int): The maximum number of attempts to run the scraper. Default is 4.
+        event_threshold (int): The minimum number of events required for each important source. Default is 100.
+        Returns:
+        bool: True if sufficient events are captured for all important sources within the maximum attempts, False otherwise.
+        The function performs the following steps:
+        1. Loads calendar URLs from the configuration file.
+        2. Defines a set of important sources.
+        3. Runs the scraper up to `max_attempts` times or until sufficient events are captured.
+        4. Checks the number of events captured for each important source.
+        5. If any important source has insufficient events, prepares a subset of URLs for re-running the scraper.
+        6. Updates the configuration settings for the re-run.
+        7. Moves existing URLs to a temporary location and writes the subset of URLs for the next run.
+        8. Logs the process and results.
+        If the scraper fails to capture sufficient events after the maximum attempts, an error is logged.
+        """
+
+        calendar_urls_file = self.config['input']['calendar_urls']
+        calendar_df = pd.read_csv(calendar_urls_file)
+        logging.info(f"def scraper_check_and_rerun(): Loaded calendar URLs from {calendar_urls_file}.")
+
+        # Define important sources.
+        important_sources = {
+            "Salsa Caliente",
+            "Red Hot Swing",
+            "Victoria Latin Dance Association",
+            "Victoria West Coast Swing Collective"
+        }
+
+        attempt = 1
+        success = False
+
+        while attempt <= max_attempts and not success:
+            logging.info(f"def scraper_check_and_rerun(): Attempt {attempt} starting crawler process.")
+            self.run_crawler()
+
+            group_df = self.groupby_source()
+            logging.info(f"def scraper_check_and_rerun(): Groupby results:\n{group_df}")
+
+            # Extract only the rows for important sources.
+            important_df = group_df[group_df['source'].isin(important_sources)]
+            missing_important = important_sources - set(important_df['source'].tolist())
+            under_threshold = [src for src in important_df['source'] 
+                            if important_df.loc[important_df['source'] == src, 'counted'].iloc[0] < event_threshold]
+
+            if not missing_important and not under_threshold:
+                logging.info("def scraper_check_and_rerun(): All important sources have sufficient events.")
+                success = True
+            else:
+                logging.info(f"def scraper_check_and_rerun(): Insufficient events for important sources. "
+                            f"Missing: {missing_important}, Under threshold: {under_threshold}. Preparing to re-run.")
+                subset_df = self.subset_calendar_urls(calendar_df, group_df, threshold=event_threshold)
+                if subset_df.empty:
+                    logging.info("def scraper_check_and_rerun(): No URLs to re-run; exiting re-run loop.")
+                    break
+
+                self.config['startup']['use_db'] = False
+                logging.info("def scraper_check_and_rerun(): Set config['startup']['use_db'] to False.")
+
+                self.config['crawling'].update({
+                    'depth_limit': 3,
+                    'headless': True,
+                    'max_crawl_trys': 3,
+                    'max_website_urls': 5,
+                    'scroll_depth': 3,
+                    'urls_run_limit': 5 * len(subset_df)
+                })
+                logging.info("def scraper_check_and_rerun(): Updated crawling settings based on subset size.")
+
+                urls_dir = self.config['input']['urls']
+                self.move_existing_urls_to_temp(urls_dir)
+                self.write_calendar_urls(subset_df, urls_dir)
+                attempt += 1
+
+        if not success:
+            logging.error("def scraper_check_and_rerun(): Failed to capture sufficient events for important sources after maximum attempts.")
+        else:
+            logging.info("def scraper_check_and_rerun(): Successfully captured sufficient events for important sources.")
+        return success
+
+
+    def restore_temp_files(self):
+        """
+        Moves any CSV files from the temp directory back to the original URLs directory.
+        """
+        urls_dir = self.config['input']['urls']
+        temp_dir = os.path.join(urls_dir, "temp")
+        if os.path.exists(temp_dir):
+            for filename in os.listdir(temp_dir):
+                src = os.path.join(temp_dir, filename)
+                dst = os.path.join(urls_dir, filename)
+                try:
+                    shutil.move(src, dst)
+                    logging.info(f"def restore_temp_files(): Moved {filename} from temp back to {urls_dir}.")
+                except Exception as e:
+                    logging.error(f"def restore_temp_files(): Failed to move {filename} back - {e}")
+            logging.info("def restore_temp_files(): Completed restoring temp files.")
+        else:
+            logging.info("def restore_temp_files(): No temp directory found; nothing to restore.")
+
+
+# --------------------------------------------------
+# Main Block
+# --------------------------------------------------
+if __name__ == "__main__":
     start_time = datetime.now()
 
-    # Get config
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-    # Instantiate class libraries
-    db_handler = DatabaseHandler(config)
-    llm_handler = LLMHandler(config_path="config/config.yaml")
-    read_extract = ReadExtract("config/config.yaml")
-
-    # Get the file name of the code that is running
+    # Handlers already instantiated globally in this file.
     file_name = os.path.basename(__file__)
-
-    # Count events and urls before scraper.py
     start_df = db_handler.count_events_urls_start(file_name)
 
-    # Run the crawler process
+    logging.info("\n\nscraper.py starting...")
+
+    # Run the initial crawler process using the subprocess-based crawler (scraper_crawl.py)
     process = CrawlerProcess(settings={
         "LOG_FILE": config['logging']['log_file'],
         "LOG_LEVEL": "INFO",
         "DEPTH_LIMIT": config['crawling']['depth_limit'],
         "FEEDS": {
-            "output/output.json": {
-                "format": "json"
-            }
+            "output/output.json": {"format": "json"}
         }
     })
-    logging.info("scraper.py starting...")
-
     process.crawl(EventSpider, config=config)
     process.start()
 
-    logging.info("__main__: Crawler process completed.")
+    # Create a ScraperManager instance and run the check-and-rerun logic.
+    manager = ScraperManager(config, db_handler)
+    success = manager.scraper_check_and_rerun(max_attempts=4, event_threshold=100)
 
-    # Count events and urls after scraper.py
+    if success:
+        # If successful, restore the temp files.
+        manager.restore_temp_files()
+    else:
+        logging.error("__main__: Scraper did not run successfully; temp files were not restored.")
+
+    logging.info("__main__: Crawler process completed.")
     db_handler.count_events_urls_end(start_df, file_name)
 
-    # Get the end time
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")
-
-    # Calculate the total time taken
     total_time = end_time - start_time
     logging.info(f"__main__: Total time taken: {total_time}\n\n")
