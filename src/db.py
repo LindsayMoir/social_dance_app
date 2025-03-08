@@ -1471,12 +1471,12 @@ class DatabaseHandler():
         """
         Main driver function to perform database operations.
         """
-        # self.create_tables()
-        # self.dedup()
-        # self.delete_old_events()
-        # self.delete_events_with_nulls()
-        # self.delete_likely_dud_events()
-        # self.fuzzy_duplicates()
+        self.create_tables()
+        self.dedup()
+        self.delete_old_events()
+        self.delete_events_with_nulls()
+        self.delete_likely_dud_events()
+        self.fuzzy_duplicates()
         self.is_foreign()
 
         # Close the database connection

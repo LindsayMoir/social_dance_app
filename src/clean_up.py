@@ -351,7 +351,7 @@ class CleanUp:
 
             else:
                 logging.info(f"def process_events_without_url(): Event {event_name} and {event_row.event_id} is not relevant.")
-                self.db_handler.delete_event_with_event_id(event_row.event_id)
+                self.db_handler.delete_event_with_event_id(int(event_row.event_id))
                 delete_count += 1
 
         logging.info("def process_events_without_url(): Deleted {delete_count} events without URLs.")
@@ -624,7 +624,7 @@ class CleanUp:
                     
                     # Delete each event by calling delete_event_with_event_id.
                     for _, event_row in events_df.iterrows():
-                        event_id = event_row['event_id']
+                        event_id = int(event_row['event_id'])
                         self.db_handler.delete_event_with_event_id(event_id)
                         logging.info("Deleted event with event_id %s due to invalid postal_code '%s'", event_id, postal_code)
                     

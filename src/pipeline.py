@@ -544,6 +544,40 @@ def db_step():
     return True
 
 # ------------------------
+# NEW: TASK FOR DATABASE BACKUP STEP
+# ------------------------
+@task
+def backup_db_step():
+    """
+    Backs up the database to checkpoint.dump using pg_dump.
+    Command:
+    pg_dump -U postgres -h localhost -F c -b -v -f checkpoint.dump social_dance_db
+    """
+    logger = get_run_logger()
+    backup_cmd = "pg_dump -U postgres -h localhost -F c -b -v -f checkpoint.dump social_dance_db"
+    
+    # Retrieve the database password from an environment variable.
+    db_password = os.getenv("DATABASE_PASSWORD")
+    if not db_password:
+        logger.error("DATABASE_PASSWORD environment variable not set.")
+        raise Exception("Missing DATABASE_PASSWORD.")
+    
+    # Set up the environment to include the password.
+    env = os.environ.copy()
+    env["PGPASSWORD"] = db_password
+    
+    logger.info(f"Backing up database with command: {backup_cmd}")
+    try:
+        result_backup = subprocess.run(
+            backup_cmd, shell=True, check=True, capture_output=True, text=True, env=env
+        )
+        logger.info(f"Database backup completed: {result_backup.stdout}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Database backup failed: {e.stderr}")
+        raise e
+    return True
+
+# ------------------------
 # TASKS FOR CLEAN_UP.PY STEP
 # ------------------------
 @task
@@ -817,6 +851,7 @@ PIPELINE_STEPS = [
     ("rd_ext", rd_ext_step),
     ("scraper", scraper_step),
     ("fb", fb_step),
+    ("backup_db", backup_db_step),
     ("db", db_step),
     ("clean_up", clean_up_step),
     ("dedup_llm", dedup_llm_step),

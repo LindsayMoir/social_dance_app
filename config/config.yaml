@@ -2,7 +2,7 @@ checkpoint:
   fb_search: checkpoint/fb_search_keywords.csv
   fb_urls: checkpoint/fb_urls.csv
   fb_urls_cp: checkpoint/fb_urls_cp.csv
-  fb_urls_cp_status: true
+  fb_urls_cp_status: false
 clean_up:
   old_events: 3
 constants:
@@ -12,9 +12,9 @@ crawling:
   depth_limit: 3
   headless: true
   max_crawl_trys: 3
-  max_website_urls: 10
+  max_website_urls: 5
   scroll_depth: 3
-  urls_run_limit: 500
+  urls_run_limit: 5
 date_range:
   days_ahead: 365
   months: 3
@@ -35,7 +35,7 @@ input:
 llm:
   mistral_model: mistral-large-latest
   openai_model: o3-mini-2025-01-31
-  provider: openai
+  provider: mistral
   spend_money: true
 location:
   epicentre: Victoria, British Columbia, Canada

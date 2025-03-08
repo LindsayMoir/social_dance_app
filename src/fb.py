@@ -101,7 +101,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     datefmt='%Y-%m-%d %H:%M:%S'
     )
-logging.info("fb.py starting...")
+logging.info("\n\nfb.py starting...")
 
 # Instantiate the class libraries
 db_handler = DatabaseHandler(config)
