@@ -405,7 +405,7 @@ class ScraperManager:
             logging.info(f"def scraper_check_and_rerun(): Attempt {attempt} starting crawler process.")
             self.run_crawler()
 
-            group_df = self.groupby_source()
+            group_df = db_handler.groupby_source()
             logging.info(f"def scraper_check_and_rerun(): Groupby results:\n{group_df}")
 
             # Extract only the rows for important sources.
@@ -479,30 +479,20 @@ if __name__ == "__main__":
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-    # Handlers already instantiated globally in this file.
+    # Instantiate required handlers.
+    db_handler = DatabaseHandler(config)
+    llm_handler = LLMHandler(config_path="config/config.yaml")
+    read_extract = ReadExtract("config/config.yaml")
     file_name = os.path.basename(__file__)
     start_df = db_handler.count_events_urls_start(file_name)
 
-    logging.info("\n\nscraper.py starting...")
+    logging.info("scraper.py starting...")
 
-    # Run the initial crawler process using the subprocess-based crawler (scraper_crawl.py)
-    process = CrawlerProcess(settings={
-        "LOG_FILE": config['logging']['log_file'],
-        "LOG_LEVEL": "INFO",
-        "DEPTH_LIMIT": config['crawling']['depth_limit'],
-        "FEEDS": {
-            "output/output.json": {"format": "json"}
-        }
-    })
-    process.crawl(EventSpider, config=config)
-    process.start()
-
-    # Create a ScraperManager instance and run the check-and-rerun logic.
+    # Let the manager handle the crawl.
     manager = ScraperManager(config, db_handler)
-    success = manager.scraper_check_and_rerun(max_attempts=4, event_threshold=100)
+    success = manager.scraper_check_and_rerun(config['crawling']['max_attempts'], event_threshold=100)
 
     if success:
-        # If successful, restore the temp files.
         manager.restore_temp_files()
     else:
         logging.error("__main__: Scraper did not run successfully; temp files were not restored.")
