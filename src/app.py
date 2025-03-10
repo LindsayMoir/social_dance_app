@@ -70,7 +70,9 @@ def error_handling(e, custom_message=None):
     st.session_state["messages"].append({"role": "assistant", "content": error_message})
     logging.error(f"app.py: Error encountered - {e}")
 
-user_input = st.text_input("Ask a question, then click Send:")
+
+# Get user input and send it to the FastAPI backend
+user_input = st.text_area("Ask a question, then click Send:", height=100)
 
 if st.button("Send"):
     if user_input.strip():

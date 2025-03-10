@@ -7,9 +7,9 @@ import yaml
 import datetime
 import copy
 import pandas as pd
-import re
 import argparse
 import time
+import shutil
 
 # Global logging configuration
 import logging
@@ -98,22 +98,39 @@ def events_table_backup_and_drop():
     if not db_conn_str:
         logger.error("def events_table_backup_and_drop(): DATABASE_CONNECTION_STRING environment variable not set.")
         raise Exception("Missing DATABASE_CONNECTION_STRING in environment.")
+    
     backup_cmd = f'pg_dump "{db_conn_str}" -F c -b -v -f "backups/local_backup.dump"'
     logger.info(f"def events_table_backup_and_drop(): Backing up database with command: {backup_cmd}")
-    try:
-        result_backup = subprocess.run(backup_cmd, shell=True, check=True, capture_output=True, text=True)
-        logger.info(f"def events_table_backup_and_drop(): Database backup completed: {result_backup.stdout}")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"def events_table_backup_and_drop(): Database backup failed: {e.stderr}")
-        raise e
+    
+    # Retry backup command 3 times with 5-second delay
+    for attempt in range(3):
+        try:
+            result_backup = subprocess.run(backup_cmd, shell=True, check=True, capture_output=True, text=True)
+            logger.info(f"def events_table_backup_and_drop(): Database backup completed: {result_backup.stdout}")
+            break
+        except subprocess.CalledProcessError as e:
+            logger.error(f"def events_table_backup_and_drop(): Database backup failed on attempt {attempt+1}: {e.stderr}")
+            if attempt < 2:
+                time.sleep(5)
+            else:
+                raise e
+
     drop_cmd = f'psql -d "{db_conn_str}" -c "DROP TABLE IF EXISTS events;"'
     logger.info(f"def events_table_backup_and_drop(): Dropping events table with command: {drop_cmd}")
-    try:
-        result_drop = subprocess.run(drop_cmd, shell=True, check=True, capture_output=True, text=True)
-        logger.info(f"def events_table_backup_and_drop(): Events table drop result: {result_drop.stdout}")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"def events_table_backup_and_drop(): Failed to drop events table: {e.stderr}")
-        raise e
+    
+    # Retry drop command 3 times with 5-second delay
+    for attempt in range(3):
+        try:
+            result_drop = subprocess.run(drop_cmd, shell=True, check=True, capture_output=True, text=True)
+            logger.info(f"def events_table_backup_and_drop(): Events table drop result: {result_drop.stdout}")
+            break
+        except subprocess.CalledProcessError as e:
+            logger.error(f"def events_table_backup_and_drop(): Failed to drop events table on attempt {attempt+1}: {e.stderr}")
+            if attempt < 2:
+                time.sleep(5)
+            else:
+                raise e
+
     return True
 
 # ------------------------
@@ -537,7 +554,7 @@ def irrelevant_rows_step():
 # ------------------------
 # TASKS FOR DB MAINTENANCE STEP (Using .dump and pg_restore)
 # ------------------------
-def run_command_with_retry(command, logger, attempts=3, delay=5, env=None, timeout=60):
+def run_command_with_retry(command, logger, attempts=3, delay=5, env=None, timeout=30):
     for attempt in range(1, attempts + 1):
         try:
             result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True, env=env, timeout=timeout)
@@ -567,7 +584,7 @@ def db_maintenance_step():
 
     dump_command = "pg_dump -U postgres -h localhost -F c -b -v -f 'backups/local_backup.dump' social_dance_db"
     try:
-        subprocess.run(dump_command, shell=True, check=True, capture_output=True, text=True, env=env_local, timeout=60)
+        subprocess.run(dump_command, shell=True, check=True, capture_output=True, text=True, env=env_local, timeout=30)
         logger.info("def db_maintenance_step(): Database dump (.dump) completed successfully.")
     except subprocess.CalledProcessError as e:
         logger.error(f"def db_maintenance_step(): Database dump failed: {e.stderr}")
@@ -589,7 +606,7 @@ def db_maintenance_step():
     )
     logger.info(f"def db_maintenance_step(): Copy command: {copy_command}")
     try:
-        subprocess.run(copy_command, shell=True, check=True, capture_output=True, text=True, env=os.environ.copy(), timeout=180)
+        subprocess.run(copy_command, shell=True, check=True, capture_output=True, text=True, env=os.environ.copy(), timeout=30)
         logger.info("def db_maintenance_step(): Database copy (restore) command executed successfully.")
     except subprocess.TimeoutExpired as te:
         logger.error(f"def db_maintenance_step(): Database copy timed out: {te}")
@@ -606,7 +623,7 @@ def db_maintenance_step():
     env_render = os.environ.copy()
     env_render["PGPASSWORD"] = render_pg_pass
     try:
-        subprocess.run(alter_command, shell=True, check=True, capture_output=True, text=True, env=env_render, timeout=60)
+        subprocess.run(alter_command, shell=True, check=True, capture_output=True, text=True, env=env_render, timeout=30)
         logger.info("def db_maintenance_step(): Database time zone altered successfully.")
     except subprocess.CalledProcessError as e:
         logger.error(f"def db_maintenance_step(): Altering time zone failed: {e.stderr}")
@@ -621,7 +638,7 @@ def db_maintenance_step():
         "-c \"SHOW TIME ZONE;\""
     )
     try:
-        result = subprocess.run(show_command, shell=True, check=True, capture_output=True, text=True, env=env_render, timeout=60)
+        result = subprocess.run(show_command, shell=True, check=True, capture_output=True, text=True, env=env_render, timeout=30)
         logger.info(f"def db_maintenance_step(): Database time zone: {result.stdout.strip()}")
     except subprocess.CalledProcessError as e:
         logger.error(f"def db_maintenance_step(): Showing time zone failed: {e.stderr}")
@@ -678,7 +695,21 @@ def run_pipeline(start_step: str, end_step: str = None):
         sys.exit(1)
     for name, step_flow in PIPELINE_STEPS[start_idx:end_idx+1]:
         print(f"Running step: {name}")
-        step_flow()
+        retry_count = 0
+        while retry_count < 3:
+            try:
+                step_flow()
+                break
+            except Exception as e:
+                if "database is locked" in str(e).lower():
+                    logger.error(f"Step {name} encountered a database locked error, retrying in 5 seconds. Attempt {retry_count+1} of 3.")
+                    time.sleep(5)
+                    retry_count += 1
+                else:
+                    raise e
+        else:
+            logger.error(f"Step {name} failed after 3 retries due to database locked errors.")
+            sys.exit(1)
 
 def prompt_user():
     print("Select pipeline execution mode:")
@@ -728,6 +759,26 @@ def prompt_user():
     print(f"Pipeline will run from '{start}' to '{end}'.")
     run_pipeline(start, end)
 
+def move_temp_files_back():
+    # After a successful run, move CSV files from temp back to the original URL directory.
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            current_config = yaml.safe_load(f)
+        urls_dir = current_config['input']['urls']
+        temp_dir = os.path.join(urls_dir, "temp")
+        if os.path.exists(temp_dir):
+            for filename in os.listdir(temp_dir):
+                if filename.endswith(".csv"):
+                    src = os.path.join(temp_dir, filename)
+                    dst = os.path.join(urls_dir, filename)
+                    shutil.move(src, dst)
+                    logger.info(f"move_temp_files_back(): Moved {filename} from temp back to {urls_dir}.")
+            logger.info("move_temp_files_back(): Completed moving temp files back.")
+        else:
+            logger.info("move_temp_files_back(): No temp directory found; nothing to move.")
+    except Exception as e:
+        logger.error(f"move_temp_files_back(): Failed to move temp files back: {e}")
+
 def main():
     parser = argparse.ArgumentParser(description="Run pipeline with command line options or interactive input.")
     parser.add_argument('--mode', choices=['1', '2', '3', '4'],
@@ -769,6 +820,12 @@ def main():
         run_pipeline(start, end)
     else:
         prompt_user()
+    
+    # After successful pipeline execution, move any CSV files from temp back to the original URLs directory.
+    try:
+        move_temp_files_back()
+    except Exception as e:
+        logger.error(f"main(): Failed to move temp files back: {e}")
 
 if __name__ == "__main__":
     main()

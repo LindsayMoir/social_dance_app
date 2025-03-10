@@ -25,6 +25,7 @@ debug:
 fuzzywuzzy:
   hurdle: 70
 input:
+  calendar_urls: data/other/calendar_urls.csv
   countries: data/other/countries.csv
   data_keywords: data/other/keywords.csv
   edge_cases: data/other/edge_cases.csv
@@ -33,7 +34,6 @@ input:
   municipalities: data/other/municipalities.txt
   predibase: data/other/duplicates_predibase.csv
   urls: data/urls
-  calendar_urls: data/other/calendar_urls.csv
 llm:
   mistral_model: mistral-large-latest
   openai_model: o3-mini-2025-01-31
