@@ -6,7 +6,7 @@ import os
 import yaml
 import logging
 from dotenv import load_dotenv
-import sys
+
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO)
