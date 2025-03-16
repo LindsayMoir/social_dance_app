@@ -927,11 +927,14 @@ class DatabaseHandler():
                 DELETE FROM events e1
                 USING events e2
                 WHERE e1.event_id < e2.event_id
-                  AND e1.event_name = e2.event_name
-                  AND e1.start_date = e2.start_date;
+                    AND e1.address_id = e2.address_id
+                    AND e1.start_date = e2.start_date
+                    AND e1.end_date = e2.end_date
+                    AND ABS(EXTRACT(EPOCH FROM (e1.start_time - e2.start_time))) <= 900
+                    AND ABS(EXTRACT(EPOCH FROM (e1.end_time - e2.end_time))) <= 900;
             """
-            self.execute_query(dedup_events_query)
-            logging.info("def dedup(): Deduplicated events table successfully.")
+            deleted_count = self.execute_query(dedup_events_query)
+            logging.info("def dedup(): Deduplicated events table successfully. Rows deleted: %d", deleted_count)
 
             # Deduplicate 'urls' table based on 'link' using ctid for row identification
             dedup_urls_query = """
@@ -940,8 +943,8 @@ class DatabaseHandler():
                 WHERE a.ctid < b.ctid
                 AND a.link = b.link;
             """
-            self.execute_query(dedup_urls_query)
-            logging.info("dedup: Deduplicated 'urls' table successfully.")
+            deleted_count = self.execute_query(dedup_urls_query)
+            logging.info("dedup: Deduplicated 'urls' table successfully. Rows deleted: %d", deleted_count)
 
         except Exception as e:
             logging.error("def dedup(): Failed to deduplicate tables: %s", e)
@@ -1567,7 +1570,7 @@ class DatabaseHandler():
                         # Stop after the first match is found.
                         break
 
-        logging.info("fix_address_id_in_events: events_address_ids_to_be_updated_list: %s", events_address_ids_to_be_updated_list)
+        logging.info("fix_address_id_in_events: events_address_ids_to_be_updated_list: %s", len(events_address_ids_to_be_updated_list))
         
         # Bulk update the events table using the provided multiple_db_inserts method.
         self.multiple_db_inserts("events", events_address_ids_to_be_updated_list)
