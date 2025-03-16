@@ -90,48 +90,8 @@ def dummy_post_process(step: str) -> bool:
     return True
 
 # ------------------------
-# TASK FOR EVENTS TABLE BACKUP AND DROP STEP
+# (Removed events_table_backup_and_drop step)
 # ------------------------
-@task
-def events_table_backup_and_drop():
-    db_conn_str = os.getenv("DATABASE_CONNECTION_STRING")
-    if not db_conn_str:
-        logger.error("def events_table_backup_and_drop(): DATABASE_CONNECTION_STRING environment variable not set.")
-        raise Exception("Missing DATABASE_CONNECTION_STRING in environment.")
-    
-    backup_cmd = f'pg_dump "{db_conn_str}" -F c -b -v -f "backups/local_backup.dump"'
-    logger.info(f"def events_table_backup_and_drop(): Backing up database with command: {backup_cmd}")
-    
-    # Retry backup command 3 times with 5-second delay
-    for attempt in range(3):
-        try:
-            result_backup = subprocess.run(backup_cmd, shell=True, check=True, capture_output=True, text=True)
-            logger.info(f"def events_table_backup_and_drop(): Database backup completed: {result_backup.stdout}")
-            break
-        except subprocess.CalledProcessError as e:
-            logger.error(f"def events_table_backup_and_drop(): Database backup failed on attempt {attempt+1}: {e.stderr}")
-            if attempt < 2:
-                time.sleep(5)
-            else:
-                raise e
-
-    drop_cmd = f'psql -d "{db_conn_str}" -c "DROP TABLE IF EXISTS events;"'
-    logger.info(f"def events_table_backup_and_drop(): Dropping events table with command: {drop_cmd}")
-    
-    # Retry drop command 3 times with 5-second delay
-    for attempt in range(3):
-        try:
-            result_drop = subprocess.run(drop_cmd, shell=True, check=True, capture_output=True, text=True)
-            logger.info(f"def events_table_backup_and_drop(): Events table drop result: {result_drop.stdout}")
-            break
-        except subprocess.CalledProcessError as e:
-            logger.error(f"def events_table_backup_and_drop(): Failed to drop events table on attempt {attempt+1}: {e.stderr}")
-            if attempt < 2:
-                time.sleep(5)
-            else:
-                raise e
-
-    return True
 
 # ------------------------
 # TASKS FOR GS.PY STEP
@@ -659,7 +619,7 @@ def send_text_message(message: str):
 # PIPELINE EXECUTION
 # ------------------------
 PIPELINE_STEPS = [
-    ("events_table_backup_and_drop", events_table_backup_and_drop),
+    # ("events_table_backup_and_drop", events_table_backup_and_drop),  # Removed as requested.
     ("db", db_step),
     ("emails", emails_step),
     ("gs", gs_step),

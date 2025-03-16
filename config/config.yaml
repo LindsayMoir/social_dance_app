@@ -22,6 +22,7 @@ date_range:
 debug:
   after_url_updated: debug/after_url_updated.csv
   before_url_updated: debug/before_url_updated.csv
+  address_fix: debug/address_fix.csv
 fuzzywuzzy:
   hurdle: 70
 input:
@@ -53,6 +54,7 @@ output:
   irrelevant_rows: output/irrelevant_rows.csv
   is_foreign: output/is_foreign.csv
 prompts:
+  address_fix: prompts/address_fix_prompt.txt
   chatbot_instructions: prompts/chatbot_instructions.txt
   dedup: prompts/dedup_prompt.txt
   default: prompts/default.txt
@@ -64,6 +66,7 @@ prompts:
   relevant_dance_url: prompts/relevant_dance_url.txt
   single_event: prompts/single_event.txt
   sql: prompts/sql_prompt.txt
+
 regex:
   dancevictoria1: (?s)(~~~~~~~~~~.*?Take the time to dance)
   djdancingdean: classes at the  Legion.*?Victoria West Coast Swing Collective Society

@@ -150,10 +150,11 @@ class DatabaseHandler():
             drop_queries = [
                 "DROP TABLE IF EXISTS events CASCADE;"
             ]
-        elif self.config['testing']['drop_tables'] == 'events':
-            drop_queries = [
-                "DROP TABLE IF EXISTS events CASCADE;"
-            ]
+            # Copy events to events_history
+            sql = 'SELECT * FROM events;'
+            events_df = pd.read_sql(sql, self.conn) 
+            events_df.to_sql('events_history', self.conn, if_exists='append', index=False)
+
         else:
             # Don't drop any tables
             drop_queries = []
@@ -211,11 +212,13 @@ class DatabaseHandler():
             CREATE TABLE IF NOT EXISTS address (
                 address_id SERIAL PRIMARY KEY,
                 full_address TEXT UNIQUE,
+                building_name TEXT,
                 street_number TEXT,
                 street_name TEXT,
                 street_type TEXT,
-                postal_box TEXT,
+                direction TEXT,
                 city TEXT,
+                met_area TEXT,
                 province_or_state TEXT,
                 postal_code TEXT,
                 country_id TEXT,
@@ -597,7 +600,7 @@ class DatabaseHandler():
                 row = insert_result[0]
                 address_id = row[0]  # address_id is the first column in the result
 
-                # *** KEY CHANGE: Convert to Python int ***
+                # Convert to Python int
                 if isinstance(address_id, np.int64):
                     address_id = int(address_id)
 
@@ -1102,7 +1105,8 @@ class DatabaseHandler():
         WHERE source = :source
         AND dance_style = :dance_style
         AND url = :url
-        AND address_id IS NULL;
+        AND address_id IS NULL
+        RETURNING event_id;
         """
         params = {
             'source': '',
@@ -1111,8 +1115,9 @@ class DatabaseHandler():
             'event_type': 'other'
             }
 
-        self.execute_query(delete_query_1, params)
-        logging.info("delete_likely_dud_events: Deleted events with empty source, dance_style, and url, and no address_id.")
+        deleted_events = self.execute_query(delete_query_1, params)
+        deleted_count = len(deleted_events) if deleted_events else 0
+        logging.info("delete_likely_dud_events: Deleted %d events with empty source, dance_style, and url, and no address_id.", deleted_count)
 
         # 2. Delete events outside of British Columbia (BC)
         delete_query_2 = """
@@ -1122,14 +1127,16 @@ class DatabaseHandler():
         FROM address
         WHERE province_or_state IS NOT NULL
             AND province_or_state != :province_or_state
-        );
+        )
+        RETURNING event_id;
         """
         params = {
             'province_or_state': 'BC'
             }
         
-        self.execute_query(delete_query_2, params)
-        logging.info("delete_likely_dud_events: Deleted events outside of British Columbia (BC).")
+        deleted_events = self.execute_query(delete_query_2, params)
+        deleted_count = len(deleted_events) if deleted_events else 0
+        logging.info("delete_likely_dud_events: Deleted %d events outside of British Columbia (BC).", deleted_count)
 
         # 3. Delete events that are not in Canada
         delete_query_3 = """
@@ -1139,14 +1146,16 @@ class DatabaseHandler():
         FROM address
         WHERE country_id IS NOT NULL
             AND country_id != :country_id
-        );
+        )
+        RETURNING event_id;
         """
         params = {
             'country_id': 'CA'
             }
         
-        self.execute_query(delete_query_3, params)
-        logging.info("delete_likely_dud_events: Deleted events that are not in Canada (CA).")
+        deleted_events = self.execute_query(delete_query_3, params)
+        deleted_count = len(deleted_events) if deleted_events else 0
+        logging.info("delete_likely_dud_events: Deleted %d events that are not in Canada (CA).", deleted_count)
 
         # 4. Delete rows in events where dance_style and url are == '' AND event_type == 'other' AND location IS NULL and description IS NULL
         delete_query_4 = """
@@ -1155,7 +1164,8 @@ class DatabaseHandler():
             AND url = :url
             AND event_type = :event_type
             AND location IS NULL
-            AND description IS NULL;
+            AND description IS NULL
+        RETURNING event_id;
         """
         params = {
             'dance_style': '',
@@ -1163,11 +1173,13 @@ class DatabaseHandler():
             'event_type': 'other'
             }
         
-        self.execute_query(delete_query_4, params)
+        deleted_events = self.execute_query(delete_query_4, params)
+        deleted_count = len(deleted_events) if deleted_events else 0
         logging.info(
-            "def delete_likely_dud_events(): Deleted events with empty "
+            "def delete_likely_dud_events(): Deleted %d events with empty "
             "dance_style, url, event_type 'other', and null location "
-            "and description."
+            "and description.",
+            deleted_count
         )
         
 
@@ -1477,17 +1489,105 @@ class DatabaseHandler():
         logging.info(f"def count_events_urls_end(): Wrote events and urls statistics to: {file_name}")
 
 
+    def dedup_address(self):
+        """
+        Deduplicates the 'address' table based on the street_number and street_name columns.
+        """
+        # Create sql statement to select all rows where street_number and street_name are not null or empty
+        sql = """
+                SELECT *
+                FROM address
+                WHERE street_number IS NOT NULL 
+                AND street_number <> ''
+                AND street_name IS NOT NULL 
+                AND street_name <> '';
+            """
+        df = pd.read_sql(sql, self.conn)
+
+        # Get duplicates
+        duplicates = df[df.duplicated(subset=['street_number', 'street_name'], keep='last')]
+        if duplicates.empty:
+            logging.info("dedup_address(): No duplicates found in the 'address' table.")
+
+        else:
+            # Get the address_ids of the duplicates
+            address_ids = duplicates['address_id'].tolist()
+
+            # Delete the duplicates
+            for address_id in address_ids:
+                self.delete_address_with_address_id(address_id)
+            logging.info("dedup_address(): Deleted %d duplicate addresses.", len(address_ids))
+
+
+    def fix_address_id_in_events(self):
+        """
+        Goes through the events table and ensures that the address_id in the events table 
+        matches the correct address_id from the address table.
+        
+        For each event:
+        - Extracts the street number from the event's location using regex.
+        - If a match is found, looks for a matching row in the address table based on street_number.
+        - If an address row is found and its street_name is present in the location, the event's address_id is updated.
+        - The event_id and updated address_id are collected in a list for a bulk update.
+        """
+        # Read the events table into a DataFrame.
+        sql = "SELECT * FROM events"
+        events_df = pd.read_sql(sql, self.conn)
+        
+        # Read the address table into a DataFrame.
+        sql = "SELECT * FROM address ORDER BY street_number, street_name"
+        address_df = pd.read_sql(sql, self.conn)
+        
+        # List to hold updates for events table.
+        events_address_ids_to_be_updated_list = []
+        
+        # Process each event row.
+        for row in events_df.itertuples(index=False):
+            # events table has columns "event_id" and "location"
+            event_id = row.event_id
+            location = row.location
+            
+            # Use regex to extract the first group of digits (the presumed street number)
+            if location is not None:
+                match = re.search(r'\d+', location)
+            else:
+                match = None
+            if match:
+                extracted_number = match.group()
+                # Look for address rows with matching street_number
+                matching_addresses = address_df[address_df['street_number'] == extracted_number]
+                for _, addr_row in matching_addresses.iterrows():
+                    # Check if the street_name from the address appears in the event's location.
+                    if pd.notnull(addr_row['street_name']) and addr_row['street_name'] in location:
+                        new_address_id = addr_row['address_id']
+                        events_address_ids_to_be_updated_list.append({
+                            "event_id": event_id,
+                            "address_id": new_address_id
+                        })
+                        # Stop after the first match is found.
+                        break
+
+        logging.info("fix_address_id_in_events: events_address_ids_to_be_updated_list: %s", events_address_ids_to_be_updated_list)
+        
+        # Bulk update the events table using the provided multiple_db_inserts method.
+        self.multiple_db_inserts("events", events_address_ids_to_be_updated_list)
+
+
     def driver(self):
         """
         Main driver function to perform database operations.
         """
-        self.create_tables()
-        self.dedup()
-        self.delete_old_events()
-        self.delete_events_with_nulls()
-        self.delete_likely_dud_events()
-        self.fuzzy_duplicates()
-        self.is_foreign()
+        if config['testing']['drop_tables'] == True:
+            self.create_tables()
+        else:
+            self.dedup()
+            self.delete_old_events()
+            self.delete_events_with_nulls()
+            self.delete_likely_dud_events()
+            self.fuzzy_duplicates()
+            self.is_foreign()
+            self.dedup_address()
+            self.fix_address_id_in_events()
 
         # Close the database connection
         self.conn.dispose()  # Using dispose() for SQLAlchemy Engine
@@ -1517,9 +1617,6 @@ if __name__ == "__main__":
     
     # Get the file name of the code that is running
     file_name = os.path.basename(__file__)
-
-    # Create tables
-    db_handler.create_tables()
 
     # Count events and urls before cleanup
     start_df = db_handler.count_events_urls_start(file_name)

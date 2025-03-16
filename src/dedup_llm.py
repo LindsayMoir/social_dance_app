@@ -66,7 +66,7 @@ class DeduplicationHandler:
             format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
             datefmt='%Y-%m-%d %H:%M:%S'
         )
-        logging.info("dedup.py starting...")
+        logging.info("\n\ndedup_llm.py starting...")
         logging.info(f"def _setup_logging(): Logging configured and run started at time: {datetime.now()}")
 
     def _setup_database(self):
@@ -265,6 +265,84 @@ class DeduplicationHandler:
         else:
             logging.info("def delete_duplicates(): No events marked for deletion.")
         return len(to_be_deleted_event_list)
+    
+
+    def parse_address(self):
+        """
+        Parse the full_address column in batches and update the corresponding columns in the address table.
+        For each batch, the prompt is built by including the entire row (all fields) for every record,
+        using itertuples(). The LLM is then queried once per batch, returning a JSON containing multiple address rows.
+        """
+        # TEMP ***
+        #sql = "SELECT * FROM address"
+        sql = 'SELECT * FROM address WHERE building_name is NULL and street_number is NULL'
+        df = pd.read_sql(text(sql), self.engine)
+        logging.info(f"parse_address: Read {len(df)} rows from the database")
+
+        batch_size = 100
+        num_rows = len(df)
+
+        # Read in prompt template from file.
+        with open(self.config['prompts']['address_fix'], "r") as file:
+            prompt_template = file.read()
+
+        for i in range(0, num_rows, batch_size):
+            batch_df = df.iloc[i: i + batch_size]
+
+            # Build the prompt by converting each row (using itertuples) into key: value lines.
+            prompt_lines = []
+            for row in batch_df.itertuples(index=False):
+                row_str = ", ".join([f"{field}: {getattr(row, field)}" for field in row._fields])
+                prompt_lines.append(row_str)
+            prompt = f"{prompt_template}\n" + "\n".join(prompt_lines)
+            logging.info(f"parse_address: Processing batch {i // batch_size + 1} with prompt:\n{prompt}")
+
+            # Query the LLM once per batch.
+            response = self.llm_handler.query_llm(prompt)
+            if not response:
+                logging.error(f"parse_address: No response received for batch {i // batch_size + 1}")
+                continue
+
+            # Expect a JSON response containing multiple address rows.f
+            parsed_addresses = self.llm_handler.extract_and_parse_json(response, '')
+            if not parsed_addresses:
+                logging.error(f"parse_address: Parsing failed for batch {i // batch_size + 1}")
+                continue
+
+            # Ensure that parsed_addresses is a list.
+            if not isinstance(parsed_addresses, list):
+                parsed_addresses = [parsed_addresses]
+
+            logging.info(f"parse_address: Successfully parsed {len(parsed_addresses)} addresses in batch {i // batch_size + 1}")
+            self._flush_batch(parsed_addresses)
+
+
+    def _flush_batch(self, batch_data):
+        """
+        Flush the batch data to CSV for debugging and insert the records into the database.
+        """
+        batch_df = pd.DataFrame(batch_data)
+        batch_df.to_csv(self.config['debug']['address_fix'], mode='a', index=False)
+        values = batch_df.to_dict(orient='records')
+        self.db_handler.multiple_db_inserts('address', values)
+        logging.info(f"_flush_batch: Successfully inserted {len(values)} records into the database.")
+
+
+    def driver(self):
+        """
+        Main driver function for the deduplication process.
+        """
+        # Loop until no duplicates are flagged for deletion (i.e. total_deleted == 0)
+        while True:
+            total_deleted = self.process_duplicates()
+            logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
+            if total_deleted == 0:
+                logging.info("No duplicates found. Exiting deduplication loop.")
+                break
+        
+        # Parse the address data
+        self.parse_address()
+        logging.info("dedup.py finished.")
 
 
 if __name__ == "__main__":
@@ -282,14 +360,7 @@ if __name__ == "__main__":
     # Count events and urls before cleanup
     start_df = db_handler.count_events_urls_start(file_name)
 
-    total_deleted = None
-    # Loop until no duplicates are flagged for deletion (i.e. total_deleted == 0)
-    while True:
-        total_deleted = deduper.process_duplicates()
-        logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
-        if total_deleted == 0:
-            logging.info("No duplicates found. Exiting deduplication loop.")
-            break
+    deduper.driver()
     
     db_handler.count_events_urls_end(start_df, file_name)
 
