@@ -238,3 +238,44 @@ address_id,full_address,building_name,street_number,street_name,street_type,dire
 20092,"Baza Dance Studios - 1309 Seymour Street, Vancouver, British Columbia,  BC, V6B 3P3, CA",Baza Dance Studios,1309,Seymour,Street,,,,BC,V6B 3P3,CA,2025-03-09 21:54:50.701049
 20095,"109–2675 Wilfert Road, Colwood at @Westshore Dance Studio,  BC, V9B 1H8, CA",,2675,Wilfert,Road,,,,BC,V9B 1H8,CA,2025-03-09 21:59:29.940658
 1159,"Fairfield Community Centre, Garry Oak Room, 1335 Thurlow. Big free parking lot.,  BC, V8S 5K2, CA",Fairfield Community Centre,1335,Thurlow,,,,,BC,V8S 5K2,CA,2025-03-09 17:31:38.900224
+address_id,full_address,building_name,street_number,street_name,street_type,direction,city,met_area,province_or_state,postal_code,country_id,time_stamp
+4025,"Vancouver, Canada (departing from Coral Princess), Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-06 16:56:32.639599
+3386,"Victoria, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-07 09:36:18.866527
+4121,"Victoria BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-09 18:14:29.152819
+address_id,full_address,building_name,street_number,street_name,street_type,direction,city,met_area,province_or_state,postal_code,country_id,time_stamp
+588,"Salsa Moderna Dance Lessons Victoria,  BC, V8S 5K2, CA",Salsa Moderna Dance Lessons,,,,,Victoria,,BC,V8S 5K2,CA,2025-03-16 15:45:29.537718
+1320,"Burrard Queen,  BC, V6B 5E7, CA",Burrard Queen,,,,,,,BC,V6B 5E7,CA,2025-03-16 18:55:53.082977
+1321,"1755 Davie St,  BC, V6G 0B8, CA",,1755,Davie,St,,,,BC,V6G 0B8,CA,2025-03-16 18:55:53.243006
+1322,"Suite Genius,  BC, V5Y 1N3, CA",Suite Genius,,,,,,,BC,V5Y 1N3,CA,2025-03-16 18:55:53.545642
+1324,"Victoria Curling Club,  BC, V8T 4C2, CA",Victoria Curling Club,,,,,,,BC,V8T 4C2,CA,2025-03-16 18:55:53.719230
+1325,"Topaz Park,  BC, V8T 2M2, CA",Topaz Park,,,,,,,BC,V8T 2M2,CA,2025-03-16 18:55:54.080473
+1326,"Fairmont Vancouver Airport,  BC, V7B 0A6, CA",Fairmont Vancouver Airport,,,,,,,BC,V7B 0A6,CA,2025-03-16 18:55:54.496634
+1315,"Northern Alberta Jubilee Auditorium, Edmonton, AB,  BC, T6G 2T2, CA",Northern Alberta Jubilee Auditorium,,,,,Edmonton,,AB,T6G 2T2,CA,2025-03-16 17:17:35.596004
+1316,"Southern Alberta Jubilee Auditorium, Calgary, AB,  BC, T2N 1M4, CA",Southern Alberta Jubilee Auditorium,,,,,Calgary,,AB,T2N 1M4,CA,2025-03-16 17:17:35.834752
+1317,"Burton Cummings Theatre, Winnipeg, MB,  BC, R3B 2H2, CA",Burton Cummings Theatre,,,,,Winnipeg,,MB,R3B 2H2,CA,2025-03-16 17:17:36.033070
+1318,"Victoria, BC, Canada, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-16 17:30:08.887198
+4025,"Vancouver, Canada (departing from Coral Princess), Vancouver, BC, CA",Coral Princess,,,,,Vancouver,,BC,,CA,2025-03-06 16:56:32.639599
+3386,"Victoria, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-07 09:36:18.866527
+1106,"Vancouver, BC, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-16 16:18:33.520259
+1079,"Confederation Centre in Burnaby (4585 Albert Street),  BC, V5C 2G5, CA",Confederation Centre,4585,Albert,Street,,Burnaby,,BC,V5C 2G5,CA,2025-03-16 15:58:29.114422
+1093,"Famee Furlane Hall – 2605 East Pender, East Vancouver,  BC, V5K 2B6, CA",Famee Furlane Hall,2605,East Pender,,,East Vancouver,,BC,V5K 2B6,CA,2025-03-16 16:04:36.526004
+1094,"Holy Trinity Ukrainian Orthodox Cathedral – 154 E 10th Ave, Vancouver,  BC, V5T 1Z4, CA",Holy Trinity Ukrainian Orthodox Cathedral,154,E 10th,Ave,,Vancouver,,BC,V5T 1Z4,CA,2025-03-16 16:04:36.791231
+1111,"Vancouver, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-16 16:19:27.591691
+1096,"The Evergreen Hall – 9291 Corbould St., Chilliwack,  BC, V2P 4A6, CA",The Evergreen Hall,9291,Corbould,St,,Chilliwack,,BC,V2P 4A6,CA,2025-03-16 16:04:37.177825
+1091,"20279 97 Ave #3, Langley,  BC, V1M 4B9, CA",,20279,97,Ave,,Langley,,BC,V1M 4B9,CA,2025-03-16 16:04:37.329115
+1081,"Confederation Centre in North Burnaby,  BC, V5C 2G5, CA",Confederation Centre,,,,,North Burnaby,,BC,V5C 2G5,CA,2025-03-16 16:02:32.998106
+1089,"1627 W Broadway, Vancouver (at Dance Vancouver Studio),  BC, V6J 1W9, CA",Dance Vancouver Studio,1627,W Broadway,,,Vancouver,,BC,V6J 1W9,CA,2025-03-16 16:04:37.457832
+1088,"181 Roundhouse Mews, Vancouver,  BC, V6Z 2W3, CA",,181,Roundhouse,Mews,,Vancouver,,BC,V6Z 2W3,CA,2025-03-16 16:04:35.345154
+1099,"Confederation Centre, North Burnaby,  BC, V5C 2G5, CA",Confederation Centre,,,,,North Burnaby,,BC,V5C 2G5,CA,2025-03-16 16:05:36.007719
+1112,"Hermann’s Jazz Club,  BC, V8W 1J9, CA",Hermann’s Jazz Club,,,,,,,BC,V8W 1J9,CA,2025-03-16 17:03:28.432733
+1136,"Vancouver Island Convention Center 101 Gordon Street Nanaimo, British Columbia Nanaimo, British Columbia- Canada,  BC, V9R 5J8, CA",Vancouver Island Convention Center,101,Gordon,Street,,Nanaimo,,BC,V9R 5J8,CA,2025-03-16 16:22:34.647502
+4121,"Victoria BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-09 18:14:29.152819
+1228,"Strawberry Vale,  BC, V8Z 7B8, CA",Strawberry Vale,,,,,,,BC,V8Z 7B8,CA,2025-03-16 16:30:51.588296
+1175,"Dance Victoria,  BC, V8T 4E8, CA",Dance Victoria,,,,,,,BC,V8T 4E8,CA,2025-03-16 16:30:51.440220
+587,"Mary Winspear Centre , 2243 Beacon Avenue, Sidney, BC,  BC, V8L 1W9, CA",Mary Winspear Centre,2243,Beacon,Avenue,,Sidney,,BC,V8L 1W9,CA,2025-03-16 15:49:13.109246
+1242,"Saint Matthias Anglican Church, 600 Richmond Ave,  BC, V8S 3Y7, CA",Saint Matthias Anglican Church,600,Richmond,Ave,,,,BC,V8S 3Y7,CA,2025-03-16 16:31:34.437535
+1245,"The Loft, 229 Gorge Road East,  BC, V9A 1L1, CA",The Loft,229,Gorge,Road,East,,,BC,V9A 1L1,CA,2025-03-16 16:32:07.719369
+1246,"Hermann's Jazz Club, 753 View St,  BC, V8W 1J9, CA",Hermann's Jazz Club,753,View,St,,,,BC,V8W 1J9,CA,2025-03-16 16:32:07.927515
+1247,"Wicket Hall , 919 Douglas St, Victoria,  BC, V8W 2C2, CA",Wicket Hall,919,Douglas,St,,Victoria,,BC,V8W 2C2,CA,2025-03-16 16:32:08.162561
+1301,"McKenzie Bight – Gowlland Tod Provincial Park,  BC, V9E 2A3, CA",McKenzie Bight – Gowlland Tod Provincial Park,,,,,,,BC,V9E 2A3,CA,2025-03-16 17:13:23.660551
+1302,"Da Vinci Centre, Victoria,  BC, V9A 3K4, CA",Da Vinci Centre,,,,,Victoria,,BC,V9A 3K4,CA,2025-03-16 17:17:07.649413

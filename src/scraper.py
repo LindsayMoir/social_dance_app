@@ -56,6 +56,7 @@ class EventSpider(scrapy.Spider):
         self.config = config
         self.visited_link = set()  # Track visited URLs
         self.keywords_list = llm_handler.get_keywords()
+        logging.info("\n\nscraper.py starting...")
 
 
     def start_requests(self):
@@ -80,15 +81,9 @@ class EventSpider(scrapy.Spider):
             source = row['source']
             keywords = row['keywords']
             url = row['link']
-
-            # Write the URL to the database if not already present
-            db_handler.write_url_to_db(source, keywords, url, None, 1)
-
-            if url not in self.visited_link:
-                self.visited_link.add(url)
-                logging.info(f"def start_requests(): Starting crawl for URL: {url}")
-                yield scrapy.Request(url=url, callback=self.parse,
-                                      cb_kwargs={'keywords': keywords, 'source': source, 'url': url})
+            logging.info(f"def start_requests(): Starting crawl for URL: {url}")
+            yield scrapy.Request(url=url, callback=self.parse,
+                                    cb_kwargs={'keywords': keywords, 'source': source, 'url': url})
                 
 
     def parse(self, response, keywords, source, url):
@@ -117,23 +112,33 @@ class EventSpider(scrapy.Spider):
                 self.fetch_google_calendar_events(calendar_url, url, source, keywords)
 
         # Combine main links and current URL, remove Facebook/Instagram URLs.
-        all_links = set(page_links + [url])
-        for link in list(all_links):
-            if 'facebook' in link or 'instagram' in link:
-                all_links.remove(link)
-                logging.info(f"def parse(): Removed Facebook/Instagram URL: {link}")
+        all_links = {url} | set(page_links)
 
-        logging.info(f"def parse(): {len(all_links)} links remain on {response.url}")
+        # Filter out unwanted links (i.e. those that do not contain 'facebook' or 'instagram').
+        filtered_links = {link for link in all_links if 'facebook' not in link and 'instagram' not in link}
 
-        for link in all_links:
-            if link not in self.visited_link:
+        # Determine the unwanted links (those that were filtered out).
+        unwanted_links = all_links - filtered_links
+
+        # Write unwanted (Facebook/Instagram) links to the database.
+        for link in unwanted_links:
+            db_handler.write_url_to_db(source, keywords, link, relevant=False, increment_crawl_try=1)
+            logging.info(f"def parse(): Recorded unwanted URL (Facebook/Instagram): {link}")
+
+        logging.info(f"def parse(): {len(filtered_links)} links remain on {response.url}")
+        logging.info(f"def parse(): Here is the current list of all_links. \n{filtered_links}")
+
+        for link in filtered_links:
+            if link in self.visited_link:
+                pass
+            else:
                 self.visited_link.add(link)
                 db_handler.write_url_to_db(source, keywords, link, None, 1)
                 if len(self.visited_link) >= self.config['crawling']['urls_run_limit']:
                     logging.info(f"def parse(): Reached maximum URL limit: {self.config['crawling']['urls_run_limit']}. Stopping further crawl.")
                     break
-                self.driver(link, keywords, source)
                 logging.info(f"def parse(): Crawling next URL: {link}")
+                self.driver(link, keywords, source)
                 yield response.follow(url=link, callback=self.parse,
                                       cb_kwargs={'keywords': keywords, 'source': source, 'url': link})
                 
@@ -485,8 +490,6 @@ if __name__ == "__main__":
     read_extract = ReadExtract("config/config.yaml")
     file_name = os.path.basename(__file__)
     start_df = db_handler.count_events_urls_start(file_name)
-
-    logging.info("scraper.py starting...")
 
     # Let the manager handle the crawl.
     manager = ScraperManager(config, db_handler)

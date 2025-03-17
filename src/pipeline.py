@@ -369,15 +369,33 @@ def run_db_script():
 
 @flow(name="DB Step")
 def db_step():
+    # Load the current config.
+    with open(CONFIG_PATH, "r") as f:
+        current_config = yaml.safe_load(f)
+    
+    # Use the current config for backup/update; note that if this is the first run,
+    # current_config['testing']['drop_tables'] should already be True.
     original_config = backup_and_update_config("db", updates=COMMON_CONFIG_UPDATES)
     write_run_config.submit("db", original_config)
+    
     if not dummy_pre_process("db"):
         send_text_message("db.py pre-processing failed.")
         restore_config(original_config, "db")
         raise Exception("db.py pre-processing failed. Pipeline stopped.")
+    
     run_db_script()
     dummy_post_process("db")
     restore_config(original_config, "db")
+    
+    # After the first run, if drop_tables is True, update the config file to set it to False.
+    with open(CONFIG_PATH, "r") as f:
+        updated_config = yaml.safe_load(f)
+    if updated_config['testing'].get('drop_tables', False):
+        updated_config['testing']['drop_tables'] = False
+        with open(CONFIG_PATH, "w") as f:
+            yaml.dump(updated_config, f)
+        logger.info("db_step: Updated config['testing']['drop_tables'] to False after first run.")
+    
     return True
 
 # ------------------------

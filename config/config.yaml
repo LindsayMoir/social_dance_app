@@ -15,14 +15,14 @@ crawling:
   max_crawl_trys: 3
   max_website_urls: 10
   scroll_depth: 2
-  urls_run_limit: 500
+  urls_run_limit: 50
 date_range:
   days_ahead: 365
   months: 3
 debug:
+  address_fix: debug/address_fix.csv
   after_url_updated: debug/after_url_updated.csv
   before_url_updated: debug/before_url_updated.csv
-  address_fix: debug/address_fix.csv
 fuzzywuzzy:
   hurdle: 70
 input:
@@ -66,7 +66,6 @@ prompts:
   relevant_dance_url: prompts/relevant_dance_url.txt
   single_event: prompts/single_event.txt
   sql: prompts/sql_prompt.txt
-
 regex:
   dancevictoria1: (?s)(~~~~~~~~~~.*?Take the time to dance)
   djdancingdean: classes at the  Legion.*?Victoria West Coast Swing Collective Society

@@ -58,6 +58,7 @@ Only mark a row (event) as irrelevant(1) if you are certain it is irrelevant (1)
 In addition to labeling each row as relevant (0) or irrelevant (1), analyze **all columns**—especially **event_name**, **description**, and **location**—to determine the event type. Classify the event into one or more of the following:
 - **class** (if the event appears to be a dance lesson or class),
 - **social dance** (if the event is a social dance gathering),
+- **rehearsal** (if the event is for a special group only for purposes of practising and then performing later on),
 - **workshop** (if the event is a workshop),
 - **other** (if it doesn't clearly fall into one of the above categories). Rehearsal(s) are **other**
 

@@ -574,16 +574,15 @@ class DatabaseHandler():
             insert_query = """
                 INSERT INTO address (
                     full_address, street_number, street_name, street_type, 
-                    postal_box, city, province_or_state, postal_code, country_id, time_stamp
+                    city, province_or_state, postal_code, country_id, time_stamp
                 ) VALUES (
                     :full_address, :street_number, :street_name, :street_type,
-                    :postal_box, :city, :province_or_state, :postal_code, :country_id, :time_stamp
+                    :city, :province_or_state, :postal_code, :country_id, :time_stamp
                 )
                 ON CONFLICT (full_address) DO UPDATE SET
                     street_number = EXCLUDED.street_number,
                     street_name = EXCLUDED.street_name,
                     street_type = EXCLUDED.street_type,
-                    postal_box = EXCLUDED.postal_box,
                     city = EXCLUDED.city,
                     province_or_state = EXCLUDED.province_or_state,
                     postal_code = EXCLUDED.postal_code,
@@ -690,12 +689,15 @@ class DatabaseHandler():
     def clean_up_address(self, events_df):
         """
         Cleans and standardizes address data from the 'events' table by:
-            1) Extracting or retrieving a Canadian postal code (regex or Google).
-            2) Attempting to fill in the address from the address DB.
-            3) Falling back to partial updates if no DB match.
-            4) If no postal code, uses Google municipality.
+        1) Extracting or retrieving a Canadian postal code (regex or Google).
+        2) Attempting to fill in the address from the address DB.
+        3) Falling back to partial updates if no DB match.
+        4) If no postal code, uses Google municipality.
         """
         logging.info("def clean_up_address(): Starting with events_df shape: %s", events_df.shape)
+        
+        # Load address table once from the database.
+        address_df = pd.read_sql("SELECT * FROM address", self.conn)
 
         for index, row in events_df.iterrows():
             raw_location = row.get('location')
@@ -704,26 +706,34 @@ class DatabaseHandler():
                 continue
 
             location = str(raw_location).strip()
-            logging.info("def clean_up_address(): Processing location '%s' (event_id: %s)", location, event_id)
-
-            # 1) Try extracting a postal code via regex
+            logging.info(f"def clean_up_address(): Processing location '{location}' (event_id: {event_id})")
+            
+            # INSERT HERE: Try using the existing address update method.
+            update_list = self.get_address_update_for_event(event_id, location, address_df)
+            if update_list:
+                # If there's a match, update the address_id and skip further processing.
+                new_address_id = update_list[0]['address_id']
+                events_df.loc[index, 'address_id'] = new_address_id
+                logging.info("def clean_up_address(): Updated event %s with address_id %s using DB match", event_id, new_address_id)
+                continue  # Skip remaining logic for this row.
+            
+            # 1) Try extracting a postal code via regex.
             postal_code = self.extract_canadian_postal_code(location)
 
-            # 2) If none found, try Google
+            # 2) If none found, try Google.
             if not postal_code:
                 google_pc = self.get_postal_code(location, self.google_api_key)
                 if google_pc and self.is_canadian_postal_code(google_pc):
                     postal_code = google_pc
                     logging.info("Got Canadian postal code '%s' from Google for '%s'", postal_code, location)
 
-            # 3) If postal code is found, query DB to get full address
+            # 3) If postal code is found, query DB to get full address.
             if postal_code:
                 updated_location, address_id = self.populate_from_db_or_fallback(location, postal_code)
                 events_df.loc[index, 'location'] = updated_location
                 events_df.loc[index, 'address_id'] = address_id
-                
             else:
-                # 4) If still no postal code, fallback to municipality from Google
+                # 4) If still no postal code, fallback to municipality from Google.
                 updated_location, address_id = self.fallback_with_municipality(location)
                 if updated_location:
                     events_df.loc[index, 'location'] = updated_location
@@ -1083,7 +1093,8 @@ class DatabaseHandler():
                 WHERE End_Date < CURRENT_DATE - INTERVAL '%s days';
             """ % days
             self.execute_query(delete_query)
-            logging.info("delete_old_events: Deleted events older than %d days.", days)
+            deleted_count = self.execute_query(delete_query)
+            logging.info(f"delete_old_events: Deleted {deleted_count} events older than {days} days.")
         except Exception as e:
             logging.error("delete_old_events: Failed to delete old events: %s", e)
 
@@ -1225,12 +1236,14 @@ class DatabaseHandler():
         try:
             delete_query = """
             DELETE FROM events
-            WHERE start_date IS NULL AND start_time IS NULL;
+            WHERE (start_date IS NULL AND start_time IS NULL) OR 
+            (start_time IS NULL AND end_time IS NULL);
             """
             self.execute_query(delete_query)
-            logging.info("def delete_events_with_nulls(): Both start_date and start_time being null deleted successfully.")
+            deleted_count = self.execute_query(delete_query) or 0
+            logging.info("def delete_events_with_nulls(): Deleted %d events where (start_date and start_time are null).", deleted_count)
         except Exception as e:
-            logging.error("def delete_events_with_nulls(): Failed to delete events with start_date and start_time being null: %s", e)
+            logging.error("def delete_events_with_nulls(): Failed to delete events with nulls: %s", e)
 
 
     def delete_event_with_event_id(self, event_id):
@@ -1522,15 +1535,42 @@ class DatabaseHandler():
             logging.info("dedup_address(): Deleted %d duplicate addresses.", len(address_ids))
 
 
+    def get_address_update_for_event(self, event_id, location, address_df):
+        """
+        Given an event's ID, its location, and the address DataFrame, 
+        extract the street number from the location using regex and 
+        then look for an address row in address_df that has a matching 
+        street_number and whose street_name appears in the location.
+        
+        Returns a list with a single update dictionary (if a match is found)
+        or an empty list if no match is found.
+        """
+        updates = []
+        if location is None:
+            return updates
+        match = re.search(r'\d+', location)
+        if match:
+            extracted_number = match.group()
+            matching_addresses = address_df[address_df['street_number'] == extracted_number]
+            for _, addr_row in matching_addresses.iterrows():
+                if pd.notnull(addr_row['street_name']) and addr_row['street_name'] in location:
+                    new_address_id = addr_row['address_id']
+                    updates.append({
+                        "event_id": event_id,
+                        "address_id": new_address_id
+                    })
+                    break  # Stop after the first match is found.
+        return updates
+
     def fix_address_id_in_events(self):
         """
         Goes through the events table and ensures that the address_id in the events table 
         matches the correct address_id from the address table.
-        
         For each event:
         - Extracts the street number from the event's location using regex.
         - If a match is found, looks for a matching row in the address table based on street_number.
-        - If an address row is found and its street_name is present in the location, the event's address_id is updated.
+        - If an address row is found and its street_name is present in the location,
+        the event's address_id is updated.
         - The event_id and updated address_id are collected in a list for a bulk update.
         """
         # Read the events table into a DataFrame.
@@ -1541,35 +1581,17 @@ class DatabaseHandler():
         sql = "SELECT * FROM address ORDER BY street_number, street_name"
         address_df = pd.read_sql(sql, self.conn)
         
-        # List to hold updates for events table.
+        # List to hold updates for the events table.
         events_address_ids_to_be_updated_list = []
         
         # Process each event row.
         for row in events_df.itertuples(index=False):
-            # events table has columns "event_id" and "location"
             event_id = row.event_id
             location = row.location
             
-            # Use regex to extract the first group of digits (the presumed street number)
-            if location is not None:
-                match = re.search(r'\d+', location)
-            else:
-                match = None
-            if match:
-                extracted_number = match.group()
-                # Look for address rows with matching street_number
-                matching_addresses = address_df[address_df['street_number'] == extracted_number]
-                for _, addr_row in matching_addresses.iterrows():
-                    # Check if the street_name from the address appears in the event's location.
-                    if pd.notnull(addr_row['street_name']) and addr_row['street_name'] in location:
-                        new_address_id = addr_row['address_id']
-                        events_address_ids_to_be_updated_list.append({
-                            "event_id": event_id,
-                            "address_id": new_address_id
-                        })
-                        # Stop after the first match is found.
-                        break
-
+            updates = self.get_address_update_for_event(event_id, location, address_df)
+            events_address_ids_to_be_updated_list.extend(updates)
+        
         logging.info("fix_address_id_in_events: events_address_ids_to_be_updated_list: %s", len(events_address_ids_to_be_updated_list))
         
         # Bulk update the events table using the provided multiple_db_inserts method.

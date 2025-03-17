@@ -9,3 +9,6 @@ ORDER BY counted DESC
 SELECT *
 FROM events
 ORDER BY source
+
+SELECT * FROM events
+WHERE source ILIKE '%latin dance canada%'
