@@ -727,7 +727,7 @@ class FacebookEventScraper():
 
     def driver_fb_urls(self):
         """
-        1. Gets all of the urls from fb_urls table.
+        1. Gets all of the urls from the urls table where the link is like '%facebook%'.
         2. For each url, extracts text and processes it.
         3. If valid events are found, writes them to the database; otherwise, updates the URL.
         4. Writes every processed URL—including event links—to the checkpoint CSV.
@@ -902,7 +902,7 @@ if __name__ == "__main__":
     # Initialize scraper
     fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
 
-    # **Call run()
+    # Call run()
     fb_scraper.run()
 
     # Close the browser and Playwright

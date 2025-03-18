@@ -228,7 +228,7 @@ class DatabaseHandler():
         self.execute_query(address_table_query)
         logging.info("create_tables: 'address' table created or already exists.")
 
-        # Create the 'address' table
+        # Create the 'runs' table
         runs_table_query = """
             CREATE TABLE IF NOT EXISTS runs (
                 run_id SERIAL PRIMARY KEY,
