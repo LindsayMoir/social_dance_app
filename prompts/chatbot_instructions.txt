@@ -1,7 +1,7 @@
 ---
-#### What Can This ChatBot Do?
+#### What Can DanceScoop Do?
 
-You can ask this ChatBot about **dance events** (ballroom, country, kizomba, latin, swing, west coast swing, zouk), that are occurring **now** and in the **future** but **NOT** in the **past** in greater Victoria, BC, Canada.
+You can ask DanceScoop about **dance events** (ballroom, country, kizomba, latin, swing, west coast swing, zouk), that are occurring **now** and in the **future** but **NOT** in the **past** in greater Victoria, BC, Canada.
 There are also a few events from greater Vancouver Island and Vancouver. 
 
 
@@ -10,6 +10,6 @@ There are also a few events from greater Vancouver Island and Vancouver.
 
 - Enter your query below and click the **Send** button.
 - If you're not happy with the results, look at the SQL query that was generated.
-- You can refine your query by continuing the dialogue with the ChatBot. It's **very flexible!**
+- You can refine your query by continuing the dialogue with DanceScoop. It's **very flexible!**
 - This is a best efforts basis:( The information is accurate as possible but ... please double check before you book your flights:)
 ---
