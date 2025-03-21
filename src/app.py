@@ -30,7 +30,7 @@ if not FASTAPI_API_URL:
     raise ValueError("The environment variable FASTAPI_API_URL is not set.")
 
 st.set_page_config(layout="wide")
-st.markdown("# Let's Dance! 🕺💃")
+st.markdown("# DanceScoop 🕺💃")
 
 # Initialize the chat message history in session state
 if "messages" not in st.session_state:

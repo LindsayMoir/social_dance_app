@@ -1,6 +1,3 @@
----
-#### What Can DanceScoop Do?
-
 You can ask DanceScoop about **dance events** (ballroom, country, kizomba, latin, swing, west coast swing, zouk), that are occurring **now** and in the **future** but **NOT** in the **past** in greater Victoria, BC, Canada.
 There are also a few events from greater Vancouver Island and Vancouver. 
 
