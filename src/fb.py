@@ -509,7 +509,6 @@ class FacebookEventScraper():
                     if link in self.urls_visited:
                         continue  # Skip already visited URLs
                     else:
-                        self.urls_visited.add(link)
                         self.unique_urls_count += 1  # Increment unique URL count
 
                         if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
@@ -517,6 +516,7 @@ class FacebookEventScraper():
                             return search_url, extracted_text_list
 
                         extracted_text = self.extract_event_text(link)
+                        self.urls_visited.add(link)
 
                         if extracted_text:
                             self.urls_with_extracted_text += 1  # Increment URLs with extracted text
@@ -653,6 +653,8 @@ class FacebookEventScraper():
 
         # Write events to DB
         db_handler.write_events_to_db(events_df, url, source, keywords)
+        relevant = True
+        db_handler.update_url(url, relevant, increment_crawl_try)
         logging.info(f"process_fb_url(): Events successfully written to DB for {url}.")
 
         self.events_written_to_db += len(events_df)  # Increment event count
@@ -690,8 +692,6 @@ class FacebookEventScraper():
                 for url, extracted_text in extracted_text_list:
                     if url not in self.urls_visited and 'facebook.com' in url:
                         logging.info(f"def driver_fb_search(): Processing Facebook URL: {url}")
-
-                        self.urls_visited.add(url)  # Add to visited URLs
 
                         if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                             logging.info("def driver_fb_search(): Reached crawl limit. Stopping processing.")
@@ -761,8 +761,8 @@ class FacebookEventScraper():
                 if base_url in self.urls_visited:
                     continue
                 else:
-                    self.urls_visited.add(base_url)
                     self.process_fb_url(base_url, source, keywords)
+                    self.urls_visited.add(base_url)
 
                     # Mark the base URL as processed (base processing done)
                     fb_urls_df.loc[fb_urls_df['link'] == base_url, 'processed'] = True
@@ -792,8 +792,8 @@ class FacebookEventScraper():
                         if event_url in self.urls_visited:
                             continue
                         else:
-                            self.urls_visited.add(event_url)
                             self.process_fb_url(event_url, source, keywords)
+                            self.urls_visited.add(event_url)
 
                             # If the event URL is not already in fb_urls_df, add a new row.
                             if event_url not in fb_urls_df['link'].values:
