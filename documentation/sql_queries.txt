@@ -10,5 +10,13 @@ SELECT *
 FROM events
 ORDER BY source
 
+SELECT tablename
+FROM pg_catalog.pg_tables
+WHERE schemaname = 'public';
+
 SELECT * FROM events
 WHERE source ILIKE '%latin dance canada%'
+
+SELECT relevant, COUNT(*) AS count
+FROM urls
+GROUP BY relevant;
