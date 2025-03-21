@@ -653,8 +653,6 @@ class FacebookEventScraper():
 
         # Write events to DB
         db_handler.write_events_to_db(events_df, url, source, keywords)
-        relevant = True
-        db_handler.update_url(url, relevant, increment_crawl_try)
         logging.info(f"process_fb_url(): Events successfully written to DB for {url}.")
 
         self.events_written_to_db += len(events_df)  # Increment event count

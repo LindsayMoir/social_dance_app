@@ -508,6 +508,7 @@ class DatabaseHandler():
 
         # Write the cleaned events data to the 'events' table
         cleaned_df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
+        self.write_url_to_db(source, keywords, url, True, 1)
         logging.info("write_events_to_db: Events data written to the 'events' table.")
 
         return None

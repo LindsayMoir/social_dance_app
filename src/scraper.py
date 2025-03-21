@@ -222,7 +222,6 @@ class EventSpider(scrapy.Spider):
         if not events_df.empty:
             logging.info(f"def process_calendar_id(): Found {len(events_df)} events for calendar_id: {calendar_id}")
             db_handler.write_events_to_db(events_df, calendar_url, source, keywords)
-            db_handler.update_url(calendar_url, relevant=True, increment_crawl_try=1)
 
 
     def get_calendar_events(self, calendar_id):
