@@ -279,3 +279,36 @@ address_id,full_address,building_name,street_number,street_name,street_type,dire
 1247,"Wicket Hall , 919 Douglas St, Victoria,  BC, V8W 2C2, CA",Wicket Hall,919,Douglas,St,,Victoria,,BC,V8W 2C2,CA,2025-03-16 16:32:08.162561
 1301,"McKenzie Bight – Gowlland Tod Provincial Park,  BC, V9E 2A3, CA",McKenzie Bight – Gowlland Tod Provincial Park,,,,,,,BC,V9E 2A3,CA,2025-03-16 17:13:23.660551
 1302,"Da Vinci Centre, Victoria,  BC, V9A 3K4, CA",Da Vinci Centre,,,,,Victoria,,BC,V9A 3K4,CA,2025-03-16 17:17:07.649413
+address_id,full_address,building_name,street_number,street_name,street_type,direction,city,met_area,province_or_state,postal_code,country_id,time_stamp
+1318,"Victoria, BC, Canada, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-16 17:30:08.887198
+3386,"Victoria, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-07 09:36:18.866527
+1106,"Vancouver, BC, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-21 07:53:42.539822
+1111,"Vancouver, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-16 16:19:27.591691
+4121,"Victoria BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-09 18:14:29.152819
+1329,"Dance Victoria, 2780 Quadra St,  BC, V8T 4E7, CA",Dance Victoria,2780,Quadra,St,,,,BC,V8T 4E7,CA,2025-03-21 06:03:03.984202
+1333,"Victoria Edelweiss Club,  BC, V8V 1E9, CA",Victoria Edelweiss Club,,,,,,,BC,V8V 1E9,CA,2025-03-21 06:43:07.278762
+1335,"Les Passmore / Silver Threads Saanich,  BC, V8Z 1H3, CA",Les Passmore / Silver Threads Saanich,,,,,,,BC,V8Z 1H3,CA,2025-03-21 06:43:08.900662
+2631,"2050 Scotia Street, Vancouver, BC,  BC, V5T 4T1, CA",,2050,Scotia,Street,,Vancouver,,BC,V5T 4T1,CA,2025-03-21 12:51:21.223131
+2551,"Les Passmore Centre, Victoria British Columbia,  BC, V8Z 1H3, CA",Les Passmore Centre,,,,,Victoria British Columbia,,BC,V8Z 1H3,CA,2025-03-21 09:38:53.707150
+2599,"Caffè Fantastico Specialty Coffees (Coffee Roaster), 965 Kings Road, British Columbia, Victoria, Canada,  BC, V8T 4E2, CA",Caffè Fantastico Specialty Coffees (Coffee Roaster),965,Kings,Road,,Victoria,,BC,V8T 4E2,CA,2025-03-21 10:05:59.815695
+2600,"Bachata Dance Studio, Victoria, BC, Canada, Victoria, BC, CA",Bachata Dance Studio,,,,,Victoria,,BC,,CA,2025-03-21 10:07:02.098964
+2486,"Centennial United Church Dance Studio, Victoria British Columbia,  BC, V8T 2E1, CA",Centennial United Church Dance Studio,,,,,Victoria British Columbia,,BC,V8T 2E1,CA,2025-03-21 09:38:52.349287
+2470,"Paddlewheel Park Hall, waterfront of Okanagan Lake, British Columbia, Canada,  BC, V1H 1K8, CA",Paddlewheel Park Hall,,,,,,,BC,V1H 1K8,CA,2025-03-21 07:48:07.251271
+2472,"Victoria, BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-21 07:55:41.781993
+1339,"The Wicket Hall (Strathcona Hotel), Victoria BC,  BC, V8W 2C2, CA",The Wicket Hall (Strathcona Hotel),,,,,Victoria,,BC,V8W 2C2,CA,2025-03-21 06:46:20.608260
+2481,"Les Passmore Centre,  BC, V8Z 1H3, CA",Les Passmore Centre,,,,,,,BC,V8Z 1H3,CA,2025-03-21 11:31:46.854461
+2634,"The Hub at Cowichan Station, 2375 Koksilah Rd, Duncan,  BC, V9L 6M5, CA",The Hub at Cowichan Station,2375,Koksilah,Rd,,Duncan,,BC,V9L 6M5,CA,2025-03-21 13:04:48.725769
+2603,"Da Vinci Centre, Victoria, BC,  BC, V9A 3K4, CA",Da Vinci Centre,,,,,Victoria,,BC,V9A 3K4,CA,2025-03-21 10:28:45.159030
+2627,"Cameron Band Shell, Beacon Hill Park Circle Drive, Victoria, British Columbia,  BC, V8V 2P2, CA",Cameron Band Shell,,Beacon Hill Park Circle,Drive,,Victoria,,BC,V8V 2P2,CA,2025-03-21 12:36:08.674830
+2636,"Hyatt Regency Calgary, 700 Centre St S, Calgary, Alberta,  BC, T2G 5P6, CA",Hyatt Regency Calgary,700,Centre,St,S,Calgary,,Alberta,T2G 5P6,CA,2025-03-21 13:29:16.944378
+2638,"Victoria, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-21 13:31:08.895504
+2641,"Baza Dance Studios, 1304 Seymour St, Vancouver, BC V6B, Canada,  BC, V6B 3P3, CA",Baza Dance Studios,1304,Seymour,St,,Vancouver,,BC,V6B 3P3,CA,2025-03-21 13:34:39.791573
+2642,"Baza Dance Studios - 1304 Seymour Street, Vancouver, British Columbia,  BC, V6B 3P3, CA",Baza Dance Studios,1304,Seymour,Street,,Vancouver,,BC,V6B 3P3,CA,2025-03-21 13:36:48.794783
+20095,"109–2675 Wilfert Road, Colwood at @Westshore Dance Studio,  BC, V9B 1H8, CA",Colwood at @Westshore Dance Studio,109–2675,Wilfert,Road,,,,BC,V9B 1H8,CA,2025-03-21 13:44:26.585581
+2645,"Kinsmen Hall, Dougall Park, Lower Gibsons,  BC, V0N 1V8, CA",Kinsmen Hall,,,,,Lower Gibsons,Dougall Park,BC,V0N 1V8,CA,2025-03-21 13:49:15.145023
+2647,"Axum Ethiopian Restaraunt; KW Studios (111 West Hastings, Vancouver); Stretch Studio (180 E Pender, Vancouver), Vancouver, BC, CA","Axum Ethiopian Restaraunt; KW Studios (111 West Hastings, Vancouver); Stretch Studio (180 E Pender, Vancouver)",,,,,Vancouver,,BC,,CA,2025-03-21 13:59:09.432406
+2649,"Cascades Casino Delta, 6005 BC-17A, Delta,  BC, V4K 5B8, CA",Cascades Casino Delta,6005,BC-17A,,,Delta,,BC,V4K 5B8,CA,2025-03-21 14:35:35.291243
+2650,"Bimini’s, Vancouver, BC,  BC, V6J 1M9, CA",Bimini’s,,,,,Vancouver,,BC,V6J 1M9,CA,2025-03-21 14:36:13.172464
+2652,"V Lounge Night Club 3366 Douglas St,  BC, V8Z 3L3, CA",V Lounge Night Club,3366,Douglas,St,,,,BC,V8Z 3L3,CA,2025-03-21 14:46:14.811373
+2656,"Studio to Stage Performing Arts Studio, 324 Terminal Ave.,  BC, V9R 5C8, CA",Studio to Stage Performing Arts Studio,324,Terminal,Ave.,,,,BC,V9R 5C8,CA,2025-03-21 15:36:19.443878
+2660,"Songhees Plaza (near the Johnson Street Bridge), Victoria, British Columbia,  BC, B1P 2P5, CA",Songhees Plaza (near the Johnson Street Bridge),,,,,Victoria,,BC,B1P 2P5,CA,2025-03-21 15:39:42.598180

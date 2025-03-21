@@ -15,7 +15,7 @@ crawling:
   max_crawl_trys: 3
   max_website_urls: 10
   scroll_depth: 2
-  urls_run_limit: 50
+  urls_run_limit: 500
 date_range:
   days_ahead: 365
   months: 3

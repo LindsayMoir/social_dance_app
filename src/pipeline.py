@@ -90,8 +90,48 @@ def dummy_post_process(step: str) -> bool:
     return True
 
 # ------------------------
-# (Removed events_table_backup_and_drop step)
+# TASK: COPY, DROP, AND CREATE EVENTS TABLE
 # ------------------------
+@task
+def copy_drop_create_events():
+    db_conn_str = os.getenv("DATABASE_CONNECTION_STRING")
+    if not db_conn_str:
+        logger.error("def copy_drop_create_events(): DATABASE_CONNECTION_STRING environment variable not set.")
+        raise Exception("Missing DATABASE_CONNECTION_STRING in environment.")
+    
+    # Compose the multi-statement SQL command.
+    sql = (
+        "BEGIN; "
+        "INSERT INTO events_history SELECT * FROM events; "
+        "DROP TABLE IF EXISTS events; "
+        "CREATE TABLE IF NOT EXISTS events ("
+            "event_id SERIAL PRIMARY KEY, "
+            "event_name TEXT, "
+            "dance_style TEXT, "
+            "description TEXT, "
+            "day_of_week TEXT, "
+            "start_date DATE, "
+            "end_date DATE, "
+            "start_time TIME, "
+            "end_time TIME, "
+            "source TEXT, "
+            "location TEXT, "
+            "price TEXT, "
+            "url TEXT, "
+            "event_type TEXT, "
+            "address_id INTEGER, "
+            "time_stamp TIMESTAMP"
+        "); COMMIT;"
+    )
+    command = f'psql -d "{db_conn_str}" -c "{sql}"'
+    logger.info(f"def copy_drop_create_events(): Running SQL command: {command}")
+    try:
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        logger.info(f"def copy_drop_create_events(): SQL command output: {result.stdout}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"def copy_drop_create_events(): SQL command failed: {e.stderr}")
+        raise e
+    return True
 
 # ------------------------
 # TASKS FOR GS.PY STEP
@@ -627,6 +667,7 @@ def send_text_message(message: str):
 # PIPELINE EXECUTION
 # ------------------------
 PIPELINE_STEPS = [
+    ("copy_drop_create_events", copy_drop_create_events),
     ("emails", emails_step),
     ("gs", gs_step),
     ("ebs", ebs_step),
