@@ -90,6 +90,7 @@ class EventbriteScraper:
         self.urls_with_found_keywords = 0
         self.events_written_to_db = 0
 
+
     async def eventbrite_search(self, query, source, keywords_list, prompt):
         """ Searches Eventbrite for events based on the query, extracts event URLs,
         retrieves event details, and processes them using LLM.
@@ -98,12 +99,31 @@ class EventbriteScraper:
             query (str): The search query to enter in Eventbrite.
             source (str): The organization name related to the events.
             keywords_list (list): List of keywords associated with the events.
-            prompt (str): The prompt to use for processing the extracted text. 
+            prompt (str): The prompt to use for processing the extracted text.
         """
         try:
+            # Navigate to Eventbrite
             await self.read_extract.page.goto("https://www.eventbrite.com/", timeout=20000)
-            logging.info(f"def eventbrite_search(): Navigated to Eventbrite.")
+            logging.info("def eventbrite_search(): Navigated to Eventbrite.")
 
+            # Check for a login popup and fill in credentials if it appears
+            try:
+                # Wait for the email input in the popup (adjust selector as needed)
+                await self.read_extract.page.wait_for_selector("input[name='email']", timeout=5000)
+                logging.info("def eventbrite_search(): Login popup detected. Filling in credentials.")
+                
+                # Fill in the email and password from configuration
+                await self.read_extract.page.fill("input[name='email']", self.config['login']['user_id'])
+                await self.read_extract.page.fill("input[name='password']", self.config['login']['password'])
+                await self.read_extract.page.click("button[type='submit']")
+                logging.info("def eventbrite_search(): Submitted login credentials.")
+
+                # Optionally wait for login processing to complete
+                await self.read_extract.page.wait_for_timeout(3000)
+            except Exception as login_error:
+                logging.info("def eventbrite_search(): No login popup detected. Continuing without login.")
+
+            # Continue with the search
             await self.perform_search(query)
             event_urls = await self.extract_event_urls()
             logging.info(f"def eventbrite_search(): Total unique event URLs found: {len(event_urls)}")
@@ -115,7 +135,7 @@ class EventbriteScraper:
                     continue
 
                 if len(self.visited_urls) >= self.config['crawling']['urls_run_limit']:
-                    logging.info(f"def eventbrite_search(): Reached the URL limit.")
+                    logging.info("def eventbrite_search(): Reached the URL limit.")
                     sys.exit()
 
                 elif counter >= self.config['crawling']['max_website_urls']:
@@ -123,7 +143,7 @@ class EventbriteScraper:
                     break
 
                 else:
-                    logging.info(f"def eventbrite_search() Processing event URL: {event_url}")
+                    logging.info(f"def eventbrite_search(): Processing event URL: {event_url}")
                     self.visited_urls.add(event_url)
                     self.urls_contacted += 1  # Track URL contacts
                     counter += 1
@@ -222,14 +242,15 @@ class EventbriteScraper:
         
 
     async def process_event(self, event_url, source, keywords_list, prompt, counter):
-        """ Processes an individual event URL: extracts text, processes it with LLM,
+        """Processes an individual event URL: extracts text, processes it with LLM,
         and writes to the database.
-
+        
         Args:
             event_url (str): Event URL.
             source (str): Organization name.
             keywords_list (list): List of keywords.
             prompt (str): Prompt for LLM processing.
+            counter (int): Counter for processed events.
         """
         try:
             extracted_text = await self.read_extract.extract_event_text(event_url)
@@ -241,7 +262,7 @@ class EventbriteScraper:
                 found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
                 if found_keywords:
                     self.urls_with_found_keywords += 1  # Count URLs with found keywords
-                    logging.info(f"def driver(): Found keywords in text for URL {event_url}: {found_keywords}")
+                    logging.info(f"def process_event(): Found keywords in text for URL {event_url}: {found_keywords}")
 
                     # Process the extracted text with LLM
                     response = self.llm_handler.process_llm_response(event_url, extracted_text, source, keywords_list, prompt)
@@ -256,19 +277,13 @@ class EventbriteScraper:
         except Exception as e:
             logging.error(f"def process_event(): Error processing event {event_url}: {e}")
 
-        finally:
-            if self.read_extract.page and counter < self.config['crawling']['max_website_urls']:
-                await self.read_extract.page.close()
-                logging.info(f"def process_event(): Closed page for URL: {event_url}")
-            else:
-                logging.info(f"def process_event(): Page not closed for URL: {event_url}\n"
-                             f"We are going onto the next keyword and that search query needs a page open")
-
 
     async def driver(self):
         """ Reads keywords, performs searches, and processes extracted event URLs. """
         self.start_time = datetime.now()  # Record start time
-        self.keywords_list = ['salsa']  # Remember to remove this after testing
+        # ***TEMP code here
+        self.keywords_list = ['quickstep', 'rhumba', 'rumba', 'salsa', 'samba', 'semba', 'swing', 'tango', 'tarraxa', 
+                              'tarraxinha', 'tarraxo', 'two step', 'urban kiz', 'waltz', 'wcs', 'west coast swing', 'zouk']
         for keyword in self.keywords_list:
             query = keyword
             source = ''
@@ -327,7 +342,7 @@ async def main():
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    logging.info("ebs.py starting...")
+    logging.info("\n\nebs.py starting...")
 
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")

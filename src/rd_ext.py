@@ -91,6 +91,9 @@ class ReadExtract:
 
 
     async def login_to_facebook(self, organization):
+        # Close any existing page to avoid multiple windows
+        if self.page:
+            await self.page.close()
         try:
             context = await self.browser.new_context(storage_state="auth.json")
             self.page = await context.new_page()
@@ -128,21 +131,19 @@ class ReadExtract:
         self.logged_in = True
         logging.info("def login_to_facebook(): Login to Facebook successful.")
         return True
-    
+
 
     async def login_to_website(self, organization, login_url, email_selector, pass_selector, submit_selector):
-        """
-        Only attempt to log in if the site actually shows a login form or 
-        redirects to a login page. Otherwise, skip login.
-        """
+        # Close any existing page to prevent multiple windows
+        if self.page:
+            await self.page.close()
         # 1) Try loading existing session state
         try:
             context = await self.browser.new_context(storage_state=f"{organization.lower()}_auth.json")
             self.page = await context.new_page()
             await self.page.goto(login_url, timeout=20000)
 
-            # If we are not on the login page or we remain logged in,
-            # we can return True immediately:
+            # If we are not on the login page or remain logged in, return immediately:
             if organization.lower() not in self.page.url.lower():
                 logging.info(f"Loaded existing session for {organization}, no login required.")
                 self.logged_in = True
@@ -150,27 +151,20 @@ class ReadExtract:
         except Exception:
             logging.info(f"No valid saved session for {organization}, checking if login is needed...")
 
-        # 2) Now we are on the site. Check if login is required:
-        # For example, we try to see if the email or password field is present
+        # 2) Check if a login form is required
         try:
-            # Wait a short time to see if the login form shows up
             await self.page.wait_for_selector(email_selector, timeout=5000)
-            # If that selector is found, it likely means the site wants login
             need_login = True
             logging.info(f"{organization} requires login (form detected).")
         except:
-            # If we time out waiting for the email selector,
-            # we assume the site does NOT require login
             logging.info(f"No login form detected for {organization}, skipping login.")
             self.logged_in = True
             return True
 
-        # 3) If we get here, we presumably see a login form
+        # 3) If login is needed, fill in and submit the form
         if need_login:
-            # Retrieve environment credentials
             email, password, _ = get_credentials(organization)
 
-            # Fill and submit the form
             await self.page.fill(email_selector, email)
             await self.page.fill(pass_selector, password)
             await self.page.click(submit_selector)
@@ -180,12 +174,10 @@ class ReadExtract:
             input("Press Enter after solving captcha (if any)...")
             await self.page.wait_for_timeout(random.randint(4000, 6000))
 
-            # Check if we are still on the login page
             if "login" in self.page.url.lower():
                 logging.error(f"Login to {organization} failed. Credentials may be incorrect.")
                 return False
 
-            # 4) If login was successful, save session
             try:
                 await self.page.context.storage_state(path=f"{organization.lower()}_auth.json")
                 logging.info(f"Session state saved for {organization}.")
@@ -196,7 +188,6 @@ class ReadExtract:
             logging.info(f"Login to {organization} successful.")
             return True
 
-        # Should never reach here, but just in case:
         return False
 
 
