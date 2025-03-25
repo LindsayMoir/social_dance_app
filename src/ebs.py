@@ -1,340 +1,352 @@
-# ebs.py
-
 """
-Eventbrite Scraper Script
-This script defines the EventbriteScraper class and its associated methods to scrape event data from Eventbrite,
-process the extracted text using a language model, and store the results in a database. The script also includes
-a main function to initialize and run the scraper.
+rd_ext.py
 
-Classes:
-    EventbriteScraper: Handles the scraping, processing, and storing of Eventbrite event data.
+input (str): The event URL.
 
-Functions:
-    main(): Initializes and runs the Eventbrite scraper.
+This module defines the ReadExtract class, which uses the asyncio version of Playwright 
+to manage a single browser page globally for tasks such as logging into Facebook 
+and extracting event text. The class ensures that only one login occurs and the same 
+page is reused across multiple operations. It is designed to be easily callable 
+from other class libraries and supports asynchronous operations.
 
-Usage:
-    Run this script directly to start the Eventbrite scraping process.
+Objectives:
+1. Maintain one globally shared page across the class instance.
+2. Ensure a single login session is reused for all operations, avoiding multiple logins.
+3. Provide an easy-to-use interface for other class libraries.
+4. Utilize the asyncio version of Playwright for asynchronous operations.
+5. Provides a place to deal with odd edge cases that may arise if you are using the logic in __main__
+    a. This will result in database updates to the events and urls tables.
 
-Example:
-    $ python ebs.py
-
-Dependencies:
-    - asyncio
-    - logging
-    - datetime
-    - pandas
-    - re
-    - sys
-    - yaml
-    - db (DatabaseHandler)
-    - rd_ext (ReadExtract)
-    - llm (LLMHandler)
-
-Configuration:
-    The script reads configuration settings from 'config/config.yaml'.
-
-Logging:
-    Logs are written to the file specified in the configuration under 'logging.log_file'.
-
-Inputs:
-    - config/config.yaml: Configuration file containing settings for the scraper.
-    - keyword.csv file from llm_handler.get_keywords() method.
-
-Outputs:
-    - Logs: Detailed logs of the scraping process.
-    - Database: Run statistics and event data stored in the database.
+output (str or dict): The extracted text content. For pages such as Bard & Banker live music, a dictionary mapping event URLs to text is returned.
 """
+
 import asyncio
+import json  # New import for JSON parsing
+from bs4 import BeautifulSoup
 from datetime import datetime
 import logging
-import os
 import pandas as pd
+import os
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
+import random
 import re
-import sys
 import yaml
 
 from db import DatabaseHandler
 from llm import LLMHandler
-from rd_ext import ReadExtract
+from credentials import get_credentials  # Import the utility function
 
 
-class EventbriteScraper:
-    def __init__(self, config, read_extract, db_handler, llm_handler):
+class ReadExtract:
+    def __init__(self, config_path="config/config.yaml"):
+        with open(config_path, 'r') as file:
+            self.config = yaml.safe_load(file)
+        self.playwright = None
+        self.browser = None
+        self.context = None
+        self.page = None
+        self.logged_in = False
+        
+
+    def extract_text_with_playwright(self, url):
         """
-        Initializes the EventbriteScraper with necessary handlers.
+        Synchronously extracts the text content from a web page using Playwright.
+        If a Google sign-in page is encountered, the method aborts and returns None.
 
         Args:
-            config (dict): Configuration dictionary.
-            read_extract (ReadExtract): Instance of ReadExtract for text extraction.
-            db_handler (DatabaseHandler): Instance to handle database operations.
-            llm_handler (LLMHandler): Instance to handle LLM processing.
-        """
-        self.config = config
-        self.read_extract = read_extract
-        self.db_handler = db_handler
-        self.llm_handler = llm_handler
-        self.visited_urls = set()
-        self.keywords_list = llm_handler.get_keywords()
+            url (str): The URL of the web page to extract text from.
 
-        # Run statistics tracking
-        if config['testing']['status']:
-            self.run_name = f"Test Run {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            self.run_description = "Test Run Description"
-        else:
-            self.run_name = "ebs Run"
-            self.run_description = f"Production {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        self.start_time = None
-        self.end_time = None
-        self.urls_contacted = 0
-        self.urls_with_extracted_text = 0
-        self.urls_with_found_keywords = 0
-        self.events_written_to_db = 0
-
-
-    async def eventbrite_search(self, query, source, keywords_list, prompt):
-        """ Searches Eventbrite for events based on the query, extracts event URLs,
-        retrieves event details, and processes them using LLM.
-
-        Parameters:
-            query (str): The search query to enter in Eventbrite.
-            source (str): The organization name related to the events.
-            keywords_list (list): List of keywords associated with the events.
-            prompt (str): The prompt to use for processing the extracted text.
+        Returns:
+            str or None: The extracted text content, or None if Google sign-in is detected or an error occurs.
         """
         try:
-            # Navigate to Eventbrite
-            await self.read_extract.page.goto("https://www.eventbrite.com/", timeout=20000)
-            logging.info("def eventbrite_search(): Navigated to Eventbrite.")
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=self.config['crawling']['headless'])
+                page = browser.new_page()
+                page.goto(url, timeout=10000)
+                page.wait_for_timeout(3000)
 
-            # Check for a login popup and fill in credentials if it appears
+                # Check for Google sign-in page
+                if "accounts.google.com" in page.url or page.is_visible("input#identifierId"):
+                    logging.info("def extract_text_with_playwright(): Google sign-in detected. Aborting extraction.")
+                    browser.close()
+                    return None
+
+                content = page.content()
+                soup = BeautifulSoup(content, 'html.parser')
+                extracted_text = ' '.join(soup.stripped_strings)
+
+                browser.close()
+                return extracted_text
+        except Exception as e:
+            logging.error(f"def extract_text_with_playwright(): Failed to extract text from {url}: {e}")
+            return None
+
+
+    async def init_browser(self):
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(headless=self.config['crawling']['headless'])
+        self.context = await self.browser.new_context()
+        self.page = await self.context.new_page()
+
+
+    async def login_to_facebook(self, organization):
+        # Close any existing page to avoid multiple windows
+        if self.page:
+            await self.page.close()
+        try:
+            context = await self.browser.new_context(storage_state="auth.json")
+            self.page = await context.new_page()
+            await self.page.goto("https://www.facebook.com/", timeout=60000)
+            if "login" not in self.page.url.lower():
+                logging.info("def login_to_facebook(): Loaded existing session. Already logged into Facebook.")
+                self.logged_in = True
+                return True
+        except Exception:
+            logging.info("def login_to_facebook(): No valid saved session found. Proceeding with manual login.")
+
+        email, password, _ = get_credentials(self.config, organization)  # Use utility function
+
+        await self.page.goto("https://www.facebook.com/login", timeout=60000)
+        await self.page.fill("input[name='email']", email)
+        await self.page.fill("input[name='pass']", password)
+        await self.page.click("button[name='login']")
+        await self.page.wait_for_timeout(random.randint(4000, 6000))
+
+        logging.warning("Please solve any captcha or challenge in the browser, then press Enter here to continue...")
+        input("After solving captcha/challenge (if any), press Enter to continue...")
+
+        await self.page.wait_for_timeout(random.randint(4000, 6000))
+
+        if "login" in self.page.url.lower():
+            logging.error("def login_to_facebook(): Login failed. Please check your credentials or solve captcha challenges.")
+            return False
+
+        try:
+            await self.page.context.storage_state(path="auth.json")
+            logging.info("def login_to_facebook(): Session state saved for future use.")
+        except Exception as e:
+            logging.warning(f"def login_to_facebook(): Could not save session state: {e}")
+
+        self.logged_in = True
+        logging.info("def login_to_facebook(): Login to Facebook successful.")
+        return True
+
+
+    async def login_to_website(self, organization, login_url, email_selector, pass_selector, submit_selector):
+        # Close any existing page to prevent multiple windows
+        if self.page:
+            await self.page.close()
+        # 1) Try loading existing session state
+        try:
+            context = await self.browser.new_context(storage_state=f"{organization.lower()}_auth.json")
+            self.page = await context.new_page()
+            await self.page.goto(login_url, timeout=20000)
+
+            # If we are not on the login page or remain logged in, return immediately:
+            if organization.lower() not in self.page.url.lower():
+                logging.info(f"Loaded existing session for {organization}, no login required.")
+                self.logged_in = True
+                return True
+        except Exception:
+            logging.info(f"No valid saved session for {organization}, checking if login is needed...")
+
+        # 2) Check if a login form is required
+        try:
+            await self.page.wait_for_selector(email_selector, timeout=5000)
+            need_login = True
+            logging.info(f"{organization} requires login (form detected).")
+        except:
+            logging.info(f"No login form detected for {organization}, skipping login.")
+            self.logged_in = True
+            return True
+
+        # 3) If login is needed, fill in and submit the form
+        if need_login:
+            email, password, _ = get_credentials(organization)
+
+            await self.page.fill(email_selector, email)
+            await self.page.fill(pass_selector, password)
+            await self.page.click(submit_selector)
+            await self.page.wait_for_timeout(random.randint(4000, 6000))
+
+            logging.warning(f"Please solve any captcha on {organization}'s login page, then press Enter to continue...")
+            input("Press Enter after solving captcha (if any)...")
+            await self.page.wait_for_timeout(random.randint(4000, 6000))
+
+            if "login" in self.page.url.lower():
+                logging.error(f"Login to {organization} failed. Credentials may be incorrect.")
+                return False
+
             try:
-                # Wait for the email input in the popup (adjust selector as needed)
-                await self.read_extract.page.wait_for_selector("input[name='email']", timeout=5000)
-                logging.info("def eventbrite_search(): Login popup detected. Filling in credentials.")
-                
-                # Fill in the email and password from configuration
-                await self.read_extract.page.fill("input[name='email']", self.config['login']['user_id'])
-                await self.read_extract.page.fill("input[name='password']", self.config['login']['password'])
-                await self.read_extract.page.click("button[type='submit']")
-                logging.info("def eventbrite_search(): Submitted login credentials.")
+                await self.page.context.storage_state(path=f"{organization.lower()}_auth.json")
+                logging.info(f"Session state saved for {organization}.")
+            except Exception as e:
+                logging.warning(f"Could not save session state for {organization}: {e}")
 
-                # Optionally wait for login processing to complete
-                await self.read_extract.page.wait_for_timeout(3000)
-            except Exception as login_error:
-                logging.info("def eventbrite_search(): No login popup detected. Continuing without login.")
+            self.logged_in = True
+            logging.info(f"Login to {organization} successful.")
+            return True
 
-            # Continue with the search
-            await self.perform_search(query)
-            event_urls = await self.extract_event_urls()
-            logging.info(f"def eventbrite_search(): Total unique event URLs found: {len(event_urls)}")
+        return False
 
-            counter = 0
+
+    async def login_if_required(self, url: str) -> bool:
+        """
+        Determines if the URL belongs to Facebook, Google, allevents, or Eventbrite.
+        If so, calls the corresponding login method. Otherwise, returns True (no login needed).
+        """
+        url_lower = url.lower()
+
+        # If it's Facebook
+        if "facebook.com" in url_lower:
+            return await self.login_to_facebook("Facebook")
+
+        # If it's Google
+        elif "google" in url_lower:
+            return await self.login_to_website(
+                organization="Google",
+                login_url="https://accounts.google.com/signin",
+                email_selector="input[type='email']",
+                pass_selector="input[type='password']",
+                submit_selector="button[type='submit']"
+            )
+
+        # If it's Allevents
+        elif "allevents" in url_lower:
+            return await self.login_to_website(
+                organization="allevents",
+                login_url="https://www.allevents.in/login",
+                email_selector="input[name='email']",
+                pass_selector="input[name='password']",
+                submit_selector="button[type='submit']"
+            )
+
+        # If it's Eventbrite
+        elif "eventbrite" in url_lower:
+            return await self.login_to_website(
+                organization="eventbrite",
+                login_url="https://www.eventbrite.com/signin/",
+                email_selector="input#email",
+                pass_selector="input#password",
+                submit_selector="button[type='submit']"
+            )
+
+        # Otherwise, no login needed
+        return True
+
+
+    async def extract_event_text(self, link, max_retries=3):
+        """
+        Extracts text from an event page with retries if extraction fails.
+
+        Args:
+            link (str): The event URL.
+            max_retries (int): Maximum number of retries in case of failure.
+
+        Returns:
+            str: Extracted text content or None if extraction fails.
+        """
+        login_success = await self.login_if_required(link)
+        if not login_success:
+            logging.error(f"def extract_event_text(): Login failed. Aborting extraction for {link}.")
+            return None
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                await self.page.goto(link, timeout=15000)
+                await self.page.wait_for_load_state("domcontentloaded")  # Ensure the DOM is fully loaded
+                await asyncio.sleep(random.uniform(3, 6))  # Randomized delay for stability
+
+                # Extract page content
+                content = await self.page.content()
+                soup = BeautifulSoup(content, 'html.parser')
+                extracted_text = ' '.join(soup.stripped_strings)
+
+                if extracted_text.strip():  # Ensure non-empty text
+                    logging.info(f"def extract_event_text(): Successfully extracted text from {link} on attempt {attempt}.")
+                    return extracted_text
+                else:
+                    logging.warning(f"def extract_event_text(): Attempt {attempt} - No text found for {link}. Retrying...")
+
+            except Exception as e:
+                logging.error(f"def extract_event_text(): Attempt {attempt} failed for {link}. Error: {e}")
+
+            # Wait before retrying (exponential backoff)
+            await asyncio.sleep(attempt * 2)
+
+        logging.error(f"def extract_event_text(): Extraction failed after {max_retries} attempts for {link}.")
+        return None
+
+    async def extract_live_music_event_urls(self, url):
+        """
+        Special method to handle the Bard & Banker live-music page.
+        It navigates to the page, parses any JSON–LD with @type 'ItemList', and extracts event URLs.
+
+        Args:
+            url (str): The Bard & Banker live-music page URL.
+
+        Returns:
+            list: A list of unique event URLs.
+        """
+        await self.page.goto(url, timeout=15000)
+        await self.page.wait_for_load_state("domcontentloaded")
+        content = await self.page.content()
+        soup = BeautifulSoup(content, 'html.parser')
+        event_urls = []
+        # Look for JSON–LD script tags
+        scripts = soup.find_all("script", type="application/ld+json")
+        for script in scripts:
+            try:
+                data = json.loads(script.string)
+                if isinstance(data, dict) and data.get("@type") == "ItemList":
+                    item_list = data.get("itemListElement", [])
+                    for item in item_list:
+                        event_item = item.get("item", {})
+                        event_url = event_item.get("url")
+                        if event_url:
+                            event_urls.append(event_url)
+            except Exception as e:
+                logging.warning(f"extract_live_music_event_urls(): Failed to parse JSON–LD: {e}")
+        return list(set(event_urls))
+
+
+    async def close(self):
+        if self.browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
+
+
+    async def main(self, url):
+        await self.init_browser()
+        logging.info(f"def main(): Initialized browser for url: {url}")
+        # Check if we have a Bard & Banker live-music page that contains multiple event URLs
+        if "bardandbanker.com/live-music" in url.lower():
+            event_urls = await self.extract_live_music_event_urls(url)
+            logging.info(f"def main(): Found {len(event_urls)} event URLs on the live-music page")
+            results = {}
             for event_url in event_urls:
-                if event_url in self.visited_urls:
-                    logging.info(f"def eventbrite_search(): URL already visited: {event_url}")
-                    continue
-
-                if len(self.visited_urls) >= self.config['crawling']['urls_run_limit']:
-                    logging.info("def eventbrite_search(): Reached the URL limit.")
-                    sys.exit()
-
-                elif counter >= self.config['crawling']['max_website_urls']:
-                    logging.info(f"def eventbrite_search(): Reached the maximum limit of {self.config['crawling']['max_website_urls']} event URLs.")
-                    break
-
-                else:
-                    logging.info(f"def eventbrite_search(): Processing event URL: {event_url}")
-                    self.visited_urls.add(event_url)
-                    self.urls_contacted += 1  # Track URL contacts
-                    counter += 1
-                    await self.process_event(event_url, source, keywords_list, prompt, counter)
-
-        except Exception as e:
-            logging.error(f"def eventbrite_search(): Error during search: {e}")
+                logging.info(f"def main(): Extracting text from event URL: {event_url}")
+                text = await self.extract_event_text(event_url)
+                results[event_url] = text
+            await self.close()
+            return results
+        else:
+            text = await self.extract_event_text(url)
+            logging.info(f"def main(): Extracted text: {text}")
+            await self.close()
+            return text
 
 
-    async def perform_search(self, query):
-        """
-        Performs a search on Eventbrite using the provided query.
+if __name__ == "__main__":
 
-        Args:
-            query (str): Search query.
-        """
-        search_selector = "input#search-autocomplete-input"
-        try:
-            await self.read_extract.page.wait_for_selector(search_selector, timeout=20000)
-            search_box = await self.read_extract.page.query_selector(search_selector)
-
-            if search_box:
-                await search_box.fill(query)
-                await search_box.press("Enter")
-                logging.info(f"def perform_search(): Performed search with query: {query}")
-                await self.read_extract.page.wait_for_load_state("networkidle", timeout=15000)
-            else:
-                logging.error("def perform_search(): Search box not found on Eventbrite.")
-                raise Exception("Search box not found.")
-        except asyncio.TimeoutError:
-            logging.error("def perform_search(): Timeout while performing search on Eventbrite.")
-            raise
-
-
-    async def extract_event_urls(self):
-        """ Extracts unique event URLs from the search results.
-
-        Returns:
-            set: A set of unique event URLs.
-        """
-        event_urls = set()
-        try:
-            event_link = await self.read_extract.page.query_selector_all("a[href*='/e/']")
-
-            for link in event_link:
-                href = await link.get_attribute("href")
-                if href:
-                    href = self.ensure_absolute_url(href)
-                    unique_id = self.extract_unique_id(href)
-                    if unique_id:
-                        event_urls.add(href)
-                        logging.debug(f"def extract_event_urls(): Found event URL: {href} with ID: {unique_id}")
-                    else:
-                        logging.debug(f"def extract_event_urls(): URL does not match the expected pattern: {href}")
-
-                if len(self.visited_urls) >= self.config['crawling']['urls_run_limit']:
-                    logging.info(f"def extract_event_urls(): Reached the maximum limit of {self.config['crawling']['max_website_urls']}"
-                                 f" event URLs or {self.config['crawling']['urls_run_limit']} visited URLs."
-                                 f"\nurls are: {event_urls}")
-
-            return event_urls
-        
-        except Exception as e:
-            logging.error(f"def extract_event_urls():  Error extracting event URLs: {e}")
-            return event_urls
-
-
-    def ensure_absolute_url(self, href):
-        """
-        Ensures that the URL is absolute.
-
-        Args:
-            href (str): URL string.
-
-        Returns:
-            str: Absolute URL.
-        """
-        if not href.startswith("http"):
-            href = f"https://www.eventbrite.com{href}"
-        return href
-    
-
-    def extract_unique_id(self, url):
-        """
-        Extracts the unique identifier from the Eventbrite URL.
-
-        Args:
-            url (str): Eventbrite event URL.
-
-        Returns:
-            str or None: Unique identifier if pattern matches, else None.
-        """
-        pattern = r'/e/[^/]+-tickets-(\d+)(?:\?|$)'
-        match = re.search(pattern, url)
-        return match.group(1) if match else None
-        
-
-    async def process_event(self, event_url, source, keywords_list, prompt, counter):
-        """Processes an individual event URL: extracts text, processes it with LLM,
-        and writes to the database.
-        
-        Args:
-            event_url (str): Event URL.
-            source (str): Organization name.
-            keywords_list (list): List of keywords.
-            prompt (str): Prompt for LLM processing.
-            counter (int): Counter for processed events.
-        """
-        try:
-            extracted_text = await self.read_extract.extract_event_text(event_url)
-
-            if extracted_text:
-                self.urls_with_extracted_text += 1  # Count extracted text URLs
-
-                # Check for keywords in the extracted text
-                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-                if found_keywords:
-                    self.urls_with_found_keywords += 1  # Count URLs with found keywords
-                    logging.info(f"def process_event(): Found keywords in text for URL {event_url}: {found_keywords}")
-
-                    # Process the extracted text with LLM
-                    response = self.llm_handler.process_llm_response(event_url, extracted_text, source, keywords_list, prompt)
-
-                    if response:
-                        self.events_written_to_db += 1  # Count events written to the database
-                else:
-                    logging.info(f"def process_event(): No keywords found in text for: {event_url}")
-            else:
-                logging.warning(f"def process_event(): No extracted text for event: {event_url}")
-
-        except Exception as e:
-            logging.error(f"def process_event(): Error processing event {event_url}: {e}")
-
-
-    async def driver(self):
-        """ Reads keywords, performs searches, and processes extracted event URLs. """
-        self.start_time = datetime.now()  # Record start time
-        # ***TEMP code here
-        self.keywords_list = ['quickstep', 'rhumba', 'rumba', 'salsa', 'samba', 'semba', 'swing', 'tango', 'tarraxa', 
-                              'tarraxinha', 'tarraxo', 'two step', 'urban kiz', 'waltz', 'wcs', 'west coast swing', 'zouk']
-        for keyword in self.keywords_list:
-            query = keyword
-            source = ''
-            prompt = 'default'
-            logging.info(f"driver(): Searching for query: {query}")
-            await self.eventbrite_search(query, source, self.keywords_list, prompt)
-
-        self.end_time = datetime.now()  # Record end time
-        logging.info(f"driver(): Completed processing {len(self.visited_urls)} unique URLs.")
-
-        # Write run statistics to the database
-        await self.write_run_statistics()
-
-
-    async def write_run_statistics(self):
-        """ Saves the run statistics to the database. """
-        elapsed_time = str(self.end_time - self.start_time)  # Convert timedelta to a string
-        python_file_name = __file__.split('/')[-1]
-
-        # Create a DataFrame for the run statistics
-        run_data = pd.DataFrame([{
-            "run_name": self.run_name,
-            "run_description": self.run_description,
-            "start_time": self.start_time,
-            "end_time": self.end_time,
-            "elapsed_time": elapsed_time,  # Now stored as a string
-            "python_file_name": python_file_name,
-            "unique_urls_count": len(self.visited_urls),
-            "total_url_attempts": self.urls_contacted,
-            "urls_with_extracted_text": self.urls_with_extracted_text,
-            "urls_with_found_keywords": self.urls_with_found_keywords,
-            "events_written_to_db": self.events_written_to_db,
-            "time_stamp": datetime.now()
-        }])
-
-        # Get the database connection engine
-        engine = self.db_handler.get_db_connection()
-
-        # Write the data to the "runs" table
-        try:
-            run_data.to_sql("runs", engine, if_exists="append", index=False)
-            logging.info("write_run_statistics(): Run statistics written to database successfully.")
-        except Exception as e:
-            logging.error(f"write_run_statistics(): Error writing run statistics to database: {e}")
-
-
-async def main():
-    """ Main function to initialize and run the Eventbrite scraper. """
+    # Get config
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
+    # Configure logging
     logging.basicConfig(
         filename=config['logging']['log_file'],
         filemode='a',
@@ -342,39 +354,53 @@ async def main():
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    logging.info("\n\nebs.py starting...")
+    logging.info("rd_ext.py starting...")
 
+    # Get the start time
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
-    # Initialize the scraper components
-    read_extract = ReadExtract(config_path='config/config.yaml')
+    # Initialize DatabaseHandler
     db_handler = DatabaseHandler(config)
-    llm_handler = LLMHandler(config_path='config/config.yaml')
-    ebs_instance = EventbriteScraper(
-        config=config,
-        read_extract=read_extract,
-        db_handler=db_handler,
-        llm_handler=llm_handler
-    )
-
+    
     # Get the file name of the code that is running
     file_name = os.path.basename(__file__)
 
-    # Count events and urls before cleanup
+    # Count events and urls before rd_ext.py
     start_df = db_handler.count_events_urls_start(file_name)
 
-    # Start
-    await read_extract.init_browser()
+    # Instantiate the classes
+    read_extract = ReadExtract("config/config.yaml")
+    llm_handler = LLMHandler("config/config.yaml")
 
-    await ebs_instance.driver()
-    await read_extract.close()
+    # Read .csv file to deal with oddities
+    df = pd.read_csv(config['input']['edge_cases'])
 
-    # Write the final event and url counts to the .csv
+    # Iterate over the rows of the dataframe
+    for row in df.itertuples(index=True, name=None):
+        # Get the url, organization name, keywords
+        idx, source, keywords, url  = row
+
+        logging.info(f"(__main__ in rd_ext.py: idx: {idx}, url: {url}, source: {source}, keywords: {keywords})")
+
+        logging.info(f"__main__: Extracting text from {url}...")
+        # Initialize the browser and extract text(s)
+        extracted = asyncio.run(read_extract.main(url))
+
+        # If multiple events were found (i.e. extracted is a dict), process each event separately
+        if isinstance(extracted, dict):
+            for event_url, text in extracted.items():
+                llm_status = llm_handler.process_llm_response(event_url, text, source, keywords, prompt=event_url)
+        else:
+            llm_status = llm_handler.process_llm_response(url, extracted, source, keywords, prompt=url)
+
+    # Count events and urls after rd_ext.py
     db_handler.count_events_urls_end(start_df, file_name)
 
+    # Get the end time
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    # Calculate the total time taken
+    total_time = end_time - start_time
+    logging.info(f"__main__: Total time taken: {total_time}\n\n")

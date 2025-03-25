@@ -17,10 +17,11 @@ Objectives:
 5. Provides a place to deal with odd edge cases that may arise if you are using the logic in __main__
     a. This will result in database updates to the events and urls tables.
 
-output (str): The extracted text content.
+output (str or dict): The extracted text content. For pages such as Bard & Banker live music, a dictionary mapping event URLs to text is returned.
 """
 
 import asyncio
+import json  # New import for JSON parsing
 from bs4 import BeautifulSoup
 from datetime import datetime
 import logging
@@ -278,7 +279,39 @@ class ReadExtract:
         logging.error(f"def extract_event_text(): Extraction failed after {max_retries} attempts for {link}.")
         return None
 
-        
+    async def extract_live_music_event_urls(self, url):
+        """
+        Special method to handle the Bard & Banker live-music page.
+        It navigates to the page, parses any JSON–LD with @type 'ItemList', and extracts event URLs.
+
+        Args:
+            url (str): The Bard & Banker live-music page URL.
+
+        Returns:
+            list: A list of unique event URLs.
+        """
+        await self.page.goto(url, timeout=15000)
+        await self.page.wait_for_load_state("domcontentloaded")
+        content = await self.page.content()
+        soup = BeautifulSoup(content, 'html.parser')
+        event_urls = []
+        # Look for JSON–LD script tags
+        scripts = soup.find_all("script", type="application/ld+json")
+        for script in scripts:
+            try:
+                data = json.loads(script.string)
+                if isinstance(data, dict) and data.get("@type") == "ItemList":
+                    item_list = data.get("itemListElement", [])
+                    for item in item_list:
+                        event_item = item.get("item", {})
+                        event_url = event_item.get("url")
+                        if event_url:
+                            event_urls.append(event_url)
+            except Exception as e:
+                logging.warning(f"extract_live_music_event_urls(): Failed to parse JSON–LD: {e}")
+        return list(set(event_urls))
+
+
     async def close(self):
         if self.browser:
             await self.browser.close()
@@ -289,10 +322,22 @@ class ReadExtract:
     async def main(self, url):
         await self.init_browser()
         logging.info(f"def main(): Initialized browser for url: {url}")
-        text = await self.extract_event_text(url)
-        logging.info(f"def main(): Extracted text: {text}")
-        await self.close()
-        return text
+        # Check if we have a Bard & Banker live-music page that contains multiple event URLs
+        if "bardandbanker.com/live-music" in url.lower():
+            event_urls = await self.extract_live_music_event_urls(url)
+            logging.info(f"def main(): Found {len(event_urls)} event URLs on the live-music page")
+            results = {}
+            for event_url in event_urls:
+                logging.info(f"def main(): Extracting text from event URL: {event_url}")
+                text = await self.extract_event_text(event_url)
+                results[event_url] = text
+            await self.close()
+            return results
+        else:
+            text = await self.extract_event_text(url)
+            logging.info(f"def main(): Extracted text: {text}")
+            await self.close()
+            return text
 
 
 if __name__ == "__main__":
@@ -308,7 +353,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt='%Y-%m-%d %H:%M:%S'
-        )
+    )
     logging.info("rd_ext.py starting...")
 
     # Get the start time
@@ -333,18 +378,21 @@ if __name__ == "__main__":
 
     # Iterate over the rows of the dataframe
     for row in df.itertuples(index=True, name=None):
-
         # Get the url, organization name, keywords
         idx, source, keywords, url  = row
 
         logging.info(f"(__main__ in rd_ext.py: idx: {idx}, url: {url}, source: {source}, keywords: {keywords})")
 
         logging.info(f"__main__: Extracting text from {url}...")
-        # Initialize the browser and extract text
-        extracted_text = asyncio.run(read_extract.main(url))
+        # Initialize the browser and extract text(s)
+        extracted = asyncio.run(read_extract.main(url))
 
-        # Process the extracted text with LLM. The url is the key into config to get the right prompt
-        llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt=url)
+        # If multiple events were found (i.e. extracted is a dict), process each event separately
+        if isinstance(extracted, dict):
+            for event_url, text in extracted.items():
+                llm_status = llm_handler.process_llm_response(event_url, text, source, keywords, prompt=event_url)
+        else:
+            llm_status = llm_handler.process_llm_response(url, extracted, source, keywords, prompt=url)
 
     # Count events and urls after rd_ext.py
     db_handler.count_events_urls_end(start_df, file_name)
@@ -356,10 +404,3 @@ if __name__ == "__main__":
     # Calculate the total time taken
     total_time = end_time - start_time
     logging.info(f"__main__: Total time taken: {total_time}\n\n")
-
-
-    
-
-
-    
-
