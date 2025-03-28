@@ -37,7 +37,7 @@ input:
   urls: data/urls
 llm:
   mistral_model: mistral-large-latest
-  openai_model: o3-mini-2025-01-31
+  openai_model: gpt-4o-mini
   provider: mistral
   spend_money: true
 location:
