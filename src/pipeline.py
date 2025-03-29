@@ -30,7 +30,7 @@ COMMON_CONFIG_UPDATES = {
          "max_website_urls": 10,
          "urls_run_limit": 500,  # default for all steps
     },
-    "llm": {"provider": "openai", "spend_money": True}
+    "llm": {"provider": "mistral", "spend_money": True}
 }
 
 # ------------------------

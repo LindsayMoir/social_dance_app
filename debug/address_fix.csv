@@ -312,3 +312,38 @@ address_id,full_address,building_name,street_number,street_name,street_type,dire
 2652,"V Lounge Night Club 3366 Douglas St,  BC, V8Z 3L3, CA",V Lounge Night Club,3366,Douglas,St,,,,BC,V8Z 3L3,CA,2025-03-21 14:46:14.811373
 2656,"Studio to Stage Performing Arts Studio, 324 Terminal Ave.,  BC, V9R 5C8, CA",Studio to Stage Performing Arts Studio,324,Terminal,Ave.,,,,BC,V9R 5C8,CA,2025-03-21 15:36:19.443878
 2660,"Songhees Plaza (near the Johnson Street Bridge), Victoria, British Columbia,  BC, B1P 2P5, CA",Songhees Plaza (near the Johnson Street Bridge),,,,,Victoria,,BC,B1P 2P5,CA,2025-03-21 15:39:42.598180
+address_id,full_address,building_name,street_number,street_name,street_type,direction,city,met_area,province_or_state,postal_code,country_id,time_stamp
+1106,"Vancouver, BC, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-28 00:06:03.313037
+3386,"Victoria, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-07 09:36:18.866527
+1318,"Victoria, BC, Canada, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:40:17.403858
+1111,"Vancouver, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-16 16:19:27.591691
+4121,"Victoria BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:25:12.967622
+2472,"Victoria, BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-21 07:55:41.781993
+2638,"Victoria, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 22:29:13.172948
+2692,"Sooke Community Hall,  BC, V9Z 0P7, CA",Sooke Community Hall,,,,,,,BC,V9Z 0P7,CA,2025-03-22 19:42:05.800744
+2694,"Pitt Meadows Plumbing & Mechanical Systems,  BC, V2X 0Y9, CA",Pitt Meadows Plumbing & Mechanical Systems,,,,,,,BC,V2X 0Y9,CA,2025-03-22 19:42:06.058887
+2695,"Vancouver's Top Bars, Vancouver, BC, CA",Vancouver's Top Bars,,,,,Vancouver,,BC,,CA,2025-03-22 19:42:06.262065
+2696,"Pierre's Champagne Lounge,  BC, V6B 2R9, CA",Pierre's Champagne Lounge,,,,,,,BC,V6B 2R9,CA,2025-03-22 19:42:06.932712
+2697,"Karma Lounge,  BC, V6E 0C6, CA",Karma Lounge,,,,,,,BC,V6E 0C6,CA,2025-03-22 19:42:07.333805
+2677,"The Dusty Flowerpot Cabaret,  BC, V5T 4T1, CA",The Dusty Flowerpot Cabaret,,,,,,,BC,V5T 4T1,CA,2025-03-22 18:11:19.388059
+2683,"Christ Church Cathedral, 690 Burrard Street, Vancouver, BC V6C 2L1,  BC, V6C2L1, CA",Christ Church Cathedral,690,Burrard,Street,,Vancouver,,BC,V6C2L1,CA,2025-03-22 19:08:24.859511
+2684,"Dave Dunnet Community Theatre,  BC, V8R 5G4, CA",Dave Dunnet Community Theatre,,,,,,,BC,V8R 5G4,CA,2025-03-22 19:11:13.771334
+2685,"The Gallery George,  BC, V6B 1G8, CA",The Gallery George,,,,,,,BC,V6B 1G8,CA,2025-03-22 19:11:14.023143
+2686,"SUM Gallery,  BC, V6A 1X6, CA",SUM Gallery,,,,,,,BC,V6A 1X6,CA,2025-03-22 19:11:14.281071
+2690,"Rose Gellert Hall, Langley Community Music School 4899 207 Street Langley, BC V3A 2E4,  BC, V3A2E4, CA",Rose Gellert Hall,4899,207,Street,Langley,,,BC,V3A2E4,CA,2025-03-22 19:16:27.296006
+2699,"660C Leg in Boot Square,  BC, V5Z 4B3, CA",,660C,Leg in Boot,Square,,,,BC,V5Z 4B3,CA,2025-03-22 19:42:08.208691
+2700,"Nook - Coworking Space in Richmond,  BC, V6X 1C3, CA",Nook - Coworking Space,,,,,,,BC,V6X 1C3,CA,2025-03-22 19:42:08.457323
+2698,"Chill x Studio,  BC, V5Y 1K6, CA",Chill x Studio,,,,,,,BC,V5Y 1K6,CA,2025-03-22 19:42:08.678834
+2706,"Eastern Star Hall, 3281 Harriet Rd,  BC, V8Z 3S3, CA",Eastern Star Hall,3281,Harriet,Rd,,,,BC,V8Z 3S3,CA,2025-03-27 22:07:33.020963
+3308,"Dance Victoria, Victoria, BC,  BC, V8T 4E8, CA",Dance Victoria,,,,,Victoria,,BC,V8T 4E8,CA,2025-03-27 22:11:46.793477
+3309,"Strawberry Vale, Victoria, BC,  BC, V8Z 5J5, CA",Strawberry Vale,,,,,Victoria,,BC,V8Z 5J5,CA,2025-03-27 22:11:47.044893
+2723,"Eastern Star Hall, 3281 Harriet Rd, Victoria, BC,  BC, V8Z 3S3, CA",Eastern Star Hall,3281,Harriet,Rd,,Victoria,,BC,V8Z 3S3,CA,2025-03-27 22:07:19.296073
+3329,"McKinnon Dance Studio, University of Victoria, Victoria, BC, Canada,  BC, V8P 5C2, CA",McKinnon Dance Studio,,,,,Victoria,,BC,V8P 5C2,CA,2025-03-27 22:34:01.940370
+3346,"Hermann's Jazz Club - Lounge and Restaurant,  BC, V8W 1J9, CA",Hermann's Jazz Club - Lounge and Restaurant,,,,,,,BC,V8W 1J9,CA,2025-03-27 23:12:53.100347
+3355,"Coral Princess, departing from Vancouver, Canada, Vancouver, BC, CA",Coral Princess,,,,,Vancouver,,BC,,CA,2025-03-27 22:51:20.807000
+3443,"Victoria, Canada, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:45:25.630424
+3446,"Royal Theatre, 805 Broughton St, Victoria, BC,  BC, V8W 1E5, CA",Royal Theatre,805,Broughton,St,,Victoria,,BC,V8W 1E5,CA,2025-03-28 00:04:28.728026
+3449,"Solwood Studio, Victoria, British Columbia,  BC, V8W 2A8, CA",Solwood Studio,,,,,Victoria,,BC,V8W 2A8,CA,2025-03-28 01:01:49.269669
+3450,"Eastern Star Hall, Victoria, British Columbia,  BC, V8Z 3S3, CA",Eastern Star Hall,,,,,Victoria,,BC,V8Z 3S3,CA,2025-03-28 01:24:31.430938
+3452,"Eastern Star Hall,  BC, V8Z 3S3, CA",Eastern Star Hall,,,,,,,BC,V8Z 3S3,CA,2025-03-28 02:55:21.636603
+3459,"Studio Salsa Attitude, 3188, Chemin Ste-Foy, Quebec, QC,  BC, G1X 1R4, CA",Studio Salsa Attitude,3188,Chemin Ste-Foy,,Quebec,,,BC,G1X 1R4,CA,2025-03-28 03:21:36.034483

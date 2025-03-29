@@ -355,78 +355,69 @@ class FacebookEventScraper():
             str: The extracted relevant text content, or None if no relevant text is found.
         """
         self.total_url_attempts += 1  # Count URL contact attempts
+        # Check if the logged-in page is still valid; otherwise, create a new one
         try:
-            # Check if the logged-in page is still valid; otherwise, create a new one
-            try:
-                if not self.logged_in_page or self.logged_in_page.url == "about:blank":
-                    raise Exception("Logged-in page is no longer valid.")
-                page = self.logged_in_page  # Use the logged-in page if it's valid
-            except Exception:
-                logging.warning("def extract_event_text(): Logged-in page is closed or invalid, opening a new one.")
-                page = self.context.new_page()  # Open a new page in the existing context
+            if not self.logged_in_page or self.logged_in_page.url == "about:blank":
+                raise Exception("Logged-in page is no longer valid.")
+            page = self.logged_in_page  # Use the logged-in page if it's valid
+        except Exception:
+            logging.warning("def extract_event_text(): Logged-in page is closed or invalid, opening a new one.")
+            page = self.context.new_page()  # Open a new page in the existing context
 
-            timeout_value = random.randint(8000, 12000)  # Random timeout to avoid bot detection
-            logging.info(f"def extract_event_text(): Navigating to {link} with timeout {timeout_value} ms.")
+        timeout_value = random.randint(10000, 15000)  # Random timeout to avoid bot detection
+        logging.info(f"def extract_event_text(): Navigating to {link} with timeout {timeout_value} ms.")
+        try:
             page.goto(link, timeout=timeout_value)
-
-            # Look for all buttons or links with text "See more" and click them
-            more_buttons = page.query_selector_all("text=/See more/i")
-            if more_buttons:
-                for more_button in more_buttons:
-                    try:
-                        more_button.wait_for_element_state("stable", timeout=random.randint(2000, 4000))  # Ensure button is stable
-                        more_button.click()
-                        page.wait_for_timeout(random.randint(4000, 8000))  # Random wait after clicking
-                        logging.info(f"Clicked 'See more' button in URL: {link}")
-                    except Exception as e:
-                        logging.warning(f"Could not click 'See more' button in URL {link}: {e}")
-            else:
-                logging.debug(f"No 'See more' buttons found in URL: {link}")
-
-            # Randomized wait before extracting content
-            page.wait_for_timeout(random.randint(5000, 7000))
-
-            # Extract page content
-            content = page.content()
-            soup = BeautifulSoup(content, 'html.parser')
-            extracted_text = ' '.join(soup.stripped_strings)
-
-            if extracted_text:
-                self.urls_with_extracted_text += 1  # Count URLs where text was extracted
-                logging.info(f"def extract_event_text(): Extracted raw text ({len(extracted_text)} chars) from {link}")
-
-                # Check for keywords in the extracted text
-                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-                if found_keywords:
-                    self.urls_with_found_keywords += 1  # Count URLs where keywords were found
-
-                    if extracted_text and 'facebook.com/events/' in link:
-                        event_extracted_text = self.extract_relevant_text(extracted_text, link)
-                        if event_extracted_text:
-                            logging.info(f"def extract_event_text(): Extracted relevant event text from {link}: {len(event_extracted_text)} chars.")
-                            return event_extracted_text
-                        else:
-                            logging.warning(f"def extract_event_text(): When regex ran, returned None in {link}.")
-                            logging.info(f"def extract_event_text(): Returned original extracted_text not just event_extracted_text in {link}")
-                            return extracted_text
-                else:
-                    logging.info(f"def extract_event_text(): No keywords found in extracted text for URL: {link}.")
-                    return None
-            else:
-                logging.warning(f"def extract_event_text(): No text extracted from {link}.")
-                return None
-            
-        # Force releasing any extra windows by putting a finally block in after a try and except block
         except Exception as e:
-            logging.warning(f"def extract_event_text(): This {link}: {e} did not work. It could be for a variety of reasons. "
-                            "It could be that the page is not loading, the page is not found, or the page is not in the right format.")
+            logging.warning(f"def extract_event_text(): Timeout or error loading {link}: {e}")
             return None
 
-        finally:
-            # If we opened a new page, close it to prevent excessive tabs
-            if page != self.logged_in_page:
-                page.close()
-                logging.info(f"def extract_event_text(): Closed extra page for URL: {link}.")
+        # Look for all buttons or links with text "See more" and click them
+        more_buttons = page.query_selector_all("text=/See more/i")
+        if more_buttons:
+            for more_button in more_buttons:
+                try:
+                    more_button.wait_for_element_state("stable", timeout=random.randint(2000, 4000))  # Ensure button is stable
+                    more_button.click()
+                    page.wait_for_timeout(random.randint(4000, 8000))  # Random wait after clicking
+                    logging.info(f"Clicked 'See more' button in URL: {link}")
+                except Exception as e:
+                    logging.warning(f"Could not click 'See more' button in URL {link}: {e}")
+        else:
+            logging.debug(f"No 'See more' buttons found in URL: {link}")
+
+        # Randomized wait before extracting content
+        page.wait_for_timeout(random.randint(5000, 7000))
+
+        # Extract page content
+        content = page.content()
+        soup = BeautifulSoup(content, 'html.parser')
+        extracted_text = ' '.join(soup.stripped_strings)
+
+        if extracted_text:
+            self.urls_with_extracted_text += 1  # Count URLs where text was extracted
+            logging.info(f"def extract_event_text(): Extracted raw text ({len(extracted_text)} chars) from {link}")
+
+            # Check for keywords in the extracted text
+            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+            if found_keywords:
+                self.urls_with_found_keywords += 1  # Count URLs where keywords were found
+
+                if extracted_text and 'facebook.com/events/' in link:
+                    event_extracted_text = self.extract_relevant_text(extracted_text, link)
+                    if event_extracted_text:
+                        logging.info(f"def extract_event_text(): Extracted relevant event text from {link}: {len(event_extracted_text)} chars.")
+                        return event_extracted_text
+                    else:
+                        logging.warning(f"def extract_event_text(): When regex ran, returned None in {link}.")
+                        logging.info(f"def extract_event_text(): Returned original extracted_text not just event_extracted_text in {link}")
+                        return extracted_text
+            else:
+                logging.info(f"def extract_event_text(): No keywords found in extracted text for URL: {link}.")
+                return None
+        else:
+            logging.warning(f"def extract_event_text(): No text extracted from {link}.")
+            return None
     
 
     def extract_relevant_text(self, content, link):
@@ -497,57 +488,52 @@ class FacebookEventScraper():
         location = self.config['constants']['location']
         extracted_text_list = []
 
-        try:
-            for keyword in keywords:
-                search_url = f"{base_url} {location} {keyword}"
-                event_links = self.extract_event_links(search_url)
-                logging.info(f"def scrape_events: Used {search_url} to get {len(event_links)} event_links\n")
+        for keyword in keywords:
+            search_url = f"{base_url} {location} {keyword}"
+            event_links = self.extract_event_links(search_url)
+            logging.info(f"def scrape_events: Used {search_url} to get {len(event_links)} event_links\n")
 
-                self.total_url_attempts += len(event_links)  # Update total URL attempts
+            self.total_url_attempts += len(event_links)  # Update total URL attempts
 
-                for link in event_links:
-                    if link in self.urls_visited:
-                        continue  # Skip already visited URLs
-                    else:
-                        self.unique_urls_count += 1  # Increment unique URL count
+            for link in event_links:
+                if link in self.urls_visited:
+                    continue  # Skip already visited URLs
+                else:
+                    self.unique_urls_count += 1  # Increment unique URL count
 
-                        if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                            logging.info("def scrape_events(): Reached the URL visit limit. Stopping the scraping process.")
-                            return search_url, extracted_text_list
+                    if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                        logging.info("def scrape_events(): Reached the URL visit limit. Stopping the scraping process.")
+                        return search_url, extracted_text_list
 
-                        extracted_text = self.extract_event_text(link)
-                        self.urls_visited.add(link)
+                    extracted_text = self.extract_event_text(link)
+                    self.urls_visited.add(link)
 
-                        if extracted_text:
-                            self.urls_with_extracted_text += 1  # Increment URLs with extracted text
+                    if extracted_text:
+                        self.urls_with_extracted_text += 1  # Increment URLs with extracted text
 
-                            # Check for keywords in the extracted text
-                            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-                            if found_keywords:
-                                self.urls_with_found_keywords += 1  # Increment URLs with found keywords
-                                extracted_text_list.append((link, extracted_text))
-                                logging.debug(f"Visited URL: {link}. Total visited: {len(self.urls_visited)}")
-                            else:
-                                logging.info(f"def scrape_events(): No keywords found in extracted text for URL: {link}.")
+                        # Check for keywords in the extracted text
+                        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+                        if found_keywords:
+                            self.urls_with_found_keywords += 1  # Increment URLs with found keywords
+                            extracted_text_list.append((link, extracted_text))
+                            logging.debug(f"Visited URL: {link}. Total visited: {len(self.urls_visited)}")
                         else:
-                            logging.info(f"def scrape_events(): No text extracted for URL: {link}.")
+                            logging.info(f"def scrape_events(): No keywords found in extracted text for URL: {link}.")
+                    else:
+                        logging.info(f"def scrape_events(): No text extracted for URL: {link}.")
 
-            logging.info(f"def scrape_events(): Extracted text from {len(extracted_text_list)} events.")
+        logging.info(f"def scrape_events(): Extracted text from {len(extracted_text_list)} events.")
 
-            # Checkpoint history. Write extracted_text_list to a csv file
-            extracted_text_df = pd.DataFrame(extracted_text_list, columns=['url', 'extracted_text'])
-            output_path = self.config['checkpoint']['extracted_text']
-            if os.path.exists(output_path):
-                extracted_text_df.to_csv(output_path, mode='a', header=False, index=False)
-            else:
-                extracted_text_df.to_csv(output_path, index=False)
-            logging.info(f"def scrape_events(): Extracted text data written to {output_path}.")
+        # Checkpoint history. Write extracted_text_list to a csv file
+        extracted_text_df = pd.DataFrame(extracted_text_list, columns=['url', 'extracted_text'])
+        output_path = self.config['checkpoint']['extracted_text']
+        if os.path.exists(output_path):
+            extracted_text_df.to_csv(output_path, mode='a', header=False, index=False)
+        else:
+            extracted_text_df.to_csv(output_path, index=False)
+        logging.info(f"def scrape_events(): Extracted text data written to {output_path}.")
 
-            return search_url, extracted_text_list
-
-        except Exception as e:
-            logging.error(f"def scrape_events: Failed to scrape events: {e}")
-            return None, []
+        return search_url, extracted_text_list
         
 
     def fix_facebook_event_url(self, malformed_url):

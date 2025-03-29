@@ -3,6 +3,7 @@ checkpoint:
   fb_urls: checkpoint/fb_urls.csv
   fb_urls_cp: checkpoint/fb_urls_cp.csv
   fb_urls_cp_status: false
+  extracted_text: checkpoint/extracted_text.csv
 clean_up:
   old_events: 3
 constants:
@@ -10,7 +11,7 @@ constants:
   location: '%20victoria%20bc%20canada%20'
 crawling:
   depth_limit: 2
-  headless: false
+  headless: true
   max_attempts: 3
   max_crawl_trys: 3
   max_website_urls: 10
@@ -38,7 +39,7 @@ input:
 llm:
   mistral_model: mistral-large-latest
   openai_model: gpt-4o-mini
-  provider: mistral
+  provider: openai
   spend_money: true
 location:
   epicentre: Victoria, British Columbia, Canada
