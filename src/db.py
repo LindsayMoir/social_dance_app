@@ -1633,7 +1633,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     )
-    logging.info("db.py starting...")
+    logging.info("\n\ndb.py starting...")
 
     start_time = datetime.now()
     logging.info("\n\nMain: Started the process at %s", start_time)

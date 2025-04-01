@@ -354,7 +354,7 @@ if __name__ == "__main__":
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    logging.info("rd_ext.py starting...")
+    logging.info("\n\nrd_ext.py starting...")
 
     # Get the start time
     start_time = datetime.now()
