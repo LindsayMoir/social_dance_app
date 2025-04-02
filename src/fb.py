@@ -3,7 +3,7 @@ fb.py
 
 This module defines the FacebookEventScraper class for scraping Facebook event data
 using Playwright and BeautifulSoup. It handles logging into Facebook, extracting event
-link and text, performing Google searches related to events, processing URLs, and 
+link and text, processing URLs, and 
 interacting with a database and Language Learning Model (LLM) to process and store
 event data.
 
@@ -12,7 +12,6 @@ Classes:
         - Initializes with configuration, sets up Playwright for browser automation.
         - Logs into Facebook and maintains a session for scraping.
         - Extracts event link and content from Facebook event pages.
-        - Uses Google Custom Search API for supplemental searches.
         - Processes Facebook URLs including fixing malformed URLs.
         - Interacts with LLMHandler for natural language processing tasks.
         - Interacts with DatabaseHandler to read/write URLs and events to the database.
@@ -55,7 +54,6 @@ Dependencies:
     - BeautifulSoup: To parse HTML content of event pages.
     - pandas: For data manipulation and CSV operations.
     - fuzzywuzzy: For fuzzy string matching.
-    - googleapiclient.discovery: For performing Google Custom Searches.
     - requests: For HTTP requests when scraping non-JS rendered pages.
     - yaml: For configuration file parsing.
     - logging: For tracking the execution flow and errors.
@@ -65,7 +63,7 @@ Dependencies:
 Note:
     - The module assumes valid configuration in 'config/config.yaml'.
     - Logging is configured in the main section to record key actions and errors.
-    - The class methods heavily rely on external services (Facebook, Google, database, LLM),
+    - The class methods heavily rely on external services (Facebook, database, LLM),
       and their correct functioning depends on valid credentials and network access.
 """
 
@@ -73,7 +71,6 @@ Note:
 from bs4 import BeautifulSoup
 from datetime import datetime
 from fuzzywuzzy import fuzz
-from googleapiclient.discovery import build
 import logging
 import os
 import pandas as pd

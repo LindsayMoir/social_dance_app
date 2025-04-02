@@ -136,63 +136,63 @@ def copy_drop_create_events():
 # ------------------------
 # TASKS FOR GS.PY STEP
 # ------------------------
-@task
-def pre_process_gs():
-    with open(CONFIG_PATH, "r") as f:
-        current_config = yaml.safe_load(f)
-    file_path = current_config['input']['data_keywords']
-    if os.path.exists(file_path):
-        logger.info(f"def pre_process_gs(): gs step: keywords file {file_path} exists.")
-        return True
-    else:
-        logger.error(f"def pre_process_gs(): gs step: keywords file {file_path} does not exist.")
-        return False
+# @task   ***TEMP
+# def pre_process_gs():
+#     with open(CONFIG_PATH, "r") as f:
+#         current_config = yaml.safe_load(f)
+#     file_path = current_config['input']['data_keywords']
+#     if os.path.exists(file_path):
+#         logger.info(f"def pre_process_gs(): gs step: keywords file {file_path} exists.")
+#         return True
+#     else:
+#         logger.error(f"def pre_process_gs(): gs step: keywords file {file_path} does not exist.")
+#         return False
 
-@task
-def run_gs_script():
-    try:
-        result = subprocess.run([sys.executable, "src/gs.py"], check=True, capture_output=True, text=True)
-        logger.info("def run_gs_script(): gs.py executed successfully.")
-        return result.stdout
-    except subprocess.CalledProcessError as e:
-        error_message = f"gs.py failed with error: {e.stderr}"
-        logger.error(f"def run_gs_script(): {error_message}")
-        raise Exception(error_message)
+# @task
+# def run_gs_script():
+#     try:
+#         result = subprocess.run([sys.executable, "src/gs.py"], check=True, capture_output=True, text=True)
+#         logger.info("def run_gs_script(): gs.py executed successfully.")
+#         return result.stdout
+#     except subprocess.CalledProcessError as e:
+#         error_message = f"gs.py failed with error: {e.stderr}"
+#         logger.error(f"def run_gs_script(): {error_message}")
+#         raise Exception(error_message)
 
-@task
-def post_process_gs():
-    with open(CONFIG_PATH, "r") as f:
-        current_config = yaml.safe_load(f)
-    file_path = current_config['input']['gs_urls']
-    if os.path.exists(file_path):
-        size = os.path.getsize(file_path)
-        logger.info(f"def post_process_gs(): gs step: File {file_path} exists with size {size} bytes.")
-        if size > 1024:
-            logger.info("def post_process_gs(): gs step: File size check passed.")
-            return True
-        else:
-            logger.error("def post_process_gs(): gs step: File size is below 1KB.")
-            return False
-    else:
-        logger.error("def post_process_gs(): gs step: gs_search_results file does not exist.")
-        return False
+# @task
+# def post_process_gs():
+#     with open(CONFIG_PATH, "r") as f:
+#         current_config = yaml.safe_load(f)
+#     file_path = current_config['input']['gs_urls']
+#     if os.path.exists(file_path):
+#         size = os.path.getsize(file_path)
+#         logger.info(f"def post_process_gs(): gs step: File {file_path} exists with size {size} bytes.")
+#         if size > 1024:
+#             logger.info("def post_process_gs(): gs step: File size check passed.")
+#             return True
+#         else:
+#             logger.error("def post_process_gs(): gs step: File size is below 1KB.")
+#             return False
+#     else:
+#         logger.error("def post_process_gs(): gs step: gs_search_results file does not exist.")
+#         return False
 
-@flow(name="GS Step")
-def gs_step():
-    original_config = backup_and_update_config("gs", updates=COMMON_CONFIG_UPDATES)
-    write_run_config.submit("gs", original_config)
-    if not pre_process_gs():
-        send_text_message("gs.py pre-processing failed: keywords file missing.")
-        restore_config(original_config, "gs")
-        raise Exception("gs.py pre-processing failed. Pipeline stopped.")
-    run_gs_script()
-    gs_ok = post_process_gs()
-    if not gs_ok:
-        send_text_message("gs.py post-processing failed: gs_search_results file missing or too small.")
-        restore_config(original_config, "gs")
-        raise Exception("gs.py post-processing failed. Pipeline stopped.")
-    restore_config(original_config, "gs")
-    return True
+# @flow(name="GS Step")
+# def gs_step():
+#     original_config = backup_and_update_config("gs", updates=COMMON_CONFIG_UPDATES)
+#     write_run_config.submit("gs", original_config)
+#     if not pre_process_gs():
+#         send_text_message("gs.py pre-processing failed: keywords file missing.")
+#         restore_config(original_config, "gs")
+#         raise Exception("gs.py pre-processing failed. Pipeline stopped.")
+#     run_gs_script()
+#     gs_ok = post_process_gs()
+#     if not gs_ok:
+#         send_text_message("gs.py post-processing failed: gs_search_results file missing or too small.")
+#         restore_config(original_config, "gs")
+#         raise Exception("gs.py post-processing failed. Pipeline stopped.")
+#     restore_config(original_config, "gs")
+#     return True
 
 # ------------------------
 # TASKS FOR EBS.PY STEP
@@ -669,7 +669,7 @@ def send_text_message(message: str):
 PIPELINE_STEPS = [
     ("copy_drop_create_events", copy_drop_create_events),
     ("emails", emails_step),
-    ("gs", gs_step),
+    # ("gs", gs_step),   ***TEMP
     ("ebs", ebs_step),
     ("rd_ext", rd_ext_step),
     ("scraper", scraper_step),

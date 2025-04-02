@@ -20,3 +20,7 @@ WHERE source ILIKE '%latin dance canada%'
 SELECT relevant, COUNT(*) AS count
 FROM urls
 GROUP BY relevant;
+
+SELECT * FROM events
+WHERE dance_style ILIKE '%coast%' or dance_style ILIKE '%wcs%'
+ORDER BY start_date, start_time

@@ -1,9 +1,9 @@
 checkpoint:
+  extracted_text: checkpoint/extracted_text.csv
   fb_search: checkpoint/fb_search_keywords.csv
   fb_urls: checkpoint/fb_urls.csv
   fb_urls_cp: checkpoint/fb_urls_cp.csv
   fb_urls_cp_status: false
-  extracted_text: checkpoint/extracted_text.csv
 clean_up:
   old_events: 3
 constants:
@@ -60,10 +60,10 @@ prompts:
   dedup: prompts/dedup_prompt.txt
   default: prompts/default.txt
   fb: prompts/fb_prompt.txt
+  https://gotothecoda.com/calendar: prompts/the_coda_prompt.txt
   https://vbds.org/other-dancing-opportunities/: prompts/default.txt
   https://www.bardandbanker.com/live-music: prompts/bard_and_banker_prompt.txt
   https://www.debrhymerband.com/shows: prompts/deb_rhymer_prompt.txt
-  https://gotothecoda.com/calendar: prompts/the_coda_prompt.txt
   irrelevant_rows: prompts/irrelevant_rows_prompt.txt
   relevant_dance_url: prompts/relevant_dance_url.txt
   single_event: prompts/single_event.txt

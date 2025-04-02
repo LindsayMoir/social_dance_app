@@ -204,10 +204,10 @@ class EventSpider(scrapy.Spider):
             decoded = base64.b64decode(padded_id).decode('utf-8', errors='ignore')
             if self.is_valid_calendar_id(decoded):
                 return decoded
-            logging.error(f"def decode_calendar_id(): Decoded ID is not valid: {decoded}")
+            logging.warning(f"def decode_calendar_id(): Decoded ID is not valid: {decoded}")
             return None
         except Exception as e:
-            logging.error(f"def decode_calendar_id(): Exception for {calendar_url} - {e}")
+            logging.warning(f"def decode_calendar_id(): Exception for {calendar_url} - {e}")
             return None
         
 

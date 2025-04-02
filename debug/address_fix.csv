@@ -347,3 +347,26 @@ address_id,full_address,building_name,street_number,street_name,street_type,dire
 3450,"Eastern Star Hall, Victoria, British Columbia,  BC, V8Z 3S3, CA",Eastern Star Hall,,,,,Victoria,,BC,V8Z 3S3,CA,2025-03-28 01:24:31.430938
 3452,"Eastern Star Hall,  BC, V8Z 3S3, CA",Eastern Star Hall,,,,,,,BC,V8Z 3S3,CA,2025-03-28 02:55:21.636603
 3459,"Studio Salsa Attitude, 3188, Chemin Ste-Foy, Quebec, QC,  BC, G1X 1R4, CA",Studio Salsa Attitude,3188,Chemin Ste-Foy,,Quebec,,,BC,G1X 1R4,CA,2025-03-28 03:21:36.034483
+address_id,full_address,building_name,street_number,street_name,street_type,direction,city,met_area,province_or_state,postal_code,country_id,time_stamp
+3386,"Victoria, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-07 09:36:18.866527
+1318,"Victoria, BC, Canada, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:40:17.403858
+1106,"Vancouver, BC, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-28 00:06:03.313037
+4121,"Victoria BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:25:12.967622
+1111,"Vancouver, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-16 16:19:27.591691
+2638,"Victoria, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 22:29:13.172948
+2472,"Victoria, BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-21 07:55:41.781993
+3443,"Victoria, Canada, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:45:25.630424
+3466,"Eastern Star Hall Chapters No 5 & No 17, 3281 Harriet Rd, Victoria,  BC, V8Z 3S3, CA",Eastern Star Hall Chapters No 5 & No 17,3281,Harriet,Rd,,Victoria,,BC,V8Z 3S3,CA,2025-03-28 16:41:57.125722
+3467,"Beacon Hill Park, Circle Drive, Victoria, British Columbia,  BC, V8V 4Z8, CA",Beacon Hill Park,,Circle,Drive,,Victoria,,BC,V8V 4Z8,CA,2025-03-28 16:44:02.038319
+3470,"Cameron Band Shell, Beacon Hill Park, Victoria, British Columbia,  BC, V8V 2P2, CA",Cameron Band Shell,,,,,Victoria,,BC,V8V 2P2,CA,2025-03-29 15:35:03.546873
+3471,"Odd Fellows Hall, 1443 W. 8th Ave, Vancouver,  BC, V6H 1C9, CA",Odd Fellows Hall,1443,8th,Ave,W,Vancouver,,BC,V6H 1C9,CA,2025-03-29 15:41:03.187207
+3481,"Kinsmen Hall Dougall Park, Lower Gibsons,  BC, V0N 1V8, CA",Kinsmen Hall Dougall Park,,,,,Lower Gibsons,,BC,V0N 1V8,CA,2025-03-29 16:32:46.508386
+3483,"Victoria Event Centre, Victoria, British Columbia,  BC, V8W 2B2, CA",Victoria Event Centre,,,,,Victoria,,BC,V8W 2B2,CA,2025-03-29 17:18:16.519062
+3484,"Cameron Bandshell, Beacon Hill Park, Victoria, British Columbia,  BC, V8V 2P2, CA",Cameron Bandshell,,,,,Victoria,,BC,V8V 2P2,CA,2025-03-29 19:07:41.357153
+3485,"Solwood Studio, Victoria,  BC, V8W 2A8, CA",Solwood Studio,,,,,Victoria,,BC,V8W 2A8,CA,2025-03-29 19:12:26.558135
+3472,"Delta Hotels by Marriott Montreal, 475 President-Kennedy Ave, Montreal H3A 1J7 Canada,  BC, H3A1J7, CA",Delta Hotels by Marriott Montreal,475,President-Kennedy,Ave,,Montreal,,BC,H3A1J7,CA,2025-03-29 19:22:36.800137
+3473,"The Abbey - Cumberland, BC, Canada, British Columbia,  BC, V0R 1S0, CA",The Abbey,,,,,Cumberland,,BC,V0R 1S0,CA,2025-03-29 19:35:52.527906
+3489,"iDance Studios, 2083 Alma St - lower level between the NoFrils & BCL, Vancouver, British Columbia,  BC, V6R 4N6, CA",iDance Studios,2083,Alma,St,,Vancouver,,BC,V6R 4N6,CA,2025-03-29 19:52:03.187662
+3474,"Dance Victoria, Victoria, British Columbia,  BC, V8T 4E8, CA",Dance Victoria,,,,,Victoria,,BC,V8T 4E8,CA,2025-03-29 19:54:08.336917
+3477,"Latin Plaza Hub, 301-68 Warer Street, Vancouver,  BC, V6B 1B8, CA",Latin Plaza Hub,301-68,Warer,Street,,Vancouver,,BC,V6B 1B8,CA,2025-03-29 20:00:38.109537
+3479,"Westshore Dance Studio, 109–2675 Wilfert Road, Colwood,  BC, V9B 1H8, CA",Westshore Dance Studio,109–2675,Wilfert,Road,,Colwood,,BC,V9B 1H8,CA,2025-03-29 20:04:13.148211

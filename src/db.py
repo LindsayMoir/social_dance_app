@@ -721,25 +721,25 @@ class DatabaseHandler():
             # 1) Try extracting a postal code via regex.
             postal_code = self.extract_canadian_postal_code(location)
 
-            # 2) If none found, try Google.
-            if not postal_code:
-                google_pc = self.get_postal_code(location, self.google_api_key)
-                if google_pc and self.is_canadian_postal_code(google_pc):
-                    postal_code = google_pc
-                    logging.info("Got Canadian postal code '%s' from Google for '%s'", postal_code, location)
+            # 2) If none found, try Google. ***TEMP
+            # if not postal_code:
+            #     google_pc = self.get_postal_code(location, self.google_api_key)
+            #     if google_pc and self.is_canadian_postal_code(google_pc):
+            #         postal_code = google_pc
+            #         logging.info("Got Canadian postal code '%s' from Google for '%s'", postal_code, location)
 
             # 3) If postal code is found, query DB to get full address.
             if postal_code:
                 updated_location, address_id = self.populate_from_db_or_fallback(location, postal_code)
                 events_df.loc[index, 'location'] = updated_location
                 events_df.loc[index, 'address_id'] = address_id
-            else:
-                # 4) If still no postal code, fallback to municipality from Google.
-                updated_location, address_id = self.fallback_with_municipality(location)
-                if updated_location:
-                    events_df.loc[index, 'location'] = updated_location
-                if address_id:
-                    events_df.loc[index, 'address_id'] = address_id
+            # else: ***TEMP
+            #     # 4) If still no postal code, fallback to municipality from Google.
+            #     updated_location, address_id = self.fallback_with_municipality(location)
+            #     if updated_location:
+            #         events_df.loc[index, 'location'] = updated_location
+            #     if address_id:
+            #         events_df.loc[index, 'address_id'] = address_id
 
         return events_df
 
@@ -812,21 +812,21 @@ class DatabaseHandler():
             WHERE mail_postal_code = %s;
         """
         df = pd.read_sql(query, self.address_db_engine, params=(postal_code,))
-        if df.empty:
-            # Fallback if no match in DB
-            municipality = self.get_municipality(location_str, self.google_api_key)
-            updated_location = f"{location_str}, {municipality}, BC, {postal_code}, CA"
-            updated_location = updated_location.replace('None,', '').strip()
-            logging.info(f"updated_location is: {updated_location}")
+        # if df.empty: ***TEMP
+        #     # Fallback if no match in DB
+        #     municipality = self.get_municipality(location_str, self.google_api_key) 
+        #     updated_location = f"{location_str}, {municipality}, BC, {postal_code}, CA"
+        #     updated_location = updated_location.replace('None,', '').strip()
+        #     logging.info(f"updated_location is: {updated_location}")
 
-            address_dict = self.create_address_dict(
-                updated_location, None, None, None, None, municipality, 'BC', postal_code, 'CA'
-            )
-            logging.info(f"address_dict is: {address_dict}")
+        #     address_dict = self.create_address_dict(
+        #         updated_location, None, None, None, None, municipality, 'BC', postal_code, 'CA'
+        #     )
+        #     logging.info(f"address_dict is: {address_dict}")
 
-            address_id = self.get_address_id(address_dict)
-            logging.info("No DB match for postal code '%s'. Using fallback: '%s'", postal_code, updated_location)
-            return updated_location, address_id
+        #     address_id = self.get_address_id(address_dict)
+        #     logging.info("No DB match for postal code '%s'. Using fallback: '%s'", postal_code, updated_location)
+        #     return updated_location, address_id
 
         # Single or multiple rows
         row = df.iloc[0] if df.shape[0] == 1 else df.loc[self.match_civic_number(df, numbers)]

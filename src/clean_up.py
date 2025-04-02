@@ -50,7 +50,7 @@ class CleanUp:
             raise ConnectionError("DatabaseHandler: Failed to establish a database connection.")
 
         # Retrieve Google API credentials using credentials.py
-        _, self.api_key, self.cse_id = get_credentials('Google')
+        # _, self.api_key, self.cse_id = get_credentials('Google') ***TEMP
 
         # We'll store references to the async browser/page once we init them
         self.browser = None
@@ -677,7 +677,7 @@ async def main():
     start_df = db_handler.count_events_urls_start(file_name)
 
     # Fix no urls in events
-    await clean_up_instance.process_events_without_url()
+    # await clean_up_instance.process_events_without_url() ***TEMP
 
     # Fix incorrect dance_styles
     await clean_up_instance.fix_incorrect_dance_styles()

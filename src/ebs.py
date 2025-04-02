@@ -108,20 +108,25 @@ class EventbriteScraper:
 
             # Check for a login popup and fill in credentials if it appears
             try:
-                # Wait for the email input in the popup (adjust selector as needed)
                 await self.read_extract.page.wait_for_selector("input[name='email']", timeout=5000)
-                logging.info("def eventbrite_search(): Login popup detected. Filling in credentials.")
+                logging.info("def eventbrite_search(): Login popup detected. Filling in email.")
                 
-                # Fill in the email and password from configuration
                 await self.read_extract.page.fill("input[name='email']", self.config['login']['user_id'])
+                await self.read_extract.page.click("button[type='submit']")
+                logging.info("def eventbrite_search(): Clicked Continue button after email.")
+
+                # Now wait for password field
+                await self.read_extract.page.wait_for_selector("input[name='password']", timeout=5000)
                 await self.read_extract.page.fill("input[name='password']", self.config['login']['password'])
                 await self.read_extract.page.click("button[type='submit']")
-                logging.info("def eventbrite_search(): Submitted login credentials.")
+                logging.info("def eventbrite_search(): Filled password and clicked submit.")
 
-                # Optionally wait for login processing to complete
+                # Wait for login processing
                 await self.read_extract.page.wait_for_timeout(3000)
+
             except Exception as login_error:
                 logging.info("def eventbrite_search(): No login popup detected. Continuing without login.")
+
 
             # Continue with the search
             await self.perform_search(query)
@@ -252,30 +257,30 @@ class EventbriteScraper:
             prompt (str): Prompt for LLM processing.
             counter (int): Counter for processed events.
         """
-        try:
-            extracted_text = await self.read_extract.extract_event_text(event_url)
+        #try:
+        extracted_text = await self.read_extract.extract_event_text(event_url)
 
-            if extracted_text:
-                self.urls_with_extracted_text += 1  # Count extracted text URLs
+        if extracted_text:
+            self.urls_with_extracted_text += 1  # Count extracted text URLs
 
-                # Check for keywords in the extracted text
-                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-                if found_keywords:
-                    self.urls_with_found_keywords += 1  # Count URLs with found keywords
-                    logging.info(f"def process_event(): Found keywords in text for URL {event_url}: {found_keywords}")
+            # Check for keywords in the extracted text
+            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+            if found_keywords:
+                self.urls_with_found_keywords += 1  # Count URLs with found keywords
+                logging.info(f"def process_event(): Found keywords in text for URL {event_url}: {found_keywords}")
 
-                    # Process the extracted text with LLM
-                    response = self.llm_handler.process_llm_response(event_url, extracted_text, source, keywords_list, prompt)
+                # Process the extracted text with LLM
+                response = self.llm_handler.process_llm_response(event_url, extracted_text, source, keywords_list, prompt)
 
-                    if response:
-                        self.events_written_to_db += 1  # Count events written to the database
-                else:
-                    logging.info(f"def process_event(): No keywords found in text for: {event_url}")
+                if response:
+                    self.events_written_to_db += 1  # Count events written to the database
             else:
-                logging.warning(f"def process_event(): No extracted text for event: {event_url}")
+                logging.info(f"def process_event(): No keywords found in text for: {event_url}")
+        else:
+            logging.warning(f"def process_event(): No extracted text for event: {event_url}")
 
-        except Exception as e:
-            logging.error(f"def process_event(): Error processing event {event_url}: {e}")
+        # except Exception as e:
+        #     logging.error(f"def process_event(): Error processing event {event_url}: {e}")
 
 
     async def driver(self):
