@@ -829,7 +829,18 @@ class DatabaseHandler():
         #     return updated_location, address_id
 
         # Single or multiple rows
-        row = df.iloc[0] if df.shape[0] == 1 else df.loc[self.match_civic_number(df, numbers)]
+        if df.empty:
+            return None, None
+
+        if df.shape[0] == 1:
+            row = df.iloc[0]
+        else:
+            match_index = self.match_civic_number(df, numbers)
+            if match_index is None or match_index not in df.index:
+                logging.warning("populate_from_db_or_fallback(): No valid match found.")
+                return None, None
+            row = df.loc[match_index]
+
         updated_location = self.format_address_from_db_row(row)
 
         address_dict = self.create_address_dict(
@@ -865,6 +876,7 @@ class DatabaseHandler():
             logging.info("Fallback with municipality: '%s'", updated_location)
             return updated_location, address_id
         return None, None
+    
 
     def match_civic_number(self, df, numbers):
         """
@@ -872,6 +884,10 @@ class DatabaseHandler():
         attempts to match the first number to a civic_no. Returns the best row index,
         or the first row if no match is found.
         """
+        if df.empty:
+            logging.warning("match_civic_number(): Received empty DataFrame.")
+            return None
+        
         if not numbers:
             return df.index[0]
         for i, addr_row in df.iterrows():
@@ -881,7 +897,9 @@ class DatabaseHandler():
                         return i
                 except ValueError:
                     continue
+
         return df.index[0]
+    
 
     def format_address_from_db_row(self, db_row):
         """

@@ -370,3 +370,12 @@ address_id,full_address,building_name,street_number,street_name,street_type,dire
 3474,"Dance Victoria, Victoria, British Columbia,  BC, V8T 4E8, CA",Dance Victoria,,,,,Victoria,,BC,V8T 4E8,CA,2025-03-29 19:54:08.336917
 3477,"Latin Plaza Hub, 301-68 Warer Street, Vancouver,  BC, V6B 1B8, CA",Latin Plaza Hub,301-68,Warer,Street,,Vancouver,,BC,V6B 1B8,CA,2025-03-29 20:00:38.109537
 3479,"Westshore Dance Studio, 109–2675 Wilfert Road, Colwood,  BC, V9B 1H8, CA",Westshore Dance Studio,109–2675,Wilfert,Road,,Colwood,,BC,V9B 1H8,CA,2025-03-29 20:04:13.148211
+address_id,full_address,building_name,street_number,street_name,street_type,direction,city,met_area,province_or_state,postal_code,country_id,time_stamp
+1318,"Victoria, BC, Canada, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:40:17.403858
+1106,"Vancouver, BC, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-28 00:06:03.313037
+3386,"Victoria, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-07 09:36:18.866527
+1111,"Vancouver, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-16 16:19:27.591691
+4121,"Victoria BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:25:12.967622
+2472,"Victoria, BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-21 07:55:41.781993
+2638,"Victoria, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 22:29:13.172948
+3443,"Victoria, Canada, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:45:25.630424

@@ -135,16 +135,16 @@ class ReadExtract:
 
 
     async def login_to_website(self, organization, login_url, email_selector, pass_selector, submit_selector):
-        # Close any existing page to prevent multiple windows
+        # Close any existing page
         if self.page:
             await self.page.close()
-        # 1) Try loading existing session state
+
+        # Try to load existing session
         try:
             context = await self.browser.new_context(storage_state=f"{organization.lower()}_auth.json")
             self.page = await context.new_page()
             await self.page.goto(login_url, timeout=20000)
 
-            # If we are not on the login page or remain logged in, return immediately:
             if organization.lower() not in self.page.url.lower():
                 logging.info(f"Loaded existing session for {organization}, no login required.")
                 self.logged_in = True
@@ -152,44 +152,62 @@ class ReadExtract:
         except Exception:
             logging.info(f"No valid saved session for {organization}, checking if login is needed...")
 
-        # 2) Check if a login form is required
+        # Check if login form is needed
         try:
             await self.page.wait_for_selector(email_selector, timeout=5000)
-            need_login = True
-            logging.info(f"{organization} requires login (form detected).")
+            logging.info(f"Login required for {organization}.")
         except:
             logging.info(f"No login form detected for {organization}, skipping login.")
             self.logged_in = True
             return True
 
-        # 3) If login is needed, fill in and submit the form
-        if need_login:
-            email, password, _ = get_credentials(organization)
+        # Handle Eventbrite-specific login
+        if 'eventbrite' in login_url:
+            email_selector = "input[name='email']"
+            password_selector = "input[name='password']"
 
-            await self.page.fill(email_selector, email)
-            await self.page.fill(pass_selector, password)
-            await self.page.click(submit_selector)
-            await self.page.wait_for_timeout(random.randint(4000, 6000))
+            if await self.page.query_selector(email_selector):
+                email = os.getenv('EVENTBRITE_APPID_UID')
+                password = os.getenv('EVENTBRITE_KEY_PW')
+                logging.info("Eventbrite login popup detected.")
 
-            logging.warning(f"Please solve any captcha on {organization}'s login page, then press Enter to continue...")
-            input("Press Enter after solving captcha (if any)...")
-            await self.page.wait_for_timeout(random.randint(4000, 6000))
+                await self.page.fill(email_selector, email)
+                await self.page.click("button[type='submit']")
+                await self.page.wait_for_selector(password_selector, timeout=5000)
+                await self.page.fill(password_selector, password)
+                await self.page.click("button[type='submit']")
+                await self.page.wait_for_timeout(3000)
+                self.logged_in = True
+                return True
+            else:
+                logging.info("No Eventbrite login popup detected.")
+                self.logged_in = True
+                return True
 
-            if "login" in self.page.url.lower():
-                logging.error(f"Login to {organization} failed. Credentials may be incorrect.")
-                return False
+        # Generic login handling
+        email, password, _ = get_credentials(organization)
+        await self.page.fill(email_selector, email)
+        await self.page.fill(pass_selector, password)
+        await self.page.click(submit_selector)
+        await self.page.wait_for_timeout(random.randint(4000, 6000))
 
-            try:
-                await self.page.context.storage_state(path=f"{organization.lower()}_auth.json")
-                logging.info(f"Session state saved for {organization}.")
-            except Exception as e:
-                logging.warning(f"Could not save session state for {organization}: {e}")
+        logging.warning(f"Please solve any captcha on {organization}'s login page, then press Enter to continue...")
+        input("Press Enter after solving captcha (if any)...")
+        await self.page.wait_for_timeout(random.randint(4000, 6000))
 
-            self.logged_in = True
-            logging.info(f"Login to {organization} successful.")
-            return True
+        if "login" in self.page.url.lower():
+            logging.error(f"Login to {organization} failed. Credentials may be incorrect.")
+            return False
 
-        return False
+        try:
+            await self.page.context.storage_state(path=f"{organization.lower()}_auth.json")
+            logging.info(f"Session state saved for {organization}.")
+        except Exception as e:
+            logging.warning(f"Could not save session state for {organization}: {e}")
+
+        self.logged_in = True
+        logging.info(f"Login to {organization} successful.")
+        return True
 
 
     async def login_if_required(self, url: str) -> bool:
