@@ -379,3 +379,12 @@ address_id,full_address,building_name,street_number,street_name,street_type,dire
 2472,"Victoria, BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-21 07:55:41.781993
 2638,"Victoria, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 22:29:13.172948
 3443,"Victoria, Canada, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:45:25.630424
+address_id,full_address,building_name,street_number,street_name,street_type,direction,city,met_area,province_or_state,postal_code,country_id,time_stamp
+1318,"Victoria, BC, Canada, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:40:17.403858
+1106,"Vancouver, BC, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-28 00:06:03.313037
+3386,"Victoria, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-07 09:36:18.866527
+4121,"Victoria BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:25:12.967622
+1111,"Vancouver, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-16 16:19:27.591691
+2472,"Victoria, BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-21 07:55:41.781993
+2638,"Victoria, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 22:29:13.172948
+3443,"Victoria, Canada, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:45:25.630424

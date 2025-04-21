@@ -1,15 +1,18 @@
+# pipeline.py
+
+import argparse
+import copy
+import datetime
 from dotenv import load_dotenv
 load_dotenv()
 import os
+import pandas as pd
+from prefect import flow, task
+import shutil
 import subprocess
 import sys
-import yaml
-import datetime
-import copy
-import pandas as pd
-import argparse
 import time
-import shutil
+import yaml
 
 # Global logging configuration
 import logging
@@ -36,7 +39,6 @@ COMMON_CONFIG_UPDATES = {
 # ------------------------
 # HELPER TASKS: Backup and Restore Config
 # ------------------------
-from prefect import flow, task
 
 @task
 def backup_and_update_config(step: str, updates: dict) -> dict:

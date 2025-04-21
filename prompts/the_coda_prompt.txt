@@ -1,5 +1,6 @@
 Context:
-You are building an application designed to save users time when searching for social dance events. Your task is to carefully extract all relevant social dance event details from the provided text (extracted_text) according to the guidelines below.
+You are building an application designed to save users time when searching for social dance events. 
+Your task is to carefully extract all relevant social dance event details from the provided text (extracted_text) according to the guidelines below.
 
 extracted_text is provided at the end of these instructions.
 ________________________________________
@@ -42,6 +43,7 @@ For each event, you must include ALL the following fields, using '' for missing 
 },
 ... (continue for every event listed)]
 There are MULTIPLE EVENTS. Often over 20 events. Please get ALL of the events.
+Please make sure that you produce properly formatted JSON. Double check your work please.
 
 7. Determining Dates:
 - Use the current date as reference (format YYYY-MM-DD) without assuming any time zone.
