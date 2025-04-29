@@ -135,10 +135,10 @@ def copy_drop_create_events():
         raise e
     return True
 
-------------------------
-TASKS FOR GS.PY STEP
-------------------------
-@task   ***TEMP
+# ------------------------
+# TASKS FOR GS.PY STEP
+# ------------------------
+@task
 def pre_process_gs():
     with open(CONFIG_PATH, "r") as f:
         current_config = yaml.safe_load(f)

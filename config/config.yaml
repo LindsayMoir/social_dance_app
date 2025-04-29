@@ -39,7 +39,7 @@ input:
 llm:
   mistral_model: mistral-large-latest
   openai_model: o4-mini
-  provider: mistral
+  provider: openai
   spend_money: true
 location:
   epicentre: Victoria, British Columbia, Canada

@@ -312,6 +312,9 @@ class ReadExtract:
         await self.page.wait_for_load_state("domcontentloaded")
         content = await self.page.content()
         soup = BeautifulSoup(content, 'html.parser')
+
+        logging.info(f'def extract_live_music_event_urls: soup is:\n{soup}')
+
         event_urls = []
         # Look for JSON–LD script tags
         scripts = soup.find_all("script", type="application/ld+json")
@@ -340,22 +343,10 @@ class ReadExtract:
     async def main(self, url):
         await self.init_browser()
         logging.info(f"def main(): Initialized browser for url: {url}")
-        # Check if we have a Bard & Banker live-music page that contains multiple event URLs
-        if "bardandbanker.com/live-music" in url.lower():
-            event_urls = await self.extract_live_music_event_urls(url)
-            logging.info(f"def main(): Found {len(event_urls)} event URLs on the live-music page")
-            results = {}
-            for event_url in event_urls:
-                logging.info(f"def main(): Extracting text from event URL: {event_url}")
-                text = await self.extract_event_text(event_url)
-                results[event_url] = text
-            await self.close()
-            return results
-        else:
-            text = await self.extract_event_text(url)
-            logging.info(f"def main(): Extracted text: {text}")
-            await self.close()
-            return text
+        text = await self.extract_event_text(url)
+        logging.info(f"def main(): Extracted text: {text}")
+        await self.close()
+        return text
 
 
 if __name__ == "__main__":
