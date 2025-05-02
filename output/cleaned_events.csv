@@ -1,13 +1,5 @@
-source,dance_style,url,event_type,event_name,day_of_week,start_date,end_date,start_time,end_time,price,location,description,time_stamp,address_id
-Bard and Banker,"bachata, cha cha, cumbia, merengue, salsa",https://www.bardandbanker.com/live-music,other,Miguelito Valdés+band,Tuesday,2025-04-29,2025-04-29,20:30:00,,,"1022 Government St. Victoria, BC V8W 1Y3",,2025-04-29 12:17:16.048404,60.0
-Bard and Banker,,https://www.bardandbanker.com/live-music,other,St. Cecilia,Wednesday,2025-04-30,2025-04-30,20:30:00,,,"1022 Government St. Victoria, BC V8W 1Y3",,2025-04-29 12:17:16.048404,60.0
-Bard and Banker,west coast swing,https://www.bardandbanker.com/live-music,other,The Wedding Crashers,Thursday,2025-05-01,2025-05-01,21:00:00,,,"1022 Government St. Victoria, BC V8W 1Y3",,2025-04-29 12:17:16.048404,60.0
-Bard and Banker,,https://www.bardandbanker.com/live-music,other,Vinyl Wave,Friday,2025-05-02,2025-05-02,16:00:00,,,"1022 Government St. Victoria, BC V8W 1Y3",,2025-04-29 12:17:16.048404,60.0
-Bard and Banker,,https://www.bardandbanker.com/live-music,other,Bipolar Bear,Saturday,2025-05-03,2025-05-03,21:00:00,,,"1022 Government St. Victoria, BC V8W 1Y3",,2025-04-29 12:17:16.048404,60.0
-Bard and Banker,,https://www.bardandbanker.com/live-music,other,David Bradford,Sunday,2025-05-04,2025-05-04,20:30:00,,,"1022 Government St. Victoria, BC V8W 1Y3",,2025-04-29 12:17:16.048404,60.0
-Bard and Banker,,https://www.bardandbanker.com/live-music,other,Max MacKrill,Monday,2025-05-05,2025-05-05,20:30:00,,,"1022 Government St. Victoria, BC V8W 1Y3",,2025-04-29 12:17:16.048404,60.0
-Bard and Banker,"bachata, cha cha, cumbia, merengue, salsa",https://www.bardandbanker.com/live-music,other,Miguelito Valdés+band,Tuesday,2025-05-06,2025-05-06,20:30:00,,,"1022 Government St. Victoria, BC V8W 1Y3",,2025-04-29 12:17:16.048404,60.0
-Bard and Banker,,https://www.bardandbanker.com/live-music,other,St. Cecilia,Wednesday,2025-05-07,2025-05-07,20:30:00,,,"1022 Government St. Victoria, BC V8W 1Y3",,2025-04-29 12:17:16.048404,60.0
-Bard and Banker,west coast swing,https://www.bardandbanker.com/live-music,other,The Wedding Crashers,Thursday,2025-05-08,2025-05-08,21:00:00,,,"1022 Government St. Victoria, BC V8W 1Y3",,2025-04-29 12:17:16.048404,60.0
-Bard and Banker,,https://www.bardandbanker.com/live-music,other,Vinyl Wave,Friday,2025-05-09,2025-05-09,16:00:00,,,"1022 Government St. Victoria, BC V8W 1Y3",,2025-04-29 12:17:16.048404,60.0
-Bard and Banker,,https://www.bardandbanker.com/live-music,other,The Temps,Saturday,2025-05-10,2025-05-10,21:00:00,,,"1022 Government St. Victoria, BC V8W 1Y3",,2025-04-29 12:17:16.048404,60.0
+source,dance_style,url,event_type,event_name,day_of_week,start_date,end_date,start_time,end_time,price,location,description,time_stamp
+The Loft,,https://loftpubvictoria.com/series/the-fabulous-b-sides/,other,The Fabulous B-Sides,Saturday,2025-05-24,2025-05-24,19:00:00,22:00:00,,The Loft Pub Victoria,Event Series The Fabulous B-Sides,2025-05-01 20:36:48.030458
+The Loft,,https://loftpubvictoria.com/series/the-fabulous-b-sides/,other,The Fabulous B-Sides,Saturday,2025-09-13,2025-09-13,19:00:00,22:00:00,,The Loft Pub Victoria,Event Series The Fabulous B-Sides,2025-05-01 20:36:48.030458
+The Loft,,https://loftpubvictoria.com/series/the-fabulous-b-sides/,other,The Fabulous B-Sides,Friday,2025-10-31,2025-10-31,19:00:00,22:00:00,,The Loft Pub Victoria,Event Series The Fabulous B-Sides,2025-05-01 20:36:48.030458
+The Loft,,https://loftpubvictoria.com/series/the-fabulous-b-sides/,other,The Fabulous B-Sides,Saturday,2025-11-29,2025-11-29,19:00:00,22:00:00,,The Loft Pub Victoria,Event Series The Fabulous B-Sides,2025-05-01 20:36:48.030458

@@ -82,7 +82,9 @@ ________________________________________
 ________________________________________
 Example Extracted Text
 Music | Bard and Banker | Victoria BC top of page Skip to Main Content EST. 2008 1022 Government St. Victoria, BC V8W 1Y3 250 953 9993 Reserve now Home About History Contact Food Dine Around Drink Weekly Features Happy Hour Music Events NYE 2025 Photo Album Group Bookings Guest Services Booklet Live Music at the Bard & Banker February 2025 Today Sun Mon Tue Wed Thu Fri Sat 26 27 28 29 30 31 1 2 3 4 8:30 p.m. Miguelito Valdés+band  (830pm) +1 more 5 8:30 p.m. St. Cecilia +1 more 6 9:00 p.m. The Wedding Crashers +1 more 7 9:00 p.m. Bipolar Bear +1 more 8 9:00 p.m. Pulse Radio +1 more 9 10 8:30 p.m. Max MacKrill +1 more 11 8:30 p.m. Miguelito Valdés+band  (830pm) +1 more 12 8:30 p.m. St. Cecilia +1 more 13 9:00 p.m. The Wedding Crashers +1 more 14 4:00 p.m. Vinyl Wave +1 more +2 more 15 9:00 p.m. Pulse Radio +1 more 16 8:30 p.m. JaimesonRhy +1 more 17 8:30 p.m. Max MacKrill +1 more 18 8:30 p.m. Miguelito Valdés+band  (830pm) +1 more 19 8:30 p.m. St. Cecilia +1 more 20 9:00 p.m. The Wedding Crashers +1 more 21 9:00 p.m. Strangers +1 more 22 9:00 p.m. Strangers +1 more 23 24 8:30 p.m. Max MacKrill +1 more 25 8:30 p.m. Miguelito Valdés+band  (830pm) +1 more 26 8:30 p.m. St. Cecilia +1 more 27 9:00 p.m. Bipolar Bear +1 more 28 9:00 p.m. Big Shiny Dudes +1 more 1 9:00 p.m. Cities +1 more 2 3 4 5 6 7 8 Join the Club & Get Updates on Special Events Enter Your Email Subscribe Now Thanks for submitting! Open 7 Days a week 11:00 am to 1:00 am © 2021 Bard & Banker bottom of page
+________________________________________
 
+The month and year is February 2025! As taken from the above string in the "Example Extracted Text": "Live Music at the Bard & Banker February 2025".
 The first 6 events in JSON format are as follows:
 [
 {
@@ -181,5 +183,6 @@ The first 6 events in JSON format are as follows:
 When the event_name has “Miguelito" in it, the dance_style should be set to “bachata, cha cha, cumbia, merengue, salsa“.
 Produce a complete JSON output for all of the events that you find in the below extracted_text according to the above instructions.
 2. Nota Benta, often Sundays have NO band playing. Please make sure that there is one playing before you create an event for it.
+3. The day of the month comes first. Then the time. Then the artist. In the extracted_text. 
 ________________________________________
 extracted_text
