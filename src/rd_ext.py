@@ -30,7 +30,7 @@ import os
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 import random
-import re
+from urllib.parse import urljoin, urlparse
 import yaml
 
 from db import DatabaseHandler
@@ -368,6 +368,51 @@ class ReadExtract:
         if len(results) == 1:
             return main_text
         return results
+    
+
+    async def extract_links(self, url: str) -> list:
+        """
+        Finds all <a href> links on a page, resolves absolute URLs,
+        filters to same-domain HTTP(S), skips ICS/calendar feeds, removes duplicates.
+        """
+        if not await self.login_if_required(url):
+            logging.error(f"Login failed for link extraction at {url}")
+            return []
+
+        await self.page.goto(url, timeout=15000)
+        await self.page.wait_for_load_state("domcontentloaded")
+        soup = BeautifulSoup(await self.page.content(), 'html.parser')
+        base = self.page.url
+        found = set()
+
+        for a in soup.find_all('a', href=True):
+            href = a['href'].strip()
+            # Skip anchors and JavaScript
+            if href.startswith('#') or href.lower().startswith('javascript:'):
+                continue
+            abs_url = urljoin(base, href)
+            parsed = urlparse(abs_url)
+            # Only HTTP/S
+            if parsed.scheme not in ('http', 'https'):
+                continue
+            # Same domain only
+            if parsed.netloc != urlparse(base).netloc:
+                continue
+            # Skip calendar/ICS feeds
+            # e.g., query params outlook-ical, webcal links, .ics endpoints
+            if 'ical' in parsed.query.lower() or parsed.path.lower().endswith('.ics'):
+                logging.info(f"Skipping calendar feed link: {abs_url}")
+                continue
+            found.add(abs_url)
+
+        return list(found)
+    
+
+    async def close(self):
+        if self.browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
 
 
 if __name__ == "__main__":

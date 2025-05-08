@@ -1,25 +1,4 @@
 source,dance_style,url,event_type,event_name,day_of_week,start_date,end_date,start_time,end_time,price,location,description
-Bard and Banker,west coast swing,,,The Wedding Crashers,Thursday,2025-05-08,2025-05-08,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Vinyl Wave,Friday,2025-05-09,2025-05-09,16:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,The Temps,Saturday,2025-05-10,2025-05-10,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,The Standing Twins,Sunday,2025-05-11,2025-05-11,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Max MacKrill,Monday,2025-05-12,2025-05-12,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,"bachata, cha cha, cumbia, merengue, salsa",,,Miguelito Valdés+band,Tuesday,2025-05-13,2025-05-13,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,St. Cecilia,Wednesday,2025-05-14,2025-05-14,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,west coast swing,,,The Wedding Crashers,Thursday,2025-05-15,2025-05-15,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Vinyl Wave,Friday,2025-05-16,2025-05-16,16:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Strangers,Saturday,2025-05-17,2025-05-17,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,JaimesonRhy,Sunday,2025-05-18,2025-05-18,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Max MacKrill,Monday,2025-05-19,2025-05-19,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,"bachata, cha cha, cumbia, merengue, salsa",,,Miguelito Valdés+band,Tuesday,2025-05-20,2025-05-20,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,St. Cecilia,Wednesday,2025-05-21,2025-05-21,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,west coast swing,,,The Wedding Crashers,Thursday,2025-05-22,2025-05-22,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Cities,Friday,2025-05-23,2025-05-23,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Big Shiny Dudes,Saturday,2025-05-24,2025-05-24,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,The Standing Twins,Sunday,2025-05-25,2025-05-25,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Vinyl Wave,Monday,2025-05-26,2025-05-26,16:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,"bachata, cha cha, cumbia, merengue, salsa",,,Miguelito Valdés+band,Tuesday,2025-05-27,2025-05-27,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,St. Cecilia,Wednesday,2025-05-28,2025-05-28,20:30,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Bipolar Bear,Thursday,2025-05-29,2025-05-29,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Vinyl Wave,Friday,2025-05-30,2025-05-30,16:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
-Bard and Banker,,,,Strangers,Saturday,2025-05-31,2025-05-31,21:00,,,"1022 Government St. Victoria, BC V8W 1Y3",
+Live Entertainment Victoria,swing,,social dance,Rhythm Train,Thursday,2025-05-08,2025-05-08,18:00,21:00,,"The Loft Pub, 229 Gorge Rd E, Victoria, BC, Canada",Live music event featuring Rhythm Train.
+Live Entertainment Victoria,,,social dance,Tom Morrissey,Friday,2025-05-09,2025-05-09,19:00,22:00,,"The Loft Pub, 229 Gorge Rd E, Victoria, BC, Canada",Live music event featuring Tom Morrissey.
+Live Entertainment Victoria,,,social dance,St. Cecilia,Saturday,2025-05-10,2025-05-10,19:00,22:00,,"The Loft Pub, 229 Gorge Rd E, Victoria, BC, Canada",Live music event featuring St. Cecilia.
