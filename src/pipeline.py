@@ -14,6 +14,24 @@ import sys
 import time
 import yaml
 
+# ————————————————
+# CONFIG & LOG‐FILE DROP
+# ————————————————
+CONFIG_PATH = "config/config.yaml"
+
+try:
+    # Load your YAML to find the configured log path
+    with open(CONFIG_PATH, "r") as f:
+        cfg = yaml.safe_load(f)
+    log_file = cfg.get("logging", {}).get("log_file", "")
+    if log_file and os.path.isfile(log_file):
+        os.remove(log_file)
+        print(f"Dropped old log file: {log_file}")
+    else:
+        print(f"No existing log file to drop at {log_file}")
+except Exception as e:
+    print(f"Could not drop log file ({e})")
+
 # Global logging configuration
 import logging
 logging.basicConfig(
@@ -22,8 +40,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
-
-CONFIG_PATH = "config/config.yaml"
 
 # Define common configuration updates for all pipeline steps
 COMMON_CONFIG_UPDATES = {
