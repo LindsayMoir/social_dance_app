@@ -57,6 +57,7 @@ output:
 prompts:
   address_fix: prompts/address_fix_prompt.txt
   chatbot_instructions: prompts/chatbot_instructions.txt
+  djdancingdean: prompts/djdancingdean_prompt.txt
   dedup: prompts/dedup_prompt.txt
   default: prompts/default.txt
   fb: prompts/fb_prompt.txt
@@ -68,10 +69,6 @@ prompts:
   relevant_dance_url: prompts/relevant_dance_url.txt
   single_event: prompts/single_event.txt
   sql: prompts/sql_prompt.txt
-regex:
-  dancevictoria1: (?s)(~~~~~~~~~~.*?Take the time to dance)
-  djdancingdean: classes at the  Legion.*?Victoria West Coast Swing Collective Society
-  victoriawcscollective: (?is)This Week(.*)$
 search:
   gs_num_results: 10
 startup:

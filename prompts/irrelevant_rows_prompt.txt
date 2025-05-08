@@ -30,7 +30,7 @@ All of these columns may contain relevant information. In particular:
 
 ### What is Relevant Data?
 An event (row) is **relevant (0)** if:
-- The row contains information about dancing or dance-related activities, and/or
+- The row contains information about dancing, live music, or dance-related activities, and/or
 - The **dance_style** likely includes one or more of these dance styles:
   - '2-step', 'bachata', 'balboa', 'cha cha', 'cha cha cha', 'country waltz', 'double shuffle', 'douceur',
     'east coast swing', 'foxtrot', 'kizomba', 'lindy hop', 'line dance', 'merengue', 'milonga', 'night club',
@@ -39,8 +39,8 @@ An event (row) is **relevant (0)** if:
 
 ### What is Irrelevant Data?
 A row is **irrelevant (1)** if:
-- The event is not about **social dancing, dance classes, or dance-related activities**.
-- The event is **not a dance event** (e.g., "Bike Repair Class", "Cemetery Tour", "Music Performance").
+- The event is not about **social dancing, dance classes, live music, or dance-related activities**.
+- The event is **not a dance event** (e.g., "Bike Repair Class", "Cemetery Tour").
 - The event is a **general festival with no clear dance focus**.
 
 ### Special Cases:

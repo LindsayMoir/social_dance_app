@@ -144,33 +144,14 @@ class GmailProcessor:
             extracted_text = self.fetch_latest_email(email)
 
             if extracted_text:
-
-                # Get regex to get pertinent part of email
-                # Get regex pattern from config
-                regex_pattern = config['regex'][email.split('@')[0]]
-
-                # Log for debugging
-                logging.info(f"regex is: {regex_pattern} and email is: {email.split('@')[0]}")
-
-                # Perform regex search (convert string to actual regex)
-                match = re.search(regex_pattern, extracted_text, re.DOTALL)
-
-                if match:
-                    extracted_text = match.group(0)  # Extract the matched portion
-                    # Prepend source in extracted_text
-                    extracted_text = f"source: {source}: \n{extracted_text}"
-                    logging.info(f"def driver(): extracted_text mini is: {extracted_text}")
-
-                    # Process extracted text with LLMHandler
-                    llm_status = self.llm_handler.process_llm_response(email, extracted_text, source, keywords, prompt)
-                    if llm_status:
-                        logging.info(f"def driver(): process_llm_response success for email: {email}")
-                    else:
-                        logging.warning(f"def driver(): process_llm_response failed for email: {email}")
+                # Process extracted text with LLMHandler
+                llm_status = self.llm_handler.process_llm_response(email, extracted_text, source, keywords, prompt)
+                if llm_status:
+                    logging.info(f"def driver(): process_llm_response success for email: {email}")
                 else:
-                    logging.info(f"def driver(): regex failed for extracted text: {extracted_text}")
+                    logging.warning(f"def driver(): process_llm_response failed for email: {email}")
             else:
-                logging.warning(f"def driver(): Failed to extract text from email: {email}")
+                logging.info(f"def driver(): regex failed for extracted text: {extracted_text}")
 
         logging.info(f"Processed {idx} emails from emails .csv")
         return

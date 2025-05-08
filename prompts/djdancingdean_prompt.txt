@@ -9,7 +9,7 @@ You MUST include all of these fields. If you do not have any information for one
 [{
     "source": "<The original source of information for this event>",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
-    "url": "<''>",
+    "url": "djdancingdean@gmail.com",
     "event_type": "<choose one: social dance, class, workshop, other, rehearsal>",
     "event_name": "<event name or title>",
     "day_of_week": "<e.g., Monday, Tuesday>",
@@ -24,7 +24,7 @@ You MUST include all of these fields. If you do not have any information for one
 {
     "source": "<The original source of information for this event>",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
-    "url": "<''>",
+    "url": "djdancingdean@gmail.com",
     "event_type": "<choose one: social dance, class, workshop, other, rehearsal>",
     "event_name": "<event name or title>",
     "day_of_week": "<e.g., Monday, Tuesday>",
@@ -39,7 +39,7 @@ You MUST include all of these fields. If you do not have any information for one
 {
     "source": "<The original source of information for this event>",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
-    "url": "<''>",
+    "url": "djdancingdean@gmail.com",
     "event_type": "<choose one: social dance, class, workshop, other, rehearsal>",
     "event_name": "<event name or title>",
     "day_of_week": "<e.g., Monday, Tuesday>",
@@ -79,9 +79,6 @@ ________________________________________
 	o	Do NOT create a separate JSON output for recurring JSON events. 
 •	DO NOT return a list for a field. For example, if you found several "dance_style" (e.g. salsa, bachata, kizomba) put that in the "dance_style" field as "salsa, bachata, kizomba". Not as "[salsa, bachata, kizomba]"
 •	If no events are found, respond with: "No events found."
-________________________________________
-6. Final Instructions
-•       You are only interested in the text that starts with "Shared with Public" and ends with "See more"
-•       Extract all events from the text that lies between these 2 phrases.
+•	Often there is a class and there is social dancing following that class. In that case, the event_type should be "class, social dance".
 ________________________________________
 extracted_text
