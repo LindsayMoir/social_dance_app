@@ -151,9 +151,10 @@ class GmailProcessor:
                 else:
                     logging.warning(f"def driver(): process_llm_response failed for email: {email}")
             else:
-                logging.info(f"def driver(): regex failed for extracted text: {extracted_text}")
+                logging.error(f"def driver(): No extracted text pulled from email: {email}")
 
         logging.info(f"Processed {idx} emails from emails .csv")
+        
         return
     
 

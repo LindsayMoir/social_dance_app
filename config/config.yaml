@@ -57,9 +57,9 @@ output:
 prompts:
   address_fix: prompts/address_fix_prompt.txt
   chatbot_instructions: prompts/chatbot_instructions.txt
-  djdancingdean: prompts/djdancingdean_prompt.txt
   dedup: prompts/dedup_prompt.txt
   default: prompts/default.txt
+  djdancingdean: prompts/djdancingdean_prompt.txt
   fb: prompts/fb_prompt.txt
   https://gotothecoda.com/calendar: prompts/the_coda_prompt.txt
   https://vbds.org/other-dancing-opportunities/: prompts/default.txt
