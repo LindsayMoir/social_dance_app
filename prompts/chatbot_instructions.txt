@@ -5,7 +5,7 @@ There are also a few events from greater Vancouver Island and Vancouver.
 ---
 #### How It Works
 
-- Enter your query below AS A COMPLETE ENGISH SENTENCE and click the **Send** button. 
+- Enter your query below **AS A COMPLETE ENGISH SENTENC** and click the **Send** button. 
 - If you're not happy with the results, look at the SQL query that was generated.
 - You can refine your query by continuing the dialogue with DanceScoop. It's **very flexible!**
 - This is a best efforts basis:( The information is accurate as possible but ... please double check before you book your flights:)
