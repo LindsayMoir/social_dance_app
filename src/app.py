@@ -59,8 +59,8 @@ st.session_state["example_idx"] = (
 
 # ─── Chat Form ────────────────────────────────────────────────────────────────
 with st.form(key="chat_form"):
-    # a unique widget‐key so we can refer to it in session_state if we like
-    chat_text = st.text_area(
+    # We bind the text area to session_state["chat_input"]
+    st.text_area(
         "Ask a question, then click Send:",
         height=100,
         key="chat_input",
@@ -68,15 +68,15 @@ with st.form(key="chat_form"):
     )
     submit = st.form_submit_button("Send")
 
-# Now we're _outside_ the `with` block
+# Now handle the click _outside_ the with‐block
 if submit:
-    # chat_text now contains whatever the user typed
+    chat_text = st.session_state.get("chat_input", "")
     if not chat_text.strip():
         st.warning("Please enter a question before sending.")
     else:
-        # reset the input box if you like:
+        # (optional) clear the box immediately
         st.session_state["chat_input"] = ""
-        
+
         # record the user message
         st.session_state["messages"].append({
             "role": "user",
@@ -93,7 +93,34 @@ if submit:
                 data = resp.json()
                 events = data.get("data", [])
 
-                # … your existing display / FAQ / SQL‐expander logic …
+                if events:
+                    # … your event‐display logic …
+                    for ev in events:
+                        st.markdown(f"**{ev.get('event_name','No Name')}**")
+                        # etc.
+
+                else:
+                    # no results → FAQ fallback
+                    keys    = list(faq.keys())
+                    matches = difflib.get_close_matches(chat_text, keys, n=3, cutoff=0.3)
+                    if matches:
+                        with st.expander("Need help? Try these…"):
+                            for k in matches:
+                                st.markdown(f"- **{k}**: {faq[k]}")
+
+                    # follow‑up question in chat history
+                    st.session_state["messages"].append({
+                        "role": "assistant",
+                        "content": (
+                            "I’m not finding any events. "
+                            "Could you tell me which dance style or date range you’d like?"
+                        )
+                    })
+
+                # debug SQL if allowed
+                if config.get("testing", {}).get("sql"):
+                    with st.expander("Show debug SQL"):
+                        st.code(data.get("sql_query", "<none>"))
 
             except Exception as e:
                 logging.error(f"app.py: Error - {e}")
