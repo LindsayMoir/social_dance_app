@@ -1,0 +1,13 @@
+# faq.yaml
+# Keys are example “fuzzy” user‐phrases, values are quick tips:
+
+how to find salsa:
+  "Try asking ‘Where can I dance salsa this weekend in Victoria?’"
+
+dance locations not showing:
+  "Make sure to include a date, e.g. ‘tango next Saturday night’."
+
+west coast swing times:
+  "Include the word ‘start’ or ‘time’, e.g. ‘When does West Coast Swing start?’"
+
+# …add as many pairs as you like

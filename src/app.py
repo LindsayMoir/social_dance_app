@@ -1,130 +1,105 @@
-# app.py 
-
+# app.py
 import streamlit as st
 import requests
 import os
 import yaml
 import logging
 from dotenv import load_dotenv
+import difflib
 
+# ─── Logging & config ─────────────────────────────────────────────────────────
 
-# Set up basic logging
 logging.basicConfig(level=logging.INFO)
 logging.info("app.py: Streamlit app starting...")
 
-# Load environment variables and configuration
 load_dotenv()
-
-# Calculate the base directory and config path
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 config_path = os.path.join(base_dir, 'config', 'config.yaml')
 
-# Load YAML configuration
 with open(config_path, "r") as f:
     config = yaml.safe_load(f)
-logging.info("app.py: config completed.")
+logging.info("app.py: config loaded.")
 
-# Get FastAPI API URL from environment variable
-FASTAPI_API_URL = os.getenv("FASTAPI_API_URL", "https://social-dance-app-ws-main.onrender.com/query")
+FASTAPI_API_URL = os.getenv("FASTAPI_API_URL")
 if not FASTAPI_API_URL:
-    raise ValueError("The environment variable FASTAPI_API_URL is not set.")
+    raise ValueError("FASTAPI_API_URL not set.")
+
+# ─── Load FAQ & Example Prompts ────────────────────────────────────────────────
+
+faq_path = os.path.join(base_dir, 'config', 'faq.yaml')
+examples_path = os.path.join(base_dir, 'config', 'examples.yaml')
+
+with open(faq_path) as f:
+    faq = yaml.safe_load(f)             # { "how to find salsa": "Try asking …", ... }
+
+with open(examples_path) as f:
+    examples = yaml.safe_load(f)        # [ "Where can I dance salsa tonight?", ... ]
+
+# ─── Streamlit Layout ─────────────────────────────────────────────────────────
 
 st.set_page_config(layout="wide")
 
-# Initialize the chat message history in session state
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
-# Load chatbot instructions from a file specified in the YAML config
-instructions_path = os.path.join(base_dir, config['prompts']['chatbot_instructions'])
-with open(instructions_path, "r") as file:
-    chatbot_instructions = file.read()
+# rotate placeholder each run
+placeholder = examples[st.session_state.get("example_idx", 0)]
+st.session_state["example_idx"] = (st.session_state.get("example_idx", 0) + 1) % len(examples)
 
-st.markdown(chatbot_instructions)
+user_input = st.text_area(
+    "Ask a question, then click Send:",
+    height=100,
+    placeholder=placeholder
+)
 
-def error_handling(e, custom_message=None):
-    """
-    Handle errors by appending a standardized error message to the chat history.
-    If custom_message is provided, it will be used as the first line of the error message.
-    """
-    if custom_message:
-        error_message = (
-            f"{custom_message} "
-            "I can answer questions such as:\n\n"
-            "1. Where can I dance salsa tonight?\n"
-            "2. Where can I dance tango this month? Only show me the social dance events.\n"
-            "3. When does the West Coast Swing event on Saturdays start?\n"
-            "4. etc. etc. ..."
-        )
-    else:
-        error_message = (
-            "Sorry, I did not quite catch that.\n\n"
-            "I can answer questions such as:\n\n"
-            "1. Where can I dance salsa tonight?\n"
-            "2. Where can I dance tango this month? Only show me the social dance events.\n"
-            "3. When does the West Coast Swing event on Saturdays start?\n"
-            "4. etc. etc. ..."
-        )
-    
-    st.session_state["messages"].append({"role": "assistant", "content": error_message})
-    logging.error(f"app.py: Error encountered - {e}")
-
-
-# Get user input and send it to the FastAPI backend
-user_input = st.text_area("Ask a question, then click Send:", height=100)
-
-if st.button("Send"):
+send = st.button("Send")
+if send:
     if user_input.strip():
-        # Display the user's message in the chat history
         st.session_state["messages"].append({"role": "user", "content": user_input})
-        logging.info("app.py: About to send user input to FastAPI backend.")
-        try:
-            # Send the query to the FastAPI backend
-            response = requests.post(FASTAPI_API_URL, json={"user_input": user_input})
-            response.raise_for_status()
-            data = response.json()
+        with st.spinner("Looking up dance events…"):
+            try:
+                resp = requests.post(FASTAPI_API_URL, json={"user_input": user_input})
+                resp.raise_for_status()
+                data = resp.json()
+                events = data.get("data", [])
 
-            # Get the event data from the response
-            events = data["data"]
-            if events:
-                # Create a scrollable container to hold the events
-                with st.container():
-                    st.markdown("<hr>", unsafe_allow_html=True)  # Add a separator line
+                if events:
+                    # display events as before…
+                    for ev in events:
+                        st.markdown(f"**{ev.get('event_name','No Name')}**")
+                        # …
+                else:
+                    # No events → show FAQ suggestions
+                    keys = list(faq.keys())
+                    matches = difflib.get_close_matches(user_input, keys, n=3, cutoff=0.3)
+                    if matches:
+                        with st.expander("Need help? Try these questions…"):
+                            for k in matches:
+                                st.markdown(f"- **{k}**: {faq[k]}")
+                    # also prompt follow-up
+                    st.session_state["messages"].append({
+                        "role": "assistant",
+                        "content": "I’m not finding any events. Could you tell me which dance style or date range you’d like?"
+                    })
 
-                    for event in events:
-                        event_name = event.get('event_name', 'No Name')
-                        url = event.get('url', '#')
-                        
-                        # Only create a hyperlink if the URL is properly formatted (starts with "http")
-                        if isinstance(url, str) and url.startswith("http"):
-                            st.markdown(f'<a href="{url}" target="_blank"><strong>{event_name}</strong></a>', unsafe_allow_html=True)
-                        else:
-                            st.markdown(f"**{event_name}**")
+                # show SQL only if testing.sql is true
+                if config.get('testing',{}).get('sql'):
+                    with st.expander("Show debug SQL"):
+                        st.code(data.get('sql_query','<none>'))
 
-                        # Display other event details (one row per column)
-                        for column_name, value in event.items():
-                            if column_name not in ('event_name', 'url'):
-                                st.markdown(f"**{column_name}**: {value}")
-                        
-                        st.markdown("<hr>", unsafe_allow_html=True)
-            else:
-                # If no events are returned and a valid SQL query exists, call error_handling with a custom message BEFORE showing the SQL query.
-                if data.get('sql_query'):
-                    error_handling("No events returned", custom_message="Sorry, I could not find those events in my database.")
-            
-            # Display the SQL query (shown after error handling if triggered)
-            st.markdown(f"**SQL Query**:\n```\n{data.get('sql_query', 'No SQL query provided')}\n```")
-            
-        except Exception as e:
-            error_handling(e)
+            except Exception as e:
+                st.session_state["messages"].append({
+                    "role":"assistant",
+                    "content":"Sorry, something went wrong. Try rephrasing your question or check back in a moment."
+                })
+                logging.error(f"app.py: Error - {e}")
     else:
-        st.write("Please enter a message")
-else:
-    st.write("Please enter a message")
+        st.warning("Please enter a question before sending.")
 
-# Render the conversation history from newest to oldest without a header
-for message in reversed(st.session_state["messages"]):
-    if message["role"] == "user":
-        st.markdown(f"**You wrote:** {message['content']}")
+# ─── Render chat history ────────────────────────────────────────────────────────
+
+for msg in reversed(st.session_state["messages"]):
+    if msg["role"] == "user":
+        st.markdown(f"**You:** {msg['content']}")
     else:
-        st.markdown(message["content"])
+        st.markdown(msg["content"])
