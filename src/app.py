@@ -128,4 +128,8 @@ with st.form(key="chat_form"):
                     })
 
 # ─── Render chat history (newest first) ───────────────────────────────────────
-for msg in reversed(st.session_state["]()_
+for msg in reversed(st.session_state["messages"]):
+    if msg["role"] == "user":
+        st.markdown(f"**You:** {msg['content']}")
+    else:
+        st.markdown(msg["content"], unsafe_allow_html=True)
