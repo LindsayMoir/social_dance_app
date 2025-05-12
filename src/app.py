@@ -59,72 +59,51 @@ st.session_state["example_idx"] = (
 
 # ─── Chat Form ────────────────────────────────────────────────────────────────
 with st.form(key="chat_form"):
-    user_input = st.text_area(
+    # a unique widget‐key so we can refer to it in session_state if we like
+    chat_text = st.text_area(
         "Ask a question, then click Send:",
         height=100,
-        key="user_input",
+        key="chat_input",
         placeholder=placeholder
     )
     submit = st.form_submit_button("Send")
 
-    if submit:
-        if not user_input.strip():
-            st.warning("Please enter a question before sending.")
-        else:
-            st.session_state["messages"].append({
-                "role": "user",
-                "content": user_input
-            })
+# Now we're _outside_ the `with` block
+if submit:
+    # chat_text now contains whatever the user typed
+    if not chat_text.strip():
+        st.warning("Please enter a question before sending.")
+    else:
+        # reset the input box if you like:
+        st.session_state["chat_input"] = ""
+        
+        # record the user message
+        st.session_state["messages"].append({
+            "role": "user",
+            "content": chat_text
+        })
 
-            with st.spinner("Looking up dance events..."):
-                try:
-                    resp = requests.post(
-                        FASTAPI_API_URL,
-                        json={"user_input": user_input}
+        with st.spinner("Looking up dance events…"):
+            try:
+                resp = requests.post(
+                    FASTAPI_API_URL,
+                    json={"user_input": chat_text}
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                events = data.get("data", [])
+
+                # … your existing display / FAQ / SQL‐expander logic …
+
+            except Exception as e:
+                logging.error(f"app.py: Error - {e}")
+                st.session_state["messages"].append({
+                    "role": "assistant",
+                    "content": (
+                        "Sorry, something went wrong. "
+                        "Try rephrasing your question or try again later."
                     )
-                    resp.raise_for_status()
-                    data = resp.json()
-                    events = data.get("data", [])
-
-                    if events:
-                        for ev in events:
-                            st.markdown(f"**{ev.get('event_name','No Name')}**")
-                            # ...display other fields...
-
-                    else:
-                        # no results → FAQ fallback
-                        keys = list(faq.keys())
-                        matches = difflib.get_close_matches(
-                            user_input, keys, n=3, cutoff=0.3
-                        )
-                        if matches:
-                            with st.expander("Need help? Try these..."):
-                                for k in matches:
-                                    st.markdown(f"- **{k}**: {faq[k]}")
-
-                        # follow‑up question
-                        st.session_state["messages"].append({
-                            "role": "assistant",
-                            "content": (
-                                "I’m not finding any events. "
-                                "Could you tell me which dance style or date range you’d like?"
-                            )
-                        })
-
-                    # show SQL only in testing mode
-                    if config.get("testing", {}).get("sql"):
-                        with st.expander("Show debug SQL"):
-                            st.code(data.get("sql_query", "<none>"))
-
-                except Exception as e:
-                    logging.error(f"app.py: Error - {e}")
-                    st.session_state["messages"].append({
-                        "role": "assistant",
-                        "content": (
-                            "Sorry, something went wrong. "
-                            "Try rephrasing your question or try again later."
-                        )
-                    })
+                })
 
 # ─── Render chat history (newest first) ───────────────────────────────────────
 for msg in reversed(st.session_state["messages"]):
