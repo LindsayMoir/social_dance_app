@@ -81,8 +81,10 @@ chat_text = st.text_area(
 )
 
 if st.button("Send"):
-    user_input = chat_text.strip()
-    if user_input:
+    user_input = st.session_state.get("chat_input", "").strip()
+    if not user_input:
+        st.warning("Please enter a question before sending.")
+    else:
         # record the user message
         st.session_state["messages"].append({"role":"user","content":user_input})
 
@@ -97,9 +99,8 @@ if st.button("Send"):
                 events = data.get("data", [])
 
                 if events:
-                    # display your events
                     for ev in events:
-                        st.markdown(f"**{ev.get('event_name','No Name')}**")
+                        st.markdown(f"**{ev.get('event_name', 'No Name')}**")
                         for k,v in ev.items():
                             if k not in ("event_name","url"):
                                 st.markdown(f"- **{k}**: {v}")
@@ -112,10 +113,15 @@ if st.button("Send"):
                         with st.expander("Need help? Try these…"):
                             for phrase in matches:
                                 st.markdown(f"- **{phrase}**: {faq[phrase]}")
-
+                    # append your custom “no events” error
                     error_handling("No events", custom_message="Sorry, I could not find those events in my database.")
 
-                # debug SQL toggle
+                # debug SQL if enabled
                 if config.get("testing", {}).get("sql"):
                     with st.expander("Show debug SQL"):
-                        st.code(data.get("sql_query","<none>"))
+                        st.code(data.get("sql_query", "<none>"))
+
+            except Exception as e:
+                # This except matches the above try
+                error_handling(e)
+
