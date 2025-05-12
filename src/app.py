@@ -10,7 +10,7 @@ import difflib
 
 # ─── Logging & config ─────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
-logging.info("app.py: Streamlit app starting…")
+logging.info("app.py: Streamlit app starting...")
 
 load_dotenv()
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,11 +38,11 @@ st.markdown(chatbot_instructions)
 faq_path = os.path.join(base_dir, "config", "faq.yaml")
 examples_path = os.path.join(base_dir, "config", "examples.yaml")
 
-with open(faq_path) as f:
-    faq = yaml.safe_load(f)      # e.g. {"how to find salsa": "Try asking…", ...}
+with open(faq_path, "r") as f:
+    faq = yaml.safe_load(f)
 
-with open(examples_path) as f:
-    examples = yaml.safe_load(f) # e.g. ["Where can I dance salsa tonight?", ...]
+with open(examples_path, "r") as f:
+    examples = yaml.safe_load(f)
 
 # ─── Session State Setup ──────────────────────────────────────────────────────
 if "messages" not in st.session_state:
@@ -51,7 +51,7 @@ if "messages" not in st.session_state:
 if "example_idx" not in st.session_state:
     st.session_state["example_idx"] = 0
 
-# Pick & rotate placeholder
+# rotate placeholder
 placeholder = examples[st.session_state["example_idx"]]
 st.session_state["example_idx"] = (
     st.session_state["example_idx"] + 1
@@ -71,12 +71,12 @@ with st.form(key="chat_form"):
         if not user_input.strip():
             st.warning("Please enter a question before sending.")
         else:
-            # record the user message
             st.session_state["messages"].append({
-                "role": "user", "content": user_input
+                "role": "user",
+                "content": user_input
             })
 
-            with st.spinner("Looking up dance events…"):
+            with st.spinner("Looking up dance events..."):
                 try:
                     resp = requests.post(
                         FASTAPI_API_URL,
@@ -87,23 +87,22 @@ with st.form(key="chat_form"):
                     events = data.get("data", [])
 
                     if events:
-                        # display your events here
                         for ev in events:
                             st.markdown(f"**{ev.get('event_name','No Name')}**")
-                            # …and so on…
+                            # ...display other fields...
 
                     else:
-                        # No results → show FAQ matches
+                        # no results → FAQ fallback
                         keys = list(faq.keys())
                         matches = difflib.get_close_matches(
                             user_input, keys, n=3, cutoff=0.3
                         )
                         if matches:
-                            with st.expander("Need help? Try these…"):
+                            with st.expander("Need help? Try these..."):
                                 for k in matches:
                                     st.markdown(f"- **{k}**: {faq[k]}")
 
-                        # also prompt a follow‑up in the chat history
+                        # follow‑up question
                         st.session_state["messages"].append({
                             "role": "assistant",
                             "content": (
@@ -112,7 +111,7 @@ with st.form(key="chat_form"):
                             )
                         })
 
-                    # debug SQL only if enabled
+                    # show SQL only in testing mode
                     if config.get("testing", {}).get("sql"):
                         with st.expander("Show debug SQL"):
                             st.code(data.get("sql_query", "<none>"))
