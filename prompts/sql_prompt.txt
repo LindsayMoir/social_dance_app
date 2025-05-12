@@ -37,6 +37,10 @@ If the user asks for a dance style that uses multiple words, for exaple "Argenti
 WHERE dance_style ILIKE '%argentine%' OR
       dance_style ILIKE '%tango%'
 
+Brief Questions:
+It is possible that the user will ask a very cryptic question that only identifies the dance_style. 
+If there is no question in the entered query, then assume that one of the words is a dance_style and they want to know where they can dance in that dance_style.
+
 Dates:
 If the user requests today, tonight, this afternoon, this evening, this morning:
     - then start_date = CURRENT_DATE
