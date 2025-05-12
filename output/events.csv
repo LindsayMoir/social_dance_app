@@ -1,4 +1,3 @@
-source,dance_style,url,event_type,event_name,day_of_week,start_date,end_date,start_time,end_time,price,location,description
-Live Entertainment Victoria,swing,,social dance,Rhythm Train,Thursday,2025-05-08,2025-05-08,18:00,21:00,,"The Loft Pub, 229 Gorge Rd E, Victoria, BC, Canada",Live music event featuring Rhythm Train.
-Live Entertainment Victoria,,,social dance,Tom Morrissey,Friday,2025-05-09,2025-05-09,19:00,22:00,,"The Loft Pub, 229 Gorge Rd E, Victoria, BC, Canada",Live music event featuring Tom Morrissey.
-Live Entertainment Victoria,,,social dance,St. Cecilia,Saturday,2025-05-10,2025-05-10,19:00,22:00,,"The Loft Pub, 229 Gorge Rd E, Victoria, BC, Canada",Live music event featuring St. Cecilia.
+source,dance_style,url,event_type,event_name,day_of_week,start_date,start_time,end_time,location,description,end_date,price
+Uvic Cuban Salsa Club,"cuban salsa, rueda, salsa",https://www.facebook.com/groups/cubansalsaclub/,"class, social dance",UVic Salsa Rueda,Wednesday,2025-05-14,19:00,21:00,"Uvic Students Union Building, 3800 Finnerty Rd A101E, Victoria, BC V8P 5C2","Weekly UVic Rueda round‑the‑circle salsa dance. This happens most Wednesdays. Usually outside and sometimes inside at Vertigo. Please check and see if it is on this week.
+",2025-05-14,0
