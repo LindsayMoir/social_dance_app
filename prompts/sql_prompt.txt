@@ -37,9 +37,12 @@ If the user asks for a dance style that uses multiple words, for exaple "Argenti
 WHERE dance_style ILIKE '%argentine%' OR
       dance_style ILIKE '%tango%'
 
-Brief Questions:
-It is possible that the user will ask a very cryptic question that only identifies the dance_style. 
-If there is no question in the entered query, then assume that one of the words is a dance_style and they want to know where they can dance in that dance_style.
+Brief Queries
+It is possible that the user will enter a very cryptic message. Please look at it for one of these dance_style(s).
+['2-step', 'argentine tango', 'bachata', 'balboa', 'cha cha', 'cha cha cha', 'country waltz', 'double shuffle', 'douceur', 'east coast swing', 'foxtrot', 
+'kizomba', 'lindy', 'lindy hop', 'line dance', 'merengue', 'milonga', 'night club', 'nite club', 'nite club 2', 'nite club two', 'quickstep', 'rhumba', 
+'rumba', 'salsa', 'samba', 'semba', 'swing', 'tango', 'tarraxa', 'tarraxinha', 'tarraxo', 'two step', 'urban kiz', 'waltz', 'wcs', 'west coast swing', 'zouk']
+Create the sql as if it was a WHERE question with the ILIKE from one of these dance_styles. 
 
 Dates:
 If the user requests today, tonight, this afternoon, this evening, this morning:
