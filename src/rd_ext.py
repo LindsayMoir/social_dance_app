@@ -156,7 +156,7 @@ class ReadExtract:
         try:
             await self.page.wait_for_selector(email_selector, timeout=5000)
             logging.info(f"Login required for {organization}.")
-        except:
+        except Exception:
             logging.info(f"No login form detected for {organization}, skipping login.")
             self.logged_in = True
             return True
@@ -164,19 +164,50 @@ class ReadExtract:
         # Handle Eventbrite-specific login
         if 'eventbrite' in login_url:
             email_selector = "input[name='email']"
-            password_selector = "input[name='password']"
+            password_selectors = [
+                "input[name='password']",
+                "input[type='password']",
+                "[data-automation='password-input']"
+            ]
 
             if await self.page.query_selector(email_selector):
                 email = os.getenv('EVENTBRITE_APPID_UID')
                 password = os.getenv('EVENTBRITE_KEY_PW')
                 logging.info("Eventbrite login popup detected.")
 
+                # fill email & submit
                 await self.page.fill(email_selector, email)
                 await self.page.click("button[type='submit']")
-                await self.page.wait_for_selector(password_selector, timeout=5000)
-                await self.page.fill(password_selector, password)
+
+                # wait for any of our password selectors
+                try:
+                    await self.page.wait_for_selector(
+                        ", ".join(password_selectors), timeout=15000
+                    )
+                except Exception as e:
+                    # capture state for debugging
+                    await self.page.screenshot(path="debug/eventbrite_login.png", full_page=True)
+                    logging.error("Password field never appeared; screenshot saved to debug/eventbrite_login.png")
+                    raise
+
+                # find whichever selector is present
+                handle = None
+                for sel in password_selectors:
+                    handle = await self.page.query_selector(sel)
+                    if handle:
+                        break
+
+                await handle.fill(password)
                 await self.page.click("button[type='submit']")
                 await self.page.wait_for_timeout(3000)
+
+                # save session state
+                try:
+                    await self.page.context.storage_state(path=f"{organization.lower()}_auth.json")
+                    logging.info(f"Session state saved for {organization}.")
+                except Exception as e:
+                    logging.warning(f"Could not save session state: {e}")
+
                 self.logged_in = True
                 return True
             else:

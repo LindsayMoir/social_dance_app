@@ -1,3 +1,12 @@
-source,dance_style,url,event_type,event_name,day_of_week,start_date,start_time,end_time,location,description,end_date,price
-Uvic Cuban Salsa Club,"cuban salsa, rueda, salsa",https://www.facebook.com/groups/cubansalsaclub/,"class, social dance",UVic Salsa Rueda,Wednesday,2025-05-14,19:00,21:00,"Uvic Students Union Building, 3800 Finnerty Rd A101E, Victoria, BC V8P 5C2","Weekly UVic Rueda round‑the‑circle salsa dance. This happens most Wednesdays. Usually outside and sometimes inside at Vertigo. Please check and see if it is on this week.
-",2025-05-14,0
+source,dance_style,url,event_type,event_name,day_of_week,start_date,end_date,start_time,end_time,price,location,description
+Eventbrite,,,social dance,Vic High RnB Night at Cafe Fantastico,Friday,2025-05-16,2025-05-16,19:00,,,Cafe Fantastico,Get ready to groove and enjoy some good food at Vic High RnB Night at Cafe Fantastico - Come see what these hard working students worked on!
+Eventbrite,,,social dance,Paint Night & Free Drink at Caffe Fantastico - Quadra Village!,Saturday,2025-08-02,2025-08-02,19:00,,$48.36,Caffe Fantastico,Paint Night & Free Drink at Caffe Fantastico - Quadra Village!
+Eventbrite,,,social dance,Paint Night & Free Drink at Caffe Fantastico - Quadra Village!,Saturday,2025-07-05,2025-07-05,19:00,,$48.36,Caffe Fantastico,Paint Night & Free Drink at Caffe Fantastico - Quadra Village!
+Eventbrite,,,social dance,Paint Night & Free Drink at Caffe Fantastico - Quadra Village!,Saturday,2025-06-07,2025-06-07,19:00,,$48.36,Caffe Fantastico,Paint Night & Free Drink at Caffe Fantastico - Quadra Village!
+Eventbrite,,,other,CAFFE FANTASTICO UNPLUGGED in May: an all ages offline gathering,Friday,2025-05-23,2025-05-23,18:30,,,Caffe Fantastico,CAFFE FANTASTICO UNPLUGGED in May: an all ages offline gathering
+Eventbrite,,,other,Fantastic Fantasies,Saturday,2025-05-24,2025-05-24,19:00,,$23.18,Stage 7 Pianos,Fantastic Fantasies
+Eventbrite,,,other,Fantastic Finale,Saturday,2025-05-31,2025-05-31,19:30,,$23.18,First Free Methodist Church,Fantastic Finale
+Eventbrite,,,other,Paint Party at Cafe Rumba,Wednesday,2025-06-04,2025-06-04,16:00,18:00,$35.00,1138 N State St,Paint Party at Cafe Rumba
+Eventbrite,,,other,The Attic Spring Play: Dory Fantasmagory,Thursday,2025-05-22,2025-05-22,19:00,,$17.85,Taproot Theatre Company's Isaac Studio Theatre,The Attic Spring Play: Dory Fantasmagory
+Eventbrite,,,other,Board Silly • Board Game Night at Miche Cafe,Saturday,2025-05-24,2025-05-24,17:00,,$5.00,Miche Cafe,Board Silly • Board Game Night at Miche Cafe
+Eventbrite,,,other,Open Mic Music Night at Boardwalk Cafe!,Friday,2025-06-06,2025-06-06,19:00,,,Boardwalk Cafe and Games,Open Mic Music Night at Boardwalk Cafe!

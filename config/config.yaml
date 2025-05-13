@@ -10,19 +10,20 @@ constants:
   fb_base_url: https://www.facebook.com/search/events?q=events
   location: '%20victoria%20bc%20canada%20'
   uvic_rueda_dict:
-    source:       "Uvic Cuban Salsa Club"
-    dance_style:  "cuban salsa, rueda, salsa"
-    url:          "https://www.facebook.com/groups/cubansalsaclub/"
-    event_type:   "class, social dance"
-    event_name:   "UVic Salsa Rueda"
-    day_of_week:  "Wednesday"
-    start_date:   ""            # will be filled in by your code
-    start_time:   "19:00"
-    end_time:     "21:00"
-    location:     "Uvic Students Union Building, 3800 Finnerty Rd A101E, Victoria, BC V8P 5C2"
-    description:  >
-      Weekly UVic Rueda round‑the‑circle salsa dance. This happens most Wednesdays.
-      Usually outside and sometimes inside at Vertigo. Please check and see if it is on this week.
+    dance_style: cuban salsa, rueda, salsa
+    day_of_week: Wednesday
+    description: "Weekly UVic Rueda round\u2011the\u2011circle salsa dance. This happens\
+      \ most Wednesdays. Usually outside and sometimes inside at Vertigo. Please check\
+      \ and see if it is on this week.\n"
+    end_time: '21:00'
+    event_name: UVic Salsa Rueda
+    event_type: class, social dance
+    location: Uvic Students Union Building, 3800 Finnerty Rd A101E, Victoria, BC V8P
+      5C2
+    source: Uvic Cuban Salsa Club
+    start_date: ''
+    start_time: '19:00'
+    url: https://www.facebook.com/groups/cubansalsaclub/
 crawling:
   depth_limit: 2
   headless: true
