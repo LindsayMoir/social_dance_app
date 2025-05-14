@@ -1,5 +1,5 @@
 ## Context:
-You are a data analyst responsible for removing **irrelevant** data from a database of social dance events. 
+You are a data analyst responsible for removing **irrelevant** data from a database of social dance events that often include live music. 
 Your goals are:
 1. To classify each row as either **relevant (0)** or **irrelevant (1)**.
 2. To determine a new event type for each row based on its content.
@@ -23,7 +23,7 @@ You have these columns in the Data below.
 - **time_stamp**
 
 All of these columns may contain relevant information. In particular:
-- **event_name** and **description** often have the most direct clues about whether the event is a dance event, what type it is, etc.
+- **event_name** and **description** often have the most direct clues about whether the event is a dance event, live music, what type it is, etc.
 - **location** can also provide clues (e.g., "Dance Victoria" in the address usually indicates a dance-related event).
 
 ---
@@ -41,13 +41,12 @@ An event (row) is **relevant (0)** if:
 A row is **irrelevant (1)** if:
 - The event is not about **social dancing, dance classes, live music, or dance-related activities**.
 - The event is **not a dance event** (e.g., "Bike Repair Class", "Cemetery Tour").
-- The event is a **general festival with no clear dance focus**.
 
 ### Special Cases:
-- If **source** equals "Bard and Banker", always label the event as **relevant (0)**.
+- If **source** equals "Bard and Banker", "The Loft", "Deb Rhymer Band", or "The Coda", always label the event as **relevant (0)**.
 - If **dance_style** contains any of the listed relevant dance styles, label the event as **relevant (0)**.
 - If the **event_name** includes "Miguelito", the row is **relevant (0)** (a special rule). 
-- If **location** includes "Dance Victoria", that also strongly indicates a dance event (relevant).
+- If **location** includes "Dance Victoria", that also strongly indicates a dance event (relevant (0)).
 
 Please rely mostly on event_name (first) and then description (second) to classify as relevant (0) or irrelevant (1).
 The other columns may be helpful.
@@ -60,7 +59,8 @@ In addition to labeling each row as relevant (0) or irrelevant (1), analyze **al
 - **social dance** (if the event is a social dance gathering),
 - **rehearsal** (if the event is for a special group only for purposes of practising and then performing later on),
 - **workshop** (if the event is a workshop),
-- **other** (if it doesn't clearly fall into one of the above categories). Rehearsal(s) are **other**
+- **live music"" (if the event has a live band)
+- **other** (if it doesn't clearly fall into one of the above categories). 
 
 If an event fits multiple categories (e.g., a class that is also a social dance), list all applicable types separated by commas.
 Check each listed dance_style (above) to see if it matches any relevant dance style.
@@ -151,7 +151,7 @@ source: Bard and Banker
 location: 1022 Government St. Victoria, BC V8W 1Y3
 price: (empty)
 url: https://www.bardandbanker.com/live-music
-event_type: social dance
+event_type: other
 address_id: (empty)
 time_stamp: 28:19.1
 
@@ -160,7 +160,7 @@ Returns:
 [
 {
 Label: 0
-event_type_new: other
+event_type_new: live music
 }
 ]
 

@@ -348,82 +348,68 @@ class LLMHandler():
 
 
     def extract_and_parse_json(self, result, url):
-            """
-            Parameters:
+        """
+        Parameters:
             result (str): The response string from which JSON needs to be extracted.
             url (str): The URL from which the response was obtained.
-            Returns:
+        Returns:
             list or None: Returns a list of events if JSON is successfully extracted and parsed, 
                         otherwise returns None.
-            """
-            if "No events found" in result:
-                logging.info("def extract_and_parse_json(): No events found in result.")
-                return None
-            
-            # Check if the response contains JSON
-            if len(result) > 100:
-                logging.info("def extract_and_parse_json(): JSON found in result.")
+        """
+        if "No events found" in result:
+            logging.info("def extract_and_parse_json(): No events found in result.")
+            return None
 
-                # Get just the JSON string from the response
+        # Check if the response contains JSON
+        if len(result) > 100:
+            logging.info("def extract_and_parse_json(): JSON found in result.")
+
+            # Get just the JSON string from the response
+            start_position = result.find('[')
+            if start_position == -1:
+                result = '[' + result
                 start_position = result.find('[')
 
-                # If no start_position is returned, prepend the string with '['
-                if start_position == -1:
-                    result = '[' + result
-                    start_position = result.find('[')
-
-                # Get the end position of the JSON string
+            end_position = result.rfind(']') + 1
+            if end_position == 0:
+                # Badly formed json: close it at the last }
+                end_position = result.rfind('}') + 1
+                result = result[:end_position] + ']'
                 end_position = result.rfind(']') + 1
 
-                # if no end_position is found append the string with ']'
-                if end_position == 0:
-                    # This means badly formed json
-                    # Find the last occurence of '}' and add ']' after that
-                    end_position = result.rfind('}') + 1
-                    result = result[:end_position] + ']'
-                    end_position = result.rfind(']') + 1
-
-                # Extract the JSON string
-                json_string = result[start_position:end_position]
-                if len(json_string) < 100:
-                    logging.info(f"def extract_and_parse_json(): malformed json: \n{json_string}")
-                    return None
-
-                # Remove single-line comments
-                cleaned_str = re.sub(r'(?<!:)//.*', '', json_string)
-
-                # Remove ellipsis patterns (if they occur)
-                cleaned_str = cleaned_str.replace('...', '')
-
-                # Ensure the string is a valid JSON array
-                cleaned_str = cleaned_str.strip()
-
-                # Remove any trailing commas before the closing brackets
-                cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)
-
-                # Added cleaning: Fix invalid escape sequences by doubling backslashes that are not followed by valid escape characters
-                cleaned_str = re.sub(r'\\(?!["\\/bfnrt])', r'\\\\', cleaned_str)
-
-                # Remove '''json from the string
-                cleaned_str = cleaned_str.replace("```json", "")
-                cleaned_str = cleaned_str.replace("```", "")
-
-                # For debugging: print the cleaned JSON string
-                logging.info(f"def extract_and_parse_json(): for url {url}, \nCleaned JSON string: \n{cleaned_str}")
-
-                # Parse the cleaned JSON string
-                try:
-                    # Convert JSON string to Python object
-                    events_json =json.loads(cleaned_str)
-                    return events_json
-                    
-                except json.JSONDecodeError as e:
-                    logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
-                    return None
-                
-            else:
-                logging.info("def extract_and_parse_json(): No valid events found in result.")
+            json_string = result[start_position:end_position]
+            if len(json_string) < 100:
+                logging.info(f"def extract_and_parse_json(): malformed json: \n{json_string}")
                 return None
+
+            # Strip out comments, ellipses, etc.
+            cleaned_str = re.sub(r'(?<!:)//.*', '', json_string)
+            cleaned_str = cleaned_str.replace('...', '')
+            cleaned_str = cleaned_str.strip()
+            cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)
+            cleaned_str = re.sub(r'\\(?!["\\/bfnrt])', r'\\\\', cleaned_str)
+            cleaned_str = cleaned_str.replace("```json", "").replace("```", "")
+
+            # **NEW**: Fix missing closing quotes on the last string value before the final `}]`
+            cleaned_str = re.sub(
+                r'(".*?":\s*"[^\"]*)(?=\s*}\s*\])',
+                r'\1"',
+                cleaned_str
+            )
+
+            logging.info(f"def extract_and_parse_json(): for url {url}, \nCleaned JSON string: \n{cleaned_str}")
+
+            try:
+                events_json = json.loads(cleaned_str)
+                return events_json
+
+            except json.JSONDecodeError as e:
+                logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
+                return None
+
+        else:
+            logging.info("def extract_and_parse_json(): No valid events found in result.")
+            return None
         
 
 # Run the LLM

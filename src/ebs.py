@@ -301,11 +301,6 @@ class EventbriteScraper:
     async def driver(self):
         """ Reads keywords, performs searches, and processes extracted event URLs. """
         self.start_time = datetime.now()  # Record start time
-        self.keywords_list = ['kizomba', 'lindy', 'lindy hop', 'line dance', 'merengue', 'milonga', 
-                              'night club', 'nite club', 'nite club 2', 'nite club two', 'quickstep', 
-                              'rhumba', 'rumba', 'salsa', 'samba', 'semba', 'swing', 'tango', 'tarraxa', 
-                              'tarraxinha', 'tarraxo', 'two step', 'urban kiz', 'waltz', 'wcs', 
-                              'west coast swing', 'zouk']   # ***TEMP
         for keyword in self.keywords_list:
             query = keyword
             source = ''
