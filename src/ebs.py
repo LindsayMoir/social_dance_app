@@ -96,72 +96,81 @@ class EventbriteScraper:
     async def eventbrite_search(self, query, source, keywords_list, prompt):
         """ Searches Eventbrite for events based on the query, extracts event URLs,
         retrieves event details, and processes them using LLM.
-
-        Parameters:
-            query (str): The search query to enter in Eventbrite.
-            source (str): The organization name related to the events.
-            keywords_list (list): List of keywords associated with the events.
-            prompt (str): The prompt to use for processing the extracted text.
         """
-        # Navigate to Eventbrite
+        # Ensure event_urls is always defined
+        event_urls = []
+
+        # Navigate to Eventbrite (wait only for DOM, with longer timeout)
         try:
-            await self.read_extract.page.goto("https://www.eventbrite.com/", timeout=20000)
+            await self.read_extract.page.goto(
+                "https://www.eventbrite.com/",
+                wait_until="domcontentloaded",
+                timeout=60000
+            )
             logging.info("def eventbrite_search(): Navigated to Eventbrite.")
         except Exception as e:
             logging.error(f"def eventbrite_search(): Error navigating to Eventbrite: {e}")
+            return  # cannot proceed without homepage
 
+        # Handle potential login popup
         try:
-            # Conditionally check for login popup (email field)
             email_selector = "input[name='email']"
             if await self.read_extract.page.query_selector(email_selector):
                 logging.info("def eventbrite_search(): Login popup detected. Filling in email.")
                 email = os.getenv('EVENTBRITE_APPID_UID')
                 await self.read_extract.page.fill(email_selector, email)
                 await self.read_extract.page.click("button[type='submit']")
-                logging.info("def eventbrite_search(): Clicked Continue button after email.")
+                logging.info("def eventbrite_search(): Clicked Continue after email.")
 
-                # Wait for password field
-                await self.read_extract.page.wait_for_selector("input[name='password']", timeout=5000)
+                # Wait for password field (longer timeout)
+                await self.read_extract.page.wait_for_selector(
+                    "input[name='password']",
+                    timeout=15000
+                )
                 password = os.getenv('EVENTBRITE_KEY_PW')
                 await self.read_extract.page.fill("input[name='password']", password)
                 await self.read_extract.page.click("button[type='submit']")
                 logging.info("def eventbrite_search(): Filled password and clicked submit.")
 
-                # Wait for login processing
+                # Brief pause for login to settle
                 await self.read_extract.page.wait_for_timeout(3000)
             else:
                 logging.info("def eventbrite_search(): No login popup detected.")
         except Exception as e:
             logging.error(f"def eventbrite_search(): Error during login process: {e}")
+            return  # abort if login flow broke
 
+        # Perform the search and extract URLs
         try:
-            # Continue with the search
             await self.perform_search(query)
             event_urls = await self.extract_event_urls()
             logging.info(f"def eventbrite_search(): Total unique event URLs found: {len(event_urls)}")
         except Exception as e:
-            logging.error(f"def eventbrite_search(): Error during search and extraction: {e}")
+            logging.error(f"def eventbrite_search(): Error during search/extraction: {e}")
+            return  # nothing to process
 
+        # Process each event URL
         counter = 0
         for event_url in event_urls:
             if event_url in self.visited_urls:
-                logging.info(f"def eventbrite_search(): URL already visited: {event_url}")
+                logging.info(f"def eventbrite_search(): Already visited: {event_url}")
                 continue
 
             if len(self.visited_urls) >= self.config['crawling']['urls_run_limit']:
-                logging.info("def eventbrite_search(): Reached the URL limit.")
+                logging.info("def eventbrite_search(): Reached overall URL limit.")
                 sys.exit()
 
-            elif counter >= self.config['crawling']['max_website_urls']:
-                logging.info(f"def eventbrite_search(): Reached the maximum limit of {self.config['crawling']['max_website_urls']} event URLs.")
+            if counter >= self.config['crawling']['max_website_urls']:
+                logging.info(
+                    f"def eventbrite_search(): Reached max {self.config['crawling']['max_website_urls']} event URLs."
+                )
                 break
 
-            else:
-                logging.info(f"def eventbrite_search(): Processing event URL: {event_url}")
-                self.visited_urls.add(event_url)
-                self.urls_contacted += 1  # Track URL contacts
-                counter += 1
-                await self.process_event(event_url, source, keywords_list, prompt, counter)
+            logging.info(f"def eventbrite_search(): Processing URL {event_url}")
+            self.visited_urls.add(event_url)
+            self.urls_contacted += 1
+            counter += 1
+            await self.process_event(event_url, source, keywords_list, prompt, counter)
 
 
     async def perform_search(self, query):

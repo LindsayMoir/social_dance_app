@@ -297,6 +297,7 @@ class ReadExtract:
         Returns:
             str: Extracted text content or None if extraction fails.
         """
+        # Ensure login
         login_success = await self.login_if_required(link)
         if not login_success:
             logging.error(f"def extract_event_text(): Login failed. Aborting extraction for {link}.")
@@ -304,29 +305,49 @@ class ReadExtract:
 
         for attempt in range(1, max_retries + 1):
             try:
-                await self.page.goto(link, timeout=15000)
-                await self.page.wait_for_load_state("domcontentloaded")  # Ensure the DOM is fully loaded
-                await asyncio.sleep(random.uniform(3, 6))  # Randomized delay for stability
+                # Navigate with domcontentloaded for faster render
+                await self.page.goto(
+                    link,
+                    wait_until="domcontentloaded",
+                    timeout=30000
+                )
+                # Optional network idle wait
+                await self.page.wait_for_load_state("networkidle", timeout=10000)
+
+                # Random delay for stability
+                await asyncio.sleep(random.uniform(3, 6))
 
                 # Extract page content
                 content = await self.page.content()
                 soup = BeautifulSoup(content, 'html.parser')
                 extracted_text = ' '.join(soup.stripped_strings)
 
-                if extracted_text.strip():  # Ensure non-empty text
-                    logging.info(f"def extract_event_text(): Successfully extracted text from {link} on attempt {attempt}.")
+                if extracted_text.strip():
+                    logging.info(
+                        f"def extract_event_text(): Successfully extracted text from {link} on attempt {attempt}."
+                    )
                     return extracted_text
                 else:
-                    logging.warning(f"def extract_event_text(): Attempt {attempt} - No text found for {link}. Retrying...")
-
+                    logging.warning(
+                        f"def extract_event_text(): Attempt {attempt} - Empty text for {link}, retrying..."
+                    )
+            except PlaywrightTimeoutError as te:
+                logging.error(
+                    f"def extract_event_text(): Attempt {attempt} timeout for {link}: {te}"
+                )
             except Exception as e:
-                logging.error(f"def extract_event_text(): Attempt {attempt} failed for {link}. Error: {e}")
+                logging.error(
+                    f"def extract_event_text(): Attempt {attempt} failed for {link}: {e}"
+                )
 
-            # Wait before retrying (exponential backoff)
+            # Exponential backoff before retry
             await asyncio.sleep(attempt * 2)
 
-        logging.error(f"def extract_event_text(): Extraction failed after {max_retries} attempts for {link}.")
+        logging.error(
+            f"def extract_event_text(): Extraction failed after {max_retries} attempts for {link}."
+        )
         return None
+
 
     async def extract_live_music_event_urls(self, url):
         """
