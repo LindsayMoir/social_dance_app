@@ -74,7 +74,7 @@ from fuzzywuzzy import fuzz
 import logging
 import os
 import pandas as pd
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import random
 import re
 from sqlalchemy import text
@@ -115,9 +115,11 @@ class FacebookEventScraper():
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(headless=self.config['crawling']['headless'])
 
-        # Create a single context & page
-        self.context = self.browser.new_context(storage_state="auth.json")
-        self.logged_in_page = self.context.new_page()
+        # Create a single context & page, reusing 'facebook_auth.json'
+        self.context = self.browser.new_context(storage_state="facebook_auth.json")
+        self.page = self.context.new_page()
+        # keep a stable reference for re‑use
+        self.logged_in_page = self.page
 
         # Attempt login
         if self.login_to_facebook():
@@ -158,58 +160,63 @@ class FacebookEventScraper():
 
     def login_to_facebook(self):
         """
-        Logs into Facebook using stored credentials and avoids opening multiple tabs.
+        Log into Facebook, reusing an existing session if possible.
+        Detects and pauses for manual solve of any checkbox CAPTCHA.
+        Saves the session to 'facebook_auth.json'.
         """
-        page = self.logged_in_page  # Reuse the same page
+        storage = "facebook_auth.json"
 
-        # Attempt to use saved session state
+        # 1) Try to reload an existing session
         try:
-            page.goto("https://www.facebook.com/", timeout=60000)
-
-            # If the Facebook search bar is visible, we are already logged in
-            if page.is_visible("div[aria-label='Search Facebook']"):
-                logging.info("Already logged in.")
+            ctx = self.browser.new_context(storage_state=storage)
+            page = ctx.new_page()
+            page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=30000)
+            if "login" not in page.url.lower():
+                logging.info("login_to_facebook: reused existing session, already logged in.")
+                # update both page refs
+                self.page = page
+                self.logged_in_page = page
                 return True
+        except Exception:
+            logging.info("login_to_facebook: no saved session, performing fresh login.")
+
+        # 2) Fresh login
+        self.page.goto("https://www.facebook.com/login", wait_until="domcontentloaded", timeout=30000)
+        email, password, _ = get_credentials("Facebook")
+        self.page.fill("input[name='email']", email)
+        self.page.fill("input[name='pass']", password)
+        self.page.click("button[name='login']")
+        logging.info("login_to_facebook: credentials submitted, waiting…")
+
+        # 3) Detect reCAPTCHA iframe
+        try:
+            self.page.wait_for_selector("iframe[src*='recaptcha']", timeout=10000)
+            self.page.screenshot(path="debug/facebook_recaptcha.png", full_page=True)
+            logging.info("login_to_facebook: reCAPTCHA detected—screenshot saved.")
+            input("Please solve the reCAPTCHA in the browser, then press ENTER here…")
+        except PlaywrightTimeoutError:
+            logging.info("login_to_facebook: no reCAPTCHA detected.")
+
+        # 4) Wait for the page to settle
+        try:
+            self.page.wait_for_load_state("networkidle", timeout=30000)
+        except PlaywrightTimeoutError:
+            logging.warning("login_to_facebook: networkidle timeout—continuing anyway.")
+
+        # 5) Verify login succeeded
+        if "login" in self.page.url.lower():
+            logging.error("login_to_facebook: still on login page—login probably failed.")
+            return False
+
+        # 6) Save session
+        try:
+            self.page.context.storage_state(path=storage)
+            logging.info("login_to_facebook: session saved to facebook_auth.json.")
         except Exception as e:
-            logging.warning(f"Session state not found. Proceeding with manual login. Error: {e}")
+            logging.warning(f"login_to_facebook: could not save session: {e}")
 
-        # Manual login required
-        email, password, _ = get_credentials('Facebook')
-
-        page.goto("https://www.facebook.com/", timeout=30000)
-        if page.is_visible("input[name='email']") and page.is_visible("input[name='pass']"):
-            page.fill("input[name='email']", email)
-            page.fill("input[name='pass']", password)
-            page.click("button[name='login']")
-        else:
-            logging.info("Login page not detected, assuming already logged in.")
-
-        # Wait for potential login redirects
-        page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(10000)
-
-        # Handle extra login prompts
-        attempts = 0
-        while attempts < 3:
-            if page.is_visible("input[name='email']") and page.is_visible("input[name='pass']"):
-                logging.info("Re-entering credentials due to login prompt.")
-                page.fill("input[name='email']", email)
-                page.fill("input[name='pass']", password)
-                page.click("button[name='login']")
-                page.wait_for_timeout(5000)
-            else:
-                break
-            attempts += 1
-
-        # If Captcha appears, wait for user input
-        if "login" in page.url.lower():
-            logging.warning("Solve the captcha or challenge in the browser, then press Enter.")
-            input("Press Enter after solving the captcha...")
-
-        # Save session state after successful login
-        self.context.storage_state(path="auth.json")
-
-        logging.info("Login to Facebook successful. Session saved.")
+        # make sure future scrapes reuse this page
+        self.logged_in_page = self.page
         return True
     
 
@@ -353,74 +360,74 @@ class FacebookEventScraper():
         """
         self.total_url_attempts += 1  # Count URL contact attempts
 
-        # Ensure logged-in page is still valid, otherwise create a new page
+        # 1) Reuse the logged‑in page if valid, otherwise open a fresh one
         try:
             if not self.logged_in_page or self.logged_in_page.url == "about:blank":
-                raise Exception("Logged-in page is no longer valid.")
+                raise Exception("Logged-in page invalid")
             page = self.logged_in_page
         except Exception:
-            logging.warning("extract_event_text(): Logged-in page is closed or invalid, opening a new one.")
+            logging.warning("extract_event_text(): Logged-in page invalid, opening a new one.")
             page = self.context.new_page()
+            self.logged_in_page = page
 
+        # 2) Navigate only to DOMContentLoaded, then wait a bit for JS
         timeout_value = random.randint(10000, 15000)
-        logging.info(f"extract_event_text(): Navigating to {link} with timeout {timeout_value} ms.")
-
+        logging.info(f"extract_event_text(): Navigating to {link} (timeout {timeout_value} ms)...")
         try:
-            page.goto(link, timeout=timeout_value)
-            page.wait_for_load_state('networkidle')  # Ensure page is fully loaded before proceeding
+            page.goto(link, wait_until="domcontentloaded", timeout=timeout_value)
         except Exception as e:
-            logging.warning(f"extract_event_text(): Timeout or navigation error loading {link}: {e}")
+            logging.warning(f"extract_event_text(): Navigation failed for {link}: {e}")
             return None
 
-        # Safely interact with "See more" buttons
-        more_buttons = page.query_selector_all("text=/See more/i")
-        if more_buttons:
-            for button in more_buttons:
-                try:
-                    button.wait_for_element_state("stable", timeout=4000)
-                    button.click()
-                    page.wait_for_timeout(random.randint(4000, 7000))
-                    logging.info(f"Clicked 'See more' button in URL: {link}")
-                except Exception as e:
-                    logging.warning(f"Could not click 'See more' button in URL {link}: {e}")
-        else:
-            logging.info(f"No 'See more' buttons found in URL: {link}")
+        # Give React/JS a few seconds to hydrate
+        page.wait_for_timeout(random.randint(4000, 7000))
 
-        # Wait before extracting content
-        page.wait_for_timeout(random.randint(5000, 7000))
+        # 3) Click any “See more” buttons
+        for btn in page.query_selector_all("text=/See more/i"):
+            try:
+                btn.click()
+                page.wait_for_timeout(random.randint(2000, 4000))
+                logging.info(f"extract_event_text(): Clicked 'See more' on {link}")
+            except Exception as e:
+                logging.warning(f"extract_event_text(): Could not click 'See more' on {link}: {e}")
 
-        # Extract page content
-        content = page.content()
-        soup = BeautifulSoup(content, 'html.parser')
+        # Final short pause before scraping HTML
+        page.wait_for_timeout(random.randint(3000, 5000))
+
+        # 4) Pull content and parse
+        html = page.content()
+        soup = BeautifulSoup(html, 'html.parser')
         extracted_text = ' '.join(soup.stripped_strings)
 
-        if extracted_text:
-            self.urls_with_extracted_text += 1
-            logging.info(f"extract_event_text(): Extracted raw text ({len(extracted_text)} chars) from {link}")
-
-            # Check for keywords
-            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-            if found_keywords:
-                self.urls_with_found_keywords += 1
-
-                if 'facebook.com/events/' in link:
-                    event_extracted_text = self.extract_relevant_text(extracted_text, link)
-                    if event_extracted_text:
-                        logging.info(f"extract_event_text(): Extracted relevant event text from {link}: {len(event_extracted_text)} chars.")
-                        return event_extracted_text
-                    else:
-                        logging.warning(f"extract_event_text(): Regex extraction returned None for {link}, returning original extracted text.")
-                        return extracted_text
-                else:
-                    pass
-            else:
-                logging.info(f"extract_event_text(): No keywords found in extracted text for URL: {link}.")
-                return None
-        else:
+        if not extracted_text:
             logging.warning(f"extract_event_text(): No text extracted from {link}.")
             return None
-    
 
+        # 5) Update counters and check for keywords
+        self.urls_with_extracted_text += 1
+        logging.info(f"extract_event_text(): Raw text length {len(extracted_text)} chars for {link}")
+
+        found = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+        if not found:
+            logging.info(f"extract_event_text(): No keywords found in text for {link}.")
+            return None
+
+        self.urls_with_found_keywords += 1
+
+        # 6) For FB event pages, run your regex‑based slice
+        if 'facebook.com/events/' in link:
+            chunk = self.extract_relevant_text(extracted_text, link)
+            if chunk:
+                logging.info(f"extract_event_text(): Extracted relevant snippet ({len(chunk)} chars) from {link}")
+                return chunk
+            else:
+                logging.warning(f"extract_event_text(): Snippet extraction failed for {link}, returning full text.")
+                return extracted_text
+
+        # 7) Otherwise return everything
+        return extracted_text
+
+    
     def extract_relevant_text(self, content, link):
         """
         Extracts a relevant portion of text from the given content based on specific patterns.

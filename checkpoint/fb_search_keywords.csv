@@ -1,8 +1,9 @@
 dance_style,keywords,processed
 ballroom,"cha cha cha, foxtrot, quickstep, rhumba, rumba, samba, waltz",True
-country,"2-step,  cha cha, double shuffle, country waltz, line dance, night club, nite club, nite club 2, nite club two, two step, west coast swing, wcs",True
-kizomba,"kizomba, urban kiz, semba, tarraxo, tarraxa, tarraxinha, douceur",True
-latin,"bachata,  cha cha, kizomba, merengue, salsa,  zouk",True
-swing,"balboa, east coast swing, lindy,  lindy hop, swing",True
-tango,"milonga, tango",True
-wcs,"west coast swing, wcs",True
+country,"2-step,  cha cha, double shuffle, country waltz, line dance, night club, nite club, nite club 2, nite club two, two step, west coast swing, wcs",False
+kizomba,"kizomba, urban kiz, semba, tarraxo, tarraxa, tarraxinha, douceur",False
+latin,"bachata,  cha cha, kizomba, merengue, salsa,  zouk",False
+swing,"balboa, east coast swing, lindy,  lindy hop, swing",False
+tango,"milonga, tango",False
+wcs,"west coast swing, wcs",False
+tango,"argentine tango, milonga, tango",False
