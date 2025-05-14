@@ -27,7 +27,7 @@ from datetime import date, datetime, timedelta
 import logging
 import pandas as pd
 import os
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 import random
 from urllib.parse import urljoin, urlparse
@@ -135,109 +135,119 @@ class ReadExtract:
 
 
     async def login_to_website(self, organization, login_url, email_selector, pass_selector, submit_selector):
-        # Close any existing page
+        """
+        Attempts to log in to a given website, with special handling for Eventbrite (including reCAPTCHA).
+        Saves session state to "<organization>_auth.json" on success.
+        """
+        # Close any existing page to avoid stale contexts
         if self.page:
             await self.page.close()
 
-        # Try to load existing session
+        # 1. Try loading an existing session
         try:
             context = await self.browser.new_context(storage_state=f"{organization.lower()}_auth.json")
             self.page = await context.new_page()
-            await self.page.goto(login_url, timeout=20000)
-
+            await self.page.goto(login_url, wait_until="domcontentloaded", timeout=20000)
+            # if we landed outside the login flow, assume still logged in
             if organization.lower() not in self.page.url.lower():
-                logging.info(f"Loaded existing session for {organization}, no login required.")
+                logging.info(f"login_to_website: Loaded existing session for {organization}, no login required.")
                 self.logged_in = True
                 return True
         except Exception:
-            logging.info(f"No valid saved session for {organization}, checking if login is needed...")
+            logging.info(f"login_to_website: No valid saved session for {organization}, proceeding to fresh login.")
 
-        # Check if login form is needed
+        # 2. Check presence of login form
         try:
             await self.page.wait_for_selector(email_selector, timeout=5000)
-            logging.info(f"Login required for {organization}.")
-        except Exception:
-            logging.info(f"No login form detected for {organization}, skipping login.")
+            logging.info(f"login_to_website: Login form detected for {organization}.")
+        except PlaywrightTimeoutError:
+            logging.info(f"login_to_website: No login form detected for {organization}, skipping login.")
             self.logged_in = True
             return True
 
-        # Handle Eventbrite-specific login
-        if 'eventbrite' in login_url:
-            email_selector = "input[name='email']"
+        # 3. Eventbrite-specific flow (handles extra reCAPTCHA step)
+        if "eventbrite" in login_url:
+            # override selectors
+            email_sel = "input[name='email']"
             password_selectors = [
                 "input[name='password']",
                 "input[type='password']",
                 "[data-automation='password-input']"
             ]
 
-            if await self.page.query_selector(email_selector):
-                email = os.getenv('EVENTBRITE_APPID_UID')
-                password = os.getenv('EVENTBRITE_KEY_PW')
-                logging.info("Eventbrite login popup detected.")
+            # fill in email and submit
+            await self.page.fill(email_sel, os.getenv("EVENTBRITE_APPID_UID"))
+            await self.page.click("button[type='submit']")
+            logging.info("login_to_website: Submitted Eventbrite email.")
 
-                # fill email & submit
-                await self.page.fill(email_selector, email)
-                await self.page.click("button[type='submit']")
+            # wait for password input
+            try:
+                await self.page.wait_for_selector(", ".join(password_selectors), timeout=15000)
+            except PlaywrightTimeoutError:
+                await self.page.screenshot(path="debug/eventbrite_login.png", full_page=True)
+                logging.error("login_to_website: Password field did not appear — screenshot saved.")
+                return False
 
-                # wait for any of our password selectors
-                try:
-                    await self.page.wait_for_selector(
-                        ", ".join(password_selectors), timeout=15000
-                    )
-                except Exception as e:
-                    # capture state for debugging
-                    await self.page.screenshot(path="debug/eventbrite_login.png", full_page=True)
-                    logging.error("Password field never appeared; screenshot saved to debug/eventbrite_login.png")
-                    raise
+            # choose whichever selector is present
+            pwd_sel = None
+            for sel in password_selectors:
+                if await self.page.query_selector(sel):
+                    pwd_sel = sel
+                    break
 
-                # find whichever selector is present
-                handle = None
-                for sel in password_selectors:
-                    handle = await self.page.query_selector(sel)
-                    if handle:
-                        break
+            # fill password and submit
+            await self.page.fill(pwd_sel, os.getenv("EVENTBRITE_KEY_PW"))
+            await self.page.click("button[type='submit']")
+            logging.info("login_to_website: Submitted Eventbrite password; checking for reCAPTCHA.")
 
-                await handle.fill(password)
-                await self.page.click("button[type='submit']")
-                await self.page.wait_for_timeout(3000)
+            # detect reCAPTCHA iframe
+            try:
+                await self.page.wait_for_selector("iframe[src*='recaptcha']", timeout=5000)
+                await self.page.screenshot(path="debug/recaptcha.png", full_page=True)
+                logging.info("login_to_website: reCAPTCHA detected — screenshot saved to debug/recaptcha.png.")
+                input("Please switch to the browser, solve the reCAPTCHA, then press ENTER here to continue…")
+                logging.info("login_to_website: Continuing after manual reCAPTCHA solve.")
+            except PlaywrightTimeoutError:
+                logging.info("login_to_website: No reCAPTCHA detected.")
 
-                # save session state
-                try:
-                    await self.page.context.storage_state(path=f"{organization.lower()}_auth.json")
-                    logging.info(f"Session state saved for {organization}.")
-                except Exception as e:
-                    logging.warning(f"Could not save session state: {e}")
+            # brief pause, then save session
+            await self.page.wait_for_timeout(3000)
+            try:
+                await self.page.context.storage_state(path=f"{organization.lower()}_auth.json")
+                logging.info(f"login_to_website: Session state saved for {organization}.")
+            except Exception as e:
+                logging.warning(f"login_to_website: Could not save session state: {e}")
 
-                self.logged_in = True
-                return True
-            else:
-                logging.info("No Eventbrite login popup detected.")
-                self.logged_in = True
-                return True
+            self.logged_in = True
+            return True
 
-        # Generic login handling
+        # 4. Generic login flow (for other sites)
         email, password, _ = get_credentials(organization)
         await self.page.fill(email_selector, email)
         await self.page.fill(pass_selector, password)
         await self.page.click(submit_selector)
+        logging.info(f"login_to_website: Submitted credentials for {organization}.")
         await self.page.wait_for_timeout(random.randint(4000, 6000))
 
-        logging.warning(f"Please solve any captcha on {organization}'s login page, then press Enter to continue...")
-        input("Press Enter after solving captcha (if any)...")
-        await self.page.wait_for_timeout(random.randint(4000, 6000))
+        # allow any manual CAPTCHA challenge
+        logging.warning(f"Please solve any CAPTCHA for {organization}, then press ENTER to continue…")
+        input("Press ENTER after solving any challenge…")
+        await self.page.wait_for_timeout(random.randint(2000, 4000))
 
+        # verify login succeeded
         if "login" in self.page.url.lower():
-            logging.error(f"Login to {organization} failed. Credentials may be incorrect.")
+            logging.error(f"login_to_website: Login to {organization} appears to have failed.")
             return False
 
+        # save authenticated session
         try:
             await self.page.context.storage_state(path=f"{organization.lower()}_auth.json")
-            logging.info(f"Session state saved for {organization}.")
+            logging.info(f"login_to_website: Session state saved for {organization}.")
         except Exception as e:
-            logging.warning(f"Could not save session state for {organization}: {e}")
+            logging.warning(f"login_to_website: Could not save session state: {e}")
 
         self.logged_in = True
-        logging.info(f"Login to {organization} successful.")
+        logging.info(f"login_to_website: Successfully logged in to {organization}.")
         return True
 
 
@@ -288,64 +298,63 @@ class ReadExtract:
 
     async def extract_event_text(self, link, max_retries=3):
         """
-        Extracts text from an event page with retries if extraction fails.
-
-        Args:
-            link (str): The event URL.
-            max_retries (int): Maximum number of retries in case of failure.
-
-        Returns:
-            str: Extracted text content or None if extraction fails.
+        Extracts text from an event page with retries and crash recovery.
         """
-        # Ensure login
-        login_success = await self.login_if_required(link)
-        if not login_success:
-            logging.error(f"def extract_event_text(): Login failed. Aborting extraction for {link}.")
+        # Ensure we're logged in
+        if not await self.login_if_required(link):
+            logging.error(f"extract_event_text: Login failed for {link}, skipping.")
             return None
 
         for attempt in range(1, max_retries + 1):
             try:
-                # Navigate with domcontentloaded for faster render
+                # Navigate; wait only for the DOM, not all resources
                 await self.page.goto(
                     link,
                     wait_until="domcontentloaded",
                     timeout=30000
                 )
-                # Optional network idle wait
-                await self.page.wait_for_load_state("networkidle", timeout=10000)
 
-                # Random delay for stability
-                await asyncio.sleep(random.uniform(3, 6))
+                # Small random delay to let any JS render
+                await asyncio.sleep(random.uniform(2, 5))
 
-                # Extract page content
+                # Pull the page HTML and parse
                 content = await self.page.content()
-                soup = BeautifulSoup(content, 'html.parser')
-                extracted_text = ' '.join(soup.stripped_strings)
+                soup = BeautifulSoup(content, "html.parser")
+                text = " ".join(soup.stripped_strings)
 
-                if extracted_text.strip():
-                    logging.info(
-                        f"def extract_event_text(): Successfully extracted text from {link} on attempt {attempt}."
-                    )
-                    return extracted_text
+                if text.strip():
+                    logging.info(f"extract_event_text: Success on attempt {attempt} for {link}")
+                    return text
                 else:
-                    logging.warning(
-                        f"def extract_event_text(): Attempt {attempt} - Empty text for {link}, retrying..."
-                    )
+                    logging.warning(f"extract_event_text: Attempt {attempt} yielded empty text; retrying...")
+
             except PlaywrightTimeoutError as te:
-                logging.error(
-                    f"def extract_event_text(): Attempt {attempt} timeout for {link}: {te}"
-                )
+                logging.error(f"extract_event_text: Attempt {attempt} timeout for {link}: {te}")
+
+            except PlaywrightError as pe:
+                msg = str(pe)
+                # Detect a crash and recreate our page/context
+                if "Page crashed" in msg or "Navigation" in msg and "interrupted" in msg:
+                    logging.warning(f"extract_event_text: Page crashed or interrupted on attempt {attempt} for {link}. Resetting page.")
+                    # Close old context & page, then re-init a fresh one
+                    try:
+                        await self.context.close()
+                    except: pass
+                    self.context = await self.browser.new_context()
+                    self.page = await self.context.new_page()
+                    continue
+                else:
+                    logging.error(f"extract_event_text: Attempt {attempt} failed for {link}: {pe}")
+
             except Exception as e:
-                logging.error(
-                    f"def extract_event_text(): Attempt {attempt} failed for {link}: {e}"
-                )
+                logging.error(f"extract_event_text: Unexpected error on attempt {attempt} for {link}: {e}")
 
             # Exponential backoff before retry
-            await asyncio.sleep(attempt * 2)
+            backoff = attempt * 2
+            logging.info(f"extract_event_text: Waiting {backoff}s before next attempt...")
+            await asyncio.sleep(backoff)
 
-        logging.error(
-            f"def extract_event_text(): Extraction failed after {max_retries} attempts for {link}."
-        )
+        logging.error(f"extract_event_text: All {max_retries} attempts failed for {link}.")
         return None
 
 
