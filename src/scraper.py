@@ -22,6 +22,7 @@ import pandas as pd
 import re
 import requests
 import scrapy
+from scrapy_playwright.page import PageMethod
 from scrapy.crawler import CrawlerProcess
 import shutil
 import sys
@@ -82,65 +83,122 @@ class EventSpider(scrapy.Spider):
             keywords = row['keywords']
             url = row['link']
             logging.info(f"def start_requests(): Starting crawl for URL: {url}")
-            yield scrapy.Request(url=url, callback=self.parse,
-                                    cb_kwargs={'keywords': keywords, 'source': source, 'url': url})
-                
+            yield scrapy.Request(
+                url=url,
+                callback=self.parse,
+                cb_kwargs={'keywords': keywords, 'source': source, 'url': url},
+                # ← Tell scrapy-playwright to spin up a browser for this request
+                meta={
+                    "playwright": True,
+                    # optional: wait for network‐idle or body to render
+                    "playwright_page_methods": [
+                        PageMethod("wait_for_selector", "body")
+                    ],
+                },
+            )
+
 
     def parse(self, response, keywords, source, url):
         """
-        Parse the response to extract links, iframes, and calendar info.
+        1) Use Playwright‑rendered HTML in response.text
+        2) Keyword & LLM logic
+        3) Extract & limit <a> links
+        4) Process iframes & Google Calendar emails
+        5) Filter unwanted, write to DB, and follow remaining links with Playwright
         """
-        page_links = response.css('a::attr(href)').getall()
-        page_links = [response.urljoin(link) for link in page_links if link.startswith('http')]
+        # 1) Get rendered page text
+        extracted_text = response.text
+
+        # 2) Keyword & LLM logic
+        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+        if found_keywords:
+            logging.info(f"def parse(): Found keywords for URL {url}: {found_keywords}")
+            prompt = 'default'
+            llm_status = llm_handler.process_llm_response(
+                url, extracted_text, source, keywords, prompt
+            )
+            if llm_status:
+                db_handler.write_url_to_db(source, found_keywords, url, True, 1)
+                logging.info(f"def parse(): URL {url} marked as relevant (LLM positive).")
+            else:
+                logging.info(f"def parse(): URL {url} marked as irrelevant (LLM negative).")
+                db_handler.write_url_to_db(source, keywords, url, False, 1)
+        else:
+            logging.info(f"def parse(): URL {url} marked as irrelevant (no keywords).")
+            db_handler.write_url_to_db(source, keywords, url, False, 1)
+
+        # 3) Extract all <a href> links
+        raw_links = response.css('a::attr(href)').getall()
+        page_links = [
+            response.urljoin(link)
+            for link in raw_links
+            if link and link.startswith(("http://", "https://"))
+        ]
         logging.info(f"def parse(): Found {len(page_links)} links on {response.url}")
         page_links = page_links[: self.config['crawling']['max_website_urls']]
         logging.info(f"def parse(): Limiting to {self.config['crawling']['max_website_urls']} links on {response.url}")
 
-        # Process iframes and extract Google Calendar emails via regex
+        # 4) Process iframes & extract Google Calendar emails
         iframe_links = response.css('iframe::attr(src)').getall()
-        iframe_links = [response.urljoin(link) for link in iframe_links if link.startswith('http')]
+        iframe_links = [
+            response.urljoin(link)
+            for link in iframe_links
+            if link.startswith(("http://", "https://"))
+        ]
         logging.info(f"def parse(): Found {len(iframe_links)} iframe links on {response.url}")
-
-        calendar_pattern = re.compile(r'"gcal"\s*:\s*"([a-zA-Z0-9_.+-]+@group\.calendar\.google\.com)"')
+        calendar_pattern = re.compile(
+            r'"gcal"\s*:\s*"([a-zA-Z0-9_.+-]+@group\.calendar\.google\.com)"'
+        )
         calendar_emails = calendar_pattern.findall(response.text)
         logging.info(f"def parse(): Extracted Google Calendar emails: {calendar_emails}")
 
-        iframe_links.extend(calendar_emails)
-        if iframe_links:
+        # Handle any iframe/calendar links first
+        if iframe_links or calendar_emails:
             db_handler.update_url(url, relevant=True, increment_crawl_try=0)
-            for calendar_url in iframe_links:
-                self.fetch_google_calendar_events(calendar_url, url, source, keywords)
+            for cal_url in iframe_links + calendar_emails:
+                self.fetch_google_calendar_events(cal_url, url, source, keywords)
 
-        # Combine main links and current URL, remove Facebook/Instagram URLs.
+        # 5) Combine & filter links
         all_links = {url} | set(page_links)
-
-        # Filter out unwanted links (i.e. those that do not contain 'facebook' or 'instagram').
-        filtered_links = {link for link in all_links if 'facebook' not in link and 'instagram' not in link}
-
-        # Determine the unwanted links (those that were filtered out).
+        filtered_links = {
+            link for link in all_links
+            if 'facebook' not in link and 'instagram' not in link
+        }
         unwanted_links = all_links - filtered_links
-
-        # Write unwanted (Facebook/Instagram) links to the database.
         for link in unwanted_links:
             db_handler.write_url_to_db(source, keywords, link, relevant=False, increment_crawl_try=1)
-            logging.info(f"def parse(): Recorded unwanted URL (Facebook/Instagram): {link}")
+            logging.info(f"def parse(): Recorded unwanted URL: {link}")
 
         logging.info(f"def parse(): {len(filtered_links)} links remain on {response.url}")
-        logging.info(f"def parse(): Here is the current list of all_links. \n{filtered_links}")
+        logging.info(f"def parse(): Here is the current list of all_links: \n{filtered_links}")
 
+        # 6) Follow each filtered link with Playwright rendering
         for link in filtered_links:
             if link in self.visited_link:
-                pass
-            else:
-                self.visited_link.add(link)
-                db_handler.write_url_to_db(source, keywords, link, None, 1)
-                if len(self.visited_link) >= self.config['crawling']['urls_run_limit']:
-                    logging.info(f"def parse(): Reached maximum URL limit: {self.config['crawling']['urls_run_limit']}. Stopping further crawl.")
-                    break
-                logging.info(f"def parse(): Crawling next URL: {link}")
-                self.driver(link, keywords, source)
-                yield response.follow(url=link, callback=self.parse,
-                                      cb_kwargs={'keywords': keywords, 'source': source, 'url': link})
+                continue
+            self.visited_link.add(link)
+            db_handler.write_url_to_db(source, keywords, link, None, 1)
+
+            if len(self.visited_link) >= self.config['crawling']['urls_run_limit']:
+                logging.info(
+                    f"def parse(): Reached maximum URL limit "
+                    f"{self.config['crawling']['urls_run_limit']}. Stopping crawl."
+                )
+                break
+
+            logging.info(f"def parse(): Crawling next URL: {link}")
+            yield scrapy.Request(
+                url=link,
+                callback=self.parse,
+                cb_kwargs={'keywords': keywords, 'source': source, 'url': link},
+                meta={
+                    "playwright": True,
+                    "playwright_page_methods": [
+                        PageMethod("wait_for_selector", "body")
+                    ],
+                },
+            )
+
                 
 
     def driver(self, url, keywords, source):
