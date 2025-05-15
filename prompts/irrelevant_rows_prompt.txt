@@ -1,5 +1,5 @@
 ## Context:
-You are a data analyst responsible for removing **irrelevant** data from a database of social dance events that often include live music. 
+You are a data analyst responsible for removing **irrelevant** data from a database of social dance and live music events. 
 Your goals are:
 1. To classify each row as either **relevant (0)** or **irrelevant (1)**.
 2. To determine a new event type for each row based on its content.
@@ -40,7 +40,7 @@ An event (row) is **relevant (0)** if:
 ### What is Irrelevant Data?
 A row is **irrelevant (1)** if:
 - The event is not about **social dancing, dance classes, live music, or dance-related activities**.
-- The event is **not a dance event** (e.g., "Bike Repair Class", "Cemetery Tour").
+- The event is **not a dance or live music event** (e.g., "Bike Repair Class", "Cemetery Tour").
 
 ### Special Cases:
 - If **source** equals "Bard and Banker", "The Loft", "Deb Rhymer Band", or "The Coda", always label the event as **relevant (0)**.
@@ -54,7 +54,8 @@ Only mark a row (event) as irrelevant(1) if you are certain it is irrelevant (1)
 ---
 
 ### Additional Classification for Event Type
-In addition to labeling each row as relevant (0) or irrelevant (1), analyze **all columns**—especially **event_name**, **description**, and **location**—to determine the event type. Classify the event into one or more of the following:
+In addition to labeling each row as relevant (0) or irrelevant (1), analyze **all columns**—especially **event_name**, **description**, and **location**—to determine the event type. 
+Classify the event into one or more of the following:
 - **class** (if the event appears to be a dance lesson or class),
 - **social dance** (if the event is a social dance gathering),
 - **rehearsal** (if the event is for a special group only for purposes of practising and then performing later on),
@@ -100,7 +101,7 @@ source: Victoria Latin Dance Association
 location: 1110 Howe ST, VANCOUVER, BC, V6Z1R2, CA
 price: Free
 url: https://www.eventbrite.ca/e/havana-fridays-tickets-440099358027
-event_type: social dance  <-- existing column in the dataset
+event_type: social dance
 address_id: 6789
 time_stamp: 12:03.7
 
@@ -151,7 +152,7 @@ source: Bard and Banker
 location: 1022 Government St. Victoria, BC V8W 1Y3
 price: (empty)
 url: https://www.bardandbanker.com/live-music
-event_type: other
+event_type: live music
 address_id: (empty)
 time_stamp: 28:19.1
 

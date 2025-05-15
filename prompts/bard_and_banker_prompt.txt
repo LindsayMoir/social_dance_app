@@ -1,5 +1,5 @@
 Context:
-I am building an application to save users time when searching for social dance events. 
+I am building an application to save users time when searching for social dance and live music events. 
 Extract relevant event details from the webpage's text (extracted_text) according to the instructions below. 
 The extracted_text is at the bottom of these instructions under the heading extracted_text
 ________________________________________
@@ -10,7 +10,7 @@ You MUST include all of these fields. If you do not have any information for one
     "source": "<The original source of information for this event>",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "<''>",
-    "event_type": "<choose one: social dance, class, workshop, other, rehearsal>",
+    "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
     "event_name": "<event name or title>",
     "day_of_week": "<e.g., Monday, Tuesday>",
     "start_date": "<YYYY-MM-DD>",
@@ -25,7 +25,7 @@ You MUST include all of these fields. If you do not have any information for one
     "source": "<The original source of information for this event>",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "<''>",
-    "event_type": "<choose one: social dance, class, workshop, other, rehearsal>",
+    "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
     "event_name": "<event name or title>",
     "day_of_week": "<e.g., Monday, Tuesday>",
     "start_date": "<YYYY-MM-DD>",
@@ -40,7 +40,7 @@ You MUST include all of these fields. If you do not have any information for one
     "source": "<The original source of information for this event>",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "<''>",
-    "event_type": "<choose one: social dance, class, workshop, other, rehearsal>",
+    "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
     "event_name": "<event name or title>",
     "day_of_week": "<e.g., Monday, Tuesday>",
     "start_date": "<YYYY-MM-DD>",
@@ -91,7 +91,7 @@ The first 6 events in JSON format are as follows:
 “source”: “Bard and Banker”,
 “dance_style””:  “bachata, cha cha, cumbia, merengue, salsa“,
 “url”: “”,
-“event_type”: “bachata, cha cha, cumbia, merengue, salsa”,
+“event_type”: "live music”,
 “event_name”: “Miguelito Valdés+band”,
 “day_of_week”: “Tuesday”,
 “start_date”: “2025-02-04“,
@@ -106,7 +106,7 @@ The first 6 events in JSON format are as follows:
 “source”: “Bard and Banker”,
 “dance_style: “”,
 “url”: “”,
-“event_type”: “”,
+“event_type”: “live music”,
 “event_name”: “St. Cecilia”,
 “day_of_week”: “Wednesday”,
 “start_date”: “2025-02-05“,
@@ -121,7 +121,7 @@ The first 6 events in JSON format are as follows:
 “source”: “Bard and Banker”,
 “dance_style: “west coast swing”
 “url”: “”,
-“event_type”: “”,
+“event_type”: “live music”,
 “event_name”: “The Wedding Crashers”,
 “day_of_week”: “Thursday”,
 “start_date”: “2025-02-06“,
@@ -136,7 +136,7 @@ The first 6 events in JSON format are as follows:
 “source”: “Bard and Banker”,
 “dance_style: “”
 “url”: “”,
-“event_type”: “”,
+“event_type”: “live music”,
 “event_name”: Bipoloar Bear”,
 “day_of_week”: “Friday”,
 “start_date”: “2025-02-07“,
@@ -151,7 +151,7 @@ The first 6 events in JSON format are as follows:
 “source”: “Bard and Banker”,
 “dance_style: “”
 “url”: “”,
-“event_type”: “”,
+“event_type”: “live music”,
 “event_name”: Pulse Radio”,
 “day_of_week”: “Saturday”,
 “start_date”: “2025-02-08“,
@@ -166,7 +166,7 @@ The first 6 events in JSON format are as follows:
 “source”: “Bard and Banker”,
 “dance_style: “”
 “url”: “”,
-“event_type”: “”,
+“event_type”: “live music”,
 “event_name”: Max MacKrill”,
 “day_of_week”: “Monday”,
 “start_date”: “2025-02-10“,

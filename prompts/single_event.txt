@@ -1,7 +1,7 @@
 ________________________________________
 
 Context:
-I am building an application to save users time when searching for social dance events. 
+I am building an application to save users time when searching for social dance or live music events. 
 •	Extract relevant event details from the webpage's text (extracted_text) according to these instructions.
 •	Only extract the FIRST event.
 •	The extracted_text is at the bottom of this prompt under the heading "extracted_text".
@@ -14,7 +14,7 @@ You MUST include all of these fields. If you do not have any information for one
     "source": "<The original source of information for this event>",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "<the URL or link>",
-    "event_type": "<choose one: social dance, class, workshop, other, rehearsal>",
+    "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
     "event_name": "<event name or title>",
     "day_of_week": "<e.g., Monday, Tuesday>",
     "start_date": "<YYYY-MM-DD>",

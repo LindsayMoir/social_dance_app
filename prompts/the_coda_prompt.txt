@@ -1,5 +1,5 @@
 Context:
-You are building an application designed to save users time when searching for social dance events. 
+You are building an application designed to save users time when searching for social dance and live music events. 
 Your task is to carefully extract all relevant social dance event details from the provided text (extracted_text) according to the guidelines below.
 
 extracted_text is provided at the end of these instructions.
@@ -30,7 +30,7 @@ For each event, you must include ALL the following fields, using '' for missing 
     "source": "The Coda",
     "dance_style": "<Select from: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs, or leave '' if not explicitly mentioned>",
     "url": "https://gotothecoda.com/calendar",
-    "event_type": "<Select one: social dance, class, workshop, other, rehearsal>",
+    "event_type": "<Select one: social dance, class, workshop, other, rehearsal, live music>",
     "event_name": "<Full event title from extracted_text>",
     "day_of_week": "<Day the event starts>",
     "start_date": "<YYYY-MM-DD>",

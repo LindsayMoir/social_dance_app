@@ -1,8 +1,8 @@
 Instructions:
 You are an expert at extracting semantic meaning from a few words. 
-I want to know if the DATA below,  which is extracted from a website, means that it is likely that the website contains information about dance events.
-Dancing we are interested in are:
-'2-step', 'bachata', 'balboa', 'cha cha', 'cha cha cha', 'country waltz', 'double shuffle', 'douceur', 'east coast swing', 'foxtrot', 'kizomba', 'lindy hop', 'line dance', 'merengue', 'milonga', 'night club', 'nite club', 'nite club 2', 'nite club two', 'quickstep', 'rhumba', 'salsa', 'samba', 'semba', 'swing', 'tango', 'tarraxa', 'tarraxinha', 'tarraxo', 'two step', 'urban kiz', 'waltz', 'wcs', 'west coast swing', 'zouk'
+I want to know if the DATA below,  which is extracted from a website, means that it is likely that the website contains information about dance or live music events.
+Dances we are interested in are:
+'2-step', 'bachata', 'balboa', 'cha cha', 'cha cha cha', 'country waltz', 'double shuffle', 'douceur', 'east coast swing', 'foxtrot', 'kizomba', 'lindy hop', 'line dance', 'live music', 'merengue', 'milonga', 'night club', 'nite club', 'nite club 2', 'nite club two', 'quickstep', 'rhumba', 'salsa', 'samba', 'semba', 'swing', 'tango', 'tarraxa', 'tarraxinha', 'tarraxo', 'two step', 'urban kiz', 'waltz', 'wcs', 'west coast swing', 'zouk'
 If you think it is likely, return True. If not likely then return False. Only return True or False, nothing else please.
 
 Data:

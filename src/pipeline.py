@@ -15,7 +15,7 @@ import time
 import yaml
 
 # ————————————————
-# CONFIG & LOG‐FILE DROP
+# CONFIG & ARCHIVE OLD LOG FILE
 # ————————————————
 CONFIG_PATH = "config/config.yaml"
 
@@ -24,13 +24,31 @@ try:
     with open(CONFIG_PATH, "r") as f:
         cfg = yaml.safe_load(f)
     log_file = cfg.get("logging", {}).get("log_file", "")
+
     if log_file and os.path.isfile(log_file):
-        os.remove(log_file)
-        print(f"Dropped old log file: {log_file}")
+        # Build a timestamped filename
+        now = datetime.datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M:%S")
+        base_name = os.path.basename(log_file)
+        _, ext = os.path.splitext(base_name)
+        new_name = f"log_{date_str}_{time_str}{ext}"
+
+        # Ensure the archive directory exists alongside the current log
+        log_dir = os.path.dirname(log_file) or "."
+        archive_dir = os.path.join(log_dir, "old_log_files")
+        os.makedirs(archive_dir, exist_ok=True)
+
+        # Move/rename the old log
+        new_path = os.path.join(archive_dir, new_name)
+        shutil.move(log_file, new_path)
+        print(f"Archived old log file to: {new_path}")
     else:
-        print(f"No existing log file to drop at {log_file}")
+        print(f"No existing log file to archive at {log_file}")
+
 except Exception as e:
-    print(f"Could not drop log file ({e})")
+    print(f"Could not archive log file ({e})")
+
 
 # Global logging configuration
 import logging

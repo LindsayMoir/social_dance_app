@@ -353,64 +353,89 @@ class LLMHandler():
             result (str): The response string from which JSON needs to be extracted.
             url (str): The URL from which the response was obtained.
         Returns:
-            list or None: Returns a list of events if JSON is successfully extracted and parsed, 
+            list or None: Returns a list of complete events if JSON is successfully extracted and parsed,
                         otherwise returns None.
         """
         if "No events found" in result:
             logging.info("def extract_and_parse_json(): No events found in result.")
             return None
 
-        # Check if the response contains JSON
-        if len(result) > 100:
-            logging.info("def extract_and_parse_json(): JSON found in result.")
-
-            # Get just the JSON string from the response
-            start_position = result.find('[')
-            if start_position == -1:
-                result = '[' + result
-                start_position = result.find('[')
-
-            end_position = result.rfind(']') + 1
-            if end_position == 0:
-                # Badly formed json: close it at the last }
-                end_position = result.rfind('}') + 1
-                result = result[:end_position] + ']'
-                end_position = result.rfind(']') + 1
-
-            json_string = result[start_position:end_position]
-            if len(json_string) < 100:
-                logging.info(f"def extract_and_parse_json(): malformed json: \n{json_string}")
-                return None
-
-            # Strip out comments, ellipses, etc.
-            cleaned_str = re.sub(r'(?<!:)//.*', '', json_string)
-            cleaned_str = cleaned_str.replace('...', '')
-            cleaned_str = cleaned_str.strip()
-            cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)
-            cleaned_str = re.sub(r'\\(?!["\\/bfnrt])', r'\\\\', cleaned_str)
-            cleaned_str = cleaned_str.replace("```json", "").replace("```", "")
-
-            # **NEW**: Fix missing closing quotes on the last string value before the final `}]`
-            cleaned_str = re.sub(
-                r'(".*?":\s*"[^\"]*)(?=\s*}\s*\])',
-                r'\1"',
-                cleaned_str
-            )
-
-            logging.info(f"def extract_and_parse_json(): for url {url}, \nCleaned JSON string: \n{cleaned_str}")
-
-            try:
-                events_json = json.loads(cleaned_str)
-                return events_json
-
-            except json.JSONDecodeError as e:
-                logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
-                return None
-
-        else:
+        # Only attempt JSON extraction on reasonably long results
+        if len(result) <= 100:
             logging.info("def extract_and_parse_json(): No valid events found in result.")
             return None
-        
+
+        logging.info("def extract_and_parse_json(): JSON found in result.")
+
+        # 1) Isolate the [...] JSON blob
+        start = result.find('[')
+        if start == -1:
+            result = '[' + result
+            start = 0
+        end = result.rfind(']') + 1
+        if end == 0:
+            end = result.rfind('}') + 1
+            result = result[:end] + ']'
+            end = result.rfind(']') + 1
+
+        json_string = result[start:end]
+        if len(json_string) < 100:
+            logging.info(f"def extract_and_parse_json(): malformed json: \n{json_string}")
+            return None
+
+        # 2) Basic cleanups
+        cleaned_str = re.sub(r'(?<!:)//.*', '', json_string)             # strip // comments
+        cleaned_str = cleaned_str.replace('...', '')                     # strip ellipses
+        cleaned_str = cleaned_str.strip()                                # trim whitespace
+        cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)                # remove trailing commas before ]
+        cleaned_str = re.sub(r'\\(?!["\\/bfnrt])', r'\\\\', cleaned_str)  # escape stray backslashes
+        cleaned_str = cleaned_str.replace("```json", "").replace("```", "")
+
+        # 3) Fix a missing closing quote on the last field before the final `}]`
+        #    — now excludes newline so it won't consume your line break
+        cleaned_str = re.sub(
+            r'("(?P<key>[^"\n]+)":\s*"[^\n"]*)(?=\s*}\s*\])',
+            r'\1"',
+            cleaned_str
+        )
+
+        # 4) Fix any field whose value spills into a newline and then has that original closing quote.
+        #    This matches: … "Some text <newline>    "  and turns it into … "Some text"
+        cleaned_str = re.sub(
+            r'("(?P<key>[^"\n]+)":\s*"(?:[^\n"\\]|\\.)*)\r?\n\s*"',
+            r'\1"',
+            cleaned_str
+        )
+
+        logging.info(f"def extract_and_parse_json(): for url {url}, \nCleaned JSON string: \n{cleaned_str}")
+
+        # 5) Parse the cleaned JSON
+        try:
+            events = json.loads(cleaned_str)
+        except json.JSONDecodeError as e:
+            logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
+            return None
+
+        # 6) Filter out any event that doesn't have all required keys
+        required_keys = {
+            "source", "dance_style", "url", "event_type", "event_name",
+            "day_of_week", "start_date", "end_date", "start_time",
+            "end_time", "price", "location", "description"
+        }
+        filtered = []
+        for ev in events:
+            if required_keys <= ev.keys():
+                filtered.append(ev)
+            else:
+                missing = required_keys - ev.keys()
+                logging.warning("Dropping incomplete event missing %s: %s", missing, ev)
+
+        if not filtered:
+            logging.info("def extract_and_parse_json(): No complete events after filtering.")
+            return None
+
+        return filtered
+
 
 # Run the LLM
 if __name__ == "__main__":
