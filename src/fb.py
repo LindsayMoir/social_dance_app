@@ -419,9 +419,11 @@ class FacebookEventScraper():
             chunk = self.extract_relevant_text(extracted_text, link)
             if chunk:
                 logging.info(f"extract_event_text(): Extracted relevant snippet ({len(chunk)} chars) from {link}")
+                logging.info(f"extract_event_text(): Snippet: {chunk}")
                 return chunk
             else:
                 logging.warning(f"extract_event_text(): Snippet extraction failed for {link}, returning full text.")
+                logging.info(f"extract_event_text(): Full text: {extracted_text}")
                 return extracted_text
 
         # 7) Otherwise return everything

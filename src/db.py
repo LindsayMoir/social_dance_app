@@ -1409,7 +1409,7 @@ class DatabaseHandler():
             muni_found = any(muni.lower() in combined_text for muni in muni_list if muni)
             
             # If a foreign country is found, consider it foreign.
-            if country_found:
+            if country_found and 'uvic' not in combined_text: # There is a uvic cuban club and it is not foreign
                 return True
             # If a BC municipality is found, it's likely not foreign.
             if muni_found:

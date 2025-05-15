@@ -273,9 +273,7 @@ class DeduplicationHandler:
         For each batch, the prompt is built by including the entire row (all fields) for every record,
         using itertuples(). The LLM is then queried once per batch, returning a JSON containing multiple address rows.
         """
-        # TEMP ***
-        #sql = "SELECT * FROM address"
-        sql = 'SELECT * FROM address WHERE building_name is NULL and street_number is NULL'
+        sql = "SELECT * FROM address"
         df = pd.read_sql(text(sql), self.engine)
         logging.info(f"parse_address: Read {len(df)} rows from the database")
 
@@ -303,7 +301,7 @@ class DeduplicationHandler:
                 logging.error(f"parse_address: No response received for batch {i // batch_size + 1}")
                 continue
 
-            # Expect a JSON response containing multiple address rows.f
+            # Expect a JSON response containing multiple address rows.
             parsed_addresses = self.llm_handler.extract_and_parse_json(response, '')
             if not parsed_addresses:
                 logging.error(f"parse_address: Parsing failed for batch {i // batch_size + 1}")
