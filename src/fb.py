@@ -386,7 +386,7 @@ class FacebookEventScraper():
         for btn in page.query_selector_all("text=/See more/i"):
             try:
                 btn.click()
-                page.wait_for_timeout(random.randint(2000, 4000))
+                page.wait_for_timeout(random.randint(3000, 6000))
                 logging.info(f"extract_event_text(): Clicked 'See more' on {link}")
             except Exception as e:
                 logging.warning(f"extract_event_text(): Could not click 'See more' on {link}: {e}")
