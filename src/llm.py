@@ -377,22 +377,20 @@ class LLMHandler():
             end = result.rfind('}') + 1
             result = result[:end] + ']'
             end = result.rfind(']') + 1
-
         json_string = result[start:end]
         if len(json_string) < 100:
             logging.info(f"def extract_and_parse_json(): malformed json: \n{json_string}")
             return None
 
         # 2) Basic cleanups
-        cleaned_str = re.sub(r'(?<!:)//.*', '', json_string)             # strip // comments
-        cleaned_str = cleaned_str.replace('...', '')                     # strip ellipses
-        cleaned_str = cleaned_str.strip()                                # trim whitespace
-        cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)                # remove trailing commas before ]
-        cleaned_str = re.sub(r'\\(?!["\\/bfnrt])', r'\\\\', cleaned_str)  # escape stray backslashes
+        cleaned_str = re.sub(r'(?<!:)//.*', '', json_string)              # strip // comments
+        cleaned_str = cleaned_str.replace('...', '')                      # strip ellipses
+        cleaned_str = cleaned_str.strip()                                 # trim whitespace
+        cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)                 # remove trailing commas before ]
+        cleaned_str = re.sub(r'\\(?!["\\/bfnrt])', r'\\\\', cleaned_str)   # escape stray backslashes
         cleaned_str = cleaned_str.replace("```json", "").replace("```", "")
 
-        # 3) Fix a missing closing quote on the last field before the final `}]`
-        #    — now excludes newline so it won't consume your line break
+        # 3) Fix missing closing quote on the last field before the final `}]`
         cleaned_str = re.sub(
             r'("(?P<key>[^"\n]+)":\s*"[^\n"]*)(?=\s*}\s*\])',
             r'\1"',
@@ -400,23 +398,31 @@ class LLMHandler():
         )
 
         # 4) Fix any field whose value spills into a newline and then has that original closing quote.
-        #    This matches: … "Some text <newline>    "  and turns it into … "Some text"
         cleaned_str = re.sub(
             r'("(?P<key>[^"\n]+)":\s*"(?:[^\n"\\]|\\.)*)\r?\n\s*"',
             r'\1"',
             cleaned_str
         )
 
+        # 5) Split concatenated events into separate objects
+        #    Look for end of one event's description then the start of the next "source"
+        split_pattern = (
+            r'("description":\s*"(?:[^"\\]|\\.)*?")\s*'
+            r'(?="source":)'
+        )
+        split_repl = r'\1"},\n{"source":'
+        cleaned_str = re.sub(split_pattern, split_repl, cleaned_str, flags=re.DOTALL)
+
         logging.info(f"def extract_and_parse_json(): for url {url}, \nCleaned JSON string: \n{cleaned_str}")
 
-        # 5) Parse the cleaned JSON
+        # 6) Parse the cleaned JSON
         try:
             events = json.loads(cleaned_str)
         except json.JSONDecodeError as e:
             logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
             return None
 
-        # 6) Filter out any event that doesn't have all required keys
+        # 7) Filter out any event that doesn't have all required keys
         required_keys = {
             "source", "dance_style", "url", "event_type", "event_name",
             "day_of_week", "start_date", "end_date", "start_time",

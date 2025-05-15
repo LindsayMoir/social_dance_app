@@ -25,7 +25,7 @@ if __name__ == "__main__":
     with open('config/config.yaml', 'r') as f:
         config = yaml.safe_load(f)
     process = CrawlerProcess(settings={
-        "LOG_FILE": config['logging']['log_file'],
+        "LOG_FILE": config['logging']['scraper_log_file'],
         "LOG_LEVEL": "INFO",
         "DEPTH_LIMIT": config['crawling']['depth_limit'],
         "FEEDS": {

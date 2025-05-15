@@ -199,7 +199,6 @@ class EventSpider(scrapy.Spider):
                 },
             )
 
-                
 
     def driver(self, url, keywords, source):
         """

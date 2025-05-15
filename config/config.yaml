@@ -61,6 +61,7 @@ location:
 logging:
   extracted_text: output/extracted_text.csv
   log_file: logs/log.txt
+  scraper_log_file: logs/scraper_log.txt
 output:
   dedup: output/dedup.csv
   ebs_search_results: output/ebs_search_results.csv
