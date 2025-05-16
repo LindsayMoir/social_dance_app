@@ -222,130 +222,46 @@ class FacebookEventScraper():
 
     def extract_event_links(self, search_url):
         """
-        Extracts event links from a search page using Playwright and regex.
-
-        Args:
-            search_url (str): The Facebook events search URL.
-
-        Returns:
-            set: A set of extracted event links.
+        Extracts event links from a Facebook page (search or group) by regex.
+        If it’s a group URL, auto-navigate to the /events/ sub-page.
+        Always reuses the single logged-in page.
         """
+        # 0) Ensure login
+        if not self.login_to_facebook():
+            logging.error(f"extract_event_links(): login failed, skipping {search_url}")
+            return set()
+
+        # 0b) If this is a group URL, go straight to its events tab
+        if "/groups/" in search_url and not search_url.rstrip("/").endswith("/events"):
+            search_url = search_url.rstrip("/") + "/events/"
+
         try:
-            self.total_url_attempts += 1  # Count each attempt
+            self.total_url_attempts += 1
+            page = self.logged_in_page
 
-            # Check if the logged-in page is still valid; otherwise, create a new one
-            try:
-                if not self.logged_in_page or self.logged_in_page.url == "about:blank":
-                    raise Exception("Logged-in page is no longer valid.")
-                page = self.logged_in_page  # Use the logged-in page if it's valid
-            except Exception:
-                logging.warning("def extract_event_links(): Logged-in page is closed or invalid, opening a new one.")
-                page = self.context.new_page()  # Open a new page in the existing context
+            timeout_value = random.randint(8000, 12000)
+            logging.info(f"extract_event_links(): Navigating to {search_url} (timeout {timeout_value}ms)")
+            page.goto(search_url, timeout=timeout_value, wait_until="domcontentloaded")
+            page.wait_for_timeout(random.randint(4000, 7000))
 
-            # Randomize timeout to avoid bot detection
-            timeout_value = random.randint(8000, 12000)  # 8 to 12 seconds
-            logging.info(f"def extract_event_links(): Navigating to {search_url} with timeout {timeout_value} ms.")
-
-            # Try navigating to the page
-            page.goto(search_url, timeout=timeout_value)
-            page.wait_for_timeout(random.randint(4000, 7000))  # Random wait before interacting
-
-            # Scroll down gradually
+            # Scroll to load all events
             for _ in range(self.config['crawling']['scroll_depth']):
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.wait_for_timeout(random.randint(1500, 3000))  # Random scroll wait
+                page.wait_for_timeout(random.randint(1500, 3000))
 
-            # Extract page content
             content = page.content()
             links = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
 
-            # Update statistics
             if links:
-                self.urls_with_extracted_text += 1  # Count URLs where extraction was successful
-                self.unique_urls.update(links)  # Add new event URLs to the unique set
+                self.urls_with_extracted_text += 1
+                self.unique_urls.update(links)
 
-            logging.info(f"def extract_event_links(): Extracted {len(links)} event links from {search_url}.")
+            logging.info(f"extract_event_links(): Found {len(links)} event links on {search_url}")
             return links
 
         except Exception as e:
-            logging.error(f"def extract_event_links(): Error extracting links from {search_url}: {e}")
+            logging.error(f"extract_event_links(): Error on {search_url}: {e}")
             return set()
-
-        finally:
-            # If we opened a new page, close it to prevent excessive tabs
-            if page != self.logged_in_page:
-                page.close()
-                logging.info(f"def extract_event_links(): Closed extra page for URL: {search_url}.")
-
-
-    def fb_group_event_links(self, url):
-        """
-        Extracts event links from a Facebook group's 'Events' tab.
-
-        Args:
-            url (str): The Facebook group URL.
-
-        Returns:
-            set: A set of extracted event links.
-        """
-        fb_group_events = set()
-
-        try:
-            self.total_url_attempts += 1  # Count each attempt
-
-            # Ensure the logged-in page is valid
-            try:
-                if not self.logged_in_page or self.logged_in_page.url == "about:blank":
-                    raise Exception("Logged-in page is no longer valid.")
-                page = self.logged_in_page  # Reuse the logged-in page
-            except Exception:
-                logging.warning("fb_group_event_links(): Logged-in page is closed or invalid, opening a new one.")
-                page = self.context.new_page()  # Open a new page in the existing context
-
-            # Navigate to the group's page
-            timeout_value = random.randint(10000, 15000)  # Randomized timeout
-            logging.info(f"fb_group_event_links(): Navigating to {url} with timeout {timeout_value} ms.")
-            page.goto(url, timeout=timeout_value)
-            page.wait_for_timeout(random.randint(4000, 6000))  # Randomized wait
-
-            # Wait for the "Events" tab to appear
-            events_tab_selector = "a[href*='/events' i]"
-            try:
-                page.wait_for_selector(events_tab_selector, timeout=random.randint(5000, 10000))
-                logging.info(f"fb_group_event_links(): Found 'Events' tab for group: {url}. Clicking it.")
-                page.click(events_tab_selector)
-                page.wait_for_timeout(random.randint(3000, 5000))  # Randomized wait
-            except Exception:
-                logging.info(f"fb_group_event_links(): No 'Events' tab found for group: {url}.")
-                return fb_group_events  # Exit early if no Events tab exists
-
-            # Scroll and gather links on the "Events" tab
-            for _ in range(self.config['crawling']['scroll_depth']):
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.wait_for_timeout(random.randint(1500, 3000))  # Random scroll wait
-
-            # Extract event links
-            content = page.content()
-            fb_group_events = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
-
-            # Update statistics
-            if fb_group_events:
-                self.urls_with_extracted_text += 1  # Count URLs where extraction was successful
-                self.unique_urls.update(fb_group_events)  # Add new event URLs to the unique set
-
-            logging.info(f"fb_group_event_links(): Extracted {len(fb_group_events)} event links "
-                        f"from the 'Events' tab of group: {url}")
-
-        except Exception as e:
-            logging.error(f"fb_group_event_links(): Error extracting event links from {url}. Error: {e}")
-
-        finally:
-            # Close any extra pages if a new one was created
-            if page != self.logged_in_page:
-                page.close()
-                logging.info(f"fb_group_event_links(): Closed extra page for URL: {url}.")
-
-        return fb_group_events
     
 
     def extract_event_text(self, link):
@@ -721,103 +637,93 @@ class FacebookEventScraper():
 
     def driver_fb_urls(self):
         """
-        1. Gets all of the urls from the urls table where the link is like '%facebook%'.
-        2. For each url, extracts text and processes it.
-        3. If valid events are found, writes them to the database; otherwise, updates the URL.
-        4. Writes every processed URL—including event links—to the checkpoint CSV.
+        1. Gets all of the URLs from the urls table where the link is like '%facebook%'.
+        2. For each URL, processes it and then scrapes any event links by hitting the /events/ subpage.
+        3. Writes every processed URL—including event links—to the checkpoint CSV.
         """
-        # Check and see if this is a checkpoint run
+        # 1) Load or initialize the checkpoint dataframe
         if config['checkpoint']['fb_urls_cp_status']:
             fb_urls_df = pd.read_csv(config['checkpoint']['fb_urls_cp'])
         else:
             query = text("""
-            SELECT * 
-            FROM urls
-            WHERE link ILIKE :link_pattern
+                SELECT *
+                FROM urls
+                WHERE link ILIKE :link_pattern
             """)
             params = {'link_pattern': '%facebook%'}
             fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
             logging.info(f"def driver_fb_urls(): Retrieved {fb_urls_df.shape[0]} Facebook URLs from the database.")
 
-        # Add checkpoint columns for base URLs (these columns will also be used for event links)
+        # 2) Add checkpoint columns
         fb_urls_df['processed'] = False
         fb_urls_df['events_processed'] = False
-
-        # Write initial checkpoint to disk
         fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
-        
+
+        # 3) Iterate each base Facebook URL
         if fb_urls_df.shape[0] > 0:
             for idx, row in fb_urls_df.iterrows():
                 base_url = row['link']
                 source = row['source']
                 keywords = row['keywords']
-                logging.info(f"def driver_fb_urls(): Processing URL: {base_url}")
+                logging.info(f"def driver_fb_urls(): Processing base URL: {base_url}")
+
+                # Skip if already done
                 if base_url in self.urls_visited:
                     continue
-                else:
-                    self.process_fb_url(base_url, source, keywords)
-                    self.urls_visited.add(base_url)
 
-                    # Mark the base URL as processed (base processing done)
-                    fb_urls_df.loc[fb_urls_df['link'] == base_url, 'processed'] = True
+                # Process the base URL itself (writes any events found on that exact page)
+                self.process_fb_url(base_url, source, keywords)
+                self.urls_visited.add(base_url)
 
-                    # Overwrite the checkpoint file after processing the base URL
+                # Mark as processed
+                fb_urls_df.loc[fb_urls_df['link'] == base_url, 'processed'] = True
+                fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+                logging.info(f"def driver_fb_urls(): Base URL marked processed: {base_url}")
+
+                # Honor the run limit
+                if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                    break
+
+                # 4) Now scrape *all* event links by auto-navigating to /events/
+                fb_event_links = self.extract_event_links(base_url)
+                if not fb_event_links:
+                    logging.info(f"driver_fb_urls(): No events tab or no events found on {base_url}")
+
+                # 5) Process each event link
+                for event_url in fb_event_links:
+                    if event_url in self.urls_visited:
+                        continue
+
+                    self.process_fb_url(event_url, source, keywords)
+                    self.urls_visited.add(event_url)
+
+                    # Add or update checkpoint row
+                    if event_url not in fb_urls_df['link'].values:
+                        new_row = pd.DataFrame({
+                            'link': [event_url],
+                            'source': [source],
+                            'keywords': [keywords],
+                            'processed': [True],
+                            'events_processed': [True]
+                        })
+                        fb_urls_df = pd.concat([fb_urls_df, new_row], ignore_index=True)
+                    else:
+                        fb_urls_df.loc[fb_urls_df['link'] == event_url, 'processed'] = True
+                        fb_urls_df.loc[fb_urls_df['link'] == event_url, 'events_processed'] = True
+
                     fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
-                    logging.info(f"def driver_fb_urls(): Base URL {base_url} marked as processed.")
+                    logging.info(f"def driver_fb_urls(): Event URL marked processed: {event_url}")
 
-                    # Check urls_run_limit for the base URL
                     if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                         break
 
-                    # Extract event links from the base URL
-                    fb_event_links = self.extract_event_links(base_url)
+                # 6) Finally mark that we've scraped events for the base URL
+                fb_urls_df.loc[fb_urls_df['link'] == base_url, 'events_processed'] = True
+                fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+                logging.info(f"def driver_fb_urls(): Events_scraped flag set for base URL: {base_url}")
 
-                    # If this is a group URL, try to extract additional event links
-                    if "facebook.com/groups" in base_url:
-                        fb_group_events = self.fb_group_event_links(base_url)
-                        if fb_group_events:
-                            if fb_event_links:
-                                fb_event_links.update(fb_group_events)
-                            else:
-                                fb_event_links = fb_group_events.copy()
-                    
-                    # Process each event link and update the checkpoint file
-                    for event_url in fb_event_links:
-                        if event_url in self.urls_visited:
-                            continue
-                        else:
-                            self.process_fb_url(event_url, source, keywords)
-                            self.urls_visited.add(event_url)
-
-                            # If the event URL is not already in fb_urls_df, add a new row.
-                            if event_url not in fb_urls_df['link'].values:
-                                new_row = pd.DataFrame({
-                                    'link': [event_url],
-                                    'source': [source],
-                                    'keywords': [keywords],
-                                    'processed': [True],
-                                    'events_processed': [True]
-                                })
-                                fb_urls_df = pd.concat([fb_urls_df, new_row], ignore_index=True)
-                            else:
-                                # If the event URL already exists, mark it as processed.
-                                fb_urls_df.loc[fb_urls_df['link'] == event_url, 'processed'] = True
-                                fb_urls_df.loc[fb_urls_df['link'] == event_url, 'events_processed'] = True
-                            
-                            # Write the updated dataframe to the checkpoint file.
-                            fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
-                            logging.info(f"def driver_fb_urls(): Event URL {event_url} marked as processed.")
-
-                            # Check urls_run_limit for event links
-                            if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                                break
-
-                    # Mark that the base URL has finished processing event links as well.
-                    fb_urls_df.loc[fb_urls_df['link'] == base_url, 'events_processed'] = True
-                    fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
-                    logging.info(f"def driver_fb_urls(): Base URL {base_url} event links marked as processed.")
         else:
-            logging.warning("def driver_fb_urls(): No rows returned from the sql query.")
+            logging.warning("def driver_fb_urls(): No Facebook URLs returned from the database.")
 
 
     def write_run_statistics(self):
@@ -857,7 +763,6 @@ class FacebookEventScraper():
         Args:
             mode (str): "search" for keyword-based scraping, "urls" for URL-based processing.
         """
-
         self.driver_fb_search()
         self.driver_fb_urls()
 
