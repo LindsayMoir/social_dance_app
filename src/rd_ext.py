@@ -637,7 +637,7 @@ if __name__ == "__main__":
     # Read .csv file to deal with oddities
     df = pd.read_csv(config['input']['edge_cases'])
 
-    Expecting columns in order: source, keywords, url, multiple
+    # Expecting columns in order: source, keywords, url, multiple
     for source, keywords, url, multiple in df.itertuples(index=False, name=None):
         multiple_flag = str(multiple).strip().lower() == 'yes'
         logging.info(f"__main__: url={url}, source={source}, keywords={keywords}, multiple={multiple_flag}")

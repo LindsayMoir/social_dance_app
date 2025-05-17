@@ -544,14 +544,23 @@ class FacebookEventScraper():
         extracted_text = self.extract_event_text(url)
         if not extracted_text:
             logging.info(f"process_fb_url: no text for {url}")
-            db_handler.update_url(url, relevant=relevant, crawl_attempts=crawl_attempts)
+            db_handler.update_url(
+                                link=url,
+                                relevant=relevant,
+                                increment_crawl_try=crawl_attempts
+                                )
+            logging.info(f"process_fb_url: updated URL {url} as not relevant")
             return
         
         self.urls_with_extracted_text += 1
         found = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
         if not found:
             logging.info(f"process_fb_url: no keywords in {url}")
-            db_handler.update_url(url, relevant=relevant, crawl_attempts=crawl_attempts)
+            db_handler.update_url(
+                                link=url,
+                                relevant=relevant,
+                                increment_crawl_try=crawl_attempts
+                                )
             return
         self.urls_with_found_keywords += 1
 
@@ -559,19 +568,31 @@ class FacebookEventScraper():
         llm_response = llm_handler.query_llm(prompt)
         if not llm_response or "No events found" in llm_response:
             logging.info(f"process_fb_url: LLM no events for {url}")
-            db_handler.update_url(url, relevant=relevant, crawl_attempts=crawl_attempts)
+            db_handler.update_url(
+                                link=url,
+                                relevant=relevant,
+                                increment_crawl_try=crawl_attempts
+                                )
             return
         
         parsed = llm_handler.extract_and_parse_json(llm_response, url)
         if not parsed:
             logging.warning(f"process_fb_url: empty LLM response for {url}")
-            db_handler.update_url(url, relevant=relevant, crawl_attempts=crawl_attempts)
+            db_handler.update_url(
+                                link=url,
+                                relevant=relevant,
+                                increment_crawl_try=crawl_attempts
+                                )
             return
         
         events_df = pd.DataFrame(parsed)
         if events_df.empty:
             logging.warning(f"process_fb_url: empty DataFrame for {url}")
-            db_handler.update_url(url, relevant=relevant, crawl_attempts=crawl_attempts)
+            db_handler.update_url(
+                                link=url,
+                                relevant=relevant,
+                                increment_crawl_try=crawl_attempts
+                                )
             return
         
         if events_df['url'].iloc[0] == '':
@@ -581,7 +602,11 @@ class FacebookEventScraper():
         logging.info(f"process_fb_url: wrote events for {url}")
         self.events_written_to_db += len(events_df)
         relevant = True
-        db_handler.update_url(url, relevant=relevant, crawl_attempts=crawl_attempts)
+        db_handler.update_url(
+                            link=url,
+                            relevant=relevant,
+                            increment_crawl_try=crawl_attempts
+                            )
         logging.info(f"process_fb_url: marked relevant {url}")
 
         return
@@ -814,20 +839,17 @@ if __name__ == "__main__":
     fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
 
     # Run and ensure cleanup
-    try:
-        fb_scraper.run()
-    except Exception as e:
-        logging.error(f"__main__: Crawler encountered an exception: {e}")
-    finally:
-        # Close browser and Playwright
-        fb_scraper.browser.close()
-        fb_scraper.playwright.stop()
+    fb_scraper.run()
 
-        # Count events and URLs after running
-        db_handler.count_events_urls_end(start_df, file_name)
+    # Close browser and Playwright
+    fb_scraper.browser.close()
+    fb_scraper.playwright.stop()
 
-        # End time and elapsed time logging
-        end_time = datetime.now()
-        logging.info(f"__main__: Finished the crawler process at {end_time}")
-        elapsed_time = end_time - start_time
-        logging.info(f"__main__: Elapsed time: {elapsed_time}")
+    # Count events and URLs after running
+    db_handler.count_events_urls_end(start_df, file_name)
+
+    # End time and elapsed time logging
+    end_time = datetime.now()
+    logging.info(f"__main__: Finished the crawler process at {end_time}")
+    elapsed_time = end_time - start_time
+    logging.info(f"__main__: Elapsed time: {elapsed_time}")
