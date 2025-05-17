@@ -1,6 +1,9 @@
 # Authentication Credentials
-auth.json
+facebook_auth.json
 eventbrite_auth.json
+
+# ignore all logs
+logs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

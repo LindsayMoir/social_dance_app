@@ -160,108 +160,107 @@ class FacebookEventScraper():
 
     def login_to_facebook(self):
         """
-        Log into Facebook, reusing an existing session if possible.
-        Detects and pauses for manual solve of any checkbox CAPTCHA.
-        Saves the session to 'facebook_auth.json'.
+        Ensure we're logged into Facebook using the existing page.
+        If already logged in, return immediately; otherwise submit credentials once and handle CAPTCHA.
         """
-        storage = "facebook_auth.json"
+        page = self.logged_in_page  # reuse single page
 
-        # 1) Try to reload an existing session
+        # 1) Quick homepage check
         try:
-            ctx = self.browser.new_context(storage_state=storage)
-            page = ctx.new_page()
-            page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=30000)
+            page.goto(
+                "https://www.facebook.com/",
+                wait_until="domcontentloaded",
+                timeout=15000
+            )
             if "login" not in page.url.lower():
-                logging.info("login_to_facebook: reused existing session, already logged in.")
-                # update both page refs
-                self.page = page
-                self.logged_in_page = page
+                logging.info("login_to_facebook: already logged in, reusing existing page.")
                 return True
-        except Exception:
-            logging.info("login_to_facebook: no saved session, performing fresh login.")
-
-        # 2) Fresh login
-        self.page.goto("https://www.facebook.com/login", wait_until="domcontentloaded", timeout=30000)
-        email, password, _ = get_credentials("Facebook")
-        self.page.fill("input[name='email']", email)
-        self.page.fill("input[name='pass']", password)
-        self.page.click("button[name='login']")
-        logging.info("login_to_facebook: credentials submitted, waiting…")
-
-        # 3) Detect reCAPTCHA iframe
-        try:
-            self.page.wait_for_selector("iframe[src*='recaptcha']", timeout=10000)
-            self.page.screenshot(path="debug/facebook_recaptcha.png", full_page=True)
-            logging.info("login_to_facebook: reCAPTCHA detected—screenshot saved.")
-            input("Please solve the reCAPTCHA in the browser, then press ENTER here…")
         except PlaywrightTimeoutError:
-            logging.info("login_to_facebook: no reCAPTCHA detected.")
+            logging.warning("login_to_facebook: homepage load timed out; proceeding.")
 
-        # 4) Wait for the page to settle
+        # 2) Submit credentials if on login page
+        if "login" in page.url.lower():
+            try:
+                email, password, _ = get_credentials("Facebook")
+                page.fill("input[name='email']", email)
+                page.fill("input[name='pass']", password)
+                page.click("button[name='login']")
+                logging.info("login_to_facebook: submitted credentials, checking for reCAPTCHA.")
+
+                # 3) Detect reCAPTCHA iframe
+                try:
+                    page.wait_for_selector("iframe[src*='recaptcha']", timeout=10000)
+                    page.screenshot(path="debug/facebook_recaptcha.png", full_page=True)
+                    logging.info("login_to_facebook: reCAPTCHA detected—screenshot saved.")
+                    input("Please solve the reCAPTCHA in the browser, then press ENTER to continue...")
+                except PlaywrightTimeoutError:
+                    logging.info("login_to_facebook: no reCAPTCHA detected.")
+
+                # 4) Wait for page to finish loading
+                logging.info("login_to_facebook: waiting for networkidle after login.")
+                page.wait_for_load_state("networkidle", timeout=30000)
+
+                if "login" in page.url.lower():
+                    logging.error("login_to_facebook: still on login page after attempt.")
+                    return False
+            except Exception as e:
+                logging.error(f"login_to_facebook: error during login: {e}")
+                return False
+
+        # 5) Persist session state
         try:
-            self.page.wait_for_load_state("networkidle", timeout=30000)
-        except PlaywrightTimeoutError:
-            logging.warning("login_to_facebook: networkidle timeout—continuing anyway.")
-
-        # 5) Verify login succeeded
-        if "login" in self.page.url.lower():
-            logging.error("login_to_facebook: still on login page—login probably failed.")
-            return False
-
-        # 6) Save session
-        try:
-            self.page.context.storage_state(path=storage)
-            logging.info("login_to_facebook: session saved to facebook_auth.json.")
+            self.context.storage_state(path="facebook_auth.json")
+            logging.info("login_to_facebook: session state saved.")
         except Exception as e:
-            logging.warning(f"login_to_facebook: could not save session: {e}")
+            logging.warning(f"login_to_facebook: could not save session state: {e}")
 
-        # make sure future scrapes reuse this page
-        self.logged_in_page = self.page
+        logging.info("login_to_facebook: login sequence complete.")
         return True
     
 
     def extract_event_links(self, search_url):
         """
-        Extracts event links from a Facebook page (search or group) by regex.
-        If it’s a group URL, auto-navigate to the /events/ sub-page.
-        Always reuses the single logged-in page.
+        Extracts Facebook event links from a search or group URL by navigating once,
+        optionally scrolling, then regex-matching '/events/<id>/' links.
         """
-        # 0) Ensure login
+        # Ensure logged in
         if not self.login_to_facebook():
             logging.error(f"extract_event_links(): login failed, skipping {search_url}")
             return set()
 
-        # 0b) If this is a group URL, go straight to its events tab
+        page = self.logged_in_page
+
+        # Handle group URL events tab
         if "/groups/" in search_url and not search_url.rstrip("/").endswith("/events"):
             search_url = search_url.rstrip("/") + "/events/"
 
+        self.total_url_attempts += 1
+        logging.info(f"extract_event_links(): Navigating to {search_url} (domcontentloaded, 20s timeout)")
         try:
-            self.total_url_attempts += 1
-            page = self.logged_in_page
-
-            timeout_value = random.randint(8000, 12000)
-            logging.info(f"extract_event_links(): Navigating to {search_url} (timeout {timeout_value}ms)")
-            page.goto(search_url, timeout=timeout_value, wait_until="domcontentloaded")
-            page.wait_for_timeout(random.randint(4000, 7000))
-
-            # Scroll to load all events
-            for _ in range(self.config['crawling']['scroll_depth']):
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.wait_for_timeout(random.randint(1500, 3000))
-
-            content = page.content()
-            links = set(re.findall(r'https://www\.facebook\.com/events/\d+/', content))
-
-            if links:
-                self.urls_with_extracted_text += 1
-                self.unique_urls.update(links)
-
-            logging.info(f"extract_event_links(): Found {len(links)} event links on {search_url}")
-            return links
-
-        except Exception as e:
-            logging.error(f"extract_event_links(): Error on {search_url}: {e}")
+            page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
+        except PlaywrightTimeoutError as e:
+            logging.error(f"extract_event_links(): navigation timed out: {e}")
             return set()
+        except Exception as e:
+            logging.error(f"extract_event_links(): unexpected error loading {search_url}: {e}")
+            return set()
+
+        # Minimal JS wait or small scroll for group events
+        if search_url.rstrip('/').endswith('/events'):
+            page.wait_for_timeout(2000)
+            for _ in range(min(2, self.config['crawling'].get('scroll_depth', 2))):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(1000)
+        else:
+            page.wait_for_timeout(2000)
+
+        html = page.content()
+        links = set(re.findall(r'https://www\.facebook\.com/events/\d+/', html))
+        if links:
+            self.urls_with_extracted_text += 1
+            self.unique_urls.update(links)
+        logging.info(f"extract_event_links(): Found {len(links)} event links on {search_url}")
+        return links
     
 
     def extract_event_text(self, link):
@@ -773,7 +772,7 @@ class FacebookEventScraper():
 
 
 if __name__ == "__main__":
-    # Load config
+    # Load configuration
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
@@ -788,33 +787,35 @@ if __name__ == "__main__":
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt='%Y-%m-%d %H:%M:%S'
     )
+
     # Start time
     start_time = datetime.now()
-    logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
+    logging.info(f"__main__: Starting fb.py ... and the crawler process at {start_time}")
 
-    # Get the file name of the code that is running
+    # Get the file name of the running script
     file_name = os.path.basename(__file__)
 
-    # Count events and urls before fb.py
+    # Count events and URLs before running
     start_df = db_handler.count_events_urls_start(file_name)
 
     # Initialize scraper
     fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
 
-    # Call run()
-    fb_scraper.run()
+    # Run and ensure cleanup
+    try:
+        fb_scraper.run()
+    except Exception as e:
+        logging.error(f"__main__: Crawler encountered an exception: {e}")
+    finally:
+        # Close browser and Playwright
+        fb_scraper.browser.close()
+        fb_scraper.playwright.stop()
 
-    # Close the browser and Playwright
-    fb_scraper.browser.close()
-    fb_scraper.playwright.stop()
+        # Count events and URLs after running
+        db_handler.count_events_urls_end(start_df, file_name)
 
-    # Count events and urls after fb.py
-    db_handler.count_events_urls_end(start_df, file_name)
-
-    # End time
-    end_time = datetime.now()
-    logging.info(f"__main__: Finished the crawler process at {end_time}")
-
-    # Elapsed time
-    elapsed_time = end_time - start_time
-    logging.info(f"__main__: Elapsed time: {elapsed_time}")
+        # End time and elapsed time logging
+        end_time = datetime.now()
+        logging.info(f"__main__: Finished the crawler process at {end_time}")
+        elapsed_time = end_time - start_time
+        logging.info(f"__main__: Elapsed time: {elapsed_time}")
