@@ -79,6 +79,7 @@ import random
 import re
 from sqlalchemy import text
 import time
+from urllib.parse import urlparse, parse_qs, unquote
 import yaml
 
 # Import other classes
@@ -218,11 +219,55 @@ class FacebookEventScraper():
         return True
     
 
+    def normalize_facebook_url(self, url: str) -> str:
+        """
+        Normalizes a Facebook URL by removing unnecessary parameters and ensuring a consistent format.
+
+        Args:
+            url (str): The Facebook URL to normalize.
+
+        Returns:
+            str: The normalized URL.
+        """
+       
+        # 1) If it’s a login redirect, unwrap the `next` param
+        if 'facebook.com/login/' in url:
+            qs = parse_qs(urlparse(url).query)
+            if 'next' in qs:
+                return unquote(qs['next'][0])
+            
+        # 2) Force all facebook domains back to https://www.facebook.com
+        return re.sub(r'https?://[^/]*facebook\.com', 'https://www.facebook.com', url)
+    
+
+    def navigate_and_maybe_login(self, raw_url: str):
+        url = self.normalize_facebook_url(raw_url)
+        page = self.logged_in_page
+
+        # Try to go there
+        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+
+        # If Facebook bounced you to a login page again…
+        if 'login' in page.url.lower():
+            logging.info(f"navigate_and_maybe_login: got login page for {url}, re-authenticating")
+            if not self.login_to_facebook():
+                logging.error("navigate_and_maybe_login: re-login failed!")
+                return False
+            # and then retry the real URL
+            page.goto(url, wait_until="domcontentloaded", timeout=20000)
+
+        return True
+    
+
     def extract_event_links(self, search_url):
         """
         Extracts Facebook event links from a search or group URL by navigating once,
         optionally scrolling, then regex-matching '/events/<id>/' links.
         """
+        # normalize out any login redirect or locale-subdomain
+        search_url = self.normalize_facebook_url(search_url)
+        logging.info(f"extract_event_links(): Normalized URL: {search_url}")
+
         # Ensure logged in
         if not self.login_to_facebook():
             logging.error(f"extract_event_links(): login failed, skipping {search_url}")
@@ -237,7 +282,9 @@ class FacebookEventScraper():
         self.total_url_attempts += 1
         logging.info(f"extract_event_links(): Navigating to {search_url} (domcontentloaded, 20s timeout)")
         try:
-            page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
+            if not self.navigate_and_maybe_login(search_url):
+                return set()
+
         except PlaywrightTimeoutError as e:
             logging.error(f"extract_event_links(): navigation timed out: {e}")
             return set()
@@ -289,7 +336,9 @@ class FacebookEventScraper():
         timeout_value = random.randint(10000, 15000)
         logging.info(f"extract_event_text(): Navigating to {link} (timeout {timeout_value} ms)...")
         try:
-            page.goto(link, wait_until="domcontentloaded", timeout=timeout_value)
+            if not self.navigate_and_maybe_login(link):
+                return None
+
         except Exception as e:
             logging.warning(f"extract_event_text(): Navigation failed for {link}: {e}")
             return None
@@ -504,6 +553,9 @@ class FacebookEventScraper():
         # Sanitize URL if malformed
         if url.startswith("http://https") or url.startswith("https://https"):
             url = self.fix_facebook_event_url(url)
+
+        # normalize out any login redirect or locale-subdomain
+        search_url = self.normalize_facebook_url(search_url)
 
         # Default values
         relevant = False
