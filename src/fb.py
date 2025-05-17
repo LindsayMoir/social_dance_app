@@ -221,177 +221,173 @@ class FacebookEventScraper():
 
     def normalize_facebook_url(self, url: str) -> str:
         """
-        Normalizes a Facebook URL by removing unnecessary parameters and ensuring a consistent format.
-
-        Args:
-            url (str): The Facebook URL to normalize.
-
-        Returns:
-            str: The normalized URL.
+        If the URL is a Facebook login redirect, unwrap the 'next' parameter and return the real target.
+        Otherwise, return the URL unchanged.
         """
-       
-        # 1) If it’s a login redirect, unwrap the `next` param
         if 'facebook.com/login/' in url:
-            qs = parse_qs(urlparse(url).query)
+            parsed = urlparse(url)
+            qs = parse_qs(parsed.query)
             if 'next' in qs:
-                return unquote(qs['next'][0])
-            
-        # 2) Force all facebook domains back to https://www.facebook.com
-        return re.sub(r'https?://[^/]*facebook\.com', 'https://www.facebook.com', url)
+                real = unquote(qs['next'][0])
+                logging.info(f"normalize_facebook_url: unwrapped login redirect to {real}")
+                return real
+        return url
     
 
-    def navigate_and_maybe_login(self, raw_url: str):
-        url = self.normalize_facebook_url(raw_url)
+    def navigate_and_maybe_login(self, incoming_url: str) -> bool:
+        """
+        Navigate to a Facebook URL, handle login redirects, detect blocks, and retry.
+        """
+        real_url = self.normalize_facebook_url(incoming_url)
         page = self.logged_in_page
-
-        # Try to go there
-        page.goto(url, wait_until="domcontentloaded", timeout=20000)
-
-        # If Facebook bounced you to a login page again…
-        if 'login' in page.url.lower():
-            logging.info(f"navigate_and_maybe_login: got login page for {url}, re-authenticating")
-            if not self.login_to_facebook():
-                logging.error("navigate_and_maybe_login: re-login failed!")
+        # If this is a login redirect, try it first to trigger login flow
+        if 'facebook.com/login/' in incoming_url:
+            try:
+                page.goto(incoming_url, wait_until="domcontentloaded", timeout=20000)
+            except PlaywrightTimeoutError:
+                logging.warning(f"navigate_and_maybe_login: timeout on login redirect {incoming_url}")
+            content = page.content().lower()
+            # Detect temporary block
+            if 'temporarily blocked' in content or 'misusing this feature' in content:
+                logging.warning(f"navigate_and_maybe_login: blocked on login redirect. Falling back to {real_url}")
+                try:
+                    page.goto(real_url, wait_until="domcontentloaded", timeout=20000)
+                except PlaywrightTimeoutError:
+                    logging.error(f"navigate_and_maybe_login: timeout loading fallback {real_url}")
+                return True
+            # If still on login page, perform login
+            if 'login' in page.url.lower():
+                logging.info(f"navigate_and_maybe_login: login required for {incoming_url}")
+                if not self.login_to_facebook():
+                    return False
+            # After login, go to real URL
+            try:
+                page.goto(real_url, wait_until="domcontentloaded", timeout=20000)
+            except PlaywrightTimeoutError:
+                logging.error(f"navigate_and_maybe_login: timeout loading real URL {real_url}")
                 return False
-            # and then retry the real URL
-            page.goto(url, wait_until="domcontentloaded", timeout=20000)
-
+            return True
+        # Non-login URLs: direct navigation
+        try:
+            page.goto(real_url, wait_until="domcontentloaded", timeout=20000)
+        except PlaywrightTimeoutError:
+            logging.warning(f"navigate_and_maybe_login: timeout on {real_url}")
+        if 'login' in page.url.lower():
+            logging.info(f"navigate_and_maybe_login: login required for {real_url}")
+            if not self.login_to_facebook():
+                return False
+            try:
+                page.goto(real_url, wait_until="domcontentloaded", timeout=20000)
+            except PlaywrightTimeoutError:
+                logging.error(f"navigate_and_maybe_login: timeout after login for {real_url}")
+                return False
         return True
     
 
-    def extract_event_links(self, search_url):
+    def extract_event_links(self, search_url: str) -> set:
         """
-        Extracts Facebook event links from a search or group URL by navigating once,
-        optionally scrolling, then regex-matching '/events/<id>/' links.
+        Extracts Facebook event links from a given search URL.
+        This method navigates to the provided Facebook search URL, ensuring access and login if necessary.
+        It normalizes the URL, handles group event tabs, scrolls the page to load more events if applicable,
+        and extracts all unique event links found in the page's HTML content.
+        Args:
+            search_url (str): The Facebook URL to search for event links.
+        Returns:
+            set: A set of unique Facebook event URLs extracted from the page.
+        Side Effects:
+            - Logs various informational and error messages.
+            - Updates internal counters and sets for tracking URLs.
+            - May trigger navigation and scrolling actions in the browser automation context.
         """
-        # normalize out any login redirect or locale-subdomain
-        search_url = self.normalize_facebook_url(search_url)
-        logging.info(f"extract_event_links(): Normalized URL: {search_url}")
 
-        # Ensure logged in
-        if not self.login_to_facebook():
-            logging.error(f"extract_event_links(): login failed, skipping {search_url}")
+        # 1) Ensure access
+        if not self.navigate_and_maybe_login(search_url):
+            logging.error(f"extract_event_links: cannot access {search_url}")
             return set()
+        
+        # 2) Normalize for tab logic
+        norm_url = self.normalize_facebook_url(search_url)
+        logging.info(f"extract_event_links(): Normalized URL: {norm_url}")
 
-        page = self.logged_in_page
-
-        # Handle group URL events tab
-        if "/groups/" in search_url and not search_url.rstrip("/").endswith("/events"):
-            search_url = search_url.rstrip("/") + "/events/"
-
+        # 3) Handle /events tab
+        if "/groups/" in norm_url and not norm_url.rstrip("/").endswith("/events"):
+            norm_url = norm_url.rstrip("/") + "/events/"
         self.total_url_attempts += 1
-        logging.info(f"extract_event_links(): Navigating to {search_url} (domcontentloaded, 20s timeout)")
+        logging.info(f"extract_event_links(): Navigating to {norm_url}")
+
         try:
-            if not self.navigate_and_maybe_login(search_url):
-                return set()
-
-        except PlaywrightTimeoutError as e:
-            logging.error(f"extract_event_links(): navigation timed out: {e}")
-            return set()
+            self.logged_in_page.goto(norm_url, wait_until="domcontentloaded", timeout=20000)
         except Exception as e:
-            logging.error(f"extract_event_links(): unexpected error loading {search_url}: {e}")
+            logging.error(f"extract_event_links(): error loading {norm_url}: {e}")
             return set()
-
-        # Minimal JS wait or small scroll for group events
-        if search_url.rstrip('/').endswith('/events'):
-            page.wait_for_timeout(2000)
+        
+        if norm_url.rstrip('/').endswith('/events'):
+            self.logged_in_page.wait_for_timeout(2000)
             for _ in range(min(2, self.config['crawling'].get('scroll_depth', 2))):
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.wait_for_timeout(1000)
+                self.logged_in_page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                self.logged_in_page.wait_for_timeout(1000)
         else:
-            page.wait_for_timeout(2000)
+            self.logged_in_page.wait_for_timeout(2000)
 
-        html = page.content()
+        html = self.logged_in_page.content()
         links = set(re.findall(r'https://www\.facebook\.com/events/\d+/', html))
         if links:
             self.urls_with_extracted_text += 1
             self.unique_urls.update(links)
-        logging.info(f"extract_event_links(): Found {len(links)} event links on {search_url}")
+        logging.info(f"extract_event_links(): Found {len(links)} links on {norm_url}")
+        
         return links
     
 
-    def extract_event_text(self, link):
+    def extract_event_text(self, link: str) -> str:
         """
-        Extracts text from an event page using Playwright and BeautifulSoup.
-
+        Extracts the full text content from a Facebook event page.
+        Navigates to the specified event link, handling login if necessary, and attempts to load the page content.
+        Clicks "See more" buttons to expand hidden text, waits for dynamic content to load, and then extracts all visible text from the page.
+        Returns the concatenated text content, or None if the page cannot be accessed or no text is found.
         Args:
-            link (str): The event link.
-
+            link (str): The URL of the Facebook event page to extract text from.
         Returns:
-            str: The extracted relevant text content, or None if no relevant text is found.
+            str: The extracted text content from the event page, or None if extraction fails.
         """
-        self.total_url_attempts += 1  # Count URL contact attempts
 
-        # 1) Reuse the logged‑in page if valid, otherwise open a fresh one
-        try:
-            if not self.logged_in_page or self.logged_in_page.url == "about:blank":
-                raise Exception("Logged-in page invalid")
-            page = self.logged_in_page
-        except Exception:
-            logging.warning("extract_event_text(): Logged-in page invalid, opening a new one.")
+        if not self.navigate_and_maybe_login(link):
+            logging.warning(f"extract_event_text: cannot access {link}")
+            return None
+        
+        self.total_url_attempts += 1
+        page = self.logged_in_page
+
+        if not page or page.url == "about:blank":
             page = self.context.new_page()
             self.logged_in_page = page
-
-        # 2) Navigate only to DOMContentLoaded, then wait a bit for JS
         timeout_value = random.randint(10000, 15000)
-        logging.info(f"extract_event_text(): Navigating to {link} (timeout {timeout_value} ms)...")
+        logging.info(f"extract_event_text: Navigating to {link} ({timeout_value} ms)")
+
         try:
-            if not self.navigate_and_maybe_login(link):
-                return None
-
-        except Exception as e:
-            logging.warning(f"extract_event_text(): Navigation failed for {link}: {e}")
+            page.goto(link, wait_until="domcontentloaded", timeout=timeout_value)
+        except PlaywrightTimeoutError:
+            logging.error(f"extract_event_text: timeout on {link}")
             return None
-
-        # Give React/JS a few seconds to hydrate
+        
         page.wait_for_timeout(random.randint(4000, 7000))
-
-        # 3) Click any “See more” buttons
         for btn in page.query_selector_all("text=/See more/i"):
             try:
                 btn.click()
                 page.wait_for_timeout(random.randint(3000, 6000))
-                logging.info(f"extract_event_text(): Clicked 'See more' on {link}")
-            except Exception as e:
-                logging.warning(f"extract_event_text(): Could not click 'See more' on {link}: {e}")
+            except:
+                break
 
-        # Final short pause before scraping HTML
         page.wait_for_timeout(random.randint(3000, 5000))
-
-        # 4) Pull content and parse
         html = page.content()
         soup = BeautifulSoup(html, 'html.parser')
-        extracted_text = ' '.join(soup.stripped_strings)
-
-        if not extracted_text:
-            logging.warning(f"extract_event_text(): No text extracted from {link}.")
+        full_text = ' '.join(soup.stripped_strings)
+        if not full_text:
+            logging.warning(f"extract_event_text: no text from {link}")
             return None
+        logging.info(f"extract_event_text: extracted {len(full_text)} chars")
 
-        # 5) Update counters and check for keywords
-        self.urls_with_extracted_text += 1
-        logging.info(f"extract_event_text(): Raw text length {len(extracted_text)} chars for {link}")
-
-        found = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-        if not found:
-            logging.info(f"extract_event_text(): No keywords found in text for {link}.")
-            return None
-
-        self.urls_with_found_keywords += 1
-
-        # 6) For FB event pages, run your regex‑based slice
-        if 'facebook.com/events/' in link:
-            chunk = self.extract_relevant_text(extracted_text, link)
-            if chunk:
-                logging.info(f"extract_event_text(): Extracted relevant snippet ({len(chunk)} chars) from {link}")
-                logging.info(f"extract_event_text(): Snippet: {chunk}")
-                return chunk
-            else:
-                logging.warning(f"extract_event_text(): Snippet extraction failed for {link}, returning full text.")
-                logging.info(f"extract_event_text(): Full text: {extracted_text}")
-                return extracted_text
-
-        # 7) Otherwise return everything
-        return extracted_text
+        return full_text
 
     
     def extract_relevant_text(self, content, link):
@@ -508,122 +504,86 @@ class FacebookEventScraper():
         logging.info(f"def scrape_events(): Extracted text data written to {output_path}.")
 
         return search_url, extracted_text_list
-        
 
-    def fix_facebook_event_url(self, malformed_url):
+
+    def process_fb_url(self, url: str, source: str, keywords: str):
         """
-        Extracts and fixes a malformed Facebook event URL.
-        
+        Processes a Facebook event URL by extracting event information, checking for relevant keywords,
+        querying an LLM for event details, and writing the results to the database.
         Args:
-            malformed_url (str): The potentially malformed URL.
-        
-        Returns:
-            str or None: A corrected URL in the format 
-                        'https://www.facebook.com/events/<event_id>/' 
-                        if found, otherwise None.
-        """
-        # Regular expression pattern to capture the Facebook event URL structure.
-        pattern = re.compile(
-            r"(https?://)?(?:www\.)?facebook\.com/events/(\d+)/",
-            re.IGNORECASE
-        )
-        
-        match = pattern.search(malformed_url)
-        if match:
-            event_id = match.group(2)  # Extracted event id
-            # Construct a properly formatted URL
-            fixed_url = f"https://www.facebook.com/events/{event_id}/"
-            return fixed_url
-        
-        return None
-
-
-    def process_fb_url(self, url, source, keywords):
-        """
-        Processes a single Facebook URL: extracts text, interacts with LLM, and updates the database.
-
-        Args:
-            url (str): The Facebook URL to process.
-            source (str): The organization name associated with the URL.
-            keywords (str): Keywords associated with the URL.
-
+            url (str): The Facebook event URL to process.
+            source (str): The source identifier for the event (e.g., 'fb').
+            keywords (str): Comma-separated keywords to check for relevance.
+        Workflow:
+            1. Navigates to the URL and logs in if necessary.
+            2. Normalizes the Facebook URL.
+            3. Extracts text content from the event page.
+            4. Checks if any of the specified keywords are present in the extracted text.
+            5. If relevant, generates a prompt and queries an LLM for structured event data.
+            6. Parses the LLM response and converts it to a DataFrame.
+            7. Writes the event data to the database if found.
+            8. Updates the URL's status in the database as relevant or not, and logs progress.
+        Side Effects:
+            - Updates internal counters for attempts, extracted texts, found keywords, and written events.
+            - Writes to and updates the database via db_handler.
+            - Logs progress and issues at various steps.
         Returns:
             None
         """
-        # Sanitize URL if malformed
-        if url.startswith("http://https") or url.startswith("https://https"):
-            url = self.fix_facebook_event_url(url)
 
-        # normalize out any login redirect or locale-subdomain
-        search_url = self.normalize_facebook_url(search_url)
-
-        # Default values
-        relevant = False
-        increment_crawl_try = 1
-
-        if not url:
-            logging.warning("process_fb_url(): No valid URL provided for processing.")
+        if not self.navigate_and_maybe_login(url):
+            logging.info(f"process_fb_url: cannot access {url}")
+            db_handler.update_url(url, relevant=False, crawl_attempts=1)
             return
+        
+        url = self.normalize_facebook_url(url)
+        relevant = False
+        crawl_attempts = 1
+        self.total_url_attempts += 1
 
-        self.total_url_attempts += 1  # Increment total attempts
-
-        # Extract text (Avoid logging in every time)
         extracted_text = self.extract_event_text(url)
         if not extracted_text:
-            logging.info(f"process_fb_url(): No text extracted for URL: {url}. Marking as processed.")
-            db_handler.update_url(url, relevant, increment_crawl_try)
+            logging.info(f"process_fb_url: no text for {url}")
+            db_handler.update_url(url, relevant=relevant, crawl_attempts=crawl_attempts)
             return
-
-        self.urls_with_extracted_text += 1  # Increment extracted text count
-
-        # Check for keywords in extracted text
-        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-        if not found_keywords:
-            logging.info(f"process_fb_url(): No keywords found in text for {url}. Marking as processed.")
-            db_handler.update_url(url, relevant, increment_crawl_try)
+        
+        self.urls_with_extracted_text += 1
+        found = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+        if not found:
+            logging.info(f"process_fb_url: no keywords in {url}")
+            db_handler.update_url(url, relevant=relevant, crawl_attempts=crawl_attempts)
             return
+        self.urls_with_found_keywords += 1
 
-        self.urls_with_found_keywords += 1  # Increment keyword match count
-        logging.info(f"process_fb_url(): Keywords found in text for {url}.")
-
-        # Generate prompt & query LLM only if keywords were found
         prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
         llm_response = llm_handler.query_llm(prompt)
-
-        # If LLM says "No events found," update URL as non-relevant
-        if llm_response is None or "No events found" in llm_response:
-            logging.info(f"process_fb_url(): LLM determined no valid events for {url}. Marking as processed.")
-            db_handler.update_url(url, relevant, increment_crawl_try)
+        if not llm_response or "No events found" in llm_response:
+            logging.info(f"process_fb_url: LLM no events for {url}")
+            db_handler.update_url(url, relevant=relevant, crawl_attempts=crawl_attempts)
             return
-
-        # Extract parsed results from LLM response
-        parsed_result = llm_handler.extract_and_parse_json(llm_response, url)
-        if not parsed_result:
-            logging.warning(f"process_fb_url(): LLM returned an empty response for {url}. Marking as processed.")
-            db_handler.update_url(url, relevant, increment_crawl_try)
+        
+        parsed = llm_handler.extract_and_parse_json(llm_response, url)
+        if not parsed:
+            logging.warning(f"process_fb_url: empty LLM response for {url}")
+            db_handler.update_url(url, relevant=relevant, crawl_attempts=crawl_attempts)
             return
-
-        # Convert parsed data into a DataFrame & Write to Database
-        events_df = pd.DataFrame(parsed_result)
+        
+        events_df = pd.DataFrame(parsed)
         if events_df.empty:
-            logging.warning(f"process_fb_url(): Parsed result was empty for {url}. No data written.")
-            db_handler.update_url(url, relevant, increment_crawl_try)
+            logging.warning(f"process_fb_url: empty DataFrame for {url}")
+            db_handler.update_url(url, relevant=relevant, crawl_attempts=crawl_attempts)
             return
-
-        # Ensure URL field is filled
-        if events_df['url'].values[0] == '':
+        
+        if events_df['url'].iloc[0] == '':
             events_df.loc[0, 'url'] = url
 
-        # Write events to DB
         db_handler.write_events_to_db(events_df, url, source, keywords)
-        logging.info(f"process_fb_url(): Events successfully written to DB for {url}.")
-
-        self.events_written_to_db += len(events_df)  # Increment event count
-
-        # Mark URL as relevant
+        logging.info(f"process_fb_url: wrote events for {url}")
+        self.events_written_to_db += len(events_df)
         relevant = True
-        db_handler.update_url(url, relevant, increment_crawl_try)
-        logging.info(f"process_fb_url(): URL marked as relevant and updated: {url}.")
+        db_handler.update_url(url, relevant=relevant, crawl_attempts=crawl_attempts)
+        logging.info(f"process_fb_url: marked relevant {url}")
+
         return
     
 

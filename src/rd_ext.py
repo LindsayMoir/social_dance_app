@@ -637,18 +637,18 @@ if __name__ == "__main__":
     # Read .csv file to deal with oddities
     df = pd.read_csv(config['input']['edge_cases'])
 
-    # Expecting columns in order: source, keywords, url, multiple
-    # for source, keywords, url, multiple in df.itertuples(index=False, name=None):
-    #     multiple_flag = str(multiple).strip().lower() == 'yes'
-    #     logging.info(f"__main__: url={url}, source={source}, keywords={keywords}, multiple={multiple_flag}")
-    #     extracted = asyncio.run(read_extract.main(url, multiple_flag))
+    Expecting columns in order: source, keywords, url, multiple
+    for source, keywords, url, multiple in df.itertuples(index=False, name=None):
+        multiple_flag = str(multiple).strip().lower() == 'yes'
+        logging.info(f"__main__: url={url}, source={source}, keywords={keywords}, multiple={multiple_flag}")
+        extracted = asyncio.run(read_extract.main(url, multiple_flag))
 
-    #     # If multiple events were found (i.e. extracted is a dict), process each event separately
-    #     if isinstance(extracted, dict):
-    #         for event_url, text in extracted.items():
-    #             llm_status = llm_handler.process_llm_response(event_url, text, source, keywords, prompt=event_url)
-    #     else:
-    #         llm_status = llm_handler.process_llm_response(url, extracted, source, keywords, prompt=url)
+        # If multiple events were found (i.e. extracted is a dict), process each event separately
+        if isinstance(extracted, dict):
+            for event_url, text in extracted.items():
+                llm_status = llm_handler.process_llm_response(event_url, text, source, keywords, prompt=event_url)
+        else:
+            llm_status = llm_handler.process_llm_response(url, extracted, source, keywords, prompt=url)
 
     # Add uvic wednesday rueda event. This event sometimes appears and then it dissapears. Lets just put it in.
     uvic_rueda()
