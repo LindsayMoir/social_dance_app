@@ -623,3 +623,157 @@ address_id,full_address,building_name,street_number,street_name,street_type,dire
 3481,"Kinsmen Hall Dougall Park, Lower Gibsons, BC, V0N 1V8, CA",Kinsmen Hall Dougall Park,,,,,Lower Gibsons,,BC,V0N 1V8,CA,2025-03-29 16:32:46.508386
 3483,"Victoria Event Centre, Victoria, British Columbia, BC, V8W 2B2, CA",Victoria Event Centre,,,,,Victoria,,BC,V8W 2B2,CA,2025-03-29 17:18:16.519062
 3484,"Cameron Bandshell, Beacon Hill Park, Victoria, British Columbia, BC, V8V 2P2, CA",Cameron Bandshell,,,,,Victoria,,BC,V8V 2P2,CA,2025-03-29 19:07:41.357153
+address_id,full_address,building_name,street_number,street_name,street_type,direction,city,met_area,province_or_state,postal_code,country_id,time_stamp
+2172,"11 High ST, VICTORIA, BC, V8Z5C8, CA",,11,High,ST,,VICTORIA,,BC,V8Z5C8,CA,2025-03-09 17:03:14.009745
+1081,"Confederation Centre in North Burnaby, BC, V5C 2G5, CA",Confederation Centre,,,,,North Burnaby,,BC,V5C 2G5,CA,2025-03-16 16:02:32.998106
+922,"3255 Harriet RD, VICTORIA, BC, V8Z3S3, CA",,3255,Harriet,RD,,VICTORIA,,BC,V8Z3S3,CA,2025-05-16 11:59:22.593304
+2130,"3 8th AVE W, VANCOUVER, BC, V5Y1M8, CA",,3,8th,AVE,W,VANCOUVER,,BC,V5Y1M8,CA,2025-05-14 07:21:52.713485
+12,"Les Passmore Centre, 286 Hampton Rd, Victoria, BC, V8Z 1H3, CA",Les Passmore Centre,286,Hampton,Rd,,Victoria,,BC,V8Z 1H3,CA,2025-03-09 16:33:33.018770
+1106,"Vancouver, BC, Canada, Vancouver, BC, CA",,,,,,Vancouver,,BC,,CA,2025-03-28 00:06:03.313037
+3386,"Victoria, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-07 09:36:18.866527
+1318,"Victoria, BC, Canada, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:40:17.403858
+8,"Bowen Park, Nanaimo, BC, V9R 1Z7, CA",Bowen Park,,,,,Nanaimo,,BC,V9R 1Z7,CA,2025-03-06 15:43:51.562704
+1327,"21 Erie ST, VICTORIA, BC, V8V5A8, CA",,21,Erie,ST,,VICTORIA,,BC,V8V5A8,CA,2025-03-16 19:01:22.248259
+1303,"1975 Bee ST, VICTORIA, BC, V8R5E6, CA",,1975,Bee,ST,,VICTORIA,,BC,V8R5E6,CA,2025-03-16 17:14:49.960070
+588,"Salsa Moderna Dance Lessons Victoria, BC, V8S 5K2, CA",Salsa Moderna Dance Lessons,,,,,Victoria,,BC,V8S 5K2,CA,2025-03-16 15:45:29.537718
+1307,"4100 Lambrick WAY, VICTORIA, BC, V8N5R3, CA",,4100,Lambrick,WAY,,VICTORIA,,BC,V8N5R3,CA,2025-03-16 17:14:49.998715
+1321,"1755 Davie St, BC, V6G 0B8, CA",,1755,Davie,St,,,,BC,V6G 0B8,CA,2025-03-16 18:55:53.243006
+1322,"Suite Genius, BC, V5Y 1N3, CA",Suite Genius,,,,,,,BC,V5Y 1N3,CA,2025-03-16 18:55:53.545642
+1324,"Victoria Curling Club, BC, V8T 4C2, CA",Victoria Curling Club,,,,,,,BC,V8T 4C2,CA,2025-03-16 18:55:53.719230
+1326,"Fairmont Vancouver Airport, BC, V7B 0A6, CA",Fairmont Vancouver Airport,,,,,,,BC,V7B 0A6,CA,2025-03-16 18:55:54.496634
+16,"Propat Legion, 411 Gorge Road East, BC, V8T 2W1, CA",Propat Legion,411,Gorge,Road,East,,,BC,V8T 2W1,CA,
+18,"Kirk Hall, 680 Courtney Street, BC, V8W 1C1, CA",Kirk Hall,680,Courtney,Street,,,,BC,V8W 1C1,CA,
+1928,"Solwood Studio, 1303 Broad Street, Victoria, BC, V8W 2A8, CA",Solwood Studio,1303,Broad,Street,,Victoria,,BC,V8W 2A8,CA,2025-03-09 18:11:06.319661
+21,"728 Kingsway, VANCOUVER, BC, V5V3C1, CA",,728,Kingsway,,,VANCOUVER,,BC,V5V 3C1,CA,
+4948,"Method Studio, 841 Fisgard St, BC, V8W 1R9, CA",Method Studio,841,Fisgard,St,,,,BC,V8W 1R9,CA,2025-03-07 11:52:59.045892
+2091,"Cameron Band Shell, Beacon Hill Park, Circle Drive, Victoria, BC, V8V 2P2, CA",Cameron Band Shell,,Circle,Drive,,Victoria,,BC,V8V 2P2,CA,
+14,"Beban Park, Nanaimo, BC, V9T 3K7, CA",Beban Park,,,,,Nanaimo,,BC,V9T 3K7,CA,2025-03-09 16:33:34.150545
+22,"Eden West Gourmet, 96 Kyle Street, Port Moody, BC V3H 1Z3, CA",Eden West Gourmet,96,Kyle,Street,,Port Moody,,BC,V3H 1Z3,CA,
+25,"8888 University DR E, BURNABY, BC, V5A1S6, CA",,8888,University,DR,E,BURNABY,,BC,V5A 1S6,CA,
+1144,"Salsa Moderna, Victoria, Victoria, BC, CA",Salsa Moderna,,,,,Victoria,,BC,,CA,2025-03-09 17:16:28.335595
+1804,"Bonsor Recreation Centre in Burnaby (6550 Bonsor Ave), BC, V5H 4P6, CA",Bonsor Recreation Centre,6550,Bonsor,Ave,,Burnaby,,BC,V5H 4P6,CA,2025-03-09 17:37:00.445952
+address_id,full_address,building_name,street_number,street_name,street_type,direction,city,met_area,province_or_state,postal_code,country_id,time_stamp
+19777,"Victoria Convention Centre, 720 Douglas Street Victoria,  BC, V8W 3M7, CA",Victoria Convention Centre,720,Douglas,Street,,Victoria,,BC,V8W 3M7,CA,2025-03-09 17:44:05.280780
+26,"1234 Government ST, VICTORIA, BC, V8W1Y3, CA",,1234,Government,ST,,VICTORIA,,BC,V8W1Y3,CA,2025-03-09 17:00:47.768410
+4952,"658 Richmond AVE, VICTORIA, BC, V8S3Y7, CA",,658,Richmond,AVE,,VICTORIA,,BC,V8S3Y7,CA,2025-03-09 17:03:13.152673
+19789,"Wicket Hall,  BC, V8W 2C2, CA",Wicket Hall,,,,,,,BC,V8W 2C2,CA,2025-03-09 18:14:01.911493
+19846,"Arthur Murray Dance Studio, Victoria,  BC, V8X 4Z1, CA",Arthur Murray Dance Studio,,,,,Victoria,,BC,V8X 4Z1,CA,2025-03-09 19:37:18.870963
+4121,"Victoria BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 23:25:12.967622
+2628,"2750 Quadra ST, VICTORIA, BC, V8T4E8, CA",,2750,Quadra,ST,,VICTORIA,,BC,V8T4E8,CA,2025-05-14 23:22:43.576365
+2472,"Victoria, BC, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-21 07:55:41.781993
+2638,"Victoria, British Columbia, Victoria, BC, CA",,,,,,Victoria,,BC,,CA,2025-03-27 22:29:13.172948
+20049,"Pacific Coliseum, Vancouver, BC,  BC, V5K 4W3, CA",Pacific Coliseum,,,,,Vancouver,,BC,V5K 4W3,CA,2025-03-09 19:58:42.316163
+1333,"Victoria Edelweiss Club,  BC, V8V 1E9, CA",Victoria Edelweiss Club,,,,,,,BC,V8V 1E9,CA,2025-03-27 22:35:58.015660
+19828,"858 Yates ST, VICTORIA, BC, V8W1L8, CA",,858,Yates,ST,,VICTORIA,,BC,V8W1L8,CA,2025-03-09 18:32:22.816656
+20050,"Save-on-Foods Memorial Centre, Victoria, BC,  BC, V8T 4J2, CA",Save-on-Foods Memorial Centre,,,,,Victoria,,BC,V8T 4J2,CA,2025-03-09 19:58:42.703034
+20051,"Prospera Place, Kelowna, BC,  BC, V1Y 9V1, CA",Prospera Place,,,,,Kelowna,,BC,V1Y 9V1,CA,2025-03-09 19:58:42.907360
+20080,"Dove Creek Hall, Courtenay, British Columbia,  BC, V9J 1S2, CA",Dove Creek Hall,,,,,Courtenay,,BC,V9J 1S2,CA,2025-03-09 21:43:08.600259
+4733,"City Light Church, 550 Obed Ave, west of Tillicum Road,  BC, V9A 1K5, CA",City Light Church,550,Obed,Ave,,Victoria,,BC,V9A 1K5,CA,2025-03-07 10:34:58.149199
+20094,"564 Yates ST, VICTORIA, BC, V8W1K8, CA",,564,Yates,ST,,VICTORIA,,BC,V8W1K8,CA,2025-03-09 21:59:55.128165
+23,"345 Broadway W, VANCOUVER, BC, V5Y1P8, CA",,345,Broadway,W,,VANCOUVER,,BC,V5Y1P8,CA,
+1159,"Fairfield Community Centre, Garry Oak Room, 1335 Thurlow, Victoria, BC, V8S 5K2, CA",Fairfield Community Centre,1335,Thurlow,,,Victoria,,BC,V8S 5K2,CA,2025-03-09 17:31:38.900224
+2079,"Northern Alberta Jubilee Auditorium, Edmonton, AB, T6G 2T2, CA",Northern Alberta Jubilee Auditorium,,,,,Edmonton,,AB,T6G 2T2,CA,2025-03-09 18:30:40.025497
+587,"Mary Winspear Centre , 2243 Beacon Avenue, Sidney, BC,  BC, V8L 1W9, CA",Mary Winspear Centre,2243,Beacon,Avenue,,Sidney,,BC,V8L 1W9,CA,2025-03-16 15:49:13.109246
+1242,"Saint Matthias Anglican Church, 600 Richmond Ave,  BC, V8S 3Y7, CA",Saint Matthias Anglican Church,600,Richmond,Ave,,,,BC,V8S 3Y7,CA,2025-03-16 16:31:34.437535
+1246,"Hermann's Jazz Club, 753 View St,  BC, V8W 1J9, CA",Hermann's Jazz Club,753,View,St,,,,BC,V8W 1J9,CA,2025-03-16 16:32:07.927515
+1247,"Wicket Hall , 919 Douglas St, Victoria,  BC, V8W 2C2, CA",Wicket Hall,919,Douglas,St,,Victoria,,BC,V8W 2C2,CA,2025-03-16 16:32:08.162561
+1301,"McKenzie Bight – Gowlland Tod Provincial Park,  BC, V9E 2A3, CA",McKenzie Bight – Gowlland Tod Provincial Park,,,,,,,BC,V9E 2A3,CA,2025-03-16 17:13:23.660551
+13,"Mary Winspear Theatre,  BC, V8L 1W9, CA",Mary Winspear Theatre,,,,,,,BC,V8L 1W9,CA,2025-03-21 06:03:04.217679
+2631,"2050 Scotia Street, Vancouver, BC,  BC, V5T 4T1, CA",,2050,Scotia,Street,,Vancouver,,BC,V5T 4T1,CA,2025-03-21 12:51:21.223131
+2603,"Da Vinci Centre, Victoria, BC,  BC, V9A 3K4, CA",Da Vinci Centre,,,,,Victoria,,BC,V9A 3K4,CA,2025-03-27 23:45:46.568007
+2632,"33719 Harris RD, ABBOTSFORD, BC, V4X1T5, CA",,33719,Harris,RD,,ABBOTSFORD,,BC,V4X1T5,CA,2025-03-21 12:52:59.274576
+2600,"Bachata Dance Studio, Victoria, BC, Canada, Victoria, BC, CA",Bachata Dance Studio,,,,,Victoria,,BC,,CA,2025-03-21 10:07:02.098964
+2470,"Paddlewheel Park Hall, waterfront of Okanagan Lake, British Columbia, Canada,  BC, V1H 1K8, CA",Paddlewheel Park Hall,,,,,,,BC,V1H 1K8,CA,2025-03-21 07:48:07.251271
+2481,"Les Passmore Centre,  BC, V8Z 1H3, CA",Les Passmore Centre,,,,,,,BC,V8Z 1H3,CA,2025-03-30 11:59:52.103788
+19790,"Ambrosia Banquet & Events,  BC, V8W 1R6, CA",Ambrosia Banquet & Events,,,,,,,BC,V8W 1R6,CA,2025-03-21 07:25:43.195922
+20070,"33676 St. Olaf AVE, ABBOTSFORD, BC, V4X1T6, CA",,33676,St. Olaf,AVE,,ABBOTSFORD,,BC,V4X1T6,CA,2025-04-01 21:25:37.238075
+2475,"2520 Bridge ST, VICTORIA, BC, V8T5H3, CA",,2520,Bridge,ST,,VICTORIA,,BC,V8T5H3,CA,2025-03-21 08:44:59.515602
+2634,"The Hub at Cowichan Station, 2375 Koksilah Rd, Duncan,  BC, V9L 6M5, CA",The Hub at Cowichan Station,2375,Koksilah,Rd,,Duncan,,BC,V9L 6M5,CA,2025-03-21 13:04:48.725769
+1175,"Dance Victoria,  BC, V8T 4E8, CA",Dance Victoria,,,,,,,BC,V8T 4E8,CA,2025-03-21 07:12:03.746700
+2636,"Hyatt Regency Calgary, 700 Centre St S, Calgary, Alberta,  BC, T2G 5P6, CA",Hyatt Regency Calgary,700,Centre,St,S,Calgary,,Alberta,T2G 5P6,CA,2025-03-21 13:29:16.944378
+2630,"5365 Lane ST, BURNABY, BC, V5H0H2, CA",,5365,Lane,ST,,BURNABY,,BC,V5H0H2,CA,2025-03-21 12:50:38.658893
+2635,"90 Dock ST, VICTORIA, BC, V8V2A1, CA",,90,Dock,ST,,VICTORIA,,BC,V8V2A1,CA,2025-03-21 13:26:29.051766
+address_id,full_address,building_name,street_number,street_name,street_type,direction,city,met_area,province_or_state,postal_code,country_id,time_stamp
+2648,"1627 Broadway W, VANCOUVER, BC, V6J1W9, CA",,1627,Broadway,W,,VANCOUVER,,BC,V6J1W9,CA,2025-05-16 12:22:38.956599
+3450,"Eastern Star Hall, Victoria, British Columbia, BC, V8Z 3S3, CA",Eastern Star Hall,,,,,Victoria,,BC,V8Z 3S3,CA,2025-03-28 01:24:31.430938
+3452,"Eastern Star Hall, BC, V8Z 3S3, CA",Eastern Star Hall,,,,,,,BC,V8Z 3S3,CA,2025-03-28 02:55:21.636603
+3459,"Studio Salsa Attitude, 3188, Chemin Ste-Foy, Quebec, QC, BC, G1X 1R4, CA",Studio Salsa Attitude,3188,Chemin Ste-Foy,,,,,QC,G1X 1R4,CA,2025-03-28 03:21:36.034483
+4044,"168 Pender ST E, VANCOUVER, BC, V6A1T5, CA",,168,Pender,ST,E,VANCOUVER,,BC,V6A1T5,CA,2025-04-02 06:19:59.158667
+4050,"412 Hastings ST W, VANCOUVER, BC, V6B1L1, CA",,412,Hastings,ST,W,VANCOUVER,,BC,V6B1L1,CA,2025-04-02 06:20:29.472316
+4052,"2036 4th AVE W, VANCOUVER, BC, V6J1M9, CA",,2036,4th,AVE,W,VANCOUVER,,BC,V6J1M9,CA,2025-04-02 06:43:27.920106
+4088,"343 Stannard AVE, VICTORIA, BC, V8S3M3, CA",,343,Stannard,AVE,,VICTORIA,,BC,V8S3M3,CA,2025-04-08 13:57:15.647889
+2666,"8874 Hudson Bay ST, LANGLEY, BC, V1M2R9, CA",,8874,Hudson Bay,ST,,LANGLEY,,BC,V1M2R9,CA,2025-05-13 20:30:57.254785
+24,"1911 Chambers ST, VICTORIA, BC, V8T3K5, CA",,1911,Chambers,ST,,VICTORIA,,BC,V8T3K5,CA,2025-05-13 11:31:40.438227
+4593,"38924 Queens WAY, SQUAMISH, BC, V8B0K8, CA",,38924,Queens,WAY,,SQUAMISH,,BC,V8B0K8,CA,2025-04-08 18:27:34.036070
+2654,"1703 Blanshard ST, VICTORIA, BC, V8W2J8, CA",,1703,Blanshard,ST,,VICTORIA,,BC,V8W2J8,CA,2025-05-16 13:45:41.672083
+4043,"1 Sixth AVE E, NEW WESTMINSTER, BC, V3L4G6, CA",,1,Sixth,AVE,E,NEW WESTMINSTER,,BC,V3L4G6,CA,2025-05-14 17:52:26.679958
+4617,"100 Pender ST E, VANCOUVER, BC, V6A1T3, CA",,100,Pender,ST,E,VANCOUVER,,BC,V6A1T3,CA,2025-05-14 18:19:34.483828
+2667,"161 Georgia ST W, VANCOUVER, BC, V6B0K9, CA",,161,Georgia,ST,,VANCOUVER,,BC,V6B0K9,CA,2025-05-14 22:03:50.117492
+3481,"Kinsmen Hall Dougall Park, Lower Gibsons, BC, V0N 1V8, CA",Kinsmen Hall Dougall Park,,,,,Lower Gibsons,,BC,V0N 1V8,CA,2025-03-29 16:32:46.508386
+3483,"Victoria Event Centre, Victoria, British Columbia, BC, V8W 2B2, CA",Victoria Event Centre,,,,,Victoria,,BC,V8W 2B2,CA,2025-03-29 17:18:16.519062
+3484,"Cameron Bandshell, Beacon Hill Park, Victoria, British Columbia, BC, V8V 2P2, CA",Cameron Bandshell,,,,,Victoria,,BC,V8V 2P2,CA,2025-03-29 19:07:41.357153
+3485,"Solwood Studio, Victoria,  BC, V8W 2A8, CA",Solwood Studio,,,,,Victoria,,BC,V8W 2A8,CA,2025-03-29 19:12:26.558135
+3472,"Delta Hotels by Marriott Montreal, 475 President-Kennedy Ave, Montreal H3A 1J7 Canada,  BC, H3A1J7, CA",Delta Hotels by Marriott Montreal,475,President-Kennedy,Ave,,Montreal,,BC,H3A1J7,CA,2025-03-29 19:22:36.800137
+3473,"The Abbey - Cumberland, BC, Canada, British Columbia,  BC, V0R 1S0, CA",The Abbey,,,,,Cumberland,,BC,V0R 1S0,CA,2025-03-29 19:35:52.527906
+3489,"iDance Studios, 2083 Alma St - lower level between the NoFrils & BCL, Vancouver, British Columbia,  BC, V6R 4N6, CA",iDance Studios,2083,Alma,St,,Vancouver,,BC,V6R 4N6,CA,2025-03-29 19:52:03.187662
+3507,"3301 Douglas ST, VICTORIA, BC, V8Z3L2, CA",,3301,Douglas,ST,,VICTORIA,,BC,V8Z3L2,CA,2025-03-29 22:30:01.284417
+4022,"1984 Mathematics RD, VANCOUVER, BC, V6T1Z2, CA",,1984,Mathematics,RD,,VANCOUVER,,BC,V6T1Z2,CA,2025-04-01 16:29:55.140438
+4032,"849 Fort ST, VICTORIA, BC, V8W1H6, CA",,849,Fort,ST,,VICTORIA,,BC,V8W1H6,CA,2025-04-01 22:48:52.225371
+4033,"20279 97 AVE, LANGLEY, BC, V1M4B9, CA",,20279,97,AVE,,LANGLEY,,BC,V1M4B9,CA,2025-04-01 23:03:37.980139
+3474,"Dance Victoria, Victoria, British Columbia,  BC, V8T 4E8, CA",Dance Victoria,,,,,Victoria,,BC,V8T 4E8,CA,2025-03-29 19:54:08.336917
+3477,"Latin Plaza Hub, 301-68 Warer Street, Vancouver,  BC, V6B 1B8, CA",Latin Plaza Hub,301-68,Warer,Street,,Vancouver,,BC,V6B 1B8,CA,2025-03-29 20:00:38.109537
+3479,"Westshore Dance Studio, 109–2675 Wilfert Road, Colwood,  BC, V9B 1H8, CA",Westshore Dance Studio,109–2675,Wilfert,Road,,Colwood,,BC,V9B 1H8,CA,2025-03-29 20:04:13.148211
+4601,"869 Hornby ST, VANCOUVER, BC, V6Z1T9, CA",,869,Hornby,ST,,VANCOUVER,,BC,V6Z1T9,CA,2025-04-09 09:38:34.662058
+3466,"Eastern Star Hall Chapters No 5 & No 17, 3281 Harriet Rd, Victoria,  BC, V8Z 3S3, CA",Eastern Star Hall Chapters No 5 & No 17,3281,Harriet,Rd,,Victoria,,BC,V8Z 3S3,CA,2025-03-28 16:41:57.125722
+4089,"9535 Canora RD, SIDNEY, BC, V8L1P3, CA",,9535,Canora,RD,,SIDNEY,,BC,V8L1P3,CA,2025-04-08 13:57:15.672919
+4652,"1770 7th AVE W, VANCOUVER, BC, V6J4Y6, CA",,1770,7th,AVE,W,VANCOUVER,,BC,V6J4Y6,CA,2025-04-17 13:07:54.166525
+4643,"3904 51st AVE W, VANCOUVER, BC, V6N3W1, CA",,3904,51st,AVE,W,VANCOUVER,,BC,V6N3W1,CA,2025-04-09 16:24:50.724755
+4644,"1515 Anderson ST, VANCOUVER, BC, V6H3R5, CA",,1515,Anderson,ST,,VANCOUVER,,BC,V6H3R5,CA,2025-04-09 16:25:19.757015
+4090,"1765 Pendrell ST, VANCOUVER, BC, V6G1T2, CA",,1765,Pendrell,ST,,VANCOUVER,,BC,V6G1T2,CA,2025-04-17 17:29:38.728916
+5205,"1240 Gladstone AVE, VICTORIA, BC, V8T1G6, CA",,1240,Gladstone,AVE,,VICTORIA,,BC,V8T1G6,CA,2025-04-17 20:27:38.602633
+4587,"8571 Alexandra RD, RICHMOND, BC, V6X1C3, CA",,8571,Alexandra,RD,,RICHMOND,,BC,V6X1C3,CA,2025-04-08 17:18:41.154075
+5212,"15 Bastion SQ, VICTORIA, BC, V8W1J1, CA",,15,Bastion,SQ,,VICTORIA,,BC,V8W1J1,CA,2025-04-17 21:41:52.462544
+3480,"620 Eighth ST, NEW WESTMINSTER, BC, V3M3S2, CA",,620,Eighth,ST,,NEW WESTMINSTER,,BC,V3M3S2,CA,2025-05-16 12:10:15.833081
+4651,"2020 Estevan RD, NANAIMO, BC, V9S0C9, CA",,2020,Estevan,RD,,NANAIMO,,BC,V9S0C9,CA,2025-04-17 13:05:54.432082
+4606,"2301 Ontario ST, VANCOUVER, BC, V5T2X5, CA",,2301,Ontario,ST,,VANCOUVER,,BC,V5T2X5,CA,2025-04-09 11:17:03.469688
+4623,"501 Denman ST, VANCOUVER, BC, V6G2W9, CA",,501,Denman,ST,,VANCOUVER,,BC,V6G2W9,CA,2025-04-09 15:10:53.709448
+4653,"318 Industrial AVE, VANCOUVER, BC, V6A2P3, CA",,318,Industrial,AVE,,VANCOUVER,,BC,V6A2P3,CA,2025-04-17 13:09:34.725740
+4600,"28 6th AVE W, VANCOUVER, BC, V5Y1K1, CA",,28,6th,AVE,,VANCOUVER,,BC,V5Y1K1,CA,2025-04-09 16:13:21.040710
+4642,"13448 Reichenbach RD, PITT MEADOWS, BC, V3Y1Z1, CA",,13448,Reichenbach,RD,,PITT MEADOWS,,BC,V3Y1Z1,CA,2025-04-09 16:22:38.908444
+5207,"1414 Douglas ST, VICTORIA, BC, V8W2G1, CA",,1414,Douglas,ST,,VICTORIA,,BC,V8W2G1,CA,2025-04-17 20:44:41.231003
+5208,"625 Johnson ST, VICTORIA, BC, V8W1M5, CA",,625,Johnson,ST,,VICTORIA,,BC,V8W1M5,CA,2025-04-17 20:54:37.899509
+5210,"207 Hastings ST W, VANCOUVER, BC, V6B1H7, CA",,207,Hastings,ST,,VANCOUVER,,BC,V6B1H7,CA,2025-04-17 21:19:04.786669
+5214,"812 Wharf ST, VICTORIA, BC, V8W1T3, CA",,812,Wharf,ST,,VICTORIA,,BC,V8W1T3,CA,2025-04-17 22:44:33.465437
+5220,"1149 Granville ST, VANCOUVER, BC, V6Z1M1, CA",,1149,Granville,ST,,VANCOUVER,,BC,V6Z1M1,CA,2025-04-27 11:21:43.490652
+5222,"3123 Broadway W, VANCOUVER, BC, V6K2H2, CA",,3123,Broadway,,,VANCOUVER,,BC,V6K2H2,CA,2025-04-27 11:25:31.316441
+5224,"34 Victoria CRES, NANAIMO, BC, V9R5B8, CA",,34,Victoria,CRES,,NANAIMO,,BC,V9R5B8,CA,2025-04-27 11:28:32.888512
+5227,"44 4th AVE W, VANCOUVER, BC, V5Y1G3, CA",,44,4th,AVE,,VANCOUVER,,BC,V5Y1G3,CA,2025-04-27 11:38:20.548485
+5229,"1720 McTavish RD, NORTH SAANICH, BC, V8L5T9, CA",,1720,McTavish,RD,,NORTH SAANICH,,BC,V8L5T9,CA,2025-04-27 11:41:19.023210
+5230,"2765 29th AVE E, VANCOUVER, BC, V5R1V5, CA",,2765,29th,AVE,,VANCOUVER,,BC,V5R1V5,CA,2025-04-27 11:41:52.906586
+5687,"2386 East MALL, VANCOUVER, BC, V6T1Z3, CA",,2386,East,MALL,,VANCOUVER,,BC,V6T1Z3,CA,2025-04-27 15:53:52.501442
+5688,"925 Balmoral RD, VICTORIA, BC, V8T1A7, CA",,925,Balmoral,RD,,VICTORIA,,BC,V8T1A7,CA,2025-04-27 18:36:21.327369
+5701,"384 Wright RD, SALT SPRING ISLAND, BC, V8K2H8, CA",,384,Wright,RD,,SALT SPRING ISLAND,,BC,V8K2H8,CA,2025-04-27 23:13:50.393835
+6164,"3600 Ratcliffe RD, COBBLE HILL, BC, V0R1L1, CA",,3600,Ratcliffe,RD,,COBBLE HILL,,BC,V0R1L1,CA,2025-05-08 21:51:29.167722
+6167,"62 8th AVE W, VANCOUVER, BC, V5Y1M7, CA",,62,8th,AVE,,VANCOUVER,,BC,V5Y1M7,CA,2025-05-08 22:16:03.632615
+6168,"1291 Gladstone AVE, VICTORIA, BC, V8T1G5, CA",,1291,Gladstone,AVE,,VICTORIA,,BC,V8T1G5,CA,2025-05-08 22:28:11.220819
+5206,"1534 Charlotte ST, CROFTON, BC, V0R1R0, CA",,1534,Charlotte,ST,,CROFTON,,BC,V0R1R0,CA,2025-05-13 21:07:25.601402
+6182,"851 Queens RD W, NORTH VANCOUVER, BC, V7N4E3, CA",,851,Queens,RD,,NORTH VANCOUVER,,BC,V7N4E3,CA,2025-05-12 21:01:10.913035
+4640,"6375 West Saanich RD, SAANICHTON, BC, V8M1W8, CA",,6375,West Saanich,RD,,SAANICHTON,,BC,V8M1W8,CA,2025-05-12 21:54:23.565966
+6188,"2010 4th AVE W, VANCOUVER, BC, V6J1M9, CA",,2010,4th,AVE,,VANCOUVER,,BC,V6J1M9,CA,2025-05-12 21:54:59.396913
+6192,"1909 Fernwood RD, VICTORIA, BC, V8T2Y6, CA",,1909,Fernwood,RD,,VICTORIA,,BC,V8T2Y6,CA,2025-05-12 22:06:17.286496
+6676,"229 Gorge RD E, VICTORIA, BC, V9A1L1, CA",,229,Gorge,RD,,VICTORIA,,BC,V9A1L1,CA,2025-05-14 11:40:35.188988
+6194,"6286 203 ST, LANGLEY, BC, V2Y3S1, CA",,6286,203,ST,,LANGLEY,,BC,V2Y3S1,CA,2025-05-12 22:08:08.313388
+6197,"1355 Mitchell ST, VICTORIA, BC, V8S4P9, CA",,1355,Mitchell,ST,,VICTORIA,,BC,V8S4P9,CA,2025-05-12 22:32:42.994589
+6210,"112 Hastings ST W, VANCOUVER, BC, V6B1G8, CA",,112,Hastings,ST,,VANCOUVER,,BC,V6B1G8,CA,2025-05-13 11:39:28.069640
+6183,"379 Keary ST, NEW WESTMINSTER, BC, V3L3L2, CA",,379,Keary,ST,,NEW WESTMINSTER,,BC,V3L3L2,CA,2025-05-14 17:59:38.505990
+5226,"1372 Island Park WALK, VANCOUVER, BC, V6H3T5, CA",,1372,Island Park,WALK,,VANCOUVER,,BC,V6H3T5,CA,2025-05-14 18:02:50.990129
+65,"725 Yates ST, VICTORIA, BC, V8W1L6, CA",,725,Yates,ST,,VICTORIA,,BC,V8W1L6,CA,2025-05-14 20:58:43.367152
+2676,"1528 Stelly's Cross RD, SAANICHTON, BC, V8M1S8, CA",,1528,Stelly's Cross,RD,,SAANICHTON,,BC,V8M1S8,CA,2025-05-14 18:06:27.882781
+8022,"82 Commercial ST, NANAIMO, BC, V9R5G4, CA",,82,Commercial,ST,,NANAIMO,,BC,V9R5G4,CA,2025-05-14 22:43:33.184734
+8024,"3 Centennial SQ, VICTORIA, BC, V8W1P5, CA",,3,Centennial,SQ,,VICTORIA,,BC,V8W1P5,CA,2025-05-14 23:22:25.478902
+19753,"Hermann's Jazz Club,  BC, V8W 1J9, CA",Hermann's Jazz Club,,,,,,,BC,V8W 1J9,CA,2025-03-27 23:16:27.496975
+2486,"Centennial United Church Dance Studio, Victoria British Columbia,  BC, V8T 2E1, CA",Centennial United Church Dance Studio,,,,,,,BC,V8T 2E1,CA,2025-03-27 23:17:55.298812
+8028,"1965 Island Diesel WAY, NANAIMO, BC, V9S5W8, CA",,1965,Island Diesel,WAY,,NANAIMO,,BC,V9S5W8,CA,2025-05-15 21:38:38.437880
+8030,"1930 Island Diesel WAY, NANAIMO, BC, V9S5W8, CA",,1930,Island Diesel,WAY,,NANAIMO,,BC,V9S5W8,CA,2025-05-16 11:29:46.365306
+5228,"279 Rainbow RD, SALT SPRING ISLAND, BC, V8K2M3, CA",,279,Rainbow,RD,,SALT SPRING ISLAND,,BC,V8K2M3,CA,2025-04-27 11:39:46.302763
+71,"3230 Cedar Hill RD, VICTORIA, BC, V8P3Y3, CA",,3230,Cedar Hill,RD,,VICTORIA,,BC,V8P3Y3,CA,2025-05-14 20:56:37.920743

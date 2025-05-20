@@ -485,6 +485,7 @@ class FacebookEventScraper():
                         found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
                         if found_keywords:
                             self.urls_with_found_keywords += 1  # Increment URLs with found keywords
+                            logging.info(f"def scrape_events(): Keywords: {found_keywords}: found in text for URL: {link}.")
                             extracted_text_list.append((link, extracted_text))
                             logging.debug(f"Visited URL: {link}. Total visited: {len(self.urls_visited)}")
                         else:
