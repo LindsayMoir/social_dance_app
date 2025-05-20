@@ -1,4 +1,4 @@
-# app.py 
+# src/app.py
 
 import streamlit as st
 import requests
@@ -7,124 +7,192 @@ import yaml
 import logging
 from dotenv import load_dotenv
 
+# ─── Initialize session_state keys up‐front ────────────────────────────────────
+initial_state = {
+    "stage": 1,
+    "used_before": "",
+    "event_type": "Social dance",    # canonical
+    "dance_styles": [],
+    "time_frame": "",
+    "final_question": None,
+    "messages": []
+}
+for key, default in initial_state.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
+# ────────────────────────────────────────────────────────────────────────────────
 
-# Set up basic logging
+# Set up logging
 logging.basicConfig(level=logging.INFO)
-logging.info("app.py: Streamlit app starting...")
+logging.info("app.py: Streamlit app starting…")
 
-# Load environment variables and configuration
+# Load environment variables & configuration
 load_dotenv()
-
-# Calculate the base directory and config path
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-config_path = os.path.join(base_dir, 'config', 'config.yaml')
-
-# Load YAML configuration
-with open(config_path, "r") as f:
+with open(os.path.join(base_dir, "config", "config.yaml"), "r") as f:
     config = yaml.safe_load(f)
-logging.info("app.py: config completed.")
 
-# Get FastAPI API URL from environment variable
-FASTAPI_API_URL = os.getenv("FASTAPI_API_URL", "https://social-dance-app-ws-main.onrender.com/query")
+FASTAPI_API_URL = os.getenv("FASTAPI_API_URL", "http://localhost:8000/query")
 if not FASTAPI_API_URL:
-    raise ValueError("The environment variable FASTAPI_API_URL is not set.")
+    raise ValueError("FASTAPI_API_URL not set")
 
 st.set_page_config(layout="wide")
 
-# Initialize the chat message history in session state
-if "messages" not in st.session_state:
-    st.session_state["messages"] = []
-
-# Load chatbot instructions from a file specified in the YAML config
-instructions_path = os.path.join(base_dir, config['prompts']['chatbot_instructions'])
+# Load chatbot instructions
+instructions_path = os.path.join(base_dir, config["prompts"]["chatbot_instructions"])
 with open(instructions_path, "r") as file:
-    chatbot_instructions = file.read()
+    st.markdown(file.read())
 
-st.markdown(chatbot_instructions)
 
 def error_handling(e, custom_message=None):
-    """
-    Handle errors by appending a standardized error message to the chat history.
-    If custom_message is provided, it will be used as the first line of the error message.
-    """
-    if custom_message:
-        error_message = (
-            f"{custom_message} "
-            "I can answer questions such as:\n\n"
-            "1. Where can I dance salsa tonight?\n"
-            "2. Where can I dance tango this month? Only show me the social dance events.\n"
-            "3. When does the West Coast Swing event on Saturdays start?\n"
-            "4. etc. etc. ..."
+    """Append a standardized error message to chat history."""
+    msg = custom_message or "Sorry, I did not catch that."
+    msg += "\n\nTry questions like:\n" \
+           "• Where can I dance salsa tonight?\n" \
+           "• When do the weekend WCS socials start?\n" \
+           "• etc."
+    st.session_state.messages.append({"role": "assistant", "content": msg})
+    logging.error(f"app.py: Error - {e}")
+
+
+# ─── Multi-step Q&A flow ───────────────────────────────────────────────────────
+
+# Stage 1: Have you used DanceScoop before?
+if st.session_state.stage == 1:
+    st.write("**Q1. Have you used DanceScoop before?**")
+    used_before_input = st.text_area(
+        "Reply `Yes` + your full query, or `No` to go step-by-step:",
+        value=st.session_state.used_before,
+        height=200,
+        key="used_before_input"
+    )
+    if st.button("Submit Q1"):
+        ans = used_before_input.strip()
+        st.session_state.used_before = ans
+        if ans.lower().startswith("yes"):
+            st.session_state.final_question = ans[len("yes"):].strip()
+            st.session_state.stage = "backend"
+        else:
+            st.session_state.stage = 2
+
+# Stage 2: Pick event type
+elif st.session_state.stage == 2:
+    st.write("**Q2. Pick an event type:**")
+    st.write(
+        "• Social dance\n"
+        "• Dance classes\n"
+        "• Dance workshops\n"
+        "• Live music venues\n"
+        "• Other"
+    )
+    event_type_input = st.selectbox(
+        "Your choice:",
+        ["Social dance", "Dance classes", "Dance workshops", "Live music venues", "Other"],
+        index=["Social dance", "Dance classes", "Dance workshops", "Live music venues", "Other"]
+              .index(st.session_state.event_type),
+        key="event_type_input"
+    )
+    if st.button("Next – Event Type"):
+        st.session_state.event_type = event_type_input
+        st.session_state.stage = 3
+
+# Stage 3: Choose dance styles
+elif st.session_state.stage == 3:
+    st.write("**Q3. Choose one or more dance styles:**")
+    dance_styles_input = st.multiselect(
+        "Select dance styles:",
+        [
+            "cha cha", "foxtrot", "quickstep", "rumba", "waltz",
+            "2 step", "double shuffle", "line dancing", "nite club 2",
+            "bachata", "cumbia", "kizomba", "merengue", "rueda", "salsa",
+            "balboa", "lindy", "swing", "wcs", "west coast swing"
+        ],
+        default=st.session_state.dance_styles,
+        key="dance_styles_input"
+    )
+    if st.button("Next – Dance Styles"):
+        st.session_state.dance_styles = dance_styles_input
+        st.session_state.stage = 4
+
+# Stage 4: Time frame
+elif st.session_state.stage == 4:
+    styles = ", ".join(st.session_state.dance_styles)
+    st.write(f"**Q4. When do you want to dance {styles}?**")
+    time_frame_input = st.text_area(
+        "e.g. This week, Tomorrow evening, June 5 to June 10",
+        value=st.session_state.time_frame,
+        height=200,
+        key="time_frame_input"
+    )
+    if st.button("Next – Time Frame"):
+        st.session_state.time_frame = time_frame_input.strip()
+        st.session_state.stage = 5
+
+# Stage 5: Confirmation
+elif st.session_state.stage == 5:
+    question = (
+        f"Where can I dance {', '.join(st.session_state.dance_styles)} "
+        f"{st.session_state.time_frame}? "
+        f"Please restrict your answer to {st.session_state.event_type.lower()} only."
+    )
+    st.write(f"**Q5. Please confirm:**\n\n\"{question}\"")
+    col1, col2 = st.columns(2)
+    if col1.button("Yes, submit"):
+        st.session_state.final_question = question
+        st.session_state.stage = "backend"
+    if col2.button("No, let me correct"):
+        st.session_state.stage = 1
+
+# Stage 'backend': call the API
+elif st.session_state.stage == "backend":
+    st.session_state.messages.append({
+        "role": "user", "content": st.session_state.final_question
+    })
+    st.write("**Sending your query to the backend…**")
+    try:
+        resp = requests.post(
+            FASTAPI_API_URL,
+            json={"user_input": st.session_state.final_question}
         )
-    else:
-        error_message = (
-            "Sorry, I did not quite catch that.\n\n"
-            "I can answer questions such as:\n\n"
-            "1. Where can I dance salsa tonight?\n"
-            "2. Where can I dance tango this month? Only show me the social dance events.\n"
-            "3. When does the West Coast Swing event on Saturdays start?\n"
-            "4. etc. etc. ..."
-        )
-    
-    st.session_state["messages"].append({"role": "assistant", "content": error_message})
-    logging.error(f"app.py: Error encountered - {e}")
+        resp.raise_for_status()
+        data = resp.json()
+        events = data.get("data", [])
 
+        if events:
+            for ev in events:
+                nm, url = ev.get("event_name", "No Name"), ev.get("url", "#")
+                if isinstance(url, str) and url.startswith("http"):
+                    st.markdown(
+                        f'<a href="{url}" target="_blank"><strong>{nm}</strong></a>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(f"**{nm}**")
+                for k, v in ev.items():
+                    if k not in ("event_name", "url"):
+                        st.markdown(f"**{k}**: {v}")
+                st.markdown("---")
+        else:
+            if data.get("sql_query"):
+                st.warning("No results found for that query.")
 
-# Get user input and send it to the FastAPI backend
-user_input = st.text_area("Ask a question, then click Send:", height=100)
+        # Display the SQL and offer to ask another
+        st.markdown(
+            f"""**SQL Query**:
+```
+{data.get('sql_query', '')}
+```""",
+                unsafe_allow_html=False
+            )
+        if st.button("Ask another question"):
+            st.session_state.stage = 1
+            st.session_state.final_question = None
 
-if st.button("Send"):
-    if user_input.strip():
-        # Display the user's message in the chat history
-        st.session_state["messages"].append({"role": "user", "content": user_input})
-        logging.info("app.py: About to send user input to FastAPI backend.")
-        try:
-            # Send the query to the FastAPI backend
-            response = requests.post(FASTAPI_API_URL, json={"user_input": user_input})
-            response.raise_for_status()
-            data = response.json()
+    except Exception as e:
+        st.error(f"Error querying backend: {e}")
+        logging.error(f"Backend error: {e}")
 
-            # Get the event data from the response
-            events = data["data"]
-            if events:
-                # Create a scrollable container to hold the events
-                with st.container():
-                    st.markdown("<hr>", unsafe_allow_html=True)  # Add a separator line
-
-                    for event in events:
-                        event_name = event.get('event_name', 'No Name')
-                        url = event.get('url', '#')
-                        
-                        # Only create a hyperlink if the URL is properly formatted (starts with "http")
-                        if isinstance(url, str) and url.startswith("http"):
-                            st.markdown(f'<a href="{url}" target="_blank"><strong>{event_name}</strong></a>', unsafe_allow_html=True)
-                        else:
-                            st.markdown(f"**{event_name}**")
-
-                        # Display other event details (one row per column)
-                        for column_name, value in event.items():
-                            if column_name not in ('event_name', 'url'):
-                                st.markdown(f"**{column_name}**: {value}")
-                        
-                        st.markdown("<hr>", unsafe_allow_html=True)
-            else:
-                # If no events are returned and a valid SQL query exists, call error_handling with a custom message BEFORE showing the SQL query.
-                if data.get('sql_query'):
-                    error_handling("No events returned", custom_message="Sorry, I could not find those events in my database.")
-            
-            # Display the SQL query (shown after error handling if triggered)
-            st.markdown(f"**SQL Query**:\n```\n{data.get('sql_query', 'No SQL query provided')}\n```")
-            
-        except Exception as e:
-            error_handling(e)
-    else:
-        st.write("Please enter a message")
-else:
-    st.write("Please enter a message")
-
-# Render the conversation history from newest to oldest without a header
-for message in reversed(st.session_state["messages"]):
-    if message["role"] == "user":
-        st.markdown(f"**You wrote:** {message['content']}")
-    else:
-        st.markdown(message["content"])
+# Render conversation history (newest first)
+for msg in reversed(st.session_state.messages):
+    prefix = "**You wrote:**" if msg["role"] == "user" else ""
+    st.markdown(f"{prefix} {msg['content']}")
