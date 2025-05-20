@@ -45,12 +45,10 @@ It is possible that the user will enter a very cryptic message. Please look at i
 Create the sql as if it was a WHERE question with the ILIKE from one of these dance_styles. 
 
 event_type
-They may also refer to event_type. The allowable values are:
-social dance, class, workshop, other, rehearsal, live music
-If it seems reasonable, restrict your rows to just those rows that have the asked for event_type.
-For example, if the user query is: "Is there any live music tonight?" The WHERE clause in the SQL statement would be:
-"WHERE event_type ILIKE '%music%'
-If the verb "learn" is used, treat it as a restriction and limit the event_type to "class".
+They may also refer to event_type. The allowable values are: social dance, class, workshop, other, rehearsal, live music
+If it seems reasonable, restrict your rows to just those rows that asked for that event_type.
+For example, if the user query is: "Is there any live music tonight?" The WHERE clause in the SQL statement would be: "WHERE event_type ILIKE '%music%'
+If the verb "learn" is used, treat it as a restriction and limit the event_type to "class" or "workshop".
 
 Dates:
 If the user requests today, tonight, this afternoon, this evening, this morning:
