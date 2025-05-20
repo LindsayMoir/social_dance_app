@@ -26,12 +26,12 @@ constants:
     url: https://www.facebook.com/groups/cubansalsaclub/
 crawling:
   depth_limit: 2
-  headless: true
+  headless: false
   max_attempts: 3
   max_crawl_trys: 3
-  max_website_urls: 10
+  max_website_urls: 2
   scroll_depth: 2
-  urls_run_limit: 500
+  urls_run_limit: 10
 date_range:
   days_ahead: 365
   months: 3

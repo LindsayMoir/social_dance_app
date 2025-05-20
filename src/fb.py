@@ -107,7 +107,7 @@ llm_handler = LLMHandler(config_path='config/config.yaml')
 
 
 class FacebookEventScraper():
-    def __init__(self, config_path="config/config.yaml"):
+    def __init__(self, config_path: str = "config/config.yaml") -> None:
         # Load configuration
         with open(config_path, 'r') as file:
             self.config = yaml.safe_load(file)
@@ -159,69 +159,95 @@ class FacebookEventScraper():
         self.keywords_list = llm_handler.get_keywords()
     
 
-    def login_to_facebook(self):
+    def login_to_facebook(self) -> bool:
         """
         Ensure we're logged into Facebook using the existing page.
-        If already logged in, return immediately; otherwise submit credentials once and handle CAPTCHA.
-
+        If already logged in, return immediately; otherwise:
+          - In headless=False, prompt for manual login (credentials + 2FA), then CAPTCHA.
+          - In headless=True, submit credentials programmatically.
         Returns:
             bool: True if login was successful, False otherwise.
         """
-        page = self.logged_in_page  # reuse single page
+        page = self.logged_in_page
+        headless = self.config['crawling'].get('headless', True)
 
-        # 1) Quick homepage check
+        # 1) Navigate to the login page
         try:
-            goto_timeout = random.randint(15000//2, int(15000 * 1.5))
             page.goto(
-                "https://www.facebook.com/",
-                wait_until="domcontentloaded",
-                timeout=goto_timeout
+                "https://www.facebook.com/login",
+                wait_until="networkidle",
+                timeout=random.randint(20000 // 2, int(20000 * 1.5))
             )
-            if "login" not in page.url.lower():
-                logging.info("login_to_facebook: already logged in, reusing existing page.")
-                return True
         except PlaywrightTimeoutError:
-            logging.warning("login_to_facebook: homepage load timed out; proceeding.")
+            logging.warning("login_to_facebook: login page load timed out; proceeding.")
 
-        # 2) Submit credentials if on login page
-        if "login" in page.url.lower():
+        # 2) If already authenticated, done
+        if "login" not in page.url.lower():
+            logging.info("login_to_facebook: already authenticated.")
+            return True
+
+        # 3) Manual flow (visible browser)
+        if not headless:
+            print("\n=== MANUAL FACEBOOK LOGIN ===")
+            print("1) In the browser window, enter your username/password and complete any 2FA.")
+            input("   Once you’ve logged in successfully, press ENTER here to continue… ")
             try:
-                email, password, _ = get_credentials("Facebook")
-                page.fill("input[name='email']", email)
-                page.fill("input[name='pass']", password)
-                page.click("button[name='login']")
-                logging.info("login_to_facebook: submitted credentials, checking for reCAPTCHA.")
+                page.reload(wait_until="networkidle", timeout=20000)
+            except PlaywrightTimeoutError:
+                logging.warning("login_to_facebook: reload after manual login timed out; continuing.")
 
-                # 3) Detect reCAPTCHA iframe
-                try:
-                    cap_timeout = random.randint(10000//2, int(10000 * 1.5))
-                    page.wait_for_selector("iframe[src*='recaptcha']", timeout=cap_timeout)
-                    page.screenshot(path="debug/facebook_recaptcha.png", full_page=True)
-                    logging.info("login_to_facebook: reCAPTCHA detected—screenshot saved.")
-                    input("Please solve the reCAPTCHA in the browser, then press ENTER to continue...")
-                except PlaywrightTimeoutError:
-                    logging.info("login_to_facebook: no reCAPTCHA detected.")
+            # CAPTCHA detection
+            try:
+                page.wait_for_selector("iframe[src*='recaptcha']", timeout=5000)
+                logging.info("login_to_facebook: CAPTCHA detected—please solve it now.")
+                page.screenshot(path="debug/recap_manual.png", full_page=True)
+                input("   After solving the CAPTCHA, press ENTER here to continue… ")
+                page.reload(wait_until="networkidle", timeout=20000)
+            except PlaywrightTimeoutError:
+                pass  # no CAPTCHA
 
-                # 4) Wait for page to finish loading
-                logging.info("login_to_facebook: waiting for networkidle after login.")
-                load_timeout = random.randint(30000//2, int(30000 * 1.5))
-                page.wait_for_load_state("networkidle", timeout=load_timeout)
-
-                if "login" in page.url.lower():
-                    logging.error("login_to_facebook: still on login page after attempt.")
-                    return False
-            except Exception as e:
-                logging.error(f"login_to_facebook: error during login: {e}")
+            if "login" in page.url.lower():
+                logging.error("login_to_facebook: still on login page after manual flow.")
                 return False
 
-        # 5) Persist session state
+            # Persist state
+            try:
+                self.context.storage_state(path="facebook_auth.json")
+                logging.info("login_to_facebook: session state saved (manual).")
+            except Exception as e:
+                logging.warning(f"login_to_facebook: could not save session state: {e}")
+            return True
+
+        # 4) Automated flow (headless)
+        try:
+            page.wait_for_selector("input[name='email']", timeout=10000)
+            page.wait_for_selector("input[name='pass']", timeout=10000)
+        except PlaywrightTimeoutError:
+            logging.error("login_to_facebook: login form did not appear.")
+            return False
+
+        try:
+            email, password, _ = get_credentials("Facebook")
+            page.fill("input[name='email']", email)
+            page.fill("input[name='pass']", password)
+            page.click("button[type='submit']")
+            logging.info("login_to_facebook: submitted credentials.")
+
+            page.wait_for_navigation(wait_until="networkidle", timeout=20000)
+            if "login" in page.url.lower():
+                logging.error("login_to_facebook: still on login page after automated flow.")
+                return False
+        except Exception as e:
+            logging.error(f"login_to_facebook: error during automated login: {e}")
+            return False
+
+        # 5) Persist state
         try:
             self.context.storage_state(path="facebook_auth.json")
             logging.info("login_to_facebook: session state saved.")
         except Exception as e:
             logging.warning(f"login_to_facebook: could not save session state: {e}")
 
-        logging.info("login_to_facebook: login sequence complete.")
         return True
     
 
@@ -412,7 +438,7 @@ class FacebookEventScraper():
         return full_text
 
     
-    def extract_relevant_text(self, content, link):
+    def extract_relevant_text(self, content: str, link: str) -> str | None:
         """
         Extracts a relevant portion of text from the given content based on specific patterns.
 
@@ -466,7 +492,7 @@ class FacebookEventScraper():
         return extracted_text
     
         
-    def scrape_events(self, keywords):
+    def scrape_events(self, keywords: list[str]) -> tuple[str, list[tuple[str, str]]]:
         """
         Logs into Facebook once, performs searches for keywords, and extracts event link and text.
 
@@ -529,7 +555,7 @@ class FacebookEventScraper():
         return search_url, extracted_text_list
 
 
-    def process_fb_url(self, url: str, source: str, keywords: str):
+    def process_fb_url(self, url: str, source: str, keywords: str) -> None:
         """
         Processes a Facebook event URL by extracting event information, checking for relevant keywords,
         querying an LLM for event details, and writing the results to the database.
@@ -635,7 +661,7 @@ class FacebookEventScraper():
         return
     
 
-    def driver_fb_search(self):
+    def driver_fb_search(self) -> None:
         """
         1. Reads in the keywords CSV file.
         2. Creates search terms for Facebook searches using each keyword.
@@ -694,7 +720,7 @@ class FacebookEventScraper():
             logging.info(f"def driver_fb_search(): Keywords checkpoint updated.")
 
 
-    def driver_fb_urls(self):
+    def driver_fb_urls(self) -> None:
         """
         1. Gets all of the URLs from the urls table where the link is like '%facebook%'.
         2. For each URL, processes it and then scrapes any event links by hitting the /events/ subpage.
@@ -785,7 +811,7 @@ class FacebookEventScraper():
             logging.warning("def driver_fb_urls(): No Facebook URLs returned from the database.")
 
 
-    def write_run_statistics(self):
+    def write_run_statistics(self) -> None:
         """
         Writes run statistics to the database.
         """
@@ -815,7 +841,7 @@ class FacebookEventScraper():
             logging.error(f"write_run_statistics(): Error writing run statistics: {e}")
 
 
-    def run(self):
+    def run(self) -> None:
         """
         Runs the Facebook scraper in the specified mode.
 
