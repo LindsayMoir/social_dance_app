@@ -163,15 +163,19 @@ class FacebookEventScraper():
         """
         Ensure we're logged into Facebook using the existing page.
         If already logged in, return immediately; otherwise submit credentials once and handle CAPTCHA.
+
+        Returns:
+            bool: True if login was successful, False otherwise.
         """
         page = self.logged_in_page  # reuse single page
 
         # 1) Quick homepage check
         try:
+            goto_timeout = random.randint(15000//2, int(15000 * 1.5))
             page.goto(
                 "https://www.facebook.com/",
                 wait_until="domcontentloaded",
-                timeout=15000
+                timeout=goto_timeout
             )
             if "login" not in page.url.lower():
                 logging.info("login_to_facebook: already logged in, reusing existing page.")
@@ -190,7 +194,8 @@ class FacebookEventScraper():
 
                 # 3) Detect reCAPTCHA iframe
                 try:
-                    page.wait_for_selector("iframe[src*='recaptcha']", timeout=10000)
+                    cap_timeout = random.randint(10000//2, int(10000 * 1.5))
+                    page.wait_for_selector("iframe[src*='recaptcha']", timeout=cap_timeout)
                     page.screenshot(path="debug/facebook_recaptcha.png", full_page=True)
                     logging.info("login_to_facebook: reCAPTCHA detected—screenshot saved.")
                     input("Please solve the reCAPTCHA in the browser, then press ENTER to continue...")
@@ -199,7 +204,8 @@ class FacebookEventScraper():
 
                 # 4) Wait for page to finish loading
                 logging.info("login_to_facebook: waiting for networkidle after login.")
-                page.wait_for_load_state("networkidle", timeout=30000)
+                load_timeout = random.randint(30000//2, int(30000 * 1.5))
+                page.wait_for_load_state("networkidle", timeout=load_timeout)
 
                 if "login" in page.url.lower():
                     logging.error("login_to_facebook: still on login page after attempt.")
@@ -237,74 +243,88 @@ class FacebookEventScraper():
     def navigate_and_maybe_login(self, incoming_url: str) -> bool:
         """
         Navigate to a Facebook URL, handle login redirects, detect blocks, and retry.
+        Input:
+            incoming_url (str): The URL to navigate to.
+        Returns:
+            bool: True if navigation was successful, False otherwise.
         """
         real_url = self.normalize_facebook_url(incoming_url)
         page = self.logged_in_page
+
         # If this is a login redirect, try it first to trigger login flow
         if 'facebook.com/login/' in incoming_url:
             try:
-                page.goto(incoming_url, wait_until="domcontentloaded", timeout=20000)
+                t = random.randint(20000//2, int(20000 * 1.5))
+                page.goto(incoming_url, wait_until="domcontentloaded", timeout=t)
             except PlaywrightTimeoutError:
                 logging.warning(f"navigate_and_maybe_login: timeout on login redirect {incoming_url}")
+
             content = page.content().lower()
             # Detect temporary block
             if 'temporarily blocked' in content or 'misusing this feature' in content:
                 logging.warning(f"navigate_and_maybe_login: blocked on login redirect. Falling back to {real_url}")
                 try:
-                    page.goto(real_url, wait_until="domcontentloaded", timeout=20000)
+                    t = random.randint(20000//2, int(20000 * 1.5))
+                    page.goto(real_url, wait_until="domcontentloaded", timeout=t)
                 except PlaywrightTimeoutError:
                     logging.error(f"navigate_and_maybe_login: timeout loading fallback {real_url}")
                 return True
+
             # If still on login page, perform login
             if 'login' in page.url.lower():
                 logging.info(f"navigate_and_maybe_login: login required for {incoming_url}")
                 if not self.login_to_facebook():
                     return False
+
             # After login, go to real URL
             try:
-                page.goto(real_url, wait_until="domcontentloaded", timeout=20000)
+                t = random.randint(20000//2, int(20000 * 1.5))
+                page.goto(real_url, wait_until="domcontentloaded", timeout=t)
             except PlaywrightTimeoutError:
                 logging.error(f"navigate_and_maybe_login: timeout loading real URL {real_url}")
                 return False
+
             return True
+
         # Non-login URLs: direct navigation
         try:
-            page.goto(real_url, wait_until="domcontentloaded", timeout=20000)
+            t = random.randint(20000//2, int(20000 * 1.5))
+            page.goto(real_url, wait_until="domcontentloaded", timeout=t)
         except PlaywrightTimeoutError:
             logging.warning(f"navigate_and_maybe_login: timeout on {real_url}")
+
         if 'login' in page.url.lower():
             logging.info(f"navigate_and_maybe_login: login required for {real_url}")
             if not self.login_to_facebook():
                 return False
             try:
-                page.goto(real_url, wait_until="domcontentloaded", timeout=20000)
+                t = random.randint(20000//2, int(20000 * 1.5))
+                page.goto(real_url, wait_until="domcontentloaded", timeout=t)
             except PlaywrightTimeoutError:
                 logging.error(f"navigate_and_maybe_login: timeout after login for {real_url}")
                 return False
+
         return True
     
 
     def extract_event_links(self, search_url: str) -> set:
         """
         Extracts Facebook event links from a given search URL.
-        This method navigates to the provided Facebook search URL, ensuring access and login if necessary.
-        It normalizes the URL, handles group event tabs, scrolls the page to load more events if applicable,
-        and extracts all unique event links found in the page's HTML content.
+        Handles login if necessary, normalizes the URL, and scrolls to load dynamic content.
         Args:
-            search_url (str): The Facebook URL to search for event links.
+            search_url (str): The URL to search for events.
         Returns:
-            set: A set of unique Facebook event URLs extracted from the page.
-        Side Effects:
-            - Logs various informational and error messages.
-            - Updates internal counters and sets for tracking URLs.
-            - May trigger navigation and scrolling actions in the browser automation context.
+            set: A set of unique event links found on the page.
+        Logs:
+            - Logs the normalized URL.
+            - Logs the number of links found.
+            - Logs any errors encountered during navigation or extraction.
         """
-
         # 1) Ensure access
         if not self.navigate_and_maybe_login(search_url):
             logging.error(f"extract_event_links: cannot access {search_url}")
             return set()
-        
+
         # 2) Normalize for tab logic
         norm_url = self.normalize_facebook_url(search_url)
         logging.info(f"extract_event_links(): Normalized URL: {norm_url}")
@@ -316,11 +336,13 @@ class FacebookEventScraper():
         logging.info(f"extract_event_links(): Navigating to {norm_url}")
 
         try:
-            self.logged_in_page.goto(norm_url, wait_until="domcontentloaded", timeout=20000)
+            t = random.randint(20000//2, int(20000 * 1.5))
+            self.logged_in_page.goto(norm_url, wait_until="domcontentloaded", timeout=t)
         except Exception as e:
             logging.error(f"extract_event_links(): error loading {norm_url}: {e}")
             return set()
-        
+
+        # scrolling logic unchanged...
         if norm_url.rstrip('/').endswith('/events'):
             self.logged_in_page.wait_for_timeout(2000)
             for _ in range(min(2, self.config['crawling'].get('scroll_depth', 2))):
@@ -335,7 +357,7 @@ class FacebookEventScraper():
             self.urls_with_extracted_text += 1
             self.unique_urls.update(links)
         logging.info(f"extract_event_links(): Found {len(links)} links on {norm_url}")
-        
+
         return links
     
 
