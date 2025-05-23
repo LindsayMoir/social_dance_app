@@ -11,7 +11,7 @@ source, dance_style, url, event_type, event_name, day_of_week, start_date, end_d
 You MUST include all of these fields. If you do not have any information for one of the fields, put '' in the field. Always fill the url field as ''.
 ________________________________________
 2. Date Rules:
-•	Use the current date in the format YYYY-MM-DD and assume NO time zone.
+•	Use the current date in the format YYYY-MM-DD and assume this is the PST time zone.
 •	If a date mentions only the month and day (no year), infer the year as follows:
 	o	Future Month/Day: Assume the current year.
 	o	Past Month/Day LESS THAN 90 days ago: Assume the current year.

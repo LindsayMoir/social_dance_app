@@ -564,34 +564,34 @@ class ReadExtract:
         return list(found)
 
 
-def uvic_rueda():
-    """
-     Reads the UVic Rueda event definition from config, updates the 'date'
-    to the next Wednesday (inclusive), and writes it to the DB.
-    """
-    # 1. grab the dict
-    event_dict = config['constants']['uvic_rueda_dict']
+    def uvic_rueda(self):
+        """
+        Reads the UVic Rueda event definition from config, updates the 'date'
+        to the next Wednesday (inclusive), and writes it to the DB.
+        """
+        # 1. grab the dict
+        event_dict = config['constants']['uvic_rueda_dict']
 
-    # ─── compute next Wednesday (0=Mon, 1=Tue, 2=Wed … 6=Sun)
-    today = date.today()
-    days_ahead = (2 - today.weekday() + 7) % 7
-    next_wed = today + timedelta(days=days_ahead)
+        # ─── compute next Wednesday (0=Mon, 1=Tue, 2=Wed … 6=Sun)
+        today = date.today()
+        days_ahead = (2 - today.weekday() + 7) % 7
+        next_wed = today + timedelta(days=days_ahead)
 
-    # 2. overwrite the date field in your dict
-    event_dict['start_date'] = next_wed.isoformat()   # e.g. "2025-05-14"
-    event_dict['end_date'] = event_dict['start_date']
+        # 2. overwrite the date field in your dict
+        event_dict['start_date'] = next_wed.isoformat()   # e.g. "2025-05-14"
+        event_dict['end_date'] = event_dict['start_date']
 
-    # 2A Set the price
-    event_dict['price'] = '0'
+        # 2A Set the price
+        event_dict['price'] = '0'
 
-    # 3. build your one‑row DataFrame
-    df = pd.DataFrame([event_dict])
+        # 3. build your one‑row DataFrame
+        df = pd.DataFrame([event_dict])
 
-    # 3. write to Postgres via db_handler
-    db_handler.write_events_to_db(df, url=event_dict['url'], 
-                                      source=event_dict['source'], 
-                                      keywords=event_dict['dance_style'])
-    logging.info(f"uvic_rueda(): Added UVic Rueda event for {next_wed.isoformat()} to DB.")
+        # 3. write to Postgres via db_handler
+        db_handler.write_events_to_db(df, url=event_dict['url'], 
+                                        source=event_dict['source'], 
+                                        keywords=event_dict['dance_style'])
+        logging.info(f"uvic_rueda(): Added UVic Rueda event for {next_wed.isoformat()} to DB.")
 
 
     async def close(self):
@@ -651,7 +651,7 @@ if __name__ == "__main__":
             llm_status = llm_handler.process_llm_response(url, extracted, source, keywords, prompt=url)
 
     # Add uvic wednesday rueda event. This event sometimes appears and then it dissapears. Lets just put it in.
-    uvic_rueda()
+    read_extract.uvic_rueda()
 
     # Count events and urls after rd_ext.py
     db_handler.count_events_urls_end(start_df, file_name)

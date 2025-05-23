@@ -46,7 +46,7 @@ There are MULTIPLE EVENTS. Often over 20 events. Please get ALL of the events.
 Please make sure that you produce properly formatted JSON. Double check your work please.
 
 7. Determining Dates:
-- Use the current date as reference (format YYYY-MM-DD) without assuming any time zone.
+- Use the current date as reference (format YYYY-MM-DD) and assume the time zone is PST.
 - For dates without an explicit year, infer as follows:
   * Future Month/Day: Assume current year.
   * Past Month/Day LESS THAN 90 days ago: Assume current year.

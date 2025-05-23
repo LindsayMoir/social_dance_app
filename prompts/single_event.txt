@@ -27,7 +27,7 @@ You MUST include all of these fields. If you do not have any information for one
 }]
 ________________________________________
 2. Date Rules:
-•	Use the current date in the format YYYY-MM-DD and assume NO time zone.
+•	Use the current date in the format YYYY-MM-DD and assume PST as the time zone.
 •	If a date mentions only the month and day (no year), infer the year as follows:
 	o	Future Month/Day: Assume the current year.
 	o	Past Month/Day: Assume the next year.

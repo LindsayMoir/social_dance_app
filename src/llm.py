@@ -356,25 +356,51 @@ class LLMHandler():
             list or None: Returns a list of complete events/addresses if JSON is successfully extracted
                         and parsed, otherwise returns None.
         """
+        # Early exits for no data
         if "No events found" in result:
             logging.info("def extract_and_parse_json(): No events found in result.")
             return None
-
         if len(result) <= 100:
             logging.info("def extract_and_parse_json(): No valid events found in result.")
             return None
 
-        # 1) Isolate the [...] JSON blob
+        # 1) Attempt to isolate a JSON array blob with bracket matching
         start = result.find('[')
         if start == -1:
-            result = '[' + result
             start = 0
-        end = result.rfind(']') + 1
-        if end == 0:
-            end = result.rfind('}') + 1
-            result = result[:end] + ']'
-            end = result.rfind(']') + 1
-        json_string = result[start:end]
+        end = None
+        depth = 0
+        in_str = False
+        escape = False
+        for i, ch in enumerate(result[start:], start):
+            if escape:
+                escape = False
+                continue
+            if ch == '\\':
+                escape = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+            elif not in_str:
+                if ch == '[':
+                    depth += 1
+                elif ch == ']':
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+        # 1a) If no proper array found, wrap top-level objects in a list
+        if end is None or end <= start:
+            first_brace = result.find('{')
+            last_brace = result.rfind('}')
+            if first_brace != -1 and last_brace > first_brace:
+                json_string = '[' + result[first_brace:last_brace+1] + ']'
+            else:
+                logging.error(f"def extract_and_parse_json(): couldn't isolate JSON blob in result from {url}")
+                return None
+        else:
+            json_string = result[start:end]
+
         if len(json_string) < 100:
             logging.info(f"def extract_and_parse_json(): malformed json: \n{json_string}")
             return None
@@ -387,37 +413,31 @@ class LLMHandler():
         cleaned_str = re.sub(r'\\(?!["\\/bfnrt])', r'\\\\', cleaned_str)
         cleaned_str = cleaned_str.replace("```json", "").replace("```", "")
 
-        # 3) Fix missing closing quote on the last field before the final `}]`
+        # 3) Fix common unterminated-string cases
         cleaned_str = re.sub(
-            r'("(?P<key>[^"\n]+)":\s*"[^\n"]*)(?=\s*}\s*\])',
+            r'("(?P<key>[^"\\n]+)":\s*"[^\\n"]*)(?=\s*}\s*\])',
             r'\1"',
             cleaned_str
         )
-
-        # 3b) Fix unterminated strings *mid‑list* before the next key
         cleaned_str = re.sub(
-            r'("(?P<key>[^"\n]+)":\s*"(?:[^"\\]|\\.)*)(?=\s*\n\s*"[^"\n]+":)',
+            r'("(?P<key>[^"\\n]+)":\s*"(?:[^"\\]|\\.)*)(?=\s*\n\s*"[^"\\n]+":)',
             r'\1"',
             cleaned_str,
             flags=re.DOTALL
         )
-
-        # 3c) Fix unterminated strings just before a comma and next key
         cleaned_str = re.sub(
-            r'("(?P<key>[^"\n]+)":\s*"(?:[^"\\]|\\.)*?)(?=,\s*"[^"\n]+":)',
+            r'("(?P<key>[^"\\n]+)":\s*"(?:[^"\\]|\\.)*?)(?=,\s*"[^"\\n]+":)',
             r'\1"',
             cleaned_str,
             flags=re.DOTALL
         )
-
-        # 4) Fix any field whose value spills into a newline and then has that original closing quote.
         cleaned_str = re.sub(
-            r'("(?P<key>[^"\n]+)":\s*"(?:[^\n"\\]|\\.)*)\r?\n\s*"',
+            r'("(?P<key>[^"\\n]+)":\s*"(?:[^\n"\\]|\\.)*)\r?\n\s*"',
             r'\1"',
             cleaned_str
         )
 
-        # 5) Split concatenated events into separate objects
+        # 4) Split concatenated events into separate objects
         split_pattern = (
             r'("description":\s*"(?:[^"\\]|\\.)*?")\s*'
             r'(?="source":)'
@@ -427,14 +447,14 @@ class LLMHandler():
 
         logging.info(f"def extract_and_parse_json(): for url {url}, \nCleaned JSON string: \n{cleaned_str}")
 
-        # 6) Parse the cleaned JSON
+        # 5) Parse the cleaned JSON
         try:
             data = json.loads(cleaned_str)
         except json.JSONDecodeError as e:
             logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
             return None
 
-        # 7) Ensure we have a list to iterate over
+        # 6) Ensure we have a list to iterate over
         if isinstance(data, dict):
             items = [data]
         elif isinstance(data, list):
@@ -447,7 +467,7 @@ class LLMHandler():
             logging.info("def extract_and_parse_json(): No items to process.")
             return None
 
-        # 8) Choose the right key‑set
+        # 7) Filter out incomplete items
         ADDRESS_KEYS = {
             "address_id", "full_address", "building_name", "street_number",
             "street_name", "street_type", "direction", "city", "met_area",
@@ -459,13 +479,7 @@ class LLMHandler():
             "end_time", "price", "location", "description"
         }
 
-        first = items[0]
-        if "address_id" in first:
-            required_keys = ADDRESS_KEYS
-        else:
-            required_keys = EVENT_KEYS
-
-        # 9) Filter out incomplete items
+        required_keys = ADDRESS_KEYS if "address_id" in items[0] else EVENT_KEYS
         filtered = []
         for item in items:
             missing = required_keys - item.keys()
