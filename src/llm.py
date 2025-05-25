@@ -97,7 +97,8 @@ class LLMHandler():
         # Set up Mistral client
         mistral_api_key = os.environ["MISTRAL_API_KEY"]
         self.mistral_client = Mistral(api_key=mistral_api_key)
-                
+
+        # Get the keywords      
         self.keywords_list = self.get_keywords()
 
 
@@ -267,7 +268,7 @@ class LLMHandler():
             try:
                 model = self.config['llm']['openai_model']
                 logging.info("query_llm(): Querying OpenAI")
-                response = self._query_openai(prompt, model)
+                response = self.query_openai(prompt, model)
                 if response:
                     logging.info(f"query_llm(): OpenAI response received: {response}")
                     return response
@@ -279,7 +280,7 @@ class LLMHandler():
             try:
                 model = self.config['llm']['mistral_model']
                 logging.info("query_llm(): Falling back to Mistral")
-                response = self._query_mistral(prompt, model)
+                response = self.query_mistral(prompt, model)
                 if response:
                     logging.info(f"query_llm(): Mistral response received: {response}")
                 else:
@@ -293,7 +294,7 @@ class LLMHandler():
             try:
                 model = self.config['llm']['mistral_model']
                 logging.info("query_llm(): Querying Mistral")
-                response = self._query_mistral(prompt, model)
+                response = self.query_mistral(prompt, model)
                 if response:
                     logging.info(f"query_llm(): Mistral response received: {response}")
                     return response
@@ -305,7 +306,7 @@ class LLMHandler():
             try:
                 openai_model = self.config['llm']['openai_model']
                 logging.info("query_llm(): Falling back to OpenAI")
-                response = self._query_openai(prompt, openai_model)
+                response = self.query_openai(prompt, openai_model)
                 if response:
                     logging.info(f"query_llm(): OpenAI response received: {response}")
                 else:
@@ -323,7 +324,7 @@ class LLMHandler():
         return response
 
 
-    def _query_openai(self, prompt, model):
+    def query_openai(self, prompt, model):
         """Handles querying OpenAI LLM."""
 
         response = self.openai_client.chat.completions.create(
@@ -332,7 +333,7 @@ class LLMHandler():
         
         return response.choices[0].message.content.strip() if response and response.choices else None
 
-    def _query_mistral(self, prompt, model):
+    def query_mistral(self, prompt, model):
         """Handles querying Mistral LLM."""
 
         chat_response = self.mistral_client.chat.complete(

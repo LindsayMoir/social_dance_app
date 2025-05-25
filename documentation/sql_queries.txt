@@ -24,3 +24,8 @@ GROUP BY relevant;
 SELECT * FROM events
 WHERE dance_style ILIKE '%coast%' or dance_style ILIKE '%wcs%'
 ORDER BY start_date, start_time
+
+SELECT event_type, COUNT(*) AS counted
+FROM events
+GROUP BY event_type
+ORDER BY counted DESC

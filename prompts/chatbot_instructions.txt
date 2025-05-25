@@ -1,12 +1,10 @@
 You can ask DanceScoop about **dance events** (ballroom, country, kizomba, latin, swing, west coast swing, zouk), that are occurring **now**, in the **future** and in the very recent **past** in greater Victoria, BC, Canada.
-There are also a few events from greater Vancouver Island and Vancouver.
-
+There are also a few events from greater Vancouver Island and Vancouver. We also include live music events where people often social dance.
+For a tutorial on how to use DanceScoop, click [here](https://lindsaymoir.com/dancescoop/tutorial/).
 ---
 #### How It Works
 
-- Enter your query below **AS A COMPLETE ENGISH SENTENCE** and click the **Send** button. 
-- If you're not happy with the results, look at the SQL query that was generated.
+- Enter your query below click the **Send** button. 
 - You can refine your query by continuing the dialogue with DanceScoop. It's **very flexible!**.
 - This is a best efforts basis:( The information is accurate as possible but ... please double check before you book your flights:)
-- For a tutorial on how to use DanceScoop, click [here](https://lindsaymoir.com/dancescoop/tutorial/).
 ---
