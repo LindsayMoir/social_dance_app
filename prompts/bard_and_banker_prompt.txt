@@ -64,16 +64,22 @@ ________________________________________
 	o	For example, this event "Thursday from 20:00-00:00 Hot Salsa " Would be interpreted as Thursday January 2, 2025 for the start_date and end_date, if your current date is December 28, 2024.
 •	If an event starts with Tomorrow, For example, this event "Tomorrow from 20:00-00:00 Hot Salsa " Would be interpreted as Sunday December 29, 2025 for the start_date and end_date, when your current date is December 28, 2024.
 _____________________________________
-3. Recurring Events:
+4. day_of_week and start_date Must Match
+•	Double check and make sure that the day_of_week and the date are correct. 
+•	If the start_date you compute can not possibly be the day_of_week then change the date to match that day_of_week as close as possible. 
+•	For example, if the day_of_week is Wednesday and the start_date is 2025-05-29 then change the start_date to 2025-05-28.
+•	Adjust the end_date if necessary based on this revised start_date.
+_____________________________________
+5. Recurring Events:
 •	For recurring events (e.g., "every Saturday" or "1st and 3rd Tuesdays"), compute all occurrences within 12 months from today's date unless an end date is explicitly mentioned.
 •	For example:
 	o	The 1st Tuesday in 2025 is January 7, 2025.
 	o	Saturdays in February 2025 are February 1, 8, 15, and 22.
 ________________________________________
-4. Outdated Pages:
+6. Outdated Pages:
 •	Events explicitly marked as "canceled" or "postponed" should have that wording put in their "description" field.
 ________________________________________
-5. Additional Notes:
+7. Additional Notes:
 •	If there are events, only produce one JSON output. 
 	o	Everything should be in that one response JSON string. 
 	o	Do NOT create a separate JSON output for recurring JSON events. 
@@ -179,10 +185,10 @@ The first 6 events in JSON format are as follows:
 }
 ]
 
-1. Additional Notes
-When the event_name has “Miguelito" in it, the dance_style should be set to “bachata, cha cha, cumbia, merengue, salsa“.
-Produce a complete JSON output for all of the events that you find in the below extracted_text according to the above instructions.
-2. Nota Benta, often Sundays have NO band playing. Please make sure that there is one playing before you create an event for it.
-3. The day of the month comes first. Then the time. Then the artist. In the extracted_text. 
+8. Additional Notes
+•	When the event_name has “Miguelito" in it, the dance_style should be set to “bachata, cha cha, cumbia, merengue, salsa“.
+•	Produce a complete JSON output for all of the events that you find in the below extracted_text according to the above instructions.
+•	Nota Benta, often Sundays have NO band playing. Please make sure that there is one playing before you create an event for it.
+•	The day of the month comes first. Then the time. Then the artist. In the extracted_text. 
 ________________________________________
 extracted_text

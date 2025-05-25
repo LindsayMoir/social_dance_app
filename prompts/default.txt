@@ -21,32 +21,38 @@ ________________________________________
 	o	For example, this event "Thursday from 20:00-00:00 Hot Salsa " Would be interpreted as Thursday January 2, 2025 for the start_date and end_date, if your current date is December 28, 2024.
 •	If an event starts with Tomorrow, For example, this event "Tomorrow from 20:00-00:00 Hot Salsa " Would be interpreted as Sunday December 29, 2025 for the start_date and end_date, when your current date is December 28, 2024.
 _____________________________________
-3. Recurring Events:
+3. day_of_week and start_date Must Match
+•	Double check and make sure that the day_of_week and the date are correct. 
+•	If the start_date you compute can not possibly be the day_of_week then change the date to match that day_of_week as close as possible. 
+•	For example, if the day_of_week is Wednesday and the start_date is 2025-05-29 then change the start_date to 2025-05-28.
+•	Adjust the end_date if necessary based on this revised start_date.
+_____________________________________
+4. Recurring Events:
 •	For recurring events (e.g., "every Saturday" or "1st and 3rd Tuesdays"), compute all occurrences within 12 months from today's date unless an end date is explicitly mentioned.
 •	For example:
 	o	The 1st Tuesday in 2025 is January 7, 2025.
 	o	Saturdays in February 2025 are February 1, 8, 15, and 22.
 ________________________________________
-4. Outdated Pages:
+5. Outdated Pages:
 •	Events explicitly marked as "canceled" or "postponed" should have that wording put in their "description" field.
 ________________________________________
-5. Additional Notes:
+6. Additional Notes:
 •	If there are events, only produce one JSON output. 
 	o	Everything should be in that one response JSON string. 
 	o	Do NOT create a separate JSON output for recurring JSON events. 
 •	DO NOT return a list for a field. For example, if you found several "dance_style" (e.g. salsa, bachata, kizomba) put that in the "dance_style" field as "salsa, bachata, kizomba". Not as "[salsa, bachata, kizomba]"
 •	If an event has no specific dates or times mentioned, this is an invalid event. DO NOT create a JSON output for this event.
 ________________________________________
-6. **Validate**  
+7. **Validate**  
 Once you’ve built the JSON array, immediately parse it in your own “mind” (i.e. treat it as if you ran it through a JSON parser).  
 • 	**If it fails** (missing comma, unquoted string, trailing comma, wrong brackets…), **fix it**.  
 •	**Keep repeating** this “generate → parse → fix” loop until it is **valid JSON**.  
 ________________________________________
-7. **Output**  
+8. **Output**  
 •	 Only output the final JSON.  
 •	 Do **not** wrap it in markdown or add any comments.  
 
-8. **Example**  
+9. **Example**  
 Valid output must look like:
 [{
     "source": "<The original source of information for this event>",
@@ -96,7 +102,7 @@ Valid output must look like:
 ...
 ]
 ________________________________________
-9. **If no events are found**, output exactly:
+10. **If no events are found**, output exactly:
 No events found.
 ________________________________________
 extracted_text

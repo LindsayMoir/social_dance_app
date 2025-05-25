@@ -118,9 +118,9 @@ if st.button("Send"):
         except Exception as e:
             error_handling(e)
     else:
-        st.write("Enter question above and click Send")
+        st.write("Enter your question above and click Send")
 else:
-    st.write("Enter question above and click Send")
+    st.write("Enter your question above and click Send")
 
 # Render the conversation history from newest to oldest without a header
 for message in reversed(st.session_state["messages"]):

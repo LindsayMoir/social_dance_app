@@ -36,15 +36,21 @@ ________________________________________
 	o	For example, this event "Thursday from 20:00-00:00 Hot Salsa " would be interpreted as Thursday January 2, 2025 for the start_date and end_date, if your current date is December 28, 2024.
 •	If an event starts with Tomorrow, this event "Tomorrow from 20:00-00:00 Hot Salsa " would be interpreted as Sunday December 29, 2024 for the start_date and end_date, when your current date is December 28, 2024.
 •	If an event starts with Today, this event "Today at 21:00 Ritmo Latino Party" would be interpreted as Friday January 31, 2025 for the start-date and end_date, when your current date is Friday January 31, 2025.
+_____________________________________
+3. day_of_week and start_date Must Match
+•	Double check and make sure that the day_of_week and the date are correct. 
+•	If the start_date you compute can not possibly be the day_of_week then change the date to match that day_of_week as close as possible. 
+•	For example, if the day_of_week is Wednesday and the start_date is 2025-05-29 then change the start_date to 2025-05-28.
+•	Adjust the end_date if necessary based on this revised start_date.
 _______________________________
-3. Recurring Events:
+4. Recurring Events:
 •	Only the FIRST event in the recurring event series should be put into the JSON output.
 *	The "description" should have the details about the recurring event.
 ________________________________________
-4. Outdated Pages:
+5. Outdated Pages:
 •	Events explicitly marked as "canceled" or "postponed" should have that wording put in their "description" field.
 ________________________________________
-5. Additional Notes:
+6. Additional Notes:
 •	DO NOT return a list for a field. For example, if you found several "dance_style" (e.g. salsa, bachata, kizomba) put that in the "dance_style" field as "salsa, bachata, kizomba". Not as "[salsa, bachata, kizomba]"
 •	If no events are found, respond with: "No events found."
 

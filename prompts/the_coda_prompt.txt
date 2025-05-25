@@ -54,6 +54,12 @@ Please make sure that you produce properly formatted JSON. Double check your wor
 - "Today" means the current date.
 - If no explicit date is given (only a day of the week), assign the next upcoming date corresponding to that day.
 
+8. day_of_week and start_date Must Match
+- Double check and make sure that the day_of_week and the date are correct. 
+- If the start_date you compute can not possibly be the day_of_week then change the date to match that day_of_week as close as possible. 
+- For example, if the day_of_week is Wednesday and the start_date is 2025-05-29 then change the start_date to 2025-05-28.
+- Adjust the end_date if necessary based on this revised start_date.
+
 8. Recurring Events:
 - If an event explicitly mentions recurring frequencies (e.g., "every Saturday"), list all occurrences within the next 12 months.
 
