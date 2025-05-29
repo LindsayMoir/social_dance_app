@@ -173,6 +173,7 @@ class DatabaseHandler():
         urls_table_query = """
             CREATE TABLE IF NOT EXISTS urls (
                 link TEXT PRIMARY KEY,
+                parent_url TEXT,
                 source TEXT,
                 keywords TEXT,
                 relevant BOOLEAN,
@@ -376,44 +377,50 @@ class DatabaseHandler():
             return False
 
 
-    def write_url_to_db(self, source, keywords, link, relevant, increment_crawl_try):
+    def write_url_to_db(self, url_row):
         """
-        Inserts a new link into the 'urls' table or updates it if it already exists.
+        Logs a URL activity by appending a new row to the 'urls' table via pandas.
 
         Args:
-            source (str): Organization names related to the link.
-            keywords (list): Keywords related to the link.
-            link (str): The link to be written or updated.
-            relevant (bool): Indicates if the link is relevant.
-            increment_crawl_try (int): The number of times the link has been crawled.
+            url_row (tuple): (link, parent_url, source, keywords,
+                            event_url_yes, event_url_no,
+                            crawl_try, depth, time_stamp)
         """
-        insert_query = """
-            INSERT INTO urls (time_stamp, source, keywords, link, relevant, crawl_try)
-            VALUES (:time_stamp, :source, :keywords, :link, :relevant, :crawl_try)
-            ON CONFLICT (link) DO UPDATE
-            SET 
-                time_stamp = EXCLUDED.time_stamp,
-                relevant = EXCLUDED.relevant,
-                crawl_try = urls.crawl_try + :increment_crawl_try;
-        """
-        insert_params = {
-            'time_stamp': datetime.now(),
-            'source': source,
-            'keywords': keywords,
-            'link': link,
-            'relevant': relevant,
-            'crawl_try': increment_crawl_try,
-            'increment_crawl_try': increment_crawl_try
-        }
-        
+        # 1) Unpack
+        link, parent_url, source, keywords, relevant, crawl_try, time_stamp = url_row
+
+        # 2) Normalize keywords into a simple comma-separated string
+        if not isinstance(keywords, str):
+            if isinstance(keywords, (list, tuple, set)):
+                keywords = ','.join(map(str, keywords))
+            else:
+                keywords = str(keywords)
+
+        # 3) Strip out braces/brackets/quotes and trim each term
+        cleaned = re.sub(r'[\{\}\[\]\"]', '', keywords)
+        parts = [p.strip() for p in cleaned.split(',') if p.strip()]
+        keywords = ', '.join(parts)
+
+        # 4) Build a one-row DataFrame
+        df = pd.DataFrame([{
+            'link':           link,
+            'parent_url':     parent_url,
+            'source':         source,
+            'keywords':       keywords,
+            'relevant':       relevant,
+            'crawl_try':      crawl_try,
+            'time_stamp':     time_stamp
+        }])
+
+        # 5) Append to the table
         try:
-            self.execute_query(insert_query, insert_params)
-            logging.info("def write_url_to_db(): URL '%s' inserted or updated in the 'urls' table.", link)
+            df.to_sql('urls', con=self.conn, if_exists='append', index=False)
+            logging.info("write_url_to_db(): appended URL '%s'", link)
         except Exception as e:
-            logging.error("def write_url_to_db(): Failed to insert/update URL '%s': %s", link, e)
+            logging.error("write_url_to_db(): failed to append URL '%s': %s", link, e)
     
 
-    def write_events_to_db(self, df, url, source, keywords):
+    def write_events_to_db(self, df, url, parent_url, source, keywords):
         """
         Writes event data to the 'events' table in the database.
 
@@ -508,7 +515,9 @@ class DatabaseHandler():
 
         # Write the cleaned events data to the 'events' table
         cleaned_df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
-        self.write_url_to_db(source, keywords, url, True, 1)
+        relevant, crawl_try, time_stamp = True, 1, datetime.now()
+        url_row = [url, parent_url, source, keywords, relevant, crawl_try, time_stamp]
+        self.write_url_to_db(url_row)
         logging.info("write_events_to_db: Events data written to the 'events' table.")
 
         return None

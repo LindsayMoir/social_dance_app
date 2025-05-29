@@ -125,31 +125,40 @@ class LLMHandler():
 
         # Check keywords in the extracted text
         found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+
+        # Initialize url_row with default values
+        relevant, increment_crawl_try, time_stamp = False, 1, datetime.now()
+        url_row = [url, search_term, source, found_keywords, relevant, increment_crawl_try, time_stamp]
     
         if found_keywords:
             logging.info(f"def driver(): Found keywords in text for URL {url}: {found_keywords}")
         
             if fb_status == True:
                 # Call the llm to process the extracted text
-                llm_status = self.process_llm_response(url, extracted_text, source, keywords_list, prompt)
+                parent_url = search_term
+                llm_status = self.process_llm_response(url, parent_url, extracted_text, source, found_keywords, prompt)
 
                 if llm_status:
                     # Mark the event link as relevant
-                    relevant, increment_crawl_try = True, 1
-                    db_handler.write_url_to_db('', keywords, url, relevant, increment_crawl_try)
+                    relevant = True
+                    db_handler.write_url_to_db(url_row)
+                    return True
                 else:
                     # Mark the event link as irrelevant
-                    relevant, increment_crawl_try = False, 1
-                    db_handler.write_url_to_db('', keywords, url, relevant, increment_crawl_try)
+                    relevant = False
+                    db_handler.write_url_to_db(url_row)
+                    return False
             else:
                 # Mark the event link as irrelevant
-                relevant, increment_crawl_try = False, 1
-                db_handler.write_url_to_db('', keywords, url, relevant, increment_crawl_try)
+                relevant = False
+                db_handler.write_url_to_db(url_row)
+                return False
         else:
             logging.info(f"def driver(): No keywords found in text for URL {url}\n search_term {search_term}.")
             # Mark the event link as irrelevant
-            relevant, increment_crawl_try = False, 1
-            db_handler.write_url_to_db('', keywords, url, relevant, increment_crawl_try)
+            relevant = False
+            db_handler.write_url_to_db(url_row)
+            return False
     
 
     def get_keywords(self) -> list:
@@ -171,7 +180,7 @@ class LLMHandler():
         return keywords_list
     
 
-    def process_llm_response(self, url, extracted_text, source, keywords_list, prompt):
+    def process_llm_response(self, url, parent_url, extracted_text, source, keywords_list, prompt):
         """
         Generate a prompt, query a Language Learning Model (LLM), and process the response.
 
@@ -196,14 +205,12 @@ class LLMHandler():
 
             if parsed_result:
                 events_df = pd.DataFrame(parsed_result)
-                db_handler.write_events_to_db(events_df, url, source, keywords_list)
+                db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_list)
                 logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
-
                 return True
         
         else:
             logging.error(f"def process_llm_response: Failed to process LLM response for URL: {url}")
-
             return False
         
     
@@ -551,7 +558,8 @@ if __name__ == "__main__":
             llm.driver(url, search_term, extracted_text, '', keywords)
         else:
             logging.info(f"__main__: No keywords found in text for URL {url}.")
-            db_handler.write_url_to_db('', keywords, url, search_term, relevant=False, increment_crawl_try=1)
+            url_row = [url, search_term, 'Facebook', found_keywords, False, 1, datetime.now()]
+            db_handler.write_url_to_db(url_row)
 
     # Count the event and urls after llm.py
     db_handler.count_events_urls_end(start_df, file_name)

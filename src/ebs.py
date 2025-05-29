@@ -170,7 +170,8 @@ class EventbriteScraper:
             self.visited_urls.add(event_url)
             self.urls_contacted += 1
             counter += 1
-            await self.process_event(event_url, source, keywords_list, prompt, counter)
+            parent_url = query
+            await self.process_event(event_url, parent_url, source, keywords_list, prompt, counter)
 
 
     async def perform_search(self, query):
@@ -261,7 +262,7 @@ class EventbriteScraper:
         return match.group(1) if match else None
         
 
-    async def process_event(self, event_url, source, keywords_list, prompt, counter):
+    async def process_event(self, event_url, parent_url, source, keywords_list, prompt, counter):
         """Processes an individual event URL: extracts text, processes it with LLM,
         and writes to the database.
         
@@ -285,7 +286,7 @@ class EventbriteScraper:
                 logging.info(f"def process_event(): Found keywords in text for URL {event_url}: {found_keywords}")
 
                 # Process the extracted text with LLM
-                response = self.llm_handler.process_llm_response(event_url, extracted_text, source, keywords_list, prompt)
+                response = self.llm_handler.process_llm_response(event_url, parent_url, extracted_text, source, keywords_list, prompt)
 
                 if response:
                     self.events_written_to_db += 1  # Count events written to the database

@@ -145,7 +145,8 @@ class GmailProcessor:
 
             if extracted_text:
                 # Process extracted text with LLMHandler
-                llm_status = self.llm_handler.process_llm_response(email, extracted_text, source, keywords, prompt)
+                parent_url = 'email inbox'
+                llm_status = self.llm_handler.process_llm_response(email, parent_url, extracted_text, source, keywords, prompt)
                 if llm_status:
                     logging.info(f"def driver(): process_llm_response success for email: {email}")
                 else:

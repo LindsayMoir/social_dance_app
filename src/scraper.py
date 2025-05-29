@@ -1,12 +1,8 @@
 """
 scraper.py
 
-This module defines the EventSpider class for crawling and a ScraperManager class 
-to orchestrate the crawl-and-check process. The EventSpider handles URL extraction,
-dynamic content extraction, and Google Calendar event processing. The ScraperManager
-runs the crawler (by launching a separate process), checks if the event counts meet 
-thresholds, and if not, adjusts configuration and re-runs the crawl. After a successful 
-run, it restores any files that were moved to a temporary folder.
+The EventSpider handles URL extraction,
+dynamic content extraction, and Google Calendar event processing. 
 
 Dependencies:
     - Scrapy, requests, pandas, yaml, logging, shutil, etc.
@@ -100,89 +96,89 @@ class EventSpider(scrapy.Spider):
 
     def parse(self, response, keywords, source, url):
         """
-        1) Use Playwright‑rendered HTML in response.text
-        2) Keyword & LLM logic
-        3) Extract & limit <a> links
-        4) Process iframes & Google Calendar emails
-        5) Filter unwanted, write to DB, and follow remaining links with Playwright
+        1) Render page via Playwright and get HTML text.
+        2) Identify keywords in the page and run LLM to decide relevance.
+        3) Record the URL in the database (with metadata).
+        4) Extract <a> links and iframe/calendar URLs.
+        5) Fetch Google Calendar events where found.
+        6) Filter out unwanted links, record them, and follow remaining links.
         """
         # 1) Get rendered page text
         extracted_text = response.text
 
         # 2) Keyword & LLM logic
         found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+        relevant    = False
+        parent_url  = ''
+        crawl_try   = 1
+        time_stamp  = datetime.now()
+        # build the initial record for this URL
+        url_row = [url, parent_url, source, found_keywords, relevant, crawl_try, time_stamp]
+
         if found_keywords:
             logging.info(f"def parse(): Found keywords for URL {url}: {found_keywords}")
-            prompt = 'default'
-            llm_status = llm_handler.process_llm_response(
-                url, extracted_text, source, keywords, prompt
-            )
+            prompt     = 'default'
+            llm_status = llm_handler.process_llm_response(url, parent_url, extracted_text, source, keywords, prompt)
             if llm_status:
-                db_handler.write_url_to_db(source, found_keywords, url, True, 1)
+                # mark as relevant
+                url_row[4] = True
+                db_handler.write_url_to_db(url_row)
                 logging.info(f"def parse(): URL {url} marked as relevant (LLM positive).")
             else:
+                db_handler.write_url_to_db(url_row)
                 logging.info(f"def parse(): URL {url} marked as irrelevant (LLM negative).")
-                db_handler.write_url_to_db(source, keywords, url, False, 1)
         else:
+            db_handler.write_url_to_db(url_row)
             logging.info(f"def parse(): URL {url} marked as irrelevant (no keywords).")
-            db_handler.write_url_to_db(source, keywords, url, False, 1)
 
-        # 3) Extract all <a href> links
+        # 3) Extract all <a href> links (limit to configured maximum)
         raw_links = response.css('a::attr(href)').getall()
         page_links = [
             response.urljoin(link)
             for link in raw_links
             if link and link.startswith(("http://", "https://"))
-        ]
+        ][: self.config['crawling']['max_website_urls']]
         logging.info(f"def parse(): Found {len(page_links)} links on {response.url}")
-        page_links = page_links[: self.config['crawling']['max_website_urls']]
-        logging.info(f"def parse(): Limiting to {self.config['crawling']['max_website_urls']} links on {response.url}")
 
-        # 4) Process iframes & extract Google Calendar emails
-        iframe_links = response.css('iframe::attr(src)').getall()
+        # 4) Process iframes & extract Google Calendar addresses
         iframe_links = [
             response.urljoin(link)
-            for link in iframe_links
+            for link in response.css('iframe::attr(src)').getall()
             if link.startswith(("http://", "https://"))
         ]
-        logging.info(f"def parse(): Found {len(iframe_links)} iframe links on {response.url}")
-        calendar_pattern = re.compile(
-            r'"gcal"\s*:\s*"([a-zA-Z0-9_.+-]+@group\.calendar\.google\.com)"'
+        calendar_emails = re.findall(
+            r'"gcal"\s*:\s*"([A-Za-z0-9_.+-]+@group\.calendar\.google\.com)"',
+            response.text
         )
-        calendar_emails = calendar_pattern.findall(response.text)
-        logging.info(f"def parse(): Extracted Google Calendar emails: {calendar_emails}")
-
-        # Handle any iframe/calendar links first
         if iframe_links or calendar_emails:
-            db_handler.update_url(url, relevant=True, increment_crawl_try=0)
             for cal_url in iframe_links + calendar_emails:
                 self.fetch_google_calendar_events(cal_url, url, source, keywords)
+            # mark the page itself as relevant if calendar events fetched
+            url_row = [cal_url, url, source, found_keywords, True, crawl_try, time_stamp]
+            db_handler.write_url_to_db(url_row)
 
-        # 5) Combine & filter links
-        all_links = {url} | set(page_links)
-        filtered_links = {
-            link for link in all_links
-            if 'facebook' not in link and 'instagram' not in link
-        }
+        # 5) Filter unwanted links and record them
+        all_links      = {url} | set(page_links)
+        filtered_links = {lnk for lnk in all_links if 'facebook' not in lnk and 'instagram' not in lnk}
         unwanted_links = all_links - filtered_links
         for link in unwanted_links:
-            db_handler.write_url_to_db(source, keywords, link, relevant=False, increment_crawl_try=1)
+            child_row = [link, url, source, found_keywords, False, 1, datetime.now()]
+            db_handler.write_url_to_db(child_row)
             logging.info(f"def parse(): Recorded unwanted URL: {link}")
 
-        logging.info(f"def parse(): {len(filtered_links)} links remain on {response.url}")
-        logging.info(f"def parse(): Here is the current list of all_links: \n{filtered_links}")
-
-        # 6) Follow each filtered link with Playwright rendering
+        # 6) Follow each remaining link with Playwright rendering
         for link in filtered_links:
             if link in self.visited_link:
                 continue
             self.visited_link.add(link)
-            db_handler.write_url_to_db(source, keywords, link, None, 1)
+
+            # record the child link before crawling
+            child_row = [link, url, source, found_keywords, False, 1, datetime.now()]
+            db_handler.write_url_to_db(child_row)
 
             if len(self.visited_link) >= self.config['crawling']['urls_run_limit']:
                 logging.info(
-                    f"def parse(): Reached maximum URL limit "
-                    f"{self.config['crawling']['urls_run_limit']}. Stopping crawl."
+                    f"def parse(): Reached URL run limit ({self.config['crawling']['urls_run_limit']}); stopping."
                 )
                 break
 
@@ -198,30 +194,6 @@ class EventSpider(scrapy.Spider):
                     ],
                 },
             )
-
-
-    def driver(self, url, keywords, source):
-        """
-        Evaluate URL relevance by extracting text and checking keywords.
-        """
-        extracted_text = read_extract.extract_text_with_playwright(url)
-        if extracted_text:
-            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-            if found_keywords:
-                logging.info(f"def driver(): Found keywords for URL {url}: {found_keywords}")
-                prompt = 'default'
-                llm_status = llm_handler.process_llm_response(url, extracted_text, source, keywords, prompt)
-                if llm_status:
-                    db_handler.write_url_to_db(source, found_keywords, url, True, 1)
-                    logging.info(f"def driver(): URL {url} marked as relevant (LLM positive).")
-                    return
-                else:
-                    logging.info(f"def driver(): URL {url} marked as irrelevant (LLM negative).")
-            else:
-                logging.info(f"def driver(): URL {url} marked as irrelevant (no keywords found).")
-        else:
-            logging.info(f"def driver(): URL {url} marked as irrelevant (no extracted text).")
-        db_handler.write_url_to_db(source, keywords, url, False, 1)
 
 
     def fetch_google_calendar_events(self, calendar_url, url, source, keywords):
@@ -278,7 +250,7 @@ class EventSpider(scrapy.Spider):
         events_df = self.get_calendar_events(calendar_id)
         if not events_df.empty:
             logging.info(f"def process_calendar_id(): Found {len(events_df)} events for calendar_id: {calendar_id}")
-            db_handler.write_events_to_db(events_df, calendar_url, source, keywords)
+            db_handler.write_events_to_db(events_df, calendar_id, calendar_url, source, keywords)
 
 
     def get_calendar_events(self, calendar_id):
@@ -362,173 +334,24 @@ class EventSpider(scrapy.Spider):
                  'End_Date', 'Start_Time', 'End_Time', 'Price', 'Location', 'Description']]
         df = df.sort_values(by=['Start_Date', 'Start_Time']).reset_index(drop=True)
         return df
-
-# --------------------------------------------------
-# ScraperManager: Orchestrates crawler runs, re-run checks, and restores temp files.
-# --------------------------------------------------
-class ScraperManager:
-    def __init__(self, config, db_handler):
-        self.config = config
-        self.db_handler = db_handler
-    
-
-    def subset_calendar_urls(self, calendar_df, group_df, threshold=100):
-        # Define the important sources
-        important_sources = {
-            "Salsa Caliente",
-            "Red Hot Swing",
-            "Victoria Latin Dance Association",
-            "Victoria West Coast Swing Collective"
-        }
-        # Get sources present in group_df that are important and have less than threshold events.
-        underperforming = group_df[
-            (group_df['source'].isin(important_sources)) & (group_df['counted'] < threshold)
-        ]['source'].tolist()
-
-        # Also, for any important source not present in group_df at all, add them.
-        for src in important_sources:
-            if src not in group_df['source'].tolist():
-                underperforming.append(src)
-
-        subset_df = calendar_df[calendar_df['source'].isin(underperforming)]
-        logging.info(f"def subset_calendar_urls(): Found {len(underperforming)} important sources under threshold or missing: {underperforming}")
-        return subset_df
-
-
-    def move_existing_urls_to_temp(self, urls_dir):
-        temp_dir = os.path.join(urls_dir, "temp")
-        os.makedirs(temp_dir, exist_ok=True)
-        for filename in os.listdir(urls_dir):
-            if filename.endswith(".csv"):
-                src = os.path.join(urls_dir, filename)
-                dst = os.path.join(temp_dir, filename)
-                shutil.move(src, dst)
-                logging.info(f"def move_existing_urls_to_temp(): Moved {filename} to {temp_dir}.")
-        logging.info(f"def move_existing_urls_to_temp(): Completed moving CSV files from {urls_dir} to {temp_dir}.")
-
-
-    def write_calendar_urls(self, calendar_df, urls_dir):
-        output_file = os.path.join(urls_dir, "calendar_urls_subset.csv")
-        calendar_df.to_csv(output_file, index=False)
-        logging.info(f"def write_calendar_urls(): Wrote subset calendar URLs to {output_file}.")
-        return output_file
     
 
     def run_crawler(self):
         """
-        Runs the crawler by launching the 'scraper_crawl.py' script in a separate process.
+        Runs the crawler inline via Scrapy's CrawlerProcess (no external subprocess).
         """
-        logging.info("def run_crawler(): Launching crawl subprocess.")
-        result = subprocess.run([sys.executable, 'src/scraper_crawl.py'], capture_output=True, text=True)
-        if result.returncode != 0:
-            logging.error(f"def run_crawler(): Crawl subprocess failed with error: {result.stderr}")
-            raise Exception("Crawl subprocess failed.")
-        else:
-            logging.info(f"def run_crawler(): Crawl subprocess completed successfully: {result.stdout}")
-
-
-    def scraper_check_and_rerun(self, max_attempts=4, event_threshold=100):
-        """
-        Attempts to run the web scraper multiple times to ensure sufficient events are captured for important sources.
-        Parameters:
-        max_attempts (int): The maximum number of attempts to run the scraper. Default is 4.
-        event_threshold (int): The minimum number of events required for each important source. Default is 100.
-        Returns:
-        bool: True if sufficient events are captured for all important sources within the maximum attempts, False otherwise.
-        The function performs the following steps:
-        1. Loads calendar URLs from the configuration file.
-        2. Defines a set of important sources.
-        3. Runs the scraper up to `max_attempts` times or until sufficient events are captured.
-        4. Checks the number of events captured for each important source.
-        5. If any important source has insufficient events, prepares a subset of URLs for re-running the scraper.
-        6. Updates the configuration settings for the re-run.
-        7. Moves existing URLs to a temporary location and writes the subset of URLs for the next run.
-        8. Logs the process and results.
-        If the scraper fails to capture sufficient events after the maximum attempts, an error is logged.
-        """
-
-        calendar_urls_file = self.config['input']['calendar_urls']
-        calendar_df = pd.read_csv(calendar_urls_file)
-        logging.info(f"def scraper_check_and_rerun(): Loaded calendar URLs from {calendar_urls_file}.")
-
-        # Define important sources.
-        important_sources = {
-            "Salsa Caliente",
-            "Red Hot Swing",
-            "Victoria Latin Dance Association",
-            "Victoria West Coast Swing Collective"
-        }
-
-        attempt = 1
-        success = False
-
-        while attempt <= max_attempts and not success:
-            logging.info(f"def scraper_check_and_rerun(): Attempt {attempt} starting crawler process.")
-            self.run_crawler()
-
-            group_df = db_handler.groupby_source()
-            logging.info(f"def scraper_check_and_rerun(): Groupby results:\n{group_df}")
-
-            # Extract only the rows for important sources.
-            important_df = group_df[group_df['source'].isin(important_sources)]
-            missing_important = important_sources - set(important_df['source'].tolist())
-            under_threshold = [src for src in important_df['source'] 
-                            if important_df.loc[important_df['source'] == src, 'counted'].iloc[0] < event_threshold]
-
-            if not missing_important and not under_threshold:
-                logging.info("def scraper_check_and_rerun(): All important sources have sufficient events.")
-                success = True
-            else:
-                logging.info(f"def scraper_check_and_rerun(): Insufficient events for important sources. "
-                            f"Missing: {missing_important}, Under threshold: {under_threshold}. Preparing to re-run.")
-                subset_df = self.subset_calendar_urls(calendar_df, group_df, threshold=event_threshold)
-                if subset_df.empty:
-                    logging.info("def scraper_check_and_rerun(): No URLs to re-run; exiting re-run loop.")
-                    break
-
-                self.config['startup']['use_db'] = False
-                logging.info("def scraper_check_and_rerun(): Set config['startup']['use_db'] to False.")
-
-                self.config['crawling'].update({
-                    'depth_limit': 3,
-                    'headless': True,
-                    'max_crawl_trys': 3,
-                    'max_website_urls': 5,
-                    'scroll_depth': 3,
-                    'urls_run_limit': 5 * len(subset_df)
-                })
-                logging.info("def scraper_check_and_rerun(): Updated crawling settings based on subset size.")
-
-                urls_dir = self.config['input']['urls']
-                self.move_existing_urls_to_temp(urls_dir)
-                self.write_calendar_urls(subset_df, urls_dir)
-                attempt += 1
-
-        if not success:
-            logging.error("def scraper_check_and_rerun(): Failed to capture sufficient events for important sources after maximum attempts.")
-        else:
-            logging.info("def scraper_check_and_rerun(): Successfully captured sufficient events for important sources.")
-        return success
-
-
-    def restore_temp_files(self):
-        """
-        Moves any CSV files from the temp directory back to the original URLs directory.
-        """
-        urls_dir = self.config['input']['urls']
-        temp_dir = os.path.join(urls_dir, "temp")
-        if os.path.exists(temp_dir):
-            for filename in os.listdir(temp_dir):
-                src = os.path.join(temp_dir, filename)
-                dst = os.path.join(urls_dir, filename)
-                try:
-                    shutil.move(src, dst)
-                    logging.info(f"def restore_temp_files(): Moved {filename} from temp back to {urls_dir}.")
-                except Exception as e:
-                    logging.error(f"def restore_temp_files(): Failed to move {filename} back - {e}")
-            logging.info("def restore_temp_files(): Completed restoring temp files.")
-        else:
-            logging.info("def restore_temp_files(): No temp directory found; nothing to restore.")
+        logging.info("def run_crawler(): Starting crawler in-process.")
+        process = CrawlerProcess(settings={
+            "LOG_FILE": self.config['logging']['scraper_log_file'],
+            "LOG_LEVEL": "INFO",
+            "DEPTH_LIMIT": self.config['crawling']['depth_limit'],
+            "FEEDS": {
+                "output/output.json": {"format": "json"}
+            }
+        })
+        process.crawl(EventSpider, config=self.config)
+        process.start()  # will block until crawl finishes
+        logging.info("def run_crawler(): Crawler completed successfully.")
 
 
 # --------------------------------------------------
@@ -544,18 +367,13 @@ if __name__ == "__main__":
     db_handler = DatabaseHandler(config)
     llm_handler = LLMHandler(config_path="config/config.yaml")
     read_extract = ReadExtract("config/config.yaml")
+    scraper = EventSpider(config)
     file_name = os.path.basename(__file__)
     start_df = db_handler.count_events_urls_start(file_name)
 
-    # Let the manager handle the crawl.
-    manager = ScraperManager(config, db_handler)
-    success = manager.scraper_check_and_rerun(config['crawling']['max_attempts'], event_threshold=100)
-
-    if success:
-        manager.restore_temp_files()
-    else:
-        logging.error("__main__: Scraper did not run successfully; temp files were not restored.")
-
+    # Start the crawler.
+    scraper.run_crawler()
+    
     logging.info("__main__: Crawler process completed.")
     db_handler.count_events_urls_end(start_df, file_name)
 

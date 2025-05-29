@@ -135,7 +135,6 @@ class FacebookEventScraper():
         else:
             self.run_name = "Facebook Event Scraper Run"
             self.run_description = f"Production {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        self.start_time = datetime.now()
 
         # **Tracking Variables**
         self.unique_urls = set()  # Store unique URLs
@@ -385,7 +384,7 @@ class FacebookEventScraper():
         logging.info(f"extract_event_links(): Found {len(links)} links on {norm_url}")
 
         return links
-    
+
 
     def extract_event_text(self, link: str) -> str:
         """
@@ -503,11 +502,11 @@ class FacebookEventScraper():
             tuple: The last search_url used and a list of tuples containing event link and extracted text.
         """
         base_url = self.config['constants']['fb_base_url']
-        location = self.config['constants']['location']
+        location_id = self.config['constants']['fb_location_id']
         extracted_text_list = []
 
         for keyword in keywords:
-            search_url = f"{base_url} {location} {keyword}"
+            search_url = f"{base_url}{keyword}{location_id}"
             event_links = self.extract_event_links(search_url)
             logging.info(f"def scrape_events: Used {search_url} to get {len(event_links)} event_links\n")
 
@@ -545,6 +544,7 @@ class FacebookEventScraper():
 
         # Checkpoint history. Write extracted_text_list to a csv file
         extracted_text_df = pd.DataFrame(extracted_text_list, columns=['url', 'extracted_text'])
+        extracted_text_df['time_stamp'] = datetime.now()
         output_path = self.config['checkpoint']['extracted_text']
         if os.path.exists(output_path):
             extracted_text_df.to_csv(output_path, mode='a', header=False, index=False)
@@ -555,7 +555,7 @@ class FacebookEventScraper():
         return search_url, extracted_text_list
 
 
-    def process_fb_url(self, url: str, source: str, keywords: str) -> None:
+    def process_fb_url(self, url: str, parent_url: str, source: str, keywords: str) -> None:
         """
         Processes a Facebook event URL by extracting event information, checking for relevant keywords,
         querying an LLM for event details, and writing the results to the database.
@@ -647,7 +647,7 @@ class FacebookEventScraper():
         if events_df['url'].iloc[0] == '':
             events_df.loc[0, 'url'] = url
 
-        db_handler.write_events_to_db(events_df, url, source, keywords)
+        db_handler.write_events_to_db(events_df, url, parent_url, source, keywords)
         logging.info(f"process_fb_url: wrote events for {url}")
         self.events_written_to_db += len(events_df)
         relevant = True
@@ -662,12 +662,20 @@ class FacebookEventScraper():
     
 
     def driver_fb_search(self) -> None:
-        """
-        1. Reads in the keywords CSV file.
-        2. Creates search terms for Facebook searches using each keyword.
-        3. Scrapes events from search results.
-        4. For each extracted Facebook URL, processes it using process_fb_url.
-        5. Writes run statistics to the database.
+        """Orchestrates the Facebook event search and extraction workflow.
+        This method performs the following steps:
+            1. Reads keywords from a CSV file specified in the configuration.
+            2. Iterates over each set of keywords to construct Facebook search queries.
+            3. Scrapes event-related data from the search results.
+            4. For each extracted Facebook event URL:
+                - Checks if the URL has already been processed.
+                - Verifies if the crawl limit has been reached.
+                - Searches for relevant keywords in the extracted text.
+                - If keywords are found, processes the event data using an LLM handler and writes results to the database.
+            5. Updates the processed status of each keyword set and checkpoints progress to a CSV file.
+        Logging is used throughout to track progress, handle crawl limits, and record processing outcomes.
+        Returns:
+            None
         """
         # Read in keywords and append a column for processed status
         keywords_df = pd.read_csv(self.config['input']['data_keywords'])
@@ -702,7 +710,8 @@ class FacebookEventScraper():
 
                             # Set prompt and process LLM response
                             prompt = 'fb'
-                            llm_response = llm_handler.process_llm_response(url, extracted_text, source, keywords_list, prompt)
+                            parent_url = search_url
+                            llm_response = llm_handler.process_llm_response(url, parent_url, extracted_text, source, keywords_list, prompt)
 
                             # If events were successfully extracted and written to the DB
                             if llm_response:
@@ -748,6 +757,7 @@ class FacebookEventScraper():
         if fb_urls_df.shape[0] > 0:
             for idx, row in fb_urls_df.iterrows():
                 base_url = row['link']
+                parent_url = row['parent_url']
                 source = row['source']
                 keywords = row['keywords']
                 logging.info(f"def driver_fb_urls(): Processing base URL: {base_url}")
@@ -757,7 +767,7 @@ class FacebookEventScraper():
                     continue
 
                 # Process the base URL itself (writes any events found on that exact page)
-                self.process_fb_url(base_url, source, keywords)
+                self.process_fb_url(base_url, parent_url, source, keywords)
                 self.urls_visited.add(base_url)
 
                 # Mark as processed
@@ -779,7 +789,7 @@ class FacebookEventScraper():
                     if event_url in self.urls_visited:
                         continue
 
-                    self.process_fb_url(event_url, source, keywords)
+                    self.process_fb_url(event_url, base_url, source, keywords)
                     self.urls_visited.add(event_url)
 
                     # Add or update checkpoint row
@@ -815,46 +825,29 @@ class FacebookEventScraper():
         """
         Writes run statistics to the database.
         """
-        try:
-            elapsed_time = str(self.end_time - self.start_time)
-            time_stamp = datetime.now()
+        end_time = datetime.now()
+        logging.info(f"write_run_statistics(): Writing run statistics for {self.run_name}.")
 
-            run_data = pd.DataFrame([{
-                "run_name": self.run_name,
-                "run_description": self.run_description,
-                "start_time": self.start_time,
-                "end_time": self.end_time,
-                "elapsed_time": elapsed_time,
-                "python_file_name": "fb.py",
-                "unique_urls_count": len(self.urls_visited),
-                "total_url_attempts": self.total_url_attempts,
-                "urls_with_extracted_text": self.urls_with_extracted_text,
-                "urls_with_found_keywords": self.urls_with_found_keywords,
-                "events_written_to_db": self.events_written_to_db,
-                "time_stamp": time_stamp
-            }])
+        elapsed_time = str(end_time - self.start_time)
+        time_stamp = datetime.now()
 
-            run_data.to_sql("runs", db_handler.get_db_connection(), if_exists="append", index=False)
-            logging.info(f"write_run_statistics(): Run statistics written to database for {self.run_name}.")
+        run_data = pd.DataFrame([{
+            "run_name": self.run_name,
+            "run_description": self.run_description,
+            "start_time": self.start_time,
+            "end_time": end_time,
+            "elapsed_time": elapsed_time,
+            "python_file_name": "fb.py",
+            "unique_urls_count": len(self.urls_visited),
+            "total_url_attempts": self.total_url_attempts,
+            "urls_with_extracted_text": self.urls_with_extracted_text,
+            "urls_with_found_keywords": self.urls_with_found_keywords,
+            "events_written_to_db": self.events_written_to_db,
+            "time_stamp": time_stamp
+        }])
 
-        except Exception as e:
-            logging.error(f"write_run_statistics(): Error writing run statistics: {e}")
-
-
-    def run(self) -> None:
-        """
-        Runs the Facebook scraper in the specified mode.
-
-        Args:
-            mode (str): "search" for keyword-based scraping, "urls" for URL-based processing.
-        """
-        self.driver_fb_search()
-        self.driver_fb_urls()
-
-        self.end_time = datetime.now()
-
-        # Write run statistics to the database
-        self.write_run_statistics()
+        run_data.to_sql("runs", db_handler.get_db_connection(), if_exists="append", index=False)
+        logging.info(f"write_run_statistics(): Run statistics written to database for {self.run_name}.")
 
 
 if __name__ == "__main__":
@@ -876,7 +869,6 @@ if __name__ == "__main__":
 
     # Start time
     start_time = datetime.now()
-    logging.info(f"__main__: Starting fb.py ... and the crawler process at {start_time}")
 
     # Get the file name of the running script
     file_name = os.path.basename(__file__)
@@ -887,8 +879,12 @@ if __name__ == "__main__":
     # Initialize scraper
     fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
 
-    # Run and ensure cleanup
-    fb_scraper.run()
+    # Run
+    fb_scraper.driver_fb_search()
+    fb_scraper.driver_fb_urls()
+
+    # Write run statistics to the database
+    fb_scraper.write_run_statistics()
 
     # Close browser and Playwright
     fb_scraper.browser.close()

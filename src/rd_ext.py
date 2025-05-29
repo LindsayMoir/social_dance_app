@@ -588,9 +588,12 @@ class ReadExtract:
         df = pd.DataFrame([event_dict])
 
         # 3. write to Postgres via db_handler
-        db_handler.write_events_to_db(df, url=event_dict['url'], 
-                                        source=event_dict['source'], 
-                                        keywords=event_dict['dance_style'])
+        db_handler.write_events_to_db(df, 
+                                      url=event_dict['url'], 
+                                      parent_url = '',
+                                      source=event_dict['source'], 
+                                      keywords=event_dict['dance_style'])
+        # 4. log the action
         logging.info(f"uvic_rueda(): Added UVic Rueda event for {next_wed.isoformat()} to DB.")
 
 
@@ -646,9 +649,11 @@ if __name__ == "__main__":
         # If multiple events were found (i.e. extracted is a dict), process each event separately
         if isinstance(extracted, dict):
             for event_url, text in extracted.items():
-                llm_status = llm_handler.process_llm_response(event_url, text, source, keywords, prompt=event_url)
+                parent_url = url # Use the original URL as parent
+                llm_status = llm_handler.process_llm_response(event_url, parent_url, text, source, keywords, prompt=event_url)
         else:
-            llm_status = llm_handler.process_llm_response(url, extracted, source, keywords, prompt=url)
+            parent_url = ''  # No parent URL for single events
+            llm_status = llm_handler.process_llm_response(url, parent_url, extracted, source, keywords, prompt=url)
 
     # Add uvic wednesday rueda event. This event sometimes appears and then it dissapears. Lets just put it in.
     read_extract.uvic_rueda()
