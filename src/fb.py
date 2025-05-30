@@ -592,8 +592,8 @@ class FacebookEventScraper():
         self.urls_with_extracted_text += 1
 
         # 3) Check for keywords
-        found = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-        if not found:
+        keywords_found = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+        if not keywords_found:
             logging.info(f"process_fb_url: no keywords in {url}")
             db_handler.write_url_to_db(url_row)
             return
@@ -624,7 +624,7 @@ class FacebookEventScraper():
             events_df.loc[0, 'url'] = url
 
         # 6) Write events and mark URL
-        db_handler.write_events_to_db(events_df, url, parent_url, source, keywords)
+        db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_found)
         self.events_written_to_db += len(events_df)
     
 
