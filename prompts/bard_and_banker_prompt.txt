@@ -63,6 +63,11 @@ ________________________________________
 •	If an event starts with a day_of_week (e.g. Sunday, Monday, Tuesday, Wednesday, etc.) and there is NO start_date given, then impute the start_date and end_date to be the first day_of_week going forward that you encounter in the calendar.
 	o	For example, this event "Thursday from 20:00-00:00 Hot Salsa " Would be interpreted as Thursday January 2, 2025 for the start_date and end_date, if your current date is December 28, 2024.
 •	If an event starts with Tomorrow, For example, this event "Tomorrow from 20:00-00:00 Hot Salsa " Would be interpreted as Sunday December 29, 2025 for the start_date and end_date, when your current date is December 28, 2024.
+________________________________________
+3. day_of_week and start_date Consistency
+•	Do not change the given day_of_week.
+•	If your computed start_date is not that weekday, shift the date by ±1 day (whichever is closer) until it matches.
+•	Adjust end_date accordingly (if single-day, set equal to start_date).
 _____________________________________
 4. day_of_week and start_date Must Match
 •	Double check and make sure that the day_of_week and the date are correct. 

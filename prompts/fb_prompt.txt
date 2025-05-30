@@ -37,11 +37,10 @@ ________________________________________
 •	If an event starts with Tomorrow, this event "Tomorrow from 20:00-00:00 Hot Salsa " would be interpreted as Sunday December 29, 2024 for the start_date and end_date, when your current date is December 28, 2024.
 •	If an event starts with Today, this event "Today at 21:00 Ritmo Latino Party" would be interpreted as Friday January 31, 2025 for the start-date and end_date, when your current date is Friday January 31, 2025.
 _____________________________________
-3. day_of_week and start_date Must Match
-•	Double check and make sure that the day_of_week and the date are correct. 
-•	If the start_date you compute can not possibly be the day_of_week then change the date to match that day_of_week as close as possible. 
-•	For example, if the day_of_week is Wednesday and the start_date is 2025-05-29 then change the start_date to 2025-05-28.
-•	Adjust the end_date if necessary based on this revised start_date.
+3. day_of_week and start_date Consistency
+•	Do not change the given day_of_week.
+•	If your computed start_date is not that weekday, shift the date by ±1 day (whichever is closer) until it matches.
+•	Adjust end_date accordingly (if single-day, set equal to start_date).
 _______________________________
 4. Recurring Events:
 •	Only the FIRST event in the recurring event series should be put into the JSON output.
