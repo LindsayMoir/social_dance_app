@@ -325,58 +325,6 @@ class DatabaseHandler():
             logging.warning("close_connection: No database connection to close.")
 
 
-    def update_url(self, link, relevant, increment_crawl_try):
-        """
-        Updates an entry in the 'urls' table with the provided link and other details.
-
-        Args:
-            link (str): The link to be updated.
-            relevant (bool): The new value for 'relevant'.
-            increment_crawl_try (int): The number to increment 'crawl_try' by.
-
-        Returns:
-            bool: True if update was successful, False otherwise.
-        """
-        # See if link is in the urls table
-        select_query = """
-            SELECT * FROM urls
-            WHERE link = :link
-        """
-        select_params = {'link': link}
-        result = self.execute_query(select_query, select_params)
-        if result and len(result) > 0:
-            update_query = """
-                UPDATE urls
-                SET
-                    time_stamp = :current_time,
-                    crawl_try = crawl_try + :increment,
-                    relevant = :relevant
-                WHERE link = :link
-            """
-            update_params = {
-                'current_time': datetime.now(),
-                'increment': increment_crawl_try,
-                'relevant': relevant,
-                'link': link
-            }
-
-            # Execute the update
-            try:
-                update_result = self.execute_query(update_query, update_params)
-                if update_result is not None and update_result > 0:
-                    logging.info("def update_url(): Updated URL '%s' successfully.", link)
-                    return True
-                else:
-                    logging.error("def update_url(): Failed to update URL '%s'.", link)
-                    return False
-            except Exception as e:
-                logging.error("def update_url(): Exception occurred while updating URL '%s': %s", link, e)
-                return False
-        else:
-            logging.info("def update_url(): URL '%s' not found for update.", link)
-            return False
-
-
     def write_url_to_db(self, url_row):
         """
         Logs a URL activity by appending a new row to the 'urls' table via pandas.
@@ -1247,14 +1195,8 @@ class DatabaseHandler():
             self.execute_query(delete_event_query, params)
             logging.info("delete_event_and_update_url: Deleted event from 'events' table.")
 
-            # Update the corresponding URL from 'urls' table
-            relevant = False
-            increment_crawl_try = 1
-            db_handler.update_url(url, relevant, increment_crawl_try)
-            logging.info("delete_event_and_update_url: Deleted URL from 'urls' table.")
-
         except Exception as e:
-            logging.error("delete_event_and_update_url: Failed to delete event and URL: %s", e)
+            logging.error("delete_event_and_update_url: Failed to delete event: %s", e)
 
 
     def delete_events_with_nulls(self):

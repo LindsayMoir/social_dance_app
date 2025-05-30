@@ -285,8 +285,8 @@ class EventbriteScraper:
                 self.urls_with_found_keywords += 1  # Count URLs with found keywords
                 logging.info(f"def process_event(): Found keywords in text for URL {event_url}: {found_keywords}")
 
-                # Process the extracted text with LLM
-                response = self.llm_handler.process_llm_response(event_url, parent_url, extracted_text, source, keywords_list, prompt)
+                # Process the extracted text with the LLM
+                response = self.llm_handler.process_llm_response(event_url, parent_url, extracted_text, source, found_keywords, prompt)
 
                 if response:
                     self.events_written_to_db += 1  # Count events written to the database

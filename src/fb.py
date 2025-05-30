@@ -557,108 +557,75 @@ class FacebookEventScraper():
 
     def process_fb_url(self, url: str, parent_url: str, source: str, keywords: str) -> None:
         """
-        Processes a Facebook event URL by extracting event information, checking for relevant keywords,
-        querying an LLM for event details, and writing the results to the database.
+        Processes a Facebook URL by extracting event information (full or relevant text),
+        querying an LLM for event details, and writing results to the database.
         Args:
-            url (str): The Facebook event URL to process.
-            source (str): The source identifier for the event (e.g., 'fb').
+            url (str): The Facebook URL to process.
+            source (str): Source identifier (e.g., 'fb').
             keywords (str): Comma-separated keywords to check for relevance.
-        Workflow:
-            1. Navigates to the URL and logs in if necessary.
-            2. Normalizes the Facebook URL.
-            3. Extracts text content from the event page.
-            4. Checks if any of the specified keywords are present in the extracted text.
-            5. If relevant, generates a prompt and queries an LLM for structured event data.
-            6. Parses the LLM response and converts it to a DataFrame.
-            7. Writes the event data to the database if found.
-            8. Updates the URL's status in the database as relevant or not, and logs progress.
-        Side Effects:
-            - Updates internal counters for attempts, extracted texts, found keywords, and written events.
-            - Writes to and updates the database via db_handler.
-            - Logs progress and issues at various steps.
         Returns:
             None
         """
-
+        # Ensure we can access the page
         if not self.navigate_and_maybe_login(url):
             logging.info(f"process_fb_url: cannot access {url}")
-            db_handler.update_url(url, relevant=False, crawl_attempts=1)
+            db_handler.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
             return
-        
-        url = self.normalize_facebook_url(url)
-        relevant = False
-        crawl_attempts = 1
-        self.total_url_attempts += 1
 
-        extracted_text = self.extract_event_text(url)
+        # Normalize URL and initialize tracking
+        url = self.normalize_facebook_url(url)
+        self.total_url_attempts += 1
+        url_row = [url, parent_url, source, keywords, False, 1, datetime.now()]
+
+        # 1) Extract text: full event page vs relevant snippet
+        if "event" in url:
+            extracted_text = self.extract_event_text(url)
+        else:
+            full_text = self.extract_event_text(url)
+            extracted_text = self.extract_relevant_text(full_text, url) if full_text else None
+
+        # 2) Bail if no text
         if not extracted_text:
             logging.info(f"process_fb_url: no text for {url}")
-            db_handler.update_url(
-                                link=url,
-                                relevant=relevant,
-                                increment_crawl_try=crawl_attempts
-                                )
-            logging.info(f"process_fb_url: updated URL {url} as not relevant")
+            db_handler.write_url_to_db(url_row)
             return
-        
         self.urls_with_extracted_text += 1
+
+        # 3) Check for keywords
         found = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
         if not found:
             logging.info(f"process_fb_url: no keywords in {url}")
-            db_handler.update_url(
-                                link=url,
-                                relevant=relevant,
-                                increment_crawl_try=crawl_attempts
-                                )
+            db_handler.write_url_to_db(url_row)
             return
         self.urls_with_found_keywords += 1
 
+        # 4) Query LLM for structured event data
         prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
         llm_response = llm_handler.query_llm(prompt)
         if not llm_response or "No events found" in llm_response:
             logging.info(f"process_fb_url: LLM no events for {url}")
-            db_handler.update_url(
-                                link=url,
-                                relevant=relevant,
-                                increment_crawl_try=crawl_attempts
-                                )
+            db_handler.write_url_to_db(url_row)
             return
-        
+
+        # 5) Parse JSON and write to DB
         parsed = llm_handler.extract_and_parse_json(llm_response, url)
         if not parsed:
             logging.warning(f"process_fb_url: empty LLM response for {url}")
-            db_handler.update_url(
-                                link=url,
-                                relevant=relevant,
-                                increment_crawl_try=crawl_attempts
-                                )
+            db_handler.write_url_to_db(url_row)
             return
-        
         events_df = pd.DataFrame(parsed)
         if events_df.empty:
             logging.warning(f"process_fb_url: empty DataFrame for {url}")
-            db_handler.update_url(
-                                link=url,
-                                relevant=relevant,
-                                increment_crawl_try=crawl_attempts
-                                )
+            db_handler.write_url_to_db(url_row)
             return
-        
-        if events_df['url'].iloc[0] == '':
+
+        # Ensure URL column is populated
+        if 'url' in events_df.columns and events_df['url'].iloc[0] == '':
             events_df.loc[0, 'url'] = url
 
+        # 6) Write events and mark URL
         db_handler.write_events_to_db(events_df, url, parent_url, source, keywords)
-        logging.info(f"process_fb_url: wrote events for {url}")
         self.events_written_to_db += len(events_df)
-        relevant = True
-        db_handler.update_url(
-                            link=url,
-                            relevant=relevant,
-                            increment_crawl_try=crawl_attempts
-                            )
-        logging.info(f"process_fb_url: marked relevant {url}")
-
-        return
     
 
     def driver_fb_search(self) -> None:

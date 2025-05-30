@@ -8,7 +8,7 @@ clean_up:
   old_events: 3
 constants:
   fb_base_url: https://www.facebook.com/search/events?q=
-  fb_location_id: "&filters=eyJycF9ldmVudHNfbG9jYXRpb246MCI6IntcIm5hbWVcIjpcImZpbHRlcl9ldmVudHNfbG9jYXRpb25cIixcImFyZ3NcIjpcIjEwMzEzNTg3OTcyNzM4MlwifSJ9"
+  fb_location_id: '&filters=eyJycF9ldmVudHNfbG9jYXRpb246MCI6IntcIm5hbWVcIjpcImZpbHRlcl9ldmVudHNfbG9jYXRpb25cIixcImFyZ3NcIjpcIjEwMzEzNTg3OTcyNzM4MlwifSJ9'
   uvic_rueda_dict:
     dance_style: cuban salsa, rueda, salsa
     day_of_week: Wednesday
@@ -29,9 +29,9 @@ crawling:
   headless: true
   max_attempts: 3
   max_crawl_trys: 3
-  max_website_urls: 7
+  max_website_urls: 10
   scroll_depth: 2
-  urls_run_limit: 20
+  urls_run_limit: 500
 date_range:
   days_ahead: 365
   months: 3
