@@ -1173,7 +1173,7 @@ class DatabaseHandler():
         )
         
 
-    def delete_event_and_update_url(self, url, event_name, start_date):
+    def delete_event(self, url, event_name, start_date):
         """
         Deletes an event from the 'events' table and the corresponding URL from the 'urls' table.
 
@@ -1183,7 +1183,7 @@ class DatabaseHandler():
             start_date (str): The start date of the event to be deleted.
         """
         try:
-            logging.info("delete_event_and_update_url: Deleting event with URL: %s, Event Name: %s, Start Date: %s", url, event_name, start_date)
+            logging.info("delete_event: Deleting event with URL: %s, Event Name: %s, Start Date: %s", url, event_name, start_date)
 
             # Delete the event from 'events' table
             delete_event_query = """
@@ -1193,10 +1193,10 @@ class DatabaseHandler():
             """
             params = {'event_name': event_name, 'start_date': start_date}
             self.execute_query(delete_event_query, params)
-            logging.info("delete_event_and_update_url: Deleted event from 'events' table.")
+            logging.info("delete_event: Deleted event from 'events' table.")
 
         except Exception as e:
-            logging.error("delete_event_and_update_url: Failed to delete event: %s", e)
+            logging.error("delete_event: Failed to delete event: %s", e)
 
 
     def delete_events_with_nulls(self):
