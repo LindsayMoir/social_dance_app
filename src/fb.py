@@ -828,6 +828,84 @@ class FacebookEventScraper():
         logging.info(f"write_run_statistics(): Run statistics written to database for {self.run_name}.")
 
 
+    def checkpoint_events(self) -> None:
+        """
+        Checkpoints the events by reading from the checkpoint CSV file and writing to the database.
+        """
+        logging.info("def checkpoint_events(): Starting to checkpoint events.")
+
+        # Read in checkpoint file
+        df = pd.read_csv('checkpoint/extracted_text_may_29_2025.csv')
+        if df.empty:
+            logging.warning("checkpoint_events(): No data found in the checkpoint file.")
+            return
+
+        parent_url = ''
+        source = 'checkpoint'
+        relevant = False
+        crawl_try = 1
+
+        for _, row in df.iterrows():
+            url = row['url']
+            extracted_text = row['extracted_text']
+
+            # try to narrow down to just the relevant snippet
+            relevant_text = fb_scraper.extract_relevant_text(extracted_text, url)
+            if not relevant_text:
+                relevant_text = extracted_text
+
+            # skip anything with no keywords
+            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+            if not found_keywords:
+                logging.info(f"checkpoint_events(): No keywords found in extracted text for URL: {url}.")
+                continue
+
+            found_keywords = ', '.join(found_keywords)
+            logging.info(f"checkpoint_events(): Keywords found in text for {url}: {found_keywords}.")
+
+            # prepare the URL‐row metadata (note the timestamp call)
+            url_row = [
+                url,
+                parent_url,
+                source,
+                found_keywords,
+                relevant,
+                crawl_try,
+                datetime.now()
+            ]
+
+            # 4) Query the LLM
+            prompt = llm_handler.generate_prompt(url, relevant_text, 'fb')
+            llm_response = llm_handler.query_llm(prompt)
+            if not llm_response or "No events found" in llm_response:
+                logging.info(f"checkpoint_events(): LLM returned no events for {url}")
+                db_handler.write_url_to_db(url_row)
+                continue
+
+            # 5) Parse JSON, build DataFrame
+            parsed = llm_handler.extract_and_parse_json(llm_response, url)
+            if not parsed:
+                logging.warning(f"checkpoint_events(): empty LLM response for {url}")
+                db_handler.write_url_to_db(url_row)
+                continue
+
+            events_df = pd.DataFrame(parsed)
+            if events_df.empty:
+                logging.warning(f"checkpoint_events(): empty DataFrame for {url}")
+                db_handler.write_url_to_db(url_row)
+                continue
+
+            # ensure the URL column is filled
+            if 'url' in events_df.columns and events_df['url'].iloc[0] == '':
+                events_df.loc[0, 'url'] = url
+
+            # 6) write events and tally
+            db_handler.write_events_to_db(events_df, url, parent_url, source, found_keywords)
+            self.events_written_to_db += len(events_df)
+
+        logging.info(f"checkpoint_events(): Completed. Wrote {self.events_written_to_db} events.")
+
+
 if __name__ == "__main__":
     # Load configuration
     with open('config/config.yaml', 'r') as file:
@@ -860,6 +938,9 @@ if __name__ == "__main__":
     # Run
     fb_scraper.driver_fb_search()
     fb_scraper.driver_fb_urls()
+
+    # To be removed in production
+    # fb_scraper.checkpoint_events()
 
     # Write run statistics to the database
     fb_scraper.write_run_statistics()
