@@ -696,17 +696,17 @@ async def main():
     # Count events and urls before cleanup
     start_df = db_handler.count_events_urls_start(file_name)
 
-    # # Fix no urls in events
-    # await clean_up_instance.process_events_without_url()
+    # Fix no urls in events
+    await clean_up_instance.process_events_without_url()
 
-    # # Fix incorrect dance_styles
-    # await clean_up_instance.fix_incorrect_dance_styles()
+    # Fix incorrect dance_styles
+    await clean_up_instance.fix_incorrect_dance_styles()
 
-    # # Delete events outside of BC, Canada
-    # await clean_up_instance.delete_events_outside_bc()
+    # Delete events outside of BC, Canada
+    await clean_up_instance.delete_events_outside_bc()
 
-    # # Delete events more than 9 months in the future
-    # await clean_up_instance.delete_events_more_than_9_months_future()
+    # Delete events more than 9 months in the future
+    await clean_up_instance.delete_events_more_than_9_months_future()
 
     # Delete events that you know are not relevant
     bad_urls = [url.strip() for url in config['constants']['delete_known_bad_urls'].split(',') if url.strip()]
