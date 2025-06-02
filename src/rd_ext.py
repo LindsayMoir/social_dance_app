@@ -502,8 +502,8 @@ class ReadExtract:
 
         # Single-URL mode
         # Check urls to see if they should be scraped
-        if not db_handler.should_process_url(event_url):
-            logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
+        if not db_handler.should_process_url(url):
+            logging.info(f"def eventbrite_search(): Skipping URL {url} based on historical relevancy.")
             return None
         
         if not multiple:
