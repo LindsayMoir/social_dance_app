@@ -138,7 +138,7 @@ class DatabaseHandler():
                 .agg(hit_ratio=_compute_hit_ratio)
                 .reset_index()
         )
-        logging.info(f"__init__(): urls_gb has {len(self.urls_gb)} unique URLs\n{self.urls_gb.head()}")
+        logging.info(f"__init__(): urls_gb has {len(self.urls_gb)} rows and {len(self.urls_gb.columns)} columns.")
             
 
     def get_db_connection(self):
@@ -1682,21 +1682,26 @@ class DatabaseHandler():
         Otherwise returns False.
         """
         # 1. Filter all rows for this URL
-        df_url = self.urls_df[self.urls_df['url'] == url]
+        df_url = self.urls_df[self.urls_df['link'] == url]
         # If we've never recorded this URL, process it
         if df_url.empty:
+            logging..info(f"should_process_url: URL {url} has never been seen before, processing it.")
             return True
 
         # 2. Look at the most recent "relevant" value
         last_relevant = df_url.iloc[-1]['relevant']
         if last_relevant and self.stale_date:
+            logging.info(f"should_process_url: URL {url} was last seen as relevant, processing it.")
             return True
 
         # 3. Last was False → check hit_ratio in self.urls_gb
-        hit_row = self.urls_gb[self.urls_gb['url'] == url]
+        hit_row = self.urls_gb[self.urls_gb['link'] == url]
         if not hit_row.empty and hit_row.iloc[0]['hit_ratio'] > 0.1:
+            logging.info(f"should_process_url: URL {url} was last seen as not relevant but hit_ratio > 0.1, processing it.")
             return True
-
+        
+        # 4. Otherwise, do not process this URL
+        logging.info(f"should_process_url: URL {url} does not meet criteria for processing, skipping it.")
         return False
 
 

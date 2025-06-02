@@ -17,9 +17,13 @@ WHERE schemaname = 'public';
 SELECT * FROM events
 WHERE source ILIKE '%latin dance canada%'
 
-SELECT relevant, COUNT(*) AS count
+SELECT
+  relevant,
+  COUNT(*) AS counted
 FROM urls
-GROUP BY relevant;
+WHERE link ILIKE '%facebook%'
+GROUP BY relevant
+ORDER BY relevant;
 
 SELECT * FROM events
 WHERE dance_style ILIKE '%coast%' or dance_style ILIKE '%wcs%'
