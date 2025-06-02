@@ -82,7 +82,7 @@ class EventSpider(scrapy.Spider):
             url = row['link']
 
             # Check urls to see if they should be scraped
-            if not self.db_handler.should_process_url(url):
+            if not db_handler.should_process_url(url):
                 logging.info(f"def eventbrite_search(): Skipping URL {url} based on historical relevancy.")
                 continue
 
@@ -178,7 +178,7 @@ class EventSpider(scrapy.Spider):
         for link in filtered_links:
 
             # Check urls to see if they should be scraped
-            if not self.db_handler.should_process_url(link):
+            if not db_handler.should_process_url(link):
                 logging.info(f"def eventbrite_search(): Skipping URL {link} based on historical relevancy.")
                 continue
 
@@ -188,7 +188,7 @@ class EventSpider(scrapy.Spider):
             self.visited_link.add(link)
 
             # Check urls to see if they should be scraped
-            if not self.db_handler.should_process_url(link):
+            if not db_handler.should_process_url(link):
                 logging.info(f"def eventbrite_search(): Skipping URL {link} based on historical relevancy.")
                 continue
 

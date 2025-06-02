@@ -749,7 +749,7 @@ class FacebookEventScraper():
                     continue
 
                 # Check urls to see if they should be scraped
-                if not self.db_handler.should_process_url(base_url):
+                if not db_handler.should_process_url(base_url):
                     logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
                     continue
 
@@ -778,7 +778,7 @@ class FacebookEventScraper():
                         continue
                     
                     # Check urls to see if they should be scraped
-                    if not self.db_handler.should_process_url(event_url):
+                    if not db_handler.should_process_url(event_url):
                         logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
                         continue
 
