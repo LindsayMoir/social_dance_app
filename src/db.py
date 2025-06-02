@@ -134,7 +134,7 @@ class DatabaseHandler():
         # Create a groupby that gives a hit_ratio for how useful the URL is
         self.urls_gb = (
             self.urls_df
-                .groupby('url')['relevant']
+                .groupby('link')['relevant']
                 .agg(hit_ratio=_compute_hit_ratio)
                 .reset_index()
         )
