@@ -166,6 +166,11 @@ class EventbriteScraper:
                 )
                 break
 
+            # Check urls to see if they should be scraped
+            if not self.db_handler.should_process_url(event_url):
+                logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
+                continue
+
             logging.info(f"def eventbrite_search(): Processing URL {event_url}")
             self.visited_urls.add(event_url)
             self.urls_contacted += 1

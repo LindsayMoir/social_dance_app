@@ -501,6 +501,11 @@ class ReadExtract:
         logging.info(f"main(): Initialized browser for {url} (multiple={multiple})")
 
         # Single-URL mode
+        # Check urls to see if they should be scraped
+        if not self.db_handler.should_process_url(event_url):
+            logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
+            return None
+        
         if not multiple:
             text = await self.extract_event_text(url)
             await self.close()
@@ -517,6 +522,12 @@ class ReadExtract:
         for link in links:
             if link == url:
                 continue
+
+            # Check urls to see if they should be scraped
+            if not self.db_handler.should_process_url(event_url):
+                logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
+                continue
+            
             text = await self.extract_event_text(link)
             results[link] = text
 

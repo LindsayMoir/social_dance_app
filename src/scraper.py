@@ -75,9 +75,17 @@ class EventSpider(scrapy.Spider):
             urls_df = pd.concat(dataframes, ignore_index=True)
 
         for _, row in urls_df.iterrows():
+
+            # Extract necessary fields from the row
             source = row['source']
             keywords = row['keywords']
             url = row['link']
+
+            # Check urls to see if they should be scraped
+            if not self.db_handler.should_process_url(url):
+                logging.info(f"def eventbrite_search(): Skipping URL {url} based on historical relevancy.")
+                continue
+
             logging.info(f"def start_requests(): Starting crawl for URL: {url}")
             yield scrapy.Request(
                 url=url,
@@ -168,9 +176,21 @@ class EventSpider(scrapy.Spider):
 
         # 6) Follow each remaining link with Playwright rendering
         for link in filtered_links:
+
+            # Check urls to see if they should be scraped
+            if not self.db_handler.should_process_url(link):
+                logging.info(f"def eventbrite_search(): Skipping URL {link} based on historical relevancy.")
+                continue
+
+            # Skip if link has already been visited
             if link in self.visited_link:
                 continue
             self.visited_link.add(link)
+
+            # Check urls to see if they should be scraped
+            if not self.db_handler.should_process_url(link):
+                logging.info(f"def eventbrite_search(): Skipping URL {link} based on historical relevancy.")
+                continue
 
             # record the child link before crawling
             child_row = [link, url, source, found_keywords, False, 1, datetime.now()]

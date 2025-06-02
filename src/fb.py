@@ -516,6 +516,10 @@ class FacebookEventScraper():
                 if link in self.urls_visited:
                     continue  # Skip already visited URLs
                 else:
+                    # Check urls to see if they should be scraped
+                    if not db_handler.should_process_url(link):
+                        logging.info(f"def scrape_events(): Skipping URL {link} based on historical relevancy.")
+                        continue
                     self.unique_urls_count += 1  # Increment unique URL count
 
                     if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
@@ -744,6 +748,11 @@ class FacebookEventScraper():
                 if base_url in self.urls_visited:
                     continue
 
+                # Check urls to see if they should be scraped
+                if not self.db_handler.should_process_url(base_url):
+                    logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
+                    continue
+
                 # Process the base URL itself (writes any events found on that exact page)
                 self.process_fb_url(base_url, parent_url, source, keywords)
                 self.urls_visited.add(base_url)
@@ -764,7 +773,13 @@ class FacebookEventScraper():
 
                 # 5) Process each event link
                 for event_url in fb_event_links:
+
                     if event_url in self.urls_visited:
+                        continue
+                    
+                    # Check urls to see if they should be scraped
+                    if not self.db_handler.should_process_url(event_url):
+                        logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
                         continue
 
                     self.process_fb_url(event_url, base_url, source, keywords)

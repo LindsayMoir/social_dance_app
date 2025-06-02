@@ -58,7 +58,7 @@ Note:
     encountered during database interactions.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 load_dotenv()
 from fuzzywuzzy import fuzz
@@ -112,6 +112,34 @@ class DatabaseHandler():
         # Get google api key
         self.google_api_key = os.getenv("GOOGLE_KEY_PW")
 
+        # Create df from urls table.
+        self.urls_df = self.create_urls_df()
+        logging.info("__init__(): URLs DataFrame created with %d rows.", len(self.urls_df))
+
+        def _compute_hit_ratio(x):
+            true_count = x.sum()
+            false_count = (~x).sum()
+
+            # Case 1: at least one True and one False
+            if true_count > 0 and false_count > 0:
+                return true_count / false_count
+
+            # Case 2: 0 Trues and all False
+            if true_count == 0:
+                return 0.0
+
+            # Case 3: all Trues and no False
+            return 1.0
+
+        # Create a groupby that gives a hit_ratio for how useful the URL is
+        self.urls_gb = (
+            self.urls_df
+                .groupby('url')['relevant']
+                .agg(hit_ratio=_compute_hit_ratio)
+                .reset_index()
+        )
+        logging.info(f"__init__(): urls_gb has {len(self.urls_gb)} unique URLs\n{self.urls_gb.head()}")
+            
 
     def get_db_connection(self):
         """
@@ -266,6 +294,27 @@ class DatabaseHandler():
         else:
             logging.info("No tables found or query failed.")
 
+
+    def create_urls_df(self):
+        """
+        Creates a DataFrame from the 'urls' table in the database.
+
+        Returns:
+            pandas.DataFrame: A DataFrame containing all rows from the 'urls' table.
+        """
+        query = "SELECT * FROM urls;"
+        try:
+            urls_df = pd.read_sql(query, self.conn)
+            logging.info("create_urls_df: Successfully created DataFrame from 'urls' table.")
+            if urls_df.empty:
+                logging.warning("create_urls_df: 'urls' table is empty.")
+            else:
+                logging.info("create_urls_df: 'urls' table contains %d rows.", len(urls_df))
+            return urls_df
+        except SQLAlchemyError as e:
+            logging.error("create_urls_df: Failed to create DataFrame from 'urls' table: %s", e)
+            return pd.DataFrame()
+        
 
     def execute_query(self, query, params=None):
         """
@@ -1567,6 +1616,88 @@ class DatabaseHandler():
         
         # Bulk update the events table using the provided multiple_db_inserts method.
         self.multiple_db_inserts("events", events_address_ids_to_be_updated_list)
+
+
+    def stale_date(self, url):
+        """
+        Check whether this URL's most recent event is “stale” (older than our allowed threshold).
+
+        Steps:
+        1. Query the `events` table for all rows where `url = :url`, ordered by `start_date` descending, limit 1.
+        2. If there are no events for this URL, return True (i.e. it's “stale” because nothing exists yet).
+        3. Otherwise, take that single most-recent `start_date`.
+            a. Convert it into a Python date object.
+        4. Compute `cutoff_date = (today's date) - (config['clean_up']['old_events'] days)`.
+            a. If `latest_start_date < cutoff_date`, then the URL is older than our threshold ⇒ return True.
+            b. Otherwise, return False (it's still fresh).
+        """
+        try:
+            # 1. Fetch the most recent start_date for this URL
+            query = """
+                SELECT start_date
+                FROM events_history
+                WHERE url = :url
+                ORDER BY start_date DESC
+                LIMIT 1;
+            """
+            params = {'url': url}
+            result = self.execute_query(query, params)
+
+            # 2. If no rows returned, nothing has been recorded for this URL ⇒ treat as “stale”
+            if not result:
+                return True
+
+            latest_start_date = result[0][0]
+            # 3. If, for some reason, start_date is NULL in the DB, treat as “stale”
+            if latest_start_date is None:
+                return True
+
+            # 3a. Convert whatever was returned into a Python date
+            #     (pd.to_datetime handles string, datetime, or pandas.Timestamp)
+            latest_date = pd.to_datetime(latest_start_date).date()
+
+            # 4. Compute cutoff_date = today – N days
+            days_threshold = int(self.config['clean_up']['old_events'])
+            cutoff_date = datetime.now().date() - timedelta(days=days_threshold)
+
+            # 4a. If the event’s date is older than cutoff_date, it’s stale → return True
+            return latest_date < cutoff_date
+
+        except Exception as e:
+            logging.error(f"stale_date: Error checking stale date for url {url}: {e}")
+            # In case of any error, default to True (safer to re‐process)
+            return True
+
+
+    def should_process_url(self, url):
+        """
+        Decide whether to process the given URL based on:
+        1. The most recent 'relevant' value in self.urls_df.
+        2. The hit_ratio in self.urls_gb if the last 'relevant' was False.
+
+        Returns True if:
+        - The URL has never been seen before (no rows in self.urls_df), or
+        - The last time we saw it, 'relevant' was True, or
+        - The last time was False but hit_ratio > 0.1.
+        Otherwise returns False.
+        """
+        # 1. Filter all rows for this URL
+        df_url = self.urls_df[self.urls_df['url'] == url]
+        # If we've never recorded this URL, process it
+        if df_url.empty:
+            return True
+
+        # 2. Look at the most recent "relevant" value
+        last_relevant = df_url.iloc[-1]['relevant']
+        if last_relevant and self.stale_date:
+            return True
+
+        # 3. Last was False → check hit_ratio in self.urls_gb
+        hit_row = self.urls_gb[self.urls_gb['url'] == url]
+        if not hit_row.empty and hit_row.iloc[0]['hit_ratio'] > 0.1:
+            return True
+
+        return False
 
 
     def driver(self):
