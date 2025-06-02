@@ -1685,7 +1685,7 @@ class DatabaseHandler():
         df_url = self.urls_df[self.urls_df['link'] == url]
         # If we've never recorded this URL, process it
         if df_url.empty:
-            logging..info(f"should_process_url: URL {url} has never been seen before, processing it.")
+            logging.info(f"should_process_url: URL {url} has never been seen before, processing it.")
             return True
 
         # 2. Look at the most recent "relevant" value
