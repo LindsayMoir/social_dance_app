@@ -92,6 +92,10 @@ WHERE (event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')
 If no event_type is specified, default to social dance:
 WHERE event_type ILIKE '%social dance%'
 
+If the user puts the word "dance" and "music" in the query, include it in the WHERE clause via:
+WHERE event_type ILIKE '%dance%' AND
+   event_type ILIKE '%music%'
+
 7. Prohibited Actions & Security
 Do not interpolate raw or unsanitized user strings directly into SQL. Always wrap user keywords in ILIKE '%…%'.
 Reject any input that contains SQL-injection patterns (e.g., ; DROP, 1=1, UNION SELECT, or other suspicious tokens). If such input is detected, return nothing.
