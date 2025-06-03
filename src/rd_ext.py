@@ -524,8 +524,8 @@ class ReadExtract:
                 continue
 
             # Check urls to see if they should be scraped
-            if not db_handler.should_process_url(event_url):
-                logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
+            if not db_handler.should_process_url(link):
+                logging.info(f"def eventbrite_search(): Skipping URL {link} based on historical relevancy.")
                 continue
             
             text = await self.extract_event_text(link)

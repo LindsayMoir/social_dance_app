@@ -555,7 +555,7 @@ class FacebookEventScraper():
         extracted_text_df['time_stamp'] = datetime.now()
         output_path = self.config['checkpoint']['extracted_text']
         if os.path.exists(output_path):
-            extracted_text_df.excel(output_path, mode='a', header=False, index=False)
+            extracted_text_df.to_excel(output_path, mode='a', header=False, index=False)
         else:
             extracted_text_df.to_excel(output_path, index=False)
         logging.info(f"def scrape_events(): Extracted text data written to {output_path}.")

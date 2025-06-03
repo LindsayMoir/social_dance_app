@@ -18,6 +18,7 @@ import pandas as pd
 import re
 import requests
 import scrapy
+from scrapy.http import TextResponse
 from scrapy_playwright.page import PageMethod
 from scrapy.crawler import CrawlerProcess
 import shutil
@@ -111,6 +112,10 @@ class EventSpider(scrapy.Spider):
         5) Fetch Google Calendar events where found.
         6) Filter out unwanted links, record them, and follow remaining links.
         """
+        # Skip non-text responses (e.g., images, PDFs, etc.)
+        if not isinstance(response, TextResponse):
+            return
+        
         # 1) Get rendered page text
         extracted_text = response.text
 
