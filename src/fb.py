@@ -72,6 +72,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from fuzzywuzzy import fuzz
 import logging
+from openpyxl import load_workbook
 import os
 import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
@@ -490,6 +491,26 @@ class FacebookEventScraper():
 
         return extracted_text
     
+
+    def append_df_to_excel(self, df: pd.DataFrame, output_path: str):
+        """
+        Appends `df` to the first sheet of output_path, creating it if necessary.
+        """
+        try:
+            # Load existing workbook
+            book = load_workbook(output_path)
+            with pd.ExcelWriter(output_path, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
+                # Write df starting at the first empty row (book.active.max_row)
+                df.to_excel(
+                    writer,
+                    index=False,
+                    header=False,
+                    startrow=book.active.max_row
+                )
+        except FileNotFoundError:
+            # If the file doesn't exist yet, create it with headers
+            df.to_excel(output_path, index=False)
+    
         
     def scrape_events(self, keywords: list[str]) -> tuple[str, list[tuple[str, str]]]:
         """
@@ -554,10 +575,7 @@ class FacebookEventScraper():
         extracted_text_df = pd.DataFrame(extracted_text_list, columns=['url', 'extracted_text'])
         extracted_text_df['time_stamp'] = datetime.now()
         output_path = self.config['checkpoint']['extracted_text']
-        if os.path.exists(output_path):
-            extracted_text_df.to_excel(output_path, mode='a', header=False, index=False)
-        else:
-            extracted_text_df.to_excel(output_path, index=False)
+        self.append_df_to_excel(extracted_text_df, output_path)
         logging.info(f"def scrape_events(): Extracted text data written to {output_path}.")
 
         return search_url, extracted_text_list
@@ -750,7 +768,7 @@ class FacebookEventScraper():
 
                 # Check urls to see if they should be scraped
                 if not db_handler.should_process_url(base_url):
-                    logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
+                    logging.info(f"def eventbrite_search(): Skipping URL {base_url} based on historical relevancy.")
                     continue
 
                 # Process the base URL itself (writes any events found on that exact page)

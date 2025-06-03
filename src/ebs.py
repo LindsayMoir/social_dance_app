@@ -51,6 +51,7 @@ load_dotenv()
 import logging
 import os
 import pandas as pd
+import random
 import re
 import sys
 import yaml
@@ -101,11 +102,12 @@ class EventbriteScraper:
         event_urls = []
 
         # Navigate to Eventbrite (wait only for DOM, with longer timeout)
+        to = random.randint(6000//2, int(6000 * 1.5))
         try:
             await self.read_extract.page.goto(
                 "https://www.eventbrite.com/",
                 wait_until="domcontentloaded",
-                timeout=60000
+                timeout=to
             )
             logging.info("def eventbrite_search(): Navigated to Eventbrite.")
         except Exception as e:
@@ -123,9 +125,10 @@ class EventbriteScraper:
                 logging.info("def eventbrite_search(): Clicked Continue after email.")
 
                 # Wait for password field (longer timeout)
+                to = random.randint(15000//2, int(15000 * 1.5))
                 await self.read_extract.page.wait_for_selector(
                     "input[name='password']",
-                    timeout=15000
+                    timeout=to
                 )
                 password = os.getenv('EVENTBRITE_KEY_PW')
                 await self.read_extract.page.fill("input[name='password']", password)
@@ -133,7 +136,8 @@ class EventbriteScraper:
                 logging.info("def eventbrite_search(): Filled password and clicked submit.")
 
                 # Brief pause for login to settle
-                await self.read_extract.page.wait_for_timeout(3000)
+                to = random.randint(3000//2, int(3000 * 1.5))
+                await self.read_extract.page.wait_for_timeout(to)
             else:
                 logging.info("def eventbrite_search(): No login popup detected.")
         except Exception as e:
@@ -188,14 +192,16 @@ class EventbriteScraper:
         """
         search_selector = "input#search-autocomplete-input"
         try:
-            await self.read_extract.page.wait_for_selector(search_selector, timeout=20000)
+            to = random.randint(20000//2, int(20000 * 1.5))
+            await self.read_extract.page.wait_for_selector(search_selector, timeout=to)
             search_box = await self.read_extract.page.query_selector(search_selector)
 
             if search_box:
                 await search_box.fill(query)
                 await search_box.press("Enter")
                 logging.info(f"def perform_search(): Performed search with query: {query}")
-                await self.read_extract.page.wait_for_load_state("networkidle", timeout=15000)
+                to = random.randint(15000//2, int(15000 * 1.5))
+                await self.read_extract.page.wait_for_load_state("networkidle", timeout=to)
             else:
                 logging.error("def perform_search(): Search box not found on Eventbrite.")
                 raise Exception("Search box not found.")
