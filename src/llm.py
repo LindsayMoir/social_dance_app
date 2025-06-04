@@ -364,7 +364,8 @@ class LLMHandler():
             list or None: Returns a list of complete events/addresses if JSON is successfully extracted
                         and parsed, otherwise returns None.
         """
-        # Early exits for no data
+        # ──────────────────────────────────────────────────────────────────────────────
+        #  Early exits for no data
         if "No events found" in result:
             logging.info("def extract_and_parse_json(): No events found in result.")
             return None
@@ -372,7 +373,8 @@ class LLMHandler():
             logging.info("def extract_and_parse_json(): No valid events found in result.")
             return None
 
-        # 1) Attempt to isolate a JSON array blob with bracket matching
+        # ──────────────────────────────────────────────────────────────────────────────
+        #  1) Attempt to isolate a JSON array blob with bracket matching
         start = result.find('[')
         if start == -1:
             start = 0
@@ -380,6 +382,7 @@ class LLMHandler():
         depth = 0
         in_str = False
         escape = False
+
         for i, ch in enumerate(result[start:], start):
             if escape:
                 escape = False
@@ -397,7 +400,8 @@ class LLMHandler():
                     if depth == 0:
                         end = i + 1
                         break
-        # 1a) If no proper array found, wrap top-level objects in a list
+
+        # 1a) If no proper array found, wrap top‐level objects in a list
         if end is None or end <= start:
             first_brace = result.find('{')
             last_brace = result.rfind('}')
@@ -413,15 +417,16 @@ class LLMHandler():
             logging.info(f"def extract_and_parse_json(): malformed json: \n{json_string}")
             return None
 
-        # 2) Basic cleanups
-        cleaned_str = re.sub(r'(?<!:)//.*', '', json_string)
-        cleaned_str = cleaned_str.replace('...', '')
+        # ──────────────────────────────────────────────────────────────────────────────
+        #  2) Basic cleanups
+        cleaned_str = re.sub(r'(?<!:)//.*', '', json_string)       # Remove // comments
+        cleaned_str = cleaned_str.replace('...', '')               # Remove ellipses
         cleaned_str = cleaned_str.strip()
-        cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)
-        cleaned_str = re.sub(r'\\(?!["\\/bfnrt])', r'\\\\', cleaned_str)
+        cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)          # Remove trailing commas before ]
         cleaned_str = cleaned_str.replace("```json", "").replace("```", "")
 
-        # 3) Fix common unterminated-string cases
+        # ──────────────────────────────────────────────────────────────────────────────
+        #  3) Fix common unterminated‐string cases
         cleaned_str = re.sub(
             r'("(?P<key>[^"\\n]+)":\s*"[^\\n"]*)(?=\s*}\s*\])',
             r'\1"',
@@ -445,7 +450,8 @@ class LLMHandler():
             cleaned_str
         )
 
-        # 4) Split concatenated events into separate objects
+        # ──────────────────────────────────────────────────────────────────────────────
+        #  4) Split concatenated events into separate objects (if needed)
         split_pattern = (
             r'("description":\s*"(?:[^"\\]|\\.)*?")\s*'
             r'(?="source":)'
@@ -453,29 +459,86 @@ class LLMHandler():
         split_repl = r'\1"},\n{"source":'
         cleaned_str = re.sub(split_pattern, split_repl, cleaned_str, flags=re.DOTALL)
 
-        logging.info(f"def extract_and_parse_json(): for url {url}, \nCleaned JSON string: \n{cleaned_str}")
+        # ──────────────────────────────────────────────────────────────────────────────
+        #  5) Convert any single‐quoted value into a double‐quoted string
+        #     e.g.  "dance_style": ''    →  "dance_style": ""
+        #          "price": 'Free'       →  "price": "Free"
+        cleaned_str = re.sub(
+            r'(?P<field>"[^"]+"\s*:\s*)\'(?P<val>[^\'"]*)\'',
+            r'\g<field>"\g<val>"',
+            cleaned_str
+        )
 
-        # 5) Parse the cleaned JSON
+        logging.info(
+            f"def extract_and_parse_json(): for url {url}, \n"
+            f"Cleaned JSON before escaping inside‐strings:\n{cleaned_str}"
+        )
+
+        # ──────────────────────────────────────────────────────────────────────────────
+        #  6) Escape \n and \t **only inside** JSON string literals
+        #
+        #     We match every JSON‐quoted string (allowing for existing \" or \\ inside),
+        #     then replace any real newline or tab in its contents with \\n or \\t.
+        def _escape_inside_string_literals(match):
+            contents = match.group(1)
+            # Normalize CRLF → LF
+            contents = contents.replace('\r\n', '\n').replace('\r', '\n')
+            # Now escape actual newlines/tabs:
+            contents = contents.replace('\n', '\\n').replace('\t', '\\t')
+            return f'"{contents}"'
+
+        # This regex captures the contents of every JSON string literal
+        cleaned_str = re.sub(
+            r'"((?:\\.|[^"\\])*)"',   # capture group 1 = everything inside the double‐quotes
+            _escape_inside_string_literals,
+            cleaned_str,
+            flags=re.DOTALL
+        )
+
+        logging.info(
+            f"def extract_and_parse_json(): for url {url}, \n"
+            f"Cleaned JSON ready for parsing:\n{cleaned_str}"
+        )
+
+        # ──────────────────────────────────────────────────────────────────────────────
+        #  7) First parse attempt
         try:
             data = json.loads(cleaned_str)
         except json.JSONDecodeError as e:
-            logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
-            return None
+            msg = str(e)
+            # If it complains about an invalid \ escape or malformed \u, do a fallback
+            # that only escapes stray backslashes not part of a valid JSON escape.
+            if "Invalid \\escape" in msg or "Invalid \\u" in msg:
+                # Escape any '\' not followed by " or \ or / or b or f or n or r or t or u
+                fallback = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', cleaned_str)
+                try:
+                    data = json.loads(fallback)
+                except json.JSONDecodeError as e2:
+                    logging.error(f"def extract_and_parse_json(): second‐pass JSON parse failed: {e2}")
+                    return None
+            else:
+                logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
+                return None
 
-        # 6) Ensure we have a list to iterate over
+        # ──────────────────────────────────────────────────────────────────────────────
+        #  8) Ensure we have a list to iterate over
         if isinstance(data, dict):
             items = [data]
         elif isinstance(data, list):
             items = data
         else:
-            logging.error("def extract_and_parse_json(): Expected list or dict, got %r", type(data))
+            logging.error(
+                "def extract_and_parse_json(): Expected list or dict, got %r",
+                type(data)
+            )
             return None
 
         if not items:
             logging.info("def extract_and_parse_json(): No items to process.")
             return None
 
-        # 7) Filter out incomplete items
+        # ──────────────────────────────────────────────────────────────────────────────
+        #  9) Filter out incomplete items
         ADDRESS_KEYS = {
             "address_id", "full_address", "building_name", "street_number",
             "street_name", "street_type", "direction", "city", "met_area",
