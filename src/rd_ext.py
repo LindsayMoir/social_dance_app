@@ -502,7 +502,7 @@ class ReadExtract:
         if len(results) == 1:
             return main_text
         return results
-    
+
 
     async def extract_links(self, url: str) -> list:
         """

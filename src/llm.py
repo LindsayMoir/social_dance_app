@@ -198,7 +198,7 @@ class LLMHandler():
         """
         # Generate prompt, query LLM, and process the response.
         prompt = self.generate_prompt(url, extracted_text, prompt)
-        llm_response = self.query_llm(prompt)
+        llm_response = self.query_llm(url, prompt)
 
         if llm_response:
             parsed_result = self.extract_and_parse_json(llm_response, url)
@@ -252,7 +252,7 @@ class LLMHandler():
 
         return prompt
     
-    def query_llm(self, prompt):
+    def query_llm(self, url, prompt):
         """
         Query the configured LLM with a given prompt and return the response.
         Fallback occurs between Mistral and OpenAI if one fails.
@@ -266,9 +266,16 @@ class LLMHandler():
         if not self.config['llm']['spend_money']:
             logging.info("query_llm(): Spending money is disabled. Skipping the LLM query.")
             return None
-
-        provider = self.config['llm']['provider']
+        
+        # Instantiate response variable
         response = None
+
+        # Mistral does not process the Bard and Banker website correctly, so we need to check the URL
+        lower = url.lower()
+        if 'bard' in lower:
+            provider = 'openai'
+        else:
+            provider = self.config['llm']['provider']
 
         if provider == 'openai':
             # Try OpenAI first

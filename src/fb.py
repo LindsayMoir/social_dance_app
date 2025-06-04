@@ -627,7 +627,7 @@ class FacebookEventScraper():
 
         # 4) Query LLM for structured event data
         prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
-        llm_response = llm_handler.query_llm(prompt)
+        llm_response = llm_handler.query_llm(url, prompt)
         if not llm_response or "No events found" in llm_response:
             logging.info(f"process_fb_url: LLM no events for {url}")
             db_handler.write_url_to_db(url_row)
@@ -909,7 +909,7 @@ class FacebookEventScraper():
 
             # 4) Query the LLM
             prompt = llm_handler.generate_prompt(url, relevant_text, 'fb')
-            llm_response = llm_handler.query_llm(prompt)
+            llm_response = llm_handler.query_llm(url, prompt)
             if not llm_response or "No events found" in llm_response:
                 logging.info(f"checkpoint_events(): LLM returned no events for {url}")
                 db_handler.write_url_to_db(url_row)

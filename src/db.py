@@ -1705,6 +1705,101 @@ class DatabaseHandler():
         return False
 
 
+    def update_dow_date(self, event_id: int, corrected_date) -> bool:
+        """
+        Updates both start_date and end_date of the event identified by event_id
+        to corrected_date. Returns True if the UPDATE succeeded.
+        """
+        update_query = """
+            UPDATE events
+               SET start_date = :corrected_date,
+                   end_date   = :corrected_date
+             WHERE event_id  = :event_id
+        """
+        params = {
+            'corrected_date': corrected_date,
+            'event_id':        event_id
+        }
+        self.execute_query(update_query, params)
+        return True
+
+
+    def check_dow_date_consistent(self) -> None:
+        """
+        1. SELECT event_id, start_date, day_of_week, end_date FROM events.
+        2. For each tuple (event_id, start_date, day_of_week), check if
+           start_date.weekday() matches the stored day_of_week. If not, shift
+           ±k days (k in [-3..+3]) to hit the correct weekday.
+        3. Call update_dow_date(...) whenever a shift is needed, which now
+           updates both start_date and end_date.
+        4. Log every adjustment.
+        """
+        select_query = """
+            SELECT event_id, start_date, day_of_week
+              FROM events
+        """
+        rows = self.execute_query(select_query)
+        # rows is a list of tuples: (event_id, start_date, day_of_week)
+
+        name_to_wd = {
+            'monday':    0,
+            'tuesday':   1,
+            'wednesday': 2,
+            'thursday':  3,
+            'friday':    4,
+            'saturday':  5,
+            'sunday':    6
+        }
+
+        for row in rows:
+            event_id  = row[0]
+            orig_date = row[1]  # DATE
+            dow_text  = row[2]  # TEXT
+
+            if orig_date is None or not dow_text:
+                continue
+
+            key = dow_text.strip().lower()
+            if key not in name_to_wd:
+                logging.warning(
+                    "check_dow_date_consistent: event_id %s has unrecognized day_of_week '%s'; skipping.",
+                    event_id, dow_text
+                )
+                continue
+
+            target_wd  = name_to_wd[key]
+            current_wd = orig_date.weekday()
+
+            if current_wd == target_wd:
+                continue  # no change needed
+
+            # Compute minimal shift in [-3..+3] so that (orig_date + shift).weekday() == target_wd
+            diff_mod_7 = (target_wd - current_wd + 7) % 7
+            if diff_mod_7 <= 3:
+                shift = diff_mod_7
+            else:
+                shift = diff_mod_7 - 7
+
+            corrected_date = orig_date + timedelta(days=shift)
+
+            if corrected_date != orig_date:
+                success = self.update_dow_date(event_id, corrected_date)
+                if success:
+                    logging.info(
+                        "check_dow_date_consistent: event_id %d: "
+                        "start_date (and end_date) changed from %s to %s "
+                        "(day_of_week was '%s').",
+                        event_id,
+                        orig_date.isoformat(),
+                        corrected_date.isoformat(),
+                        dow_text
+                    )
+                else:
+                    logging.error(
+                        "check_dow_date_consistent: failed to update event_id %d", event_id
+                    )
+
+
     def driver(self):
         """
         Main driver function to perform database operations.
@@ -1720,6 +1815,7 @@ class DatabaseHandler():
             self.is_foreign()
             self.dedup_address()
             self.fix_address_id_in_events()
+            self.check_dow_date_consistent()
 
         # Close the database connection
         self.conn.dispose()  # Using dispose() for SQLAlchemy Engine

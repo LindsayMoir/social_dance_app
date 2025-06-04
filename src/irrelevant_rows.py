@@ -200,7 +200,7 @@ class IrrelevantRowsHandler:
             prompt = self.load_prompt(chunk.to_json(orient="records"))
             # logging.info(f"def process_chunk_with_llm(): Prompt for chunk {chunk_index}:\n{prompt}")
 
-            response_chunk = self.llm_handler.query_llm(prompt)
+            response_chunk = self.llm_handler.query_llm('', prompt)
 
             if not response_chunk:
                 logging.warning(f"def process_chunk_with_llm(): Received empty response for chunk {chunk_index}.")

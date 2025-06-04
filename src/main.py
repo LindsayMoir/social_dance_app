@@ -100,7 +100,7 @@ def process_query(request: QueryRequest):
     logging.info(f"Constructed Prompt: {prompt}")
     
     # Query the language model for a raw SQL query
-    sql_query = llm_handler.query_llm(prompt)
+    sql_query = llm_handler.query_llm('', prompt)
     logging.info(f"Raw SQL Query: {sql_query}")
 
     if sql_query:

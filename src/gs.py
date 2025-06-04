@@ -86,20 +86,14 @@ class GoogleSearch():
         with open(prompt_file_path, 'r') as file:
             prompt = file.read()
         prompt = f"{prompt}\nTitle: {title}\nURL: {url}\nSnippet: {snippet}"
-        # logging.info(f"def relevant_dance_url(): Prompt: \n{prompt} \nURL: {url}")
-
-        #try:
-        relevant = self.llm_handler.query_llm(prompt)
+        
+        relevant = self.llm_handler.query_llm(url, prompt)
         if relevant and relevant.lower() == 'True'.lower():
             logging.info(f"def relevant_dance_url(): LLM's opinion on the relevance of this URL: {url} is: {relevant}")
             return True
         else:
             logging.info(f"def relevant_dance_url(): LLM's opinion on the relevance of this URL: {url} is: {relevant}")
             return False
-        
-        # except Exception as e:
-        #     logging.error(f"def relevant_dance_url(): URL: {url} Error in LLM processing: {e}")
-        #     return None
         
 
     def google_search(self, query, keyword, num_results=10):

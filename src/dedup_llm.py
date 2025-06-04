@@ -198,7 +198,7 @@ class DeduplicationHandler:
             prompt = self.load_prompt(chunk.to_markdown())
             logging.info(f"def process_chunk_with_llm(): Prompt for chunk {chunk_index}.")
 
-            response_chunk = self.llm_handler.query_llm(prompt)
+            response_chunk = self.llm_handler.query_llm('', prompt)
 
             if not response_chunk:
                 logging.warning(f"def process_chunk_with_llm(): Received empty response for chunk {chunk_index}.")
@@ -296,7 +296,7 @@ class DeduplicationHandler:
             logging.info(f"parse_address: Processing batch {i // batch_size + 1} with prompt:\n{prompt}")
 
             # Query the LLM once per batch.
-            response = self.llm_handler.query_llm(prompt)
+            response = self.llm_handler.query_llm('', prompt)
             if not response:
                 logging.error(f"parse_address: No response received for batch {i // batch_size + 1}")
                 continue
