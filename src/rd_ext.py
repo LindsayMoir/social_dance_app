@@ -453,39 +453,6 @@ class ReadExtract:
         return None
 
 
-    async def extract_live_music_event_urls(self, url):
-        """
-        Special method to handle the Bard & Banker live-music page.
-        It navigates to the page, parses any JSON–LD with @type 'ItemList', and extracts event URLs.
-
-        Args:
-            url (str): The Bard & Banker live-music page URL.
-
-        Returns:
-            list: A list of unique event URLs.
-        """
-        await self.page.goto(url, timeout=15000)
-        await self.page.wait_for_load_state("domcontentloaded")
-        content = await self.page.content()
-        soup = BeautifulSoup(content, 'html.parser')
-        event_urls = []
-        # Look for JSON–LD script tags
-        scripts = soup.find_all("script", type="application/ld+json")
-        for script in scripts:
-            try:
-                data = json.loads(script.string)
-                if isinstance(data, dict) and data.get("@type") == "ItemList":
-                    item_list = data.get("itemListElement", [])
-                    for item in item_list:
-                        event_item = item.get("item", {})
-                        event_url = event_item.get("url")
-                        if event_url:
-                            event_urls.append(event_url)
-            except Exception as e:
-                logging.warning(f"extract_live_music_event_urls(): Failed to parse JSON–LD: {e}")
-        return list(set(event_urls))
-
-
     async def close(self):
         if self.browser:
             await self.browser.close()
