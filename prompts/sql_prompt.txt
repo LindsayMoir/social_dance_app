@@ -82,8 +82,8 @@ If the user’s input is very terse, scan it for any of the above styles. If fou
 The allowed event_type values are (case-insensitive substrings):
 'social dance', 'class', 'workshop', 'other', 'rehearsal', 'live music'
 
-If the user explicitly asks for a given event_type, include it in the WHERE clause via:
-WHERE event_type ILIKE '%live music%'
+If the user explicitly asks for a given event_type, include it in the WHERE clause. For example "live music":
+WHERE event_type ILIKE '%music%'
 
 If the user uses a verb like “learn” (e.g. “I want to learn salsa”), restrict event_type to either class or workshop. Example:
 WHERE (event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')
@@ -93,7 +93,7 @@ If no event_type is specified, default to social dance:
 WHERE event_type ILIKE '%social dance%'
 
 If the user puts the word "dance" and "music" in the query, include it in the WHERE clause via:
-WHERE event_type ILIKE '%dance%' AND
+WHERE event_type ILIKE '%dance%' OR
    event_type ILIKE '%music%'
 
 7. Prohibited Actions & Security
