@@ -1815,7 +1815,7 @@ class DatabaseHandler():
             self.is_foreign()
             self.dedup_address()
             self.fix_address_id_in_events()
-            self.check_dow_date_consistent()
+            #self.check_dow_date_consistent()
 
         # Close the database connection
         self.conn.dispose()  # Using dispose() for SQLAlchemy Engine

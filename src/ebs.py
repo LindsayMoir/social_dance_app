@@ -170,6 +170,16 @@ class EventbriteScraper:
                 )
                 break
 
+            # Check if the words in the url make it likely to be relevant
+            prompt_type = self.config['propmpts']['relevant_dance_url']
+            prompt = self.llm_handler.generat_prompt(event_url, event_url, prompt_type)
+
+            # query the llm
+            if not self.llm_handler.query_llm(prompt):
+                logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on LLM response.")
+                continue
+            logging.info(f"def eventbrite_search(): LLM response indicates URL {event_url} is relevant.")
+
             # Check urls to see if they should be scraped
             if not self.db_handler.should_process_url(event_url):
                 logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
@@ -284,7 +294,6 @@ class EventbriteScraper:
             prompt (str): Prompt for LLM processing.
             counter (int): Counter for processed events.
         """
-        #try:
         extracted_text = await self.read_extract.extract_event_text(event_url)
 
         if extracted_text:
@@ -306,13 +315,16 @@ class EventbriteScraper:
         else:
             logging.warning(f"def process_event(): No extracted text for event: {event_url}")
 
-        # except Exception as e:
-        #     logging.error(f"def process_event(): Error processing event {event_url}: {e}")
-
 
     async def driver(self):
         """ Reads keywords, performs searches, and processes extracted event URLs. """
         self.start_time = datetime.now()  # Record start time
+
+        # ***TEMP
+        self.keywords_list = ['milonga tango', 'music festivals', 'nite club two', 'outdoor music', 
+                              'quickstep', 'rumba', 'salsa', 'samba', 'semba', 'swing', 'tango', 
+                              'two step', 'urban kiz', 'waltz', 'wcs', 'west coast swing', 'zouk']
+
         for keyword in self.keywords_list:
             query = keyword
             source = ''
