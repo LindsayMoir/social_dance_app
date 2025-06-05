@@ -170,14 +170,25 @@ class EventbriteScraper:
                 )
                 break
 
-            # Check if the words in the url make it likely to be relevant
-            prompt_type = self.config['propmpts']['relevant_dance_url']
-            prompt = self.llm_handler.generat_prompt(event_url, event_url, prompt_type)
+           # Check if the words in the url make it likely to be relevant
+            prompt_type = 'relevant_dance_url'
+            prompt = self.llm_handler.generate_prompt(event_url, event_url, prompt_type)
 
-            # query the llm
-            if not self.llm_handler.query_llm(prompt):
+            # 1) Get the raw LLM output
+            raw = self.llm_handler.query_llm(event_url, prompt)
+            logging.info(f"def eventbrite_search(): Raw LLM output for {event_url} → {repr(raw)}")
+
+            # 2) Convert to a proper boolean
+            if isinstance(raw, str):
+                is_relevant = raw.strip().lower() == "true"
+            else:
+                is_relevant = bool(raw)
+
+            # 3) Act accordingly
+            if not is_relevant:
                 logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on LLM response.")
                 continue
+
             logging.info(f"def eventbrite_search(): LLM response indicates URL {event_url} is relevant.")
 
             # Check urls to see if they should be scraped
@@ -321,8 +332,7 @@ class EventbriteScraper:
         self.start_time = datetime.now()  # Record start time
 
         # ***TEMP
-        self.keywords_list = ['milonga tango', 'music festivals', 'nite club two', 'outdoor music', 
-                              'quickstep', 'rumba', 'salsa', 'samba', 'semba', 'swing', 'tango', 
+        self.keywords_list = ['rumba', 'salsa', 'samba', 'semba', 'swing', 'tango', 
                               'two step', 'urban kiz', 'waltz', 'wcs', 'west coast swing', 'zouk']
 
         for keyword in self.keywords_list:
