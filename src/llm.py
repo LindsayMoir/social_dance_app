@@ -232,7 +232,6 @@ class LLMHandler():
         # If this errors, then prompt_type is 'default'
         try:
             txt_file_path = self.config['prompts'][prompt_type]
-            logging.info(f"def generate_prompt(): prompt type: text file path: {txt_file_path}")
         except KeyError:
             txt_file_path = self.config['prompts']['default']
         logging.info(f"def generate_prompt(): prompt type: text file path: {txt_file_path}")

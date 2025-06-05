@@ -331,9 +331,10 @@ class EventbriteScraper:
         """ Reads keywords, performs searches, and processes extracted event URLs. """
         self.start_time = datetime.now()  # Record start time
 
-        # ***TEMP
-        self.keywords_list = ['rumba', 'salsa', 'samba', 'semba', 'swing', 'tango', 
-                              'two step', 'urban kiz', 'waltz', 'wcs', 'west coast swing', 'zouk']
+        # Remove the output file if it exists
+        output_path = self.config['output']['ebs_keywords_processed']
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
         for keyword in self.keywords_list:
             query = keyword
@@ -342,6 +343,20 @@ class EventbriteScraper:
             logging.info(f"driver(): Searching for query: {query}")
             await self.eventbrite_search(query, source, self.keywords_list, prompt)
 
+            # Log the keyword and timestamp to a CSV file
+            # 1) get the current timestamp as a string
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # 2) build a one‐row DataFrame
+            df_row = pd.DataFrame({
+                "keyword":   [keyword],
+                "timestamp": [ts]
+            })
+
+            # 3) append to CSV (write header only if file doesn't exist yet)
+            write_header = not os.path.exists(output_path)
+            df_row.to_csv(output_path, mode="a", header=write_header, index=False)
+        
         self.end_time = datetime.now()  # Record end time
         logging.info(f"driver(): Completed processing {len(self.visited_urls)} unique URLs.")
 

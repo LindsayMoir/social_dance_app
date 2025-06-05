@@ -948,7 +948,7 @@ class DatabaseHandler():
 
     def dedup(self):
         """
-        Removes duplicates from the 'events' and 'urls' tables in the database.
+        Removes duplicates from the 'events' table in the database.
 
         For the 'events' table, duplicates are identified based on the combination of
         'Name_of_the_Event' and 'Start_Date'. Only the latest entry is kept.
@@ -970,16 +970,6 @@ class DatabaseHandler():
             """
             deleted_count = self.execute_query(dedup_events_query)
             logging.info("def dedup(): Deduplicated events table successfully. Rows deleted: %d", deleted_count)
-
-            # Deduplicate 'urls' table based on 'link' using ctid for row identification
-            dedup_urls_query = """
-                DELETE FROM urls a
-                USING urls b
-                WHERE a.ctid < b.ctid
-                AND a.link = b.link;
-            """
-            deleted_count = self.execute_query(dedup_urls_query)
-            logging.info("dedup: Deduplicated 'urls' table successfully. Rows deleted: %d", deleted_count)
 
         except Exception as e:
             logging.error("def dedup(): Failed to deduplicate tables: %s", e)
