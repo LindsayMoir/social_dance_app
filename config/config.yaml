@@ -30,9 +30,9 @@ crawling:
   headless: true
   max_attempts: 3
   max_crawl_trys: 3
-  max_website_urls: 10
+  max_website_urls: 5
   scroll_depth: 2
-  urls_run_limit: 500
+  urls_run_limit: 10
 date_range:
   days_ahead: 365
   months: 3
@@ -49,6 +49,7 @@ input:
   edge_cases: data/other/edge_cases.csv
   emails: data/other/emails.csv
   gs_urls: data/urls/gs_urls.csv
+  images: data/other/images.csv
   municipalities: data/other/municipalities.txt
   predibase: data/other/duplicates_predibase.csv
   urls: data/urls
@@ -56,7 +57,7 @@ llm:
   anthropic_model: claude-opus-4-20250514
   mistral_model: mistral-large-latest
   openai_model: o4-mini
-  provider: mistral
+  provider: openai
   spend_money: true
 location:
   epicentre: Victoria, British Columbia, Canada
@@ -67,6 +68,7 @@ logging:
 output:
   dedup: output/dedup.csv
   ebs_search_results: output/ebs_search_results.csv
+  ebs_keywords_processed: output/ebs_keywords_processed.csv
   events_urls_diff: output/events_urls_diff.csv
   fb_search_results: output/fb_search_results.csv
   gs_search_results: output/gs_search_results.csv

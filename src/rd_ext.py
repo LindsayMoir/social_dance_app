@@ -615,8 +615,8 @@ if __name__ == "__main__":
     read_extract = ReadExtract("config/config.yaml")
     llm_handler = LLMHandler("config/config.yaml")
 
-    # Read .csv file to deal with oddities
-    df = pd.read_csv(config['input']['edge_cases'])
+    # # Read .csv file to deal with oddities
+    # df = pd.read_csv(config['input']['edge_cases'])
 
     # Expecting columns in order: source, keywords, url, multiple
     for source, keywords, url, multiple in df.itertuples(index=False, name=None):

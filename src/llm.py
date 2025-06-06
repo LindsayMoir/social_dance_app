@@ -508,6 +508,10 @@ class LLMHandler():
         )
 
         # ──────────────────────────────────────────────────────────────────────────────
+        #  6.5) Remove any extra '}' immediately before the final ']'
+        cleaned_str = re.sub(r'\}\s*\}\s*\]$', r'}\n]', cleaned_str)
+        # ──────────────────────────────────────────────────────────────────────────────
+        
         #  7) First parse attempt
         try:
             data = json.loads(cleaned_str)

@@ -131,12 +131,15 @@ class DatabaseHandler():
             # Case 3: all Trues and no False
             return 1.0
 
-        # Create a groupby that gives a hit_ratio for how useful the URL is
+        # Create a groupby that gives a hit_ratio and a sum of crawl_try for how useful the URL is
         self.urls_gb = (
             self.urls_df
-                .groupby('link')['relevant']
-                .agg(hit_ratio=_compute_hit_ratio)
-                .reset_index()
+            .groupby('link')
+            .agg(
+                hit_ratio=('relevant', _compute_hit_ratio),
+                crawl_try=('crawl_try', 'sum')
+            )
+            .reset_index()
         )
         logging.info(f"__init__(): urls_gb has {len(self.urls_gb)} rows and {len(self.urls_gb.columns)} columns.")
             
@@ -379,9 +382,7 @@ class DatabaseHandler():
         Logs a URL activity by appending a new row to the 'urls' table via pandas.
 
         Args:
-            url_row (tuple): (link, parent_url, source, keywords,
-                            event_url_yes, event_url_no,
-                            crawl_try, depth, time_stamp)
+            url_row (tuple): (link, parent_url, source, keywords, crawl_try, time_stamp)
         """
         # 1) Unpack
         link, parent_url, source, keywords, relevant, crawl_try, time_stamp = url_row
@@ -433,7 +434,7 @@ class DatabaseHandler():
         df.to_csv('output/events.csv', index=False)
 
         # Need to check if it is from google calendar or from the LLM.
-        if 'calendar' in url:
+        if 'calendar' in url or 'calendar' in parent_url:
             
             # Rename columns to match the database schema
             df = df.rename(columns={
@@ -463,8 +464,8 @@ class DatabaseHandler():
             df['source'] = df['source'].fillna('').replace('', source)
         else:
             df['source'] = source
-
-        # Update the 'url' column with the source URL if there is no URL in the DataFrame
+        
+        # fill missing or empty strings with the current URL
         df['url'] = df['url'].fillna('').replace('', url)
 
         # Suppress warnings for date parsing
@@ -1399,8 +1400,7 @@ class DatabaseHandler():
             muni_found = any(muni.lower() in combined_text for muni in muni_list if muni)
             
             # If a foreign country is found, consider it foreign.
-            # Only return True if a foreign country is found and 'cuban' is NOT in the combined text (to allow Cuban salsa)
-            if country_found and 'cuban' not in combined_text:
+            if country_found:
                 return True
             # If a BC municipality is found, it's likely not foreign.
             if muni_found:
@@ -1686,10 +1686,20 @@ class DatabaseHandler():
 
         # 3. Last was False → check hit_ratio in self.urls_gb
         hit_row = self.urls_gb[self.urls_gb['link'] == url]
-        if not hit_row.empty and hit_row.iloc[0]['hit_ratio'] > 0.1:
-            logging.info(f"should_process_url: URL {url} was last seen as not relevant but hit_ratio > 0.1, processing it.")
-            return True
-        
+
+        if not hit_row.empty:
+            # Extract scalars from the grouped DataFrame
+            hit_ratio = hit_row.iloc[0]['hit_ratio']
+            crawl_trys = hit_row.iloc[0]['crawl_try']
+
+            if hit_ratio > 0.1 or crawl_trys <= 3:
+                logging.info(
+                    "should_process_url: URL %s was last seen as not relevant "
+                    "but hit_ratio (%.2f) > 0.1 or crawl_try (%d) ≤ 3, processing it.",
+                    url, hit_ratio, crawl_trys
+                )
+                return True
+
         # 4. Otherwise, do not process this URL
         logging.info(f"should_process_url: URL {url} does not meet criteria for processing, skipping it.")
         return False
