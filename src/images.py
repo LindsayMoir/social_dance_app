@@ -12,6 +12,7 @@ import random
 import re
 import requests
 from scrapy import Selector
+import sys
 import pytesseract
 from urllib.parse import urljoin
 import yaml
@@ -43,7 +44,7 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# Keep a separate name for the module‐level logger, so we do NOT shadow `logging`
+# Keep a separate name for the module‐level logger, so we do NOT do shadow `logging`
 logger = logging.getLogger(__name__)
 logger.info("Starting images.py …")
 
@@ -65,7 +66,7 @@ class ImageScraper:
         self.keywords_list = llm_handler.get_keywords()
 
         # Directory for downloaded images
-        self.download_dir = self.config.get("image_download_dir", "downloads/")
+        self.download_dir = self.config.get("image_download_dir", "images/")
         os.makedirs(self.download_dir, exist_ok=True)
 
 
@@ -172,6 +173,8 @@ class ImageScraper:
         for idx, source, keywords, image_url, parent_url in df.itertuples():
             # 1. Download the image
             local_path = self.download_image(image_url)
+            logger.info(f"images_from_csv(): Downloaded {image_url} to {local_path}")
+            
             if local_path is None:
                 # Download failed—skip OCR and move to next row
                 self.logger.error(
@@ -193,11 +196,11 @@ class ImageScraper:
                     f"images_from_csv(): No keywords found in image_url: {image_url} (parent: {parent_url})"
                 )
                 continue
-
+            
             self.logger.info(
                 f"images_from_csv(): Found keywords {found_keywords} in image {image_url} (parent: {parent_url})"
             )
-
+            
             # 4. Generate LLM prompt and process
             prompt_type = 'default'
             prompt = llm_handler.generate_prompt(image_url, extracted_text, prompt_type)

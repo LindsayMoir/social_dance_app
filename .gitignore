@@ -5,6 +5,9 @@ eventbrite_auth.json
 # ignore all logs
 logs/
 
+# ignore all images
+images/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
