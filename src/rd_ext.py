@@ -140,178 +140,91 @@ class ReadExtract:
 
         return True
 
-    async def login_to_website(self, organization, login_url, email_selector, pass_selector, submit_selector):
-        storage = f"{organization.lower()}_auth.json"
 
-        # Tear down old page
-        if self.page:
-            await self.page.close()
-
-        # 1) Try existing session
-        try:
-            ctx = await self.browser.new_context(storage_state=storage)
-            self.page = await ctx.new_page()
-            await self.page.goto(login_url, wait_until="domcontentloaded", timeout=20000)
-            if "login" not in self.page.url.lower():
-                logging.info(f"login_to_website(): reused session for {organization}.")
-                return True
-        except Exception:
-            logging.info(f"login_to_website(): no saved session for {organization}, manual login.")
-
-        # 2) Detect form presence
-        try:
-            await self.page.wait_for_selector(email_selector, timeout=5000)
-            logging.info(f"login_to_website(): Login form detected for {organization}.")
-        except PlaywrightTimeoutError:
-            logging.info(f"login_to_website(): No login form for {organization}; skipping login.")
-            return True
-
-        # 3) Eventbrite‐specific flow
-        if 'eventbrite' in login_url:
-            await self.page.fill("input[name='email']", os.getenv('EVENTBRITE_APPID_UID'))
-            await self.page.click("button[type='submit']")
-            logging.info("login_to_website(): Email submitted for Eventbrite.")
-
-            pw_selectors = ["input[name='password']", "input[type='password']", "[data-automation='password-input']"]
-            try:
-                await self.page.wait_for_selector(", ".join(pw_selectors), timeout=15000)
-            except PlaywrightTimeoutError:
-                await self.page.screenshot(path="debug/eventbrite_login.png", full_page=True)
-                logging.error("login_to_website(): password field never appeared.")
-                return False
-
-            handle = None
-            for sel in pw_selectors:
-                handle = await self.page.query_selector(sel)
-                if handle: break
-
-            await handle.fill(os.getenv('EVENTBRITE_KEY_PW'))
-            await self.page.click("button[type='submit']")
-            await asyncio.sleep(3)
-
-            # reCAPTCHA?
-            try:
-                await self.page.wait_for_selector("iframe[src*='recaptcha']", timeout=10000)
-                await self.page.screenshot(path="debug/eventbrite_recaptcha.png", full_page=True)
-                input("Solve any Eventbrite CAPTCHA, then press Enter…")
-            except PlaywrightTimeoutError:
-                pass
-
-            # save
-            try:
-                await self.page.context.storage_state(path=storage)
-                logging.info("login_to_website(): Eventbrite session saved.")
-            except Exception as e:
-                logging.warning(f"login_to_website(): failed to save: {e}")
-
-            return True
-
-        # 4) Generic flow
-        email, password, _ = get_credentials(organization)
-        await self.page.fill(email_selector, email)
-        await self.page.fill(pass_selector, password)
-        await self.page.click(submit_selector)
-        await asyncio.sleep(random.uniform(3,6))
-
-        logging.warning(f"login_to_website(): If a CAPTCHA appeared, solve it then press Enter.")
-        input("Press Enter once done…")
-        await asyncio.sleep(random.uniform(3,6))
-
-        if "login" in self.page.url.lower():
-            logging.error(f"login_to_website(): still on login page—failed.")
-            return False
-
-        try:
-            await self.page.context.storage_state(path=storage)
-            logging.info(f"login_to_website(): session saved for {organization}.")
-        except Exception as e:
-            logging.warning(f"login_to_website(): could not save: {e}")
-
-        return True
-
-
-    async def login_to_website(self, organization, login_url, email_selector, pass_selector, submit_selector):
+    async def login_to_website(
+        self,
+        organization: str,
+        login_url: str,
+        email_selector: str,
+        pass_selector: str,
+        submit_selector: str
+    ) -> bool:
         """
         Logs in to an arbitrary site, reusing a saved storage_state if available,
-        or falling back to filling the form and prompting for any CAPTCHA.
+        or falling back to filling the form (including Eventbrite flow) and prompting
+        for any CAPTCHA.
 
-        Args:
-            organization (str): Name of the site (used for naming storage files).
-            login_url (str): URL to navigate to for login.
-            email_selector (str): CSS selector for the email/username input.
-            pass_selector (str): CSS selector for the password input.
-            submit_selector (str): CSS selector for the submit button.
-
-        Returns:
-            bool: True if logged in or no login needed, False on failure.
+        Returns True on success (or if no login form is found), False on failure.
         """
-        # 1) Tear down any existing page
-        if self.page:
-            await self.page.close()
-
-        # 2) Try to load an existing session
         storage_path = f"{organization.lower()}_auth.json"
-        try:
-            context = await self.browser.new_context(storage_state=storage_path)
-            self.page = await context.new_page()
-            await self.page.goto(login_url, timeout=20000)
-            # if redirected away from login, assume we're already authenticated
-            if login_url.split('?')[0] not in self.page.url:
-                logging.info(f"login_to_website(): Reused session for {organization}.")
-                self.logged_in = True
-                return True
-        except Exception:
-            logging.info(f"login_to_website(): No valid saved session for {organization}, proceeding to manual login.")
 
-        # 3) Detect whether a login form is present
+        # 1) Try to reuse existing session
+        try:
+            ctx = await self.browser.new_context(storage_state=storage_path)
+            page = await ctx.new_page()
+            await page.goto(login_url, wait_until="domcontentloaded", timeout=20000)
+
+            # If redirected off the login page, we’re already logged in
+            if login_url.split("?")[0] not in page.url:
+                self.context = ctx
+                self.page = page
+                self.logged_in = True
+                logging.info(f"login_to_website(): Reused session for {organization}.")
+                return True
+
+            # Otherwise clean up and do fresh login
+            await page.close()
+            await ctx.close()
+            logging.info(f"login_to_website(): Storage found but still on login page; will do fresh login.")
+        except Exception:
+            logging.info(f"login_to_website(): No valid saved session for {organization}, fresh login.")
+
+        # 2) Fresh login: open new context & page
+        self.context = await self.browser.new_context()
+        self.page = await self.context.new_page()
+        await self.page.goto(login_url, wait_until="domcontentloaded", timeout=20000)
+
+        # 3) Check for the presence of the login form
         try:
             await self.page.wait_for_selector(email_selector, timeout=5000)
             logging.info(f"login_to_website(): Login form detected for {organization}.")
         except PlaywrightTimeoutError:
-            logging.info(f"login_to_website(): No login form at {organization}, skipping.")
+            logging.info(f"login_to_website(): No login form for {organization}; assuming no login needed.")
             self.logged_in = True
             return True
 
-        # 4) Eventbrite‐specific handling (popup flows, multiple password selectors, captcha)
-        if 'eventbrite' in login_url:
-            email_sel = "input[name='email']"
-            password_selectors = [
-                "input[name='password']",
-                "input[type='password']",
-                "[data-automation='password-input']"
-            ]
-
-            # fill email
-            await self.page.fill(email_sel, os.getenv('EVENTBRITE_APPID_UID'))
-            await self.page.click("button[type='submit']")
+        # 4) Eventbrite‐specific flow
+        if "eventbrite" in login_url:
+            # Submit email first
+            await self.page.fill(email_selector, os.getenv("EVENTBRITE_APPID_UID"))
+            await self.page.click(submit_selector)
             logging.info("login_to_website(): Submitted Eventbrite email.")
 
-            # wait for any one of the password selectors
+            # Wait for password field
+            pw_selectors = [pass_selector, "input[type='password']"]
             try:
-                await self.page.wait_for_selector(", ".join(password_selectors), timeout=15000)
+                await self.page.wait_for_selector(",".join(pw_selectors), timeout=15000)
             except PlaywrightTimeoutError:
                 await self.page.screenshot(path="debug/eventbrite_login.png", full_page=True)
-                logging.error("login_to_website(): Password field never appeared; screenshot at debug/eventbrite_login.png")
+                logging.error("login_to_website(): Password field never appeared for Eventbrite.")
                 return False
 
-            # choose the first one that matches
+            # Fill whichever selector matched
             handle = None
-            for sel in password_selectors:
+            for sel in pw_selectors:
                 handle = await self.page.query_selector(sel)
                 if handle:
                     break
-
-            # fill password + submit
-            await handle.fill(os.getenv('EVENTBRITE_KEY_PW'))
-            await self.page.click("button[type='submit']")
+            await handle.fill(os.getenv("EVENTBRITE_KEY_PW"))
+            await self.page.click(submit_selector)
             await self.page.wait_for_timeout(3000)
 
-            # save session
+            # Save state
             try:
-                await self.page.context.storage_state(path=storage_path)
-                logging.info(f"login_to_website(): Saved Eventbrite session state.")
+                await self.context.storage_state(path=storage_path)
+                logging.info("login_to_website(): Saved Eventbrite session state.")
             except Exception as e:
-                logging.warning(f"login_to_website(): Couldn't save session: {e}")
+                logging.warning(f"login_to_website(): Could not save Eventbrite session: {e}")
 
             self.logged_in = True
             return True
@@ -321,25 +234,24 @@ class ReadExtract:
         await self.page.fill(email_selector, email)
         await self.page.fill(pass_selector, password)
         await self.page.click(submit_selector)
-        # let any JS / redirects finish
         await self.page.wait_for_timeout(random.uniform(3, 6))
 
-        # prompt user to solve CAPTCHA if it pops up
-        logging.warning(f"login_to_website(): If a CAPTCHA appeared on {organization}, please solve it in the browser, then press Enter.")
-        input("Press Enter once you’ve completed any challenge...")
-
+        # Let user solve any CAPTCHA
+        logging.warning("login_to_website(): If a CAPTCHA appeared, solve it now and press Enter.")
+        input("Press Enter once you’ve completed any challenge…")
         await self.page.wait_for_timeout(random.uniform(3, 6))
-        # check for failure
+
+        # Verify success
         if "login" in self.page.url.lower():
-            logging.error(f"login_to_website(): Login to {organization} failed; still on login page.")
+            logging.error(f"login_to_website(): Still on login page after submit for {organization}.")
             return False
 
-        # save storage state for next time
+        # Save storage state for next reuse
         try:
-            await self.page.context.storage_state(path=storage_path)
+            await self.context.storage_state(path=storage_path)
             logging.info(f"login_to_website(): Saved session state for {organization}.")
         except Exception as e:
-            logging.warning(f"login_to_website(): Could not save session: {e}")
+            logging.warning(f"login_to_website(): Could not save session state: {e}")
 
         self.logged_in = True
         logging.info(f"login_to_website(): Login to {organization} succeeded.")
