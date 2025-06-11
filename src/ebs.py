@@ -51,6 +51,7 @@ load_dotenv()
 import logging
 import os
 import pandas as pd
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 import random
 import re
 import sys
@@ -114,36 +115,6 @@ class EventbriteScraper:
             logging.error(f"def eventbrite_search(): Error navigating to Eventbrite: {e}")
             return  # cannot proceed without homepage
 
-        # Handle potential login popup
-        try:
-            email_selector = "input[name='email']"
-            if await self.read_extract.page.query_selector(email_selector):
-                logging.info("def eventbrite_search(): Login popup detected. Filling in email.")
-                email = os.getenv('EVENTBRITE_APPID_UID')
-                await self.read_extract.page.fill(email_selector, email)
-                await self.read_extract.page.click("button[type='submit']")
-                logging.info("def eventbrite_search(): Clicked Continue after email.")
-
-                # Wait for password field (longer timeout)
-                to = random.randint(15000//2, int(15000 * 1.5))
-                await self.read_extract.page.wait_for_selector(
-                    "input[name='password']",
-                    timeout=to
-                )
-                password = os.getenv('EVENTBRITE_KEY_PW')
-                await self.read_extract.page.fill("input[name='password']", password)
-                await self.read_extract.page.click("button[type='submit']")
-                logging.info("def eventbrite_search(): Filled password and clicked submit.")
-
-                # Brief pause for login to settle
-                to = random.randint(3000//2, int(3000 * 1.5))
-                await self.read_extract.page.wait_for_timeout(to)
-            else:
-                logging.info("def eventbrite_search(): No login popup detected.")
-        except Exception as e:
-            logging.error(f"def eventbrite_search(): Error during login process: {e}")
-            return  # abort if login flow broke
-
         # Perform the search and extract URLs
         try:
             await self.perform_search(query)
@@ -206,30 +177,44 @@ class EventbriteScraper:
 
     async def perform_search(self, query):
         """
-        Performs a search on Eventbrite using the provided query.
-
-        Args:
-            query (str): Search query.
+        Performs a search on Eventbrite using the provided query, retrying up to 3 times on failure.
+        Logs and returns if all attempts fail, allowing the caller to continue.
         """
         search_selector = "input#search-autocomplete-input"
-        try:
-            to = random.randint(20000//2, int(20000 * 1.5))
-            await self.read_extract.page.wait_for_selector(search_selector, timeout=to)
-            search_box = await self.read_extract.page.query_selector(search_selector)
+        max_retries = 3
 
-            if search_box:
+        for attempt in range(1, max_retries + 1):
+            try:
+                to = random.randint(20000 // 2, int(20000 * 1.5))
+                await self.read_extract.page.wait_for_selector(search_selector, timeout=to)
+                search_box = await self.read_extract.page.query_selector(search_selector)
+
+                if not search_box:
+                    logging.error(f"def perform_search(): Search box not found (attempt {attempt}).")
+                    raise Exception("Search box not found.")
+
                 await search_box.fill(query)
                 await search_box.press("Enter")
-                logging.info(f"def perform_search(): Performed search with query: {query}")
-                to = random.randint(15000//2, int(15000 * 1.5))
-                await self.read_extract.page.wait_for_load_state("networkidle", timeout=to)
-            else:
-                logging.error("def perform_search(): Search box not found on Eventbrite.")
-                raise Exception("Search box not found.")
-        except asyncio.TimeoutError:
-            logging.error("def perform_search(): Timeout while performing search on Eventbrite.")
-            raise
+                logging.info(f"def perform_search(): Performed search '{query}' (attempt {attempt}).")
 
+                to = random.randint(15000 // 2, int(15000 * 1.5))
+                await self.read_extract.page.wait_for_load_state("networkidle", timeout=to)
+                return  # success
+
+            except asyncio.TimeoutError:
+                logging.warning(f"def perform_search(): Timeout on '{query}' (attempt {attempt}).")
+            except Exception as e:
+                logging.warning(f"def perform_search(): Error on '{query}' (attempt {attempt}): {e}")
+
+            if attempt < max_retries:
+                backoff = attempt * 2
+                logging.warning(f"def perform_search(): Retrying '{query}' in {backoff}s ({attempt+1}/{max_retries})")
+                await asyncio.sleep(backoff)
+
+        # all attempts failed—log and return so caller can continue
+        logging.error(f"def perform_search(): Giving up on '{query}' after {max_retries} attempts.")
+        return  # or return False
+    
 
     async def extract_event_urls(self):
         """ Extracts unique event URLs from the search results.
@@ -432,7 +417,6 @@ async def main():
 
     # Start
     await read_extract.init_browser()
-
     await ebs_instance.driver()
     await read_extract.close()
 

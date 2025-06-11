@@ -32,7 +32,7 @@ crawling:
   max_crawl_trys: 3
   max_website_urls: 10
   scroll_depth: 2
-  urls_run_limit: 500
+  urls_run_limit: 1500
 date_range:
   days_ahead: 365
   months: 3
@@ -51,6 +51,7 @@ input:
   gs_urls: data/urls/gs_urls.csv
   images: data/other/images.csv
   municipalities: data/other/municipalities.txt
+  pdfs: data/other/pdfs.csv
   predibase: data/other/duplicates_predibase.csv
   urls: data/urls
 llm:
@@ -64,6 +65,7 @@ location:
 logging:
   extracted_text: output/extracted_text.csv
   log_file: logs/log.txt
+  read_pdfs: logs/read_pdfs.txt
   scraper_log_file: logs/scraper_log.txt
 output:
   dedup: output/dedup.csv

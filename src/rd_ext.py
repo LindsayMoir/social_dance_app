@@ -152,39 +152,45 @@ class ReadExtract:
         """
         Logs in to an arbitrary site, reusing a saved storage_state if available,
         or falling back to filling the form (including Eventbrite flow) and prompting
-        for any CAPTCHA.
-
+        for any manual 2FA/CAPTCHA. Uses a single context/page throughout.
         Returns True on success (or if no login form is found), False on failure.
         """
         storage_path = f"{organization.lower()}_auth.json"
 
-        # 1) Try to reuse existing session
+        # ──────────── Quick bail if already logged in ────────────
+        if self.logged_in:
+            logging.info(f"login_to_website(): Already logged in to {organization}, reusing session.")
+            return True
+
+        # ──────────── 1) Try to reuse existing session ────────────
         try:
             ctx = await self.browser.new_context(storage_state=storage_path)
             page = await ctx.new_page()
             await page.goto(login_url, wait_until="domcontentloaded", timeout=20000)
-
-            # If redirected off the login page, we’re already logged in
+            # If we land off the login page, session is valid
             if login_url.split("?")[0] not in page.url:
                 self.context = ctx
                 self.page = page
                 self.logged_in = True
                 logging.info(f"login_to_website(): Reused session for {organization}.")
                 return True
-
-            # Otherwise clean up and do fresh login
+            # Otherwise, close and do fresh login
             await page.close()
             await ctx.close()
-            logging.info(f"login_to_website(): Storage found but still on login page; will do fresh login.")
+            logging.info(f"login_to_website(): Storage found but still on login page; will do fresh login for {organization}.")
         except Exception:
             logging.info(f"login_to_website(): No valid saved session for {organization}, fresh login.")
 
-        # 2) Fresh login: open new context & page
+        # ──────────── 2) Fresh login: reset context/page ────────────
+        if getattr(self, 'page', None):
+            await self.page.close()
+        if getattr(self, 'context', None):
+            await self.context.close()
         self.context = await self.browser.new_context()
         self.page = await self.context.new_page()
         await self.page.goto(login_url, wait_until="domcontentloaded", timeout=20000)
 
-        # 3) Check for the presence of the login form
+        # ──────────── 3) Check for login form presence ────────────
         try:
             await self.page.wait_for_selector(email_selector, timeout=5000)
             logging.info(f"login_to_website(): Login form detected for {organization}.")
@@ -193,9 +199,9 @@ class ReadExtract:
             self.logged_in = True
             return True
 
-        # 4) Eventbrite‐specific flow
+        # ──────────── 4) Eventbrite‐specific flow ────────────
         if "eventbrite" in login_url:
-            # Submit email first
+            # Submit email
             await self.page.fill(email_selector, os.getenv("EVENTBRITE_APPID_UID"))
             await self.page.click(submit_selector)
             logging.info("login_to_website(): Submitted Eventbrite email.")
@@ -203,23 +209,33 @@ class ReadExtract:
             # Wait for password field
             pw_selectors = [pass_selector, "input[type='password']"]
             try:
-                await self.page.wait_for_selector(",".join(pw_selectors), timeout=15000)
+                await self.page.wait_for_selector(
+                    ",".join(pw_selectors), timeout=15000
+                )
             except PlaywrightTimeoutError:
                 await self.page.screenshot(path="debug/eventbrite_login.png", full_page=True)
                 logging.error("login_to_website(): Password field never appeared for Eventbrite.")
                 return False
 
-            # Fill whichever selector matched
+            # Fill password
             handle = None
             for sel in pw_selectors:
                 handle = await self.page.query_selector(sel)
                 if handle:
                     break
-            await handle.fill(os.getenv("EVENTBRITE_KEY_PW"))
+            password = os.getenv("EVENTBRITE_KEY_PW")
+            await handle.fill(password)
             await self.page.click(submit_selector)
-            await self.page.wait_for_timeout(3000)
+            logging.info("login_to_website(): Filled Eventbrite password and clicked submit.")
 
-            # Save state
+            # Manual 2FA pause
+            input(
+                "🔒 2FA step: check your email for the code, paste it into the browser’s 2FA field, "
+                "click Continue there, then press Enter here to resume…"
+            )
+            await self.page.wait_for_timeout(2000)
+
+            # Save session state
             try:
                 await self.context.storage_state(path=storage_path)
                 logging.info("login_to_website(): Saved Eventbrite session state.")
@@ -229,24 +245,25 @@ class ReadExtract:
             self.logged_in = True
             return True
 
-        # 5) Generic login flow
-        email, password, _ = get_credentials(organization)
+        # ──────────── 5) Generic login flow ────────────
+        # Fill credentials
+        email, password, _ = get_credentials(self.config, organization)
         await self.page.fill(email_selector, email)
         await self.page.fill(pass_selector, password)
         await self.page.click(submit_selector)
         await self.page.wait_for_timeout(random.uniform(3, 6))
 
-        # Let user solve any CAPTCHA
-        logging.warning("login_to_website(): If a CAPTCHA appeared, solve it now and press Enter.")
+        # Let user solve CAPTCHA or any extra challenge
+        logging.warning("login_to_website(): If a CAPTCHA or other challenge appeared, solve it now and press Enter.")
         input("Press Enter once you’ve completed any challenge…")
         await self.page.wait_for_timeout(random.uniform(3, 6))
 
-        # Verify success
+        # Final verification
         if "login" in self.page.url.lower():
             logging.error(f"login_to_website(): Still on login page after submit for {organization}.")
             return False
 
-        # Save storage state for next reuse
+        # Save storage state
         try:
             await self.context.storage_state(path=storage_path)
             logging.info(f"login_to_website(): Saved session state for {organization}.")
@@ -528,7 +545,7 @@ if __name__ == "__main__":
     llm_handler = LLMHandler("config/config.yaml")
 
     # # Read .csv file to deal with oddities
-    # df = pd.read_csv(config['input']['edge_cases'])
+    df = pd.read_csv(config['input']['edge_cases'])
 
     # Expecting columns in order: source, keywords, url, multiple
     for source, keywords, url, multiple in df.itertuples(index=False, name=None):

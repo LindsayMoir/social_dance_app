@@ -431,9 +431,6 @@ class DatabaseHandler():
             - The 'event_id' column is auto-generated and should not be included in the DataFrame.
             - Ensures that only relevant columns are written to the database.
         """
-        # Save the events data to a CSV file for debugging purposes
-        df.to_csv('output/events.csv', index=False)
-
         # Need to check if it is from google calendar or from the LLM.
         if 'calendar' in url or 'calendar' in parent_url:
             
