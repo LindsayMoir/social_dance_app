@@ -85,6 +85,7 @@ class DatabaseHandler():
             config (dict): A dictionary containing configuration parameters for the database connection.
         """
         self.config = config
+        self.load_blacklist_domains()
 
         if os.getenv("RENDER"):
             logging.info("def __init__(): Running on Render.")
@@ -143,6 +144,19 @@ class DatabaseHandler():
         )
         logging.info(f"__init__(): urls_gb has {len(self.urls_gb)} rows and {len(self.urls_gb.columns)} columns.")
             
+
+    def load_blacklist_domains(self):
+        """ Load blacklisted domains from CSV once at initialization. """
+        csv_path = self.config['constants']['black_list_domains']
+        df = pd.read_csv(csv_path)
+        self.blacklisted_domains = set(df['Domain'].str.lower().str.strip())
+        logging.info(f"Loaded {len(self.blacklisted_domains)} blacklisted domains.")
+
+    def avoid_domains(self, url):
+        """ Check if URL contains any blacklisted domain. """
+        url_lower = url.lower()
+        return any(domain in url_lower for domain in self.blacklisted_domains)
+    
 
     def get_db_connection(self):
         """
@@ -1715,6 +1729,10 @@ class DatabaseHandler():
         # 4. Otherwise, do not process this URL
         logging.info(f"should_process_url: URL {url} does not meet criteria for processing, skipping it.")
         return False
+    
+
+    def avoid_domains(self, url):
+        pass
 
 
     def update_dow_date(self, event_id: int, corrected_date) -> bool:
