@@ -203,7 +203,8 @@ class DatabaseHandler():
         # Create the 'urls' table
         urls_table_query = """
             CREATE TABLE IF NOT EXISTS urls (
-                link TEXT PRIMARY KEY,
+                link_id SERIAL PRIMARY KEY
+                link TEXT,
                 parent_url TEXT,
                 source TEXT,
                 keywords TEXT,
@@ -503,6 +504,22 @@ class DatabaseHandler():
         # Now drop rows where all important columns are NA
         cleaned_df = cleaned_df.dropna(subset=important_columns, how='all')
 
+        # Drop rows older than “today minus N days”
+        # Ensure 'end_date' is datetime64[ns]
+        cleaned_df['end_date'] = pd.to_datetime(cleaned_df['end_date'], errors='coerce')
+
+        # Drop rows older than “today minus N days”
+        cutoff = pd.Timestamp.now() - pd.Timedelta(days=self.config['clean_up']['old_events'])
+        cleaned_df = cleaned_df.loc[cleaned_df['end_date'] >= cutoff].reset_index(drop=True)
+
+        # If there are no events left, bail out early
+        if cleaned_df.empty:
+            logging.info("write_events_to_db: No events remain after checking for end_date, skipping write.")
+            relevant, crawl_try, time_stamp = False, 1, datetime.now()
+            url_row = [url, parent_url, source, keywords, relevant, crawl_try, time_stamp]
+            self.write_url_to_db(url_row)
+            return None
+
         # Save the cleaned events data to a CSV file for debugging purposes
         cleaned_df.to_csv('output/cleaned_events.csv', index=False)
 
@@ -517,8 +534,6 @@ class DatabaseHandler():
         url_row = [url, parent_url, source, keywords, relevant, crawl_try, time_stamp]
         self.write_url_to_db(url_row)
         logging.info("write_events_to_db: Events data written to the 'events' table.")
-
-        return None
     
     
     def update_event(self, event_identifier, new_data, best_url):

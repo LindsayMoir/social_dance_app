@@ -476,11 +476,6 @@ class LLMHandler():
             cleaned_str
         )
 
-        logging.info(
-            f"def extract_and_parse_json(): for url {url}, \n"
-            f"Cleaned JSON before escaping inside‐strings:\n{cleaned_str}"
-        )
-
         # ──────────────────────────────────────────────────────────────────────────────
         #  6) Escape \n and \t **only inside** JSON string literals
         #

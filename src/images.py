@@ -3,10 +3,13 @@
 from pathlib import Path
 import asyncio
 import logging
+import os
 import sys
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 
+from bs4 import BeautifulSoup
+from io import BytesIO
 import pandas as pd
 import pytesseract
 import requests
@@ -82,7 +85,7 @@ class ImageScraper:
 
     async def _login_to_instagram(self) -> bool:
         if hasattr(self, 'ig_session'):
-            self.logger.debug("Reusing Instagram session")
+            self.logger.info("Reusing Instagram session")
             return True
         success = await self.read_extract.login_to_website(
             organization="instagram",
@@ -106,7 +109,6 @@ class ImageScraper:
         self.ig_session = session
         return True
     
-
     def is_image_url(self, url: str) -> bool:
         """
         Determines whether the given URL points to an image file based on its extension.
@@ -153,7 +155,6 @@ class ImageScraper:
             self.logger.exception(f"Failed to download image {image_url}")
             return None
         
-
     def ocr_image_to_text(self, local_path: Path) -> str:
         """
         Performs OCR (Optical Character Recognition) on a given image file and returns the extracted text.
@@ -186,7 +187,6 @@ class ImageScraper:
         except Exception:
             self.logger.exception(f"OCR failed on {local_path}")
             return ""
-        
         
     def check_image_events_exist(self, image_url: str) -> bool:
         """
@@ -258,7 +258,6 @@ class ImageScraper:
         self.logger.info(f"Copied history events into events for URL: {image_url}")
         return True
 
-
     def get_image_links(self) -> pd.DataFrame:
         """
         Retrieves and combines image links from a CSV file and Instagram links from the database.
@@ -283,7 +282,7 @@ class ImageScraper:
 
         # Parameterized query using sqlalchemy.text for safe ILIKE
         query = text("""
-            SELECT link, parent_url, source, keywords
+            SELECT link, parent_url, source, keywords, relevant, crawl_try, time_stamp
             FROM urls
             WHERE link ILIKE :link_pattern
         """ )
@@ -301,65 +300,117 @@ class ImageScraper:
         limit = self.config['crawling']['urls_run_limit']
         if isinstance(limit, int) and limit > 0:
             df = df.iloc[:limit]
-            
+
         return df
 
-
-    def process_webpage_url(self, page_url:str, parent_url:str, source:str) -> None:
+    def process_webpage_url(self, page_url: str, parent_url: str, source: str, keywords: str) -> None:
         """
-        Processes a webpage URL by fetching its content, extracting text, searching for specified keywords,
-        and handling images found on the page.
+        Processes a webpage URL by fetching its content, extracting visible text,
+        searching for specified keywords, and handling embedded images.
+
         Args:
             page_url (str): The URL of the webpage to process.
-            parent_url (str): The URL of the parent page from which this page was discovered.
-            source (str): The source identifier or label for tracking the origin of the request.
+            parent_url (str): The parent page URL for context.
+            source (str): The source identifier for categorization.
+            keywords(str): The keywords from the original source (.csv or db).
         Returns:
             None
-        Workflow:
-            - Skips processing if the URL has already been visited.
-            - Fetches the webpage content using an HTTP GET request.
-            - Extracts and concatenates all text from the page body.
-            - Searches for any keywords from the predefined list within the page text.
-            - If keywords are found, generates a prompt and processes the LLM response.
-            - Extracts all image URLs from the page and processes each valid image URL.
-        Exceptions:
-            - Logs and skips the page if fetching the content fails.
         """
-        if page_url in self.urls_visited: return
+        if page_url in self.urls_visited:
+            self.logger.info(f"process_webpage_url(): Already visited {page_url}, skipping.")
+            return
         self.urls_visited.add(page_url)
 
+        # Instantiate url_row
+        url_row = (page_url, parent_url, source, '', False, 1, datetime.now())
+
         try:
-            resp = requests.get(page_url, timeout=10); resp.raise_for_status()
-        except Exception:
-            self.logger.exception(f"Failed to fetch page {page_url}"); return
-        
-        text = ' '.join(Selector(text=resp.text).xpath('//body//text()').getall()).strip()
-        if not text: 
-            logger.info(f"process_webpage_url(): No text extracted from url: {page_url}")
+            resp = requests.get(page_url, timeout=10)
+            resp.raise_for_status()
+        except Exception as e:
+            self.logger.error(f"process_webpage_url(): Failed to fetch {page_url}: {e}")
+            self.db_handler.write_url_to_db(url_row)
             return
 
+        # strip scripts/styles & extract visible text
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        for tag in soup(['script', 'style']):
+            tag.decompose()
+        visible_text = soup.get_text(separator=' ')
+        text = ' '.join(visible_text.split())
+        self.logger.info(f"process_webpage_url(): Extracted text length {len(text)}")
+        self.logger.info(f"process_webpage_url(): Extracted text is:\n{text}")
+
+        # Fallback to Playwright for JS‑heavy or too‑short scrapes
+        if not text or len(text) < 200 or "instagram.com" in page_url:
+            self.logger.info(f"process_webpage_url(): Falling back to Playwright for {page_url}")
+            pw_text = self.loop.run_until_complete(
+                self.read_extract.extract_event_text(page_url)
+            )
+            if not pw_text:
+                self.logger.info(f"process_webpage_url(): Playwright extraction failed for {page_url}")
+                self.db_handler.write_url_to_db(url_row)
+                return
+            text = pw_text
+            self.logger.info(f"process_webpage_url(): Playwright-extracted text length {len(text)}")
+            self.logger.info(f"process_webpage_url(): Playwright text is:\n{text}")
+
+        if not text:
+            self.logger.info(f"process_webpage_url(): No visible text in {page_url}")
+            self.db_handler.write_url_to_db(url_row)
+            return
+
+        # keyword filtering
         found = [kw for kw in self.keywords_list if kw.lower() in text.lower()]
-        if not found: 
-            logger.info(f"process_webpage_url(): No keywords found in url: {page_url}")
+        if not found:
+            self.logger.info(f"process_webpage_url(): No keywords found in {page_url}")
+            self.db_handler.write_url_to_db(url_row)
             return
+        self.logger.info(f"process_webpage_url(): Keywords {found} found in {page_url}")
 
+        # LLM processing
         prompt = self.llm_handler.generate_prompt(page_url, text, 'default')
-        self.llm_handler.process_llm_response(page_url, parent_url, text, source, found, prompt)
+        status = self.llm_handler.process_llm_response(
+            page_url, parent_url, text, source, found, prompt
+        )
+        if status:
+            self.logger.info(f"process_webpage_url(): LLM succeeded for {page_url}")
+        else:
+            self.logger.warning(f"process_webpage_url(): LLM produced no events for {page_url}")
 
-        imgs = Selector(text=resp.text).xpath('//img/@src').getall()
-        # build full URLs and filter by extension
-        img_urls = [urljoin(page_url, i) for i in imgs if self.is_image_url(i)]
-        logger.info(f"process_webpage_url(): Extracted {len(img_urls)} image urls, from url: {page_url}")
+        # extract and process images
+        # pull down the browser’s rendered DOM
+        rendered_html = self.loop.run_until_complete(
+            self.read_extract.page.content()
+        )
+        imgs = Selector(text=rendered_html).xpath('//img/@src').getall()
+        img_urls = [urljoin(page_url, u) for u in imgs if self.is_image_url(u)]
 
-        # limit to configured maximum
-        max_imgs = self.config.get('crawling', {}).get('max_website_urls', len(img_urls))
-        logger.info(f"process_webpage_url(): Only processing {max_imgs} due to config constraints.")
-        for src in img_urls[:max_imgs]:
-            logger.info(f"process_webpage_url(): Now processing image {src}")
-            self.process_image_url(src, page_url, source)
+        # Establish a minimum size for the img_urls.
+        MIN_W, MIN_H = 500, 500
 
+        valid_imgs = []
+        for url in img_urls:
+            try:
+                # fetch into memory
+                resp = self.ig_session.get(url, timeout=10)
+                resp.raise_for_status()
+                img = Image.open(BytesIO(resp.content))
+            except Exception:
+                self.logger.info(f"Skipping {url}: failed to download/open")
+                continue
 
-    def process_image_url(self, image_url:str, parent_url:str, source:str) -> None:
+            w, h = img.size
+            if w >= MIN_W and h >= MIN_H:
+                valid_imgs.append(url)
+            else:
+                self.logger.info(f"Skipping {url}: too small ({w}x{h})")
+
+        # now process only the valid ones
+        for src in valid_imgs[:config['crawling']['max_website_urls']]:
+            self.process_image_url(src, page_url, source, keywords)
+
+    def process_image_url(self, image_url:str, parent_url:str, source:str, keywords: str) -> None:
         """
         Processes an image URL by downloading the image, extracting text using OCR, 
         searching for specified keywords, and handling the result with an LLM handler.
@@ -367,6 +418,7 @@ class ImageScraper:
             image_url (str): The URL of the image to process.
             parent_url (str): The URL of the parent page where the image was found.
             source (str): The source identifier for the image.
+            keywords(str): The keywords that were taken from the original input.
         Returns:
             None
         Workflow:
@@ -378,16 +430,27 @@ class ImageScraper:
         """
         self.logger.info(f"process_image_url(): Starting processing for {image_url}")
 
+        # Instantiate url_row
+        url_row = (image_url, parent_url, source, keywords, False, 1, datetime.now())
+
         # Skip if already visited
         if image_url in self.urls_visited:
-            self.logger.debug(f"process_image_url(): Already visited {image_url}, skipping.")
+            self.logger.info(f"process_image_url(): Already visited {image_url}, skipping.")
             return
         self.urls_visited.add(image_url)
-        self.logger.debug(f"process_image_url(): Marked {image_url} as visited.")
+        self.logger.info(f"process_image_url(): Marked {image_url} as visited.")
 
         # Skip if events already exist
         if self.check_image_events_exist(image_url):
             self.logger.info(f"process_image_url(): Events already exist for {image_url}, skipping OCR.")
+            url_row = (image_url, parent_url, source, keywords, True, 1, datetime.now())
+            self.db_handler.write_url_to_db(url_row)
+            return
+        
+        # Check and see if we should process this url
+        if not self.db_handler.should_process_url(image_url):
+            self.logger.info(f"process_image_url(): should_process_url for {image_url}, returned False.")
+            self.db_handler.write_url_to_db(url_row)
             return
 
         # Download the image
@@ -395,27 +458,31 @@ class ImageScraper:
         path = self.download_image(image_url)
         if not path:
             self.logger.error(f"process_image_url(): download_image() failed for {image_url}")
+            self.db_handler.write_url_to_db(url_row)
             return
-        self.logger.debug(f"process_image_url(): Image saved to {path}")
+        self.logger.info(f"process_image_url(): Image saved to {path}")
 
         # Run OCR
         self.logger.info(f"process_image_url(): Running OCR on {path}")
         text = self.ocr_image_to_text(path)
         if not text:
             self.logger.info(f"process_image_url(): No text extracted from {path}, skipping.")
+            self.db_handler.write_url_to_db(url_row)
             return
-        self.logger.debug(f"process_image_url(): Extracted text length {len(text)} characters")
+        self.logger.info(f"process_image_url(): Extracted text length {len(text)} characters")
+        self.logger.info(f"process_image_url(): Extracted text: \n{text}")
 
         # Keyword filtering
         found = [kw for kw in self.keywords_list if kw.lower() in text.lower()]
         if not found:
             self.logger.info(f"process_image_url(): No relevant keywords in OCR text for {image_url}")
+            self.db_handler.write_url_to_db(url_row)
             return
         self.logger.info(f"process_image_url(): Found keywords {found} in image {image_url}")
 
         # LLM prompt & response
         prompt = self.llm_handler.generate_prompt(image_url, text, 'default')
-        self.logger.debug(f"process_image_url(): Generated prompt for LLM: {prompt!r}")
+        self.logger.info(f"process_image_url(): Generated default prompt for image_url: {image_url}")
         status = self.llm_handler.process_llm_response(
             image_url, parent_url, text, source, found, prompt
         )
@@ -423,7 +490,6 @@ class ImageScraper:
             self.logger.info(f"process_image_url(): LLM processing succeeded for {image_url}")
         else:
             self.logger.warning(f"process_image_url(): LLM processing did not produce any events for {image_url}")
-
 
     def process_images(self) -> None:
         """
@@ -437,28 +503,46 @@ class ImageScraper:
            or to `process_webpage_url()` for webpage URLs.
         5. Log completion when done.
         """
+        # Get the file name of the code that is running
+        file_name = os.path.basename(__file__)
+
+        # Count events and urls at start
+        start_df = self.db_handler.count_events_urls_start(file_name)
+
         self.logger.info("process_images(): Starting batch processing of image/webpage links.")
         df = self.get_image_links()
         total = len(df)
         self.logger.info(f"process_images(): Retrieved {total} links to process.")
 
         for idx, row in enumerate(df.itertuples(index=False), start=1):
-            url, parent, source, *_ = row
-            self.logger.debug(f"process_images(): [{idx}/{total}] url={url}, parent={parent}, source={source}")
+            url, parent, source, keywords, *_ = row
+            self.logger.info(f"process_images(): [{idx}/{total}] url={url}, parent={parent}, source={source}")
+
+            # Check and see if we should process this url
+            if not self.db_handler.should_process_url(url):
+                self.looger.info(f"process_images(): should_process_url returned False for url: {url}")
+                continue
 
             if self.is_image_url(url):
                 self.logger.info(f"process_images(): Detected direct image URL ({url}), invoking OCR pipeline.")
-                self.process_image_url(url, parent, source)
+                self.process_image_url(url, parent, source, keywords)
             else:
                 self.logger.info(f"process_images(): Detected webpage URL ({url}), extracting embedded images.")
-                self.process_webpage_url(url, parent, source)
+                self.process_webpage_url(url, parent, source, keywords)
 
         self.logger.info("process_images(): Completed processing all links.")
+
+        self.db_handler.count_events_urls_end(start_df, __file__)
+        logging.info(f"Wrote events and urls statistics to: {file_name}")
 
 
 if __name__ == '__main__':
     start = datetime.now()
+
     scraper = ImageScraper(config)
     scraper.process_images()
-    scraper.db_handler.count_events_urls_end({}, __file__)
+
+    scraper.loop.run_until_complete(scraper.read_extract.close())
+    scraper.loop.close()
+
     logger.info(f"Finished in {datetime.now()-start}\n")

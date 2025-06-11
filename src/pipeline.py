@@ -430,6 +430,38 @@ def fb_step():
     return True
 
 # ------------------------
+# TASKS FOR IMAGES.PY STEP
+# ------------------------
+@task
+def run_images_script():
+    try:
+        result = subprocess.run(
+            [sys.executable, "src/images.py"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info("def run_images_script(): images.py executed successfully.")
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        error_message = f"images.py failed with error: {e.stderr}"
+        logger.error(f"def run_images_script(): {error_message}")
+        raise Exception(error_message)
+
+@task
+def post_process_images():
+    return True
+
+@flow(name="Images Step")
+def images_step():
+    original_config = backup_and_update_config("images", updates=COMMON_CONFIG_UPDATES)
+    write_run_config.submit("images", original_config)
+    run_images_script()
+    post_process_images()
+    restore_config(original_config, "images")
+    return True
+
+# ------------------------
 # TASKS FOR DB.PY STEP
 # ------------------------
 @task
@@ -710,6 +742,7 @@ PIPELINE_STEPS = [
     ("rd_ext", rd_ext_step),
     ("scraper", scraper_step),
     ("fb", fb_step),
+    ("images", images_step),
     ("backup_db", backup_db_step),
     ("db", db_step),
     ("clean_up", clean_up_step),
