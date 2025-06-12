@@ -969,7 +969,7 @@ if __name__ == "__main__":
     fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
 
     # Run
-    fb_scraper.driver_fb_search()
+    #fb_scraper.driver_fb_search()   # TEMP***
     fb_scraper.driver_fb_urls()
 
     # To be removed in production

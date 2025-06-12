@@ -7,8 +7,8 @@ checkpoint:
 clean_up:
   old_events: 3
 constants:
-  delete_known_bad_urls: nuline, myglobaleventreports
   black_list_domains: data/other/black_list_domains.csv
+  delete_known_bad_urls: nuline, myglobaleventreports
   fb_base_url: https://www.facebook.com/search/events?q=
   fb_location_id: '&filters=eyJycF9ldmVudHNfbG9jYXRpb246MCI6IntcIm5hbWVcIjpcImZpbHRlcl9ldmVudHNfbG9jYXRpb25cIixcImFyZ3NcIjpcIjEwMzEzNTg3OTcyNzM4MlwifSJ9'
   uvic_rueda_dict:
@@ -33,7 +33,7 @@ crawling:
   max_crawl_trys: 3
   max_website_urls: 10
   scroll_depth: 2
-  urls_run_limit: 1500
+  urls_run_limit: 500
 date_range:
   days_ahead: 365
   months: 3

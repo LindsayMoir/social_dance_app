@@ -212,10 +212,8 @@ class EventSpider(scrapy.Spider):
             db_handler.write_url_to_db(child_row)
 
             if len(self.visited_link) >= self.config['crawling']['urls_run_limit']:
-                logging.info(
-                    f"def parse(): Reached URL run limit ({self.config['crawling']['urls_run_limit']}); stopping."
-                )
-                sys.exit()
+                logging.info(f"parse(): Reached URL run limit ({self.config['crawling']['urls_run_limit']}); stopping crawler.")
+                raise scrapy.exceptions.CloseSpider(reason="URL run limit reached")
 
             logging.info(f"def parse(): Crawling next URL: {link}")
             yield scrapy.Request(

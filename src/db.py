@@ -445,6 +445,10 @@ class DatabaseHandler():
             - The 'event_id' column is auto-generated and should not be included in the DataFrame.
             - Ensures that only relevant columns are written to the database.
         """
+        # — ensure url and parent_url are safe to search —
+        url = '' if pd.isna(url) else str(url)
+        parent_url = '' if pd.isna(parent_url) else str(parent_url)
+
         # Need to check if it is from google calendar or from the LLM.
         if 'calendar' in url or 'calendar' in parent_url:
             
