@@ -397,7 +397,7 @@ class DatabaseHandler():
         Logs a URL activity by appending a new row to the 'urls' table via pandas.
 
         Args:
-            url_row (tuple): (link, parent_url, source, keywords, crawl_try, time_stamp)
+            url_row (tuple): (link, parent_url, source, keywords, relevant, crawl_try, time_stamp)
         """
         # 1) Unpack
         link, parent_url, source, keywords, relevant, crawl_try, time_stamp = url_row

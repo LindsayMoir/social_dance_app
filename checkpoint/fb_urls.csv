@@ -1,5 +1,18 @@
 link,parent_url,source,keywords,relevant,crawl_try,time_stamp,processed,events_processed
-https://www.facebook.com/events/331996206027048/,,Swing Dance Association of Victoria,"balboa, swing, lindy",True,1,06:31.6,False,False
-https://www.facebook.com/events/1863130401159642/,,Kiz/Met,"kizomba, urban kiz",True,1,06:31.6,False,False
-https://www.facebook.com/events/1594017944616421/,,Oak Bay,"live music, swing, dance",True,1,06:31.6,False,False
-https://www.facebook.com/events/2108062343037268/,,Puerto Vallarta Amigos,"live music, salsa, bachata",True,2,06:31.6,False,False
+https://www.facebook.com/events/331996206027048/,,Swing Dance Association of Victoria,"balboa, swing, lindy",True,1.0,06:31.6,True,True
+https://www.facebook.com/events/1863130401159642/,,Kiz/Met,"kizomba, urban kiz",True,1.0,06:31.6,True,True
+https://www.facebook.com/events/1594017944616421/,,Oak Bay,"live music, swing, dance",True,1.0,06:31.6,True,True
+https://www.facebook.com/events/2108062343037268/,,Puerto Vallarta Amigos,"live music, salsa, bachata",True,2.0,06:31.6,True,True
+https://www.facebook.com/events/1556012538401199/,,Swing Dance Association of Victoria,"balboa, swing, lindy",,,,True,True
+https://www.facebook.com/events/691138080073761/,,Swing Dance Association of Victoria,"balboa, swing, lindy",,,,True,True
+https://www.facebook.com/events/641562508751592/,,Swing Dance Association of Victoria,"balboa, swing, lindy",,,,True,True
+https://www.facebook.com/events/1079226067560481/,,Swing Dance Association of Victoria,"balboa, swing, lindy",,,,True,True
+https://www.facebook.com/events/1514674672845802/,,Swing Dance Association of Victoria,"balboa, swing, lindy",,,,True,True
+https://www.facebook.com/events/3975145332748137/,,Swing Dance Association of Victoria,"balboa, swing, lindy",,,,True,True
+https://www.facebook.com/events/1388695712154512/,,Swing Dance Association of Victoria,"balboa, swing, lindy",,,,True,True
+https://www.facebook.com/events/457213090692060/,,Swing Dance Association of Victoria,"balboa, swing, lindy",,,,True,True
+https://www.facebook.com/events/1381141813052937/,,Kiz/Met,"kizomba, urban kiz",,,,True,True
+https://www.facebook.com/events/1504249320558078/,,Kiz/Met,"kizomba, urban kiz",,,,True,True
+https://www.facebook.com/events/698717786229454/,,Oak Bay,"live music, swing, dance",,,,True,True
+https://www.facebook.com/events/3782870128685993/,,Oak Bay,"live music, swing, dance",,,,True,True
+https://www.facebook.com/events/1375625583681530/,,Puerto Vallarta Amigos,"live music, salsa, bachata",,,,True,True
