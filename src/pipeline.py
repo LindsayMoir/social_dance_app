@@ -462,6 +462,38 @@ def images_step():
     return True
 
 # ------------------------
+# NEW TASKS FOR READ_PDFS.PY STEP
+# ------------------------
+@task
+def run_read_pdfs_script():
+    try:
+        result = subprocess.run(
+            [sys.executable, "src/read_pdfs.py"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info("def run_read_pdfs_script(): read_pdfs.py executed successfully.")
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        error_message = f"read_pdfs.py failed with error: {e.stderr}"
+        logger.error(f"def run_read_pdfs_script(): {error_message}")
+        raise Exception(error_message)
+
+@task
+def post_process_read_pdfs():
+    return True
+
+@flow(name="Read PDFs Step")
+def read_pdfs_step():
+    original_config = backup_and_update_config("read_pdfs", updates=COMMON_CONFIG_UPDATES)
+    write_run_config.submit("read_pdfs", original_config)
+    run_read_pdfs_script()
+    post_process_read_pdfs()
+    restore_config(original_config, "read_pdfs")
+    return True
+
+# ------------------------
 # TASKS FOR DB.PY STEP
 # ------------------------
 @task
@@ -743,6 +775,7 @@ PIPELINE_STEPS = [
     ("scraper", scraper_step),
     ("fb", fb_step),
     ("images", images_step),
+    ("read_pdfs", read_pdfs_step),
     ("backup_db", backup_db_step),
     ("db", db_step),
     ("clean_up", clean_up_step),

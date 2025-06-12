@@ -520,7 +520,7 @@ class ImageScraper:
 
             # Check and see if we should process this url
             if not self.db_handler.should_process_url(url):
-                self.looger.info(f"process_images(): should_process_url returned False for url: {url}")
+                self.logger.info(f"process_images(): should_process_url returned False for url: {url}")
                 continue
 
             if self.is_image_url(url):
