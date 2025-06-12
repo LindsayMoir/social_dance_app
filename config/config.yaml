@@ -44,6 +44,8 @@ debug:
 fuzzywuzzy:
   hurdle: 70
 input:
+  butchart_image_url: https://butchartgardens.com/wp-content/uploads/2025/06/Outdoor-Summer-Concert-2025-994x1536.jpg
+  butchart_parent_url: https://butchartgardens.com/summer-entertainment-calendar/
   calendar_urls: data/other/calendar_urls.csv
   countries: data/other/countries.csv
   data_keywords: data/other/keywords.csv
@@ -88,6 +90,7 @@ prompts:
   https://vbds.org/other-dancing-opportunities/: prompts/default.txt
   https://www.bardandbanker.com/live-music: prompts/bard_and_banker_prompt.txt
   https://www.debrhymerband.com/shows: prompts/deb_rhymer_prompt.txt
+  images: prompts/images_prompt.txt
   irrelevant_rows: prompts/irrelevant_rows_prompt.txt
   relevant_dance_url: prompts/relevant_dance_url.txt
   single_event: prompts/single_event.txt

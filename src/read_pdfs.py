@@ -10,11 +10,20 @@ import requests
 import yaml
 from dateutil import parser as dateparser
 
-# Configure console logging
-tlogging = logging.getLogger()
+# Get config
+with open('config/config.yaml', 'r') as file:
+    config = yaml.safe_load(file)
+
+# Need handlers outside of class libary
+from llm import LLMHandler
+llm_handler = LLMHandler(config_path='config/config.yaml')
+from db import DatabaseHandler
+db_handler = DatabaseHandler(config)
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    force=True            # <-- force re-configuration of the root logger
 )
 
 # Parser registry and decorator
@@ -32,6 +41,7 @@ def register_parser(source_name: str):
 
 # Database handler import
 from db import DatabaseHandler
+from llm import LLMHandler
 from sqlalchemy import Table, insert
 
 class ReadPDFs:
@@ -77,11 +87,8 @@ class ReadPDFs:
         logging.info("DatabaseHandler initialized.")
 
     def read_write_pdf(self) -> pd.DataFrame:
-        # Name of this file
         file_name = os.path.basename(__file__)
-        # Count at start
         start_df = self.db.count_events_urls_start(file_name)
-
         logging.info(f"Reading CSV: {self.csv_path}")
         sources = pd.read_csv(self.csv_path, dtype=str)
         all_events = []
@@ -92,50 +99,35 @@ class ReadPDFs:
             parent_url = row.get('parent_url','')
             keywords = row.get('keywords',None)
             logging.info(f"Row {idx}: source={source}, pdf_url={pdf_url}")
-
-            # Skip blacklisted URLs
             if any(bl in pdf_url for bl in self.black_list_domains):
                 logging.info(f"Skipping blacklisted URL: {pdf_url}")
                 continue
-
             parser = PARSER_REGISTRY.get(source)
             if not parser:
                 logging.warning(f"No parser for source '{source}', skipping.")
                 continue
-
-            # Download
             resp = requests.get(pdf_url, timeout=30)
             resp.raise_for_status()
             pdf_file = io.BytesIO(resp.content)
-
-            # Parse
             df = parser(pdf_file)
-            if df.empty:
-                logging.warning(f"Parser returned empty DataFrame for '{source}'.")
+            if df is None or df.empty:
+                logging.warning(f"Parser returned empty or None DataFrame for '{source}'.")
                 continue
-
-            # Clean
             df = df.dropna(subset=['event_name','start_date'])
             if df.empty:
                 logging.warning(f"All rows dropped for '{source}' after cleaning.")
                 continue
-
-            # Stamp metadata
             df['source'] = source
             df['url'] = pdf_url
             df['address_id'] = None
             df['time_stamp'] = datetime.now()
-
-            # Insert
             records = df.to_dict(orient='records')
             logging.info(f"Batch inserting {len(records)} events for '{source}'")
             self.db.multiple_db_inserts('events', records)
             url_row = (pdf_url, parent_url, source, keywords, True, 1, datetime.now())
             self.db.write_url_to_db(url_row)
-
             all_events.append(df)
 
-        # If none parsed
         if not all_events:
             logging.info("No events parsed; returning empty DataFrame.")
             cols = [
@@ -150,7 +142,6 @@ class ReadPDFs:
             logging.info(f"Wrote events and urls statistics to: {file_name}")
             return pd.DataFrame(columns=cols)
 
-        # Normal path
         result = pd.concat(all_events, ignore_index=True)
         logging.info(f"Total events processed: {len(result)}")
         self.db.count_events_urls_end(start_df, file_name)
@@ -174,11 +165,9 @@ def parse_victoria_summer_music(pdf_file) -> pd.DataFrame:
                 all_pages.append(row_list)
     if not all_pages: return pd.DataFrame()
     raw=pd.DataFrame(all_pages,columns=cols)
-
     year=datetime.now().year
     raw['start_date']=pd.to_datetime(raw['Mth']+' '+raw['Date']+f' {year}',format='%b %d %Y',errors='coerce')
     raw['end_date']=raw['start_date']
-
     def parse_times(ts):
         if pd.isna(ts) or not isinstance(ts,str): return pd.Series({'start_time':None,'end_time':None})
         ts=ts.lower().replace('noon','12:00pm')
@@ -190,7 +179,6 @@ def parse_victoria_summer_music(pdf_file) -> pd.DataFrame:
             try: et=dateparser.parse(parts[1].strip(),fuzzy=True).time()
             except: pass
         return pd.Series({'start_time':st,'end_time':et})
-
     times=raw['Time'].apply(parse_times)
     df=pd.concat([raw.rename(columns={'Event':'event_name','Description':'description','Location':'location'})[['event_name','description','location','start_date','end_date']],times],axis=1)
     df['day_of_week']=df['start_date'].dt.day_name()
@@ -199,127 +187,52 @@ def parse_victoria_summer_music(pdf_file) -> pd.DataFrame:
     df['event_type']='dance, live music'
     return df
 
+def dump_pdf_text(pdf_file) -> str:
+    full_text=[]
+    with pdfplumber.open(pdf_file) as pdf:
+        for i,page in enumerate(pdf.pages):
+            txt=page.extract_text() or ''
+            full_text.append(f"----- Page {i} -----\n{txt}")
+    return "\n".join(full_text)
+
 @register_parser("The Butchart Gardens Outdoor Summer Concerts")
 def parse_butchart_gardens_concerts(pdf_file) -> pd.DataFrame:
-    logging.info("Parsing PDF for 'The Butchart Gardens Outdoor Summer Concerts'.")
-    current_year = datetime.now().year
-    events = []
-    # Map page indices explicitly to months
-    month_map = {0: "July", 1: "August"}
 
-    with pdfplumber.open(pdf_file) as pdf:
-        for page_num, page in enumerate(pdf.pages):
-            month = month_map.get(page_num)
-            if not month:
-                logging.warning(f"Unexpected page {page_num}; skipping.")
-                continue
-            logging.info(f"[DEBUG] Using month '{month}' for page {page_num}")
+    extracted_text = dump_pdf_text(pdf_file)
+    logging.info(f"parse_butchart_gardens_concerts(): Length of extracted_text is: {len(extracted_text)}")
+    prompt = llm_handler.generate_prompt(pdf_file, extracted_text, 'images')
+    logging.info(f"parse_butchart_gardens_concerts(): prompt's length is: {len(prompt)}")
+    image_url = config['input']['butchart_image_url']
+    parent_url = config['input']['butchart_parent_url']
 
-            table = page.extract_table()
-            if not table or len(table) < 2:
-                logging.info("No calendar grid on this page, skipping.")
-                continue
+    llm_response = llm_handler.query_openai(
+        prompt=prompt,
+        model=config['llm']['openai_model'],
+        image_url=image_url
+    )
+    if llm_response:
+        parsed_result = llm_handler.extract_and_parse_json(llm_response, image_url)
 
-            headers = [h.strip() for h in table[0]]
-            logging.info(f"[DEBUG] Calendar headers: {headers!r}")
+        if parsed_result:
+            events_df = pd.DataFrame(parsed_result)
+            db_handler.write_events_to_db(events_df, image_url, parent_url, 'Butchart Gardens', 'dance, live music')
+            logging.info("def process_llm_response: Events written to the database.")
+            return events_df
 
-            for row_idx, row in enumerate(table[1:], start=1):
-                for col_idx, cell in enumerate(row):
-                    cell_text = cell or ""
-                    weekday = headers[col_idx] if col_idx < len(headers) else f"col{col_idx}"
-                    logging.info(f"[DEBUG] Cell({row_idx},{weekday}) raw: {cell_text[:100]!r}")
-                    if not cell_text.strip():
-                        continue
-
-                    # Improved listing extraction: handle standalone day numbers
-                    listings = []
-                    current = None
-                    for ln in cell_text.split("\n"):
-                        text = ln.strip()
-                        if not text:
-                            continue
-                        # pure day number
-                        if re.fullmatch(r"\d{1,2}", text):
-                            if current:
-                                listings.append(current)
-                            current = {"day_num": int(text), "rest": ""}
-                        # day+rest on one line
-                        elif re.match(r"^\d{1,2}\s+", text):
-                            parts = text.split(None, 1)
-                            if current:
-                                listings.append(current)
-                            current = {"day_num": int(parts[0]), "rest": parts[1] if len(parts)>1 else ""}
-                        # continuation
-                        elif current:
-                            sep = " " if current["rest"] else ""
-                            current["rest"] += sep + text
-                    if current:
-                        listings.append(current)
-
-                    logging.info(f"[DEBUG] Parsed listings: {listings!r}")
-
-                    for L in listings:
-                        t_match = re.search(r"(\d{1,2}(?::\d{2})?\s*(?:am|pm))$", L["rest"], re.IGNORECASE)
-                        if t_match:
-                            t_str = t_match.group(1)
-                            try:
-                                start_time = dateparser.parse(t_str).time()
-                            except Exception:
-                                start_time = None
-                            title = L["rest"][:t_match.start()].strip()
-                        else:
-                            start_time = None
-                            title = L["rest"].strip()
-
-                        try:
-                            dt = datetime.strptime(f"{month} {L['day_num']} {current_year}", "%B %d %Y")
-                        except ValueError:
-                            logging.warning(f"Could not parse date: {month} {L['day_num']}")
-                            continue
-
-                        logging.info(f"[DEBUG] Appending event: {title!r} on {dt} at {start_time}")
-                        events.append({
-                            "event_name": title,
-                            "dance_style": "ballroom, swing, wcs",
-                            "description": "",
-                            "day_of_week": weekday,
-                            "start_date": dt,
-                            "end_date": dt,
-                            "start_time": start_time,
-                            "end_time": None,
-                            "source": "The Butchart Gardens Outdoor Summer Concerts",
-                            "location": "The Butchart Gardens",
-                            "price": "Free with admission",
-                            "url": "https://butchartgardens.com/summer-entertainment-calendar/",
-                            "event_type": "live music",
-                            "address_id": None,
-                            "time_stamp": datetime.now()
-                        })
-
-    return pd.DataFrame(events)
-
-def dump_pdf_text(pdf_file) -> str:
-    """
-    Extract and return all text from the given PDF file buffer, with page separators.
-    """
-    full_text = []
-    with pdfplumber.open(pdf_file) as pdf:
-        for page_num, page in enumerate(pdf.pages):
-            text = page.extract_text() or ""
-            full_text.append(f"----- Page {page_num} -----\n{text}\n")
-            logging.info(f"dump_pdf_text(): Here is the full text: \n{full_text}")
-            return "\n".join(full_text)
+        else:
+            logging.error("def process_llm_response: Failed to process LLM response.")
+            return None
 
 if __name__=='__main__':
+
     base_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_path=os.path.join(base_dir,'config','config.yaml')
     with open(config_path) as f:
         config=yaml.safe_load(f)
-    logging.info('Starting PDF processing.')
-    reader=ReadPDFs(config)
-    #df=reader.read_write_pdf()   # TEMP***
 
-    full_text = dump_pdf_text('data/other/Summer-Entertainment-calendar-double-sided-2025.pdf')
+    logging.info('\n\nStarting read_pdfs.py ....')
+    reader=ReadPDFs(config)
+    df=reader.read_write_pdf()
 
     logging.info(f"Result df head:\n{df.head()}")
     logging.info(f"Completed. Events: {len(df)}")

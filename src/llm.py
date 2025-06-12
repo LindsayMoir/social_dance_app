@@ -338,14 +338,34 @@ class LLMHandler():
         return response
 
 
-    def query_openai(self, prompt, model):
-        """Handles querying OpenAI LLM."""
+    def query_openai(self, prompt, model, image_url=None):
+        """
+        Handles querying OpenAI LLM, optionally attaching an image.
+        - prompt: str of the user text
+        - model: e.g. "o4-mini-high" or "gpt-4.1-mini"
+        - image_url: optional URL string of an image to include
+        """
+        # build the message content as a list of text + optional image_url blocks
+        content_blocks = [
+            {"type": "text", "text": prompt}
+        ]
+        if image_url:
+            content_blocks.append({
+                "type": "image_url",
+                "image_url": {"url": image_url}
+            })
 
+        # send the chat completion
         response = self.openai_client.chat.completions.create(
-            model=model, messages=[{"role": "user", "content": prompt}]
+            model=model,
+            messages=[{"role": "user", "content": content_blocks}]
         )
-        
-        return response.choices[0].message.content.strip() if response and response.choices else None
+
+        # extract and return the assistant's reply
+        if response and response.choices:
+            return response.choices[0].message.content.strip()
+        return None
+
 
     def query_mistral(self, prompt, model):
         """Handles querying Mistral LLM."""
