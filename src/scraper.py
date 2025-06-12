@@ -192,7 +192,7 @@ class EventSpider(scrapy.Spider):
             if db_handler.avoid_domains(link):
                 logging.info(f"parse: Skipping blacklisted URL {link}.")
                 continue
-            
+
             if not db_handler.should_process_url(link):
                 logging.info(f"def eventbrite_search(): Skipping URL {link} based on historical relevancy.")
                 continue
@@ -215,7 +215,7 @@ class EventSpider(scrapy.Spider):
                 logging.info(
                     f"def parse(): Reached URL run limit ({self.config['crawling']['urls_run_limit']}); stopping."
                 )
-                break
+                sys.exit()
 
             logging.info(f"def parse(): Crawling next URL: {link}")
             yield scrapy.Request(
