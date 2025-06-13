@@ -64,6 +64,8 @@ class ReadPDFs:
             logging.getLogger().addHandler(fh)
             logging.info(f"Logging to file: {log_file}")
 
+        logging.info('\n\nStarting read_pdfs.py ....')
+
         # Load blacklisted domains
         black_list_path = config.get('constants', {}).get('black_list_domains')
         self.black_list_domains = []
@@ -98,31 +100,53 @@ class ReadPDFs:
             pdf_url = row.get('pdf_url','')
             parent_url = row.get('parent_url','')
             keywords = row.get('keywords',None)
-            logging.info(f"Row {idx}: source={source}, pdf_url={pdf_url}")
+            logging.info(f"read_write_pdf(): Row {idx}: source={source}, pdf_url={pdf_url}")
+
+            # Check for black listed domains
             if any(bl in pdf_url for bl in self.black_list_domains):
-                logging.info(f"Skipping blacklisted URL: {pdf_url}")
+                logging.info(f"read_write_pdf(): Skipping blacklisted URL: {pdf_url}")
                 continue
+
+            # Skip if events already exist
+            if self.db.check_image_events_exist(pdf_url):
+                logging.info(f"read_write_pdf(): pdf_url is: {pdf_url}")
+                url_row = (pdf_url, parent_url, source, keywords, True, 1, datetime.now())
+                self.db.write_url_to_db(url_row)
+                continue
+            
+            # Check and see if we should process this url
+            if self.db.should_process_url(pdf_url):
+                pass
+            else:
+                logging.info(f"read_write_pdf(): should_process_url for {pdf_url}, returned False.")
+                url_row = (pdf_url, parent_url, source, keywords, False, 1, datetime.now())
+                self.db.write_url_to_db(url_row)
+                continue
+
             parser = PARSER_REGISTRY.get(source)
             if not parser:
-                logging.warning(f"No parser for source '{source}', skipping.")
+                logging.warning(f"read_write_pdf(): No parser for source '{source}', skipping.")
                 continue
             resp = requests.get(pdf_url, timeout=30)
             resp.raise_for_status()
             pdf_file = io.BytesIO(resp.content)
+
+            # Parse the pdf and get the events
             df = parser(pdf_file)
             if df is None or df.empty:
                 logging.warning(f"Parser returned empty or None DataFrame for '{source}'.")
                 continue
             df = df.dropna(subset=['event_name','start_date'])
             if df.empty:
-                logging.warning(f"All rows dropped for '{source}' after cleaning.")
+                logging.warning(f"read_write_pdf(): All rows dropped for '{source}' after cleaning.")
                 continue
             df['source'] = source
             df['url'] = pdf_url
             df['address_id'] = None
             df['time_stamp'] = datetime.now()
             records = df.to_dict(orient='records')
-            logging.info(f"Batch inserting {len(records)} events for '{source}'")
+
+            logging.info(f"read_write_pdf(): Batch inserting {len(records)} events for '{source}'")
             self.db.multiple_db_inserts('events', records)
             url_row = (pdf_url, parent_url, source, keywords, True, 1, datetime.now())
             self.db.write_url_to_db(url_row)
@@ -139,19 +163,19 @@ class ReadPDFs:
             url_row = (pdf_url, parent_url, source, keywords, False, 1, datetime.now())
             self.db.write_url_to_db(url_row)
             self.db.count_events_urls_end(start_df, file_name)
-            logging.info(f"Wrote events and urls statistics to: {file_name}")
+            logging.info(f"read_write_pdf(): Wrote events and urls statistics to: {file_name}")
             return pd.DataFrame(columns=cols)
 
         result = pd.concat(all_events, ignore_index=True)
-        logging.info(f"Total events processed: {len(result)}")
+        logging.info(f"read_write_pdf(): Total events processed: {len(result)}")
         self.db.count_events_urls_end(start_df, file_name)
-        logging.info(f"Wrote events and urls statistics to: {file_name}")
+        logging.info(f"read_write_pdf(): Wrote events and urls statistics to: {file_name}")
         return result
 
 
 @register_parser("Victoria Summer Music")
 def parse_victoria_summer_music(pdf_file) -> pd.DataFrame:
-    logging.info("Parsing PDF for 'Victoria Summer Music'.")
+    logging.info("parse_victoria_summer_music(): Parsing PDF for 'Victoria Summer Music'.")
     all_pages=[]
     cols=['Mth','Day','Date','Location','Time','Event','Description']
     with pdfplumber.open(pdf_file) as pdf:
@@ -204,6 +228,7 @@ def parse_butchart_gardens_concerts(pdf_file) -> pd.DataFrame:
     logging.info(f"parse_butchart_gardens_concerts(): prompt's length is: {len(prompt)}")
     image_url = config['input']['butchart_image_url']
     parent_url = config['input']['butchart_parent_url']
+    pdf_url = config['input']['butchart_pdf_url']
 
     llm_response = llm_handler.query_openai(
         prompt=prompt,
@@ -211,12 +236,16 @@ def parse_butchart_gardens_concerts(pdf_file) -> pd.DataFrame:
         image_url=image_url
     )
     if llm_response:
-        parsed_result = llm_handler.extract_and_parse_json(llm_response, image_url)
+        logging.info(f"parse_butchart_gardens_concerts(): llm_response first 200 characters: \n{llm_response[:200]}")
+        parsed_result = llm_handler.extract_and_parse_json(llm_response, pdf_url)
+        logging.info(f"parse_butchart_gardens_concerts(): llm_response first 200 characters: {llm_response[:200]} ")
 
         if parsed_result:
             events_df = pd.DataFrame(parsed_result)
-            db_handler.write_events_to_db(events_df, image_url, parent_url, 'Butchart Gardens', 'dance, live music')
-            logging.info("def process_llm_response: Events written to the database.")
+            events_df['dance_style'] = 'ballroom, swing, wcs, west coast swing'
+            events_df['event_type'] = 'social dance, live music'
+            events_df['url'] = config['input']['butchart_pdf_url']
+            logging.info("def process_llm_response: Events generated and returned.")
             return events_df
 
         else:
@@ -230,9 +259,11 @@ if __name__=='__main__':
     with open(config_path) as f:
         config=yaml.safe_load(f)
 
-    logging.info('\n\nStarting read_pdfs.py ....')
     reader=ReadPDFs(config)
     df=reader.read_write_pdf()
 
-    logging.info(f"Result df head:\n{df.head()}")
-    logging.info(f"Completed. Events: {len(df)}")
+    if df is None or df.empty:
+        pass
+    else:
+        logging.info(f"Result df head:\n{df.head()}")
+        logging.info(f"Completed. Events: {len(df)}")

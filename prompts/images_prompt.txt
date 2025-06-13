@@ -34,38 +34,32 @@ _____________________________________
 4. end_time
 •	end_time = start_time plus 2 hours. For example if the event starts at 19:15:00, it ends at 21:15:00.
 _____________________________________
-5. dance_style
-•	Pleae make dance_style = "ballroom, swing, wcs, west coast swing"
-_____________________________________
-5. end_time
-•	end_time = start_time plus 2 hours. For example if the event starts at 19:15:00, it ends at 21:15:00.
-_____________________________________
-7. Recurring Events:
+5. Recurring Events:
 •	For recurring events (e.g., "every Saturday" or "1st and 3rd Tuesdays"), compute all occurrences within 12 months from today's date unless an end date is explicitly mentioned.
 •	For example:
 	o	The 1st Tuesday in 2025 is January 7, 2025.
 	o	Saturdays in February 2025 are February 1, 8, 15, and 22.
 ________________________________________
-8. Outdated Pages:
+6. Outdated Pages:
 •	Events explicitly marked as "canceled" or "postponed" should have that wording put in their "description" field.
 ________________________________________
-9. Additional Notes:
+7. Additional Notes:
 •	If there are events, only produce one JSON output. 
 	o	Everything should be in that one response JSON string. 
 	o	Do NOT create a separate JSON output for recurring JSON events. 
 •	DO NOT return a list for a field. For example, if you found several "dance_style" (e.g. salsa, bachata, kizomba) put that in the "dance_style" field as "salsa, bachata, kizomba". Not as "[salsa, bachata, kizomba]"
 •	If an event has no specific dates or times mentioned, this is an invalid event. DO NOT create a JSON output for this event.
 ________________________________________
-10. **Validate**  
+8. **Validate**  
 Once you’ve built the JSON array, immediately parse it in your own “mind” (i.e. treat it as if you ran it through a JSON parser).  
 • 	**If it fails** (missing comma, unquoted string, trailing comma, wrong brackets…), **fix it**.  
 •	**Keep repeating** this “generate → parse → fix” loop until it is **valid JSON**.  
 ________________________________________
-11. **Output**  
+9. **Output**  
 •	 Only output the final JSON.  
 •	 Do **not** wrap it in markdown or add any comments.  
 
-12. **Example**  
+10. **Example**  
 Valid output must look like:
 [{
     "source": "Butchart Garsdens",
@@ -115,13 +109,13 @@ Valid output must look like:
 ...
 ]
 ________________________________________
-13. First Row of Calendar
+11. First Row of Calendar
 PLEASE pay attention. The first row of the calendar is a little different for each month (July and August). 
 Look at the image and make sure you are getting all of the events.
 On the July "page" there are 3 events starting with June 27.
 On the August "page" there are 2 July events (July 30 and July 31).
 ________________________________________
-14. **If no events are found**, output exactly:
+12. **If no events are found**, output exactly:
 No events found.
 ________________________________________
 extracted_text

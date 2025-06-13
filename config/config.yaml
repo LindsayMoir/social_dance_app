@@ -46,6 +46,7 @@ fuzzywuzzy:
 input:
   butchart_image_url: https://butchartgardens.com/wp-content/uploads/2025/06/Outdoor-Summer-Concert-2025-994x1536.jpg
   butchart_parent_url: https://butchartgardens.com/summer-entertainment-calendar/
+  butchart_pdf_url: https://butchartgardens.com/wp-content/uploads/2025/06/Summer-Entertainment-calendar-double-sided-2025.pdf
   calendar_urls: data/other/calendar_urls.csv
   countries: data/other/countries.csv
   data_keywords: data/other/keywords.csv

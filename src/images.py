@@ -83,6 +83,7 @@ class ImageScraper:
             self.logger.error("Instagram login failed. Exiting.")
             sys.exit(1)
 
+
     async def _login_to_instagram(self) -> bool:
         if hasattr(self, 'ig_session'):
             self.logger.info("Reusing Instagram session")
@@ -109,6 +110,7 @@ class ImageScraper:
         self.ig_session = session
         return True
     
+
     def is_image_url(self, url: str) -> bool:
         """
         Determines whether the given URL points to an image file based on its extension.
@@ -122,6 +124,7 @@ class ImageScraper:
         path = urlparse(url).path
         ext = Path(path).suffix.lower()
         return ext in IMAGE_EXTENSIONS
+
 
     def download_image(self, image_url: str) -> Path | None:
         """
@@ -155,6 +158,7 @@ class ImageScraper:
             self.logger.exception(f"Failed to download image {image_url}")
             return None
         
+
     def ocr_image_to_text(self, local_path: Path) -> str:
         """
         Performs OCR (Optical Character Recognition) on a given image file and returns the extracted text.
@@ -187,76 +191,7 @@ class ImageScraper:
         except Exception:
             self.logger.exception(f"OCR failed on {local_path}")
             return ""
-        
-    def check_image_events_exist(self, image_url: str) -> bool:
-        """
-        Determines whether there are any events associated with the specified image URL.
 
-        The method performs the following steps:
-        1. Checks if any events with the given image URL exist in the `events` table.
-           - If found, returns True.
-        2. If not found, checks the `events_history` table for events with the given image URL.
-           - If not found in history, returns False.
-        3. If found in history, copies recent events (within a configurable number of days)
-           from `events_history` to `events`, then returns True.
-
-        Args:
-            image_url (str): The URL of the image to check for associated events.
-
-        Returns:
-            bool: True if events exist or were copied from history; False otherwise.
-
-        Side Effects:
-            - May insert records into the `events` table if recent history events are found.
-            - Logs actions and outcomes at each step.
-        """
-        # 1) Check live events table
-        sql_live = """
-        SELECT COUNT(*)
-          FROM events
-         WHERE url = :url
-        """
-        params = {'url': image_url}
-        live = self.db_handler.execute_query(sql_live, params)
-        if live and live[0][0] > 0:
-            self.logger.info(f"Events already exist for URL: {image_url}")
-            return True
-
-        # 2) Check history table
-        sql_hist = """
-        SELECT COUNT(*)
-          FROM events_history
-         WHERE url = :url
-        """
-        hist = self.db_handler.execute_query(sql_hist, params)
-        if not (hist and hist[0][0] > 0):
-            self.logger.info(f"No history events for URL: {image_url}")
-            return False
-
-        # 3) Copy recent history into events
-        sql_copy = """
-        INSERT INTO events (
-            event_name, dance_style, description, day_of_week,
-            start_date, end_date, start_time, end_time,
-            source, location, price, url,
-            event_type, address_id, time_stamp
-        )
-        SELECT
-            event_name, dance_style, description, day_of_week,
-            start_date, end_date, start_time, end_time,
-            source, location, price, url,
-            event_type, address_id, time_stamp
-          FROM events_history
-         WHERE url = :url
-           AND time_stamp > NOW() - (:days * INTERVAL '1 day')
-        """
-        params_copy = {
-            'url':  image_url,
-            'days': self.config['clean_up']['old_events']
-        }
-        self.db_handler.execute_query(sql_copy, params_copy)
-        self.logger.info(f"Copied history events into events for URL: {image_url}")
-        return True
 
     def get_image_links(self) -> pd.DataFrame:
         """
@@ -302,6 +237,7 @@ class ImageScraper:
             df = df.iloc[:limit]
 
         return df
+
 
     def process_webpage_url(self, page_url: str, parent_url: str, source: str, keywords: str) -> None:
         """
@@ -410,6 +346,7 @@ class ImageScraper:
         for src in valid_imgs[:config['crawling']['max_website_urls']]:
             self.process_image_url(src, page_url, source, keywords)
 
+
     def process_image_url(self, image_url:str, parent_url:str, source:str, keywords: str) -> None:
         """
         Processes an image URL by downloading the image, extracting text using OCR, 
@@ -441,7 +378,7 @@ class ImageScraper:
         self.logger.info(f"process_image_url(): Marked {image_url} as visited.")
 
         # Skip if events already exist
-        if self.check_image_events_exist(image_url):
+        if self.db.check_image_events_exist(image_url):
             self.logger.info(f"process_image_url(): Events already exist for {image_url}, skipping OCR.")
             url_row = (image_url, parent_url, source, keywords, True, 1, datetime.now())
             self.db_handler.write_url_to_db(url_row)
@@ -490,6 +427,7 @@ class ImageScraper:
             self.logger.info(f"process_image_url(): LLM processing succeeded for {image_url}")
         else:
             self.logger.warning(f"process_image_url(): LLM processing did not produce any events for {image_url}")
+
 
     def process_images(self) -> None:
         """

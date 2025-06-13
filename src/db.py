@@ -1834,6 +1834,85 @@ class DatabaseHandler():
                     )
 
 
+    def check_image_events_exist(self, image_url: str) -> bool:
+        """
+        Determines whether there are any events associated with the specified image URL.
+
+        Steps:
+        1. Check `events` table.
+        2. If none, check `events_history`.
+        3. If found in history, copy only the most‐recent version of each event
+        into `events` (grouped by all fields except time_stamp).
+        """
+        # 1) Check live events table
+        sql_live = """
+        SELECT COUNT(*)
+        FROM events
+        WHERE url = :url
+        """
+        params = {'url': image_url}
+        logging.info(f"check_image_events_exist(): image_url is: {image_url}")
+        live = self.execute_query(sql_live, params)
+        if live and live[0][0] > 0:
+            logging.info(f"check_image_events_exist(): live is: {live[0][0]}")
+            logging.info(f"check_image_events_exist(): Events already exist for URL: {image_url}")
+            return True
+
+        # 2) Check history table
+        sql_hist = """
+        SELECT COUNT(*)
+        FROM events_history
+        WHERE url = :url
+        """
+        hist = self.execute_query(sql_hist, params)
+        if not (hist and hist[0][0] > 0):
+            logging.info(f"check_image_events_exist(): No history events for URL: {image_url}")
+            return False
+
+        # 3) Copy only the most‐recent history row per unique event into events
+        sql_copy = """
+        INSERT INTO events (
+            event_name, dance_style, description, day_of_week,
+            start_date, end_date, start_time, end_time,
+            source, location, price, url,
+            event_type, address_id, time_stamp
+        )
+        SELECT
+            sub.event_name, sub.dance_style, sub.description, sub.day_of_week,
+            sub.start_date, sub.end_date, sub.start_time, sub.end_time,
+            sub.source, sub.location, sub.price, sub.url,
+            sub.event_type, sub.address_id, sub.time_stamp
+        FROM (
+            SELECT DISTINCT ON (
+                event_name, dance_style, description, day_of_week,
+                start_date, end_date, start_time, end_time,
+                source, location, price, url,
+                event_type, address_id
+            )
+                event_name, dance_style, description, day_of_week,
+                start_date, end_date, start_time, end_time,
+                source, location, price, url,
+                event_type, address_id, time_stamp
+            FROM events_history
+            WHERE url = :url
+            AND time_stamp > NOW() - (:days * INTERVAL '1 day')
+            ORDER BY
+                event_name, dance_style, description, day_of_week,
+                start_date, end_date, start_time, end_time,
+                source, location, price, url,
+                event_type, address_id,
+                time_stamp DESC
+        ) AS sub
+        """
+        params_copy = {
+            'url':  image_url,
+            'days': self.config['clean_up']['old_events']
+        }
+        self.execute_query(sql_copy, params_copy)
+        logging.info(f"check_image_events_exist(): Copied most‐recent history events into events for URL: {image_url}")
+        return True
+    
+
     def driver(self):
         """
         Main driver function to perform database operations.
