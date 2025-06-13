@@ -112,7 +112,7 @@ ________________________________________
 11. First Row of Calendar
 PLEASE pay attention. The first row of the calendar is a little different for each month (July and August). 
 Look at the image and make sure you are getting all of the events.
-On the July "page" there are 3 events starting with June 27.
+On the July "page" there are 3 events. Those events are June 27, June 28, June 29. MAKE SURE YOU INCLUDE THESE!
 On the August "page" there are 2 July events (July 30 and July 31).
 ________________________________________
 12. **If no events are found**, output exactly:
