@@ -1,4 +1,122 @@
 """
+Main execution block for db.py.
+This section performs the following steps when the script is run directly:
+1. Loads configuration settings from a YAML file located at 'config/config.yaml'.
+2. Sets up logging using the configuration parameters, appending logs to the specified log file.
+3. Logs the start time of the process.
+4. Initializes an instance of the DatabaseHandler class with the loaded configuration.
+5. Retrieves the name of the currently running file for logging and reporting purposes.
+6. Counts the number of events and URLs in the database before performing any cleanup operations.
+7. Executes the main database maintenance and cleanup operations by calling the driver() method of DatabaseHandler.
+8. Counts the number of events and URLs in the database after cleanup and writes the results to a CSV file.
+9. Logs the end time and the total elapsed time for the process.
+This main block is intended for scheduled or manual database maintenance, ensuring that the database is deduplicated, cleaned, and up-to-date, with all operations and statistics logged for auditing and debugging purposes.
+Attempts to find and return an address update for a given event based on its location string.
+This method extracts the street number from the provided location string using a regular expression,
+then searches the provided address DataFrame for rows where the 'street_number' matches the extracted number.
+For each matching address, it checks if the 'street_name' is present in the location string.
+If a match is found, it creates a dictionary containing the event's ID and the matched address's ID.
+DatabaseHandler class for managing PostgreSQL database operations related to social dance events.
+This class provides methods for connecting to the database, creating and managing tables, 
+executing queries, deduplicating records, cleaning and normalizing event and address data, 
+and performing various utility operations for event data ingestion and maintenance.
+Methods
+-------
+__init__(self, config)
+    Initialize the DatabaseHandler with configuration, establish connections, and prepare lookup data.
+load_blacklist_domains(self)
+    Load blacklisted domains from a CSV file into a set for fast lookup.
+avoid_domains(self, url)
+    Check if a given URL contains any blacklisted domain.
+get_db_connection(self)
+    Establish and return a SQLAlchemy engine for the PostgreSQL database.
+create_tables(self)
+    Create required tables in the database, optionally dropping existing ones based on configuration.
+create_urls_df(self)
+    Create a pandas DataFrame from the 'urls' table in the database.
+execute_query(self, query, params=None)
+    Execute a SQL query with optional parameters and return results or affected row count.
+close_connection(self)
+    Close the database connection safely.
+write_url_to_db(self, url_row)
+    Append a new URL activity row to the 'urls' table.
+write_events_to_db(self, df, url, parent_url, source, keywords)
+    Write cleaned event data to the 'events' table, handling normalization and address association.
+update_event(self, event_identifier, new_data, best_url)
+    Update an event row in the database by overlaying new data and updating the URL.
+get_address_id(self, address_dict)
+    Insert or update an address in the 'address' table and return its address_id.
+get_postal_code(self, address, api_key)
+    Retrieve the postal code for a given address using the Google Geocoding API.
+get_municipality(self, address, api_key)
+    Retrieve the municipality (locality) for a given address using the Google Geocoding API.
+clean_up_address(self, events_df)
+    Clean and standardize address data for events, associating them with address IDs.
+extract_canadian_postal_code(self, location_str)
+    Extract a Canadian postal code from a location string using regex.
+create_address_dict(self, full_address, street_number, street_name, street_type, postal_box, city, province_or_state, postal_code, country_id)
+    Create a dictionary representing an address.
+populate_from_db_or_fallback(self, location_str, postal_code)
+    Populate address information from the address DB or fallback to partial data if not found.
+fallback_with_municipality(self, location_str)
+    Fallback to using municipality information for address association if postal code is missing.
+match_civic_number(self, df, numbers)
+    Match a civic number from a location string to a row in the address DataFrame.
+format_address_from_db_row(self, db_row)
+    Format an address string from a database row, including city and province.
+is_canadian_postal_code(self, postal_code)
+    Check if a string matches the Canadian postal code format.
+dedup(self)
+    Remove duplicate events from the 'events' table based on key columns.
+fetch_events_dataframe(self)
+    Fetch all events from the database as a sorted DataFrame.
+decide_preferred_row(self, row1, row2)
+    Decide which of two event rows to keep based on URL, completeness, and recency.
+update_preferred_row_from_other(self, preferred, other, columns)
+fuzzy_duplicates(self)
+    Identify and remove fuzzy duplicates from the events table using event name similarity.
+delete_old_events(self)
+    Delete events older than a configured number of days from the 'events' table.
+delete_likely_dud_events(self)
+    Delete events that are likely invalid based on various criteria (e.g., empty fields, wrong province/country).
+delete_event(self, url, event_name, start_date)
+    Delete an event from the 'events' table based on URL, event name, and start date.
+delete_events_with_nulls(self)
+    Delete events where start_date and start_time, or start_time and end_time, are both null.
+delete_event_with_event_id(self, event_id)
+    Delete an event from the 'events' table by event_id.
+delete_multiple_events(self, event_ids)
+    Delete multiple events from the 'events' table by a list of event_ids.
+multiple_db_inserts(self, table_name, values)
+    Insert or update multiple records in a specified table using upsert logic.
+delete_address_with_address_id(self, address_id)
+    Delete an address from the 'address' table by address_id.
+is_foreign(self)
+    Identify and delete events likely not in British Columbia or Canada based on location and description.
+groupby_source(self)
+    Return a DataFrame with event counts grouped by source.
+count_events_urls_start(self, file_name)
+    Count the number of events and URLs at the start of a process and return as a DataFrame.
+count_events_urls_end(self, start_df, file_name)
+    Count the number of events and URLs at the end of a process, compare with start, and write results to CSV.
+dedup_address(self)
+    Deduplicate the 'address' table based on street_number and street_name.
+get_address_update_for_event(self, event_id, location, address_df)
+    Find and return address_id updates for an event based on its location.
+fix_address_id_in_events(self)
+    Ensure address_id in events table matches the correct address_id from the address table.
+stale_date(self, url)
+    Check if the most recent event for a URL is older than the allowed threshold.
+should_process_url(self, url)
+    Decide whether to process a URL based on its history and relevance.
+update_dow_date(self, event_id, corrected_date)
+    Update start_date and end_date of an event to a corrected date.
+check_dow_date_consistent(self)
+    Ensure start_date matches the stored day_of_week for all events, correcting as needed.
+check_image_events_exist(self, image_url)
+    Check if events exist for a given image URL, restoring from history if necessary.
+driver(self)
+    Main driver function to perform database maintenance operations.
 db.py
 
 This module provides the DatabaseHandler class, which encapsulates methods 
@@ -79,10 +197,23 @@ import warnings
 class DatabaseHandler():
     def __init__(self, config):
         """
-        Initializes the DatabaseHandler with the given configuration.
+        Initializes the DatabaseHandler instance with the provided configuration.
 
-        Args:
-            config (dict): A dictionary containing configuration parameters for the database connection.
+        This constructor sets up the database connections based on the environment (Render or local),
+        loads the blacklist domains, initializes SQLAlchemy metadata, retrieves the Google API key,
+        and prepares DataFrames for URL analysis.
+
+            config (dict): Configuration parameters for the database connection.
+
+        Raises:
+            ConnectionError: If the database connection could not be established.
+
+        Side Effects:
+            - Loads blacklist domains.
+            - Establishes connections to the main and address databases.
+            - Reflects the existing database schema into SQLAlchemy metadata.
+            - Retrieves the Google API key from environment variables.
+            - Creates a DataFrame from the URLs table and computes grouped statistics for URL usefulness.
         """
         self.config = config
         self.load_blacklist_domains()
@@ -146,13 +277,35 @@ class DatabaseHandler():
             
 
     def load_blacklist_domains(self):
-        """ Load blacklisted domains from CSV once at initialization. """
+        """
+        Loads a set of blacklisted domains from a CSV file specified in the configuration.
+
+        The CSV file path is retrieved from self.config['constants']['black_list_domains'].
+        The CSV is expected to have a column named 'Domain'. All domain names are converted
+        to lowercase and stripped of whitespace before being added to the blacklist set.
+
+        The resulting set is stored in self.blacklisted_domains.
+
+        Logs the number of loaded blacklisted domains at the INFO level.
+        """
         csv_path = self.config['constants']['black_list_domains']
         df = pd.read_csv(csv_path)
         self.blacklisted_domains = set(df['Domain'].str.lower().str.strip())
         logging.info(f"Loaded {len(self.blacklisted_domains)} blacklisted domains.")
 
     def avoid_domains(self, url):
+        """
+        Check if the given URL contains any blacklisted domain.
+
+        Args:
+            url (str): The URL to check.
+
+        Returns:
+            bool: True if the URL contains any domain from the blacklist, False otherwise.
+
+        Note:
+            The check is case-insensitive.
+        """
         """ Check if URL contains any blacklisted domain. """
         url_lower = url.lower()
         return any(domain in url_lower for domain in self.blacklisted_domains)
@@ -160,11 +313,11 @@ class DatabaseHandler():
 
     def get_db_connection(self):
         """
-        Establishes and returns a SQLAlchemy engine for connecting to the PostgreSQL database.
+        Establish and return a SQLAlchemy engine for the PostgreSQL database.
 
         Returns:
-            sqlalchemy.engine.Engine: A SQLAlchemy engine for the PostgreSQL database connection.
-            None: If the connection fails.
+            sqlalchemy.engine.Engine: SQLAlchemy engine instance if connection is successful.
+            None: If the connection could not be established.
         """
         try:
             # Read the database connection parameters from the config
@@ -186,8 +339,18 @@ class DatabaseHandler():
 
     def create_tables(self):
         """
-        Creates the 'urls', 'events', 'address', and 'organization tables in the database if they do not already exist.
-        If config['testing']['drop_tables'] is True, it will drop existing tables before creation.
+        Creates the required tables in the database if they do not already exist.
+
+        Tables created:
+            - urls
+            - events
+            - address
+            - runs
+
+        If config['testing']['drop_tables'] is True, existing tables are dropped before creation,
+        and the current 'events' table is backed up to 'events_history'.
+
+        This method ensures all necessary tables for the application are present and logs the process.
         """
         
         # Check if we need to drop tables as per configuration
@@ -315,10 +478,13 @@ class DatabaseHandler():
 
     def create_urls_df(self):
         """
-        Creates a DataFrame from the 'urls' table in the database.
+        Creates and returns a pandas DataFrame from the 'urls' table in the database.
 
         Returns:
-            pandas.DataFrame: A DataFrame containing all rows from the 'urls' table.
+            pandas.DataFrame: DataFrame containing all rows from the 'urls' table.
+        Notes:
+            - If the table is empty or an error occurs, returns an empty DataFrame.
+            - Logs the number of rows loaded or any errors encountered.
         """
         query = "SELECT * FROM urls;"
         try:
@@ -340,12 +506,16 @@ class DatabaseHandler():
 
         Args:
             query (str): The SQL query to execute.
-            params (dict): Optional dictionary of parameters for parameterized queries.
+            params (dict, optional): Dictionary of parameters for parameterized queries.
 
         Returns:
-            list of dict or int or None: A list of rows as dictionaries if the query returns rows,
-                                        the number of rows affected for update operations,
-                                        else None.
+            list: List of rows (as tuples) if the query returns rows.
+            int: Number of rows affected for non-select queries.
+            None: If the query fails or there is no database connection.
+
+        Notes:
+            - Handles NaN values in params by converting them to None (NULL in SQL).
+            - Logs errors if the query execution fails.
         """
         if self.conn is None:
             logging.error("execute_query: No database connection available.")
@@ -380,7 +550,12 @@ class DatabaseHandler():
     
     def close_connection(self):
         """
-        Closes the database connection.
+        Closes the database connection if it exists.
+
+        This method attempts to properly dispose of the current database connection.
+        If the connection is successfully closed, an informational log message is recorded.
+        If an error occurs during the closing process, the exception is logged as an error.
+        If there is no active connection, a warning is logged indicating that there is no connection to close.
         """
         if self.conn:
             try:
@@ -394,10 +569,27 @@ class DatabaseHandler():
 
     def write_url_to_db(self, url_row):
         """
-        Logs a URL activity by appending a new row to the 'urls' table via pandas.
+        Appends a new URL activity record to the 'urls' table in the database.
 
-        Args:
-            url_row (tuple): (link, parent_url, source, keywords, relevant, crawl_try, time_stamp)
+        This method processes and normalizes the provided URL data, especially the 'keywords' field,
+        ensuring it is stored as a clean, comma-separated string. The data is then inserted as a new row
+        into the 'urls' table using pandas' DataFrame and SQL interface.
+
+            url_row (tuple): A tuple containing the following fields in order:
+                - link (str): The URL to be logged.
+                - parent_url (str): The parent URL from which this link was found.
+                - source (str): The source or context of the URL.
+                - keywords (str | list | tuple | set): Associated keywords, which can be a string or an iterable.
+                - relevant (bool | int): Indicator of relevance.
+                - crawl_try (int): Number of crawl attempts.
+                - time_stamp (str | datetime): Timestamp of the activity.
+
+        Raises:
+            Exception: Logs an error if the database insertion fails.
+
+        Side Effects:
+            - Appends a new row to the 'urls' table in the connected database.
+            - Logs success or failure of the operation.
         """
         # 1) Unpack
         link, parent_url, source, keywords, relevant, crawl_try, time_stamp = url_row
@@ -435,15 +627,29 @@ class DatabaseHandler():
 
     def write_events_to_db(self, df, url, parent_url, source, keywords):
         """
-        Writes event data to the 'events' table in the database.
-
-        Args:
-            df (pandas.DataFrame): DataFrame containing events data.
-            url (str): URL from which the events data was sourced.
-
-        Notes:
-            - The 'event_id' column is auto-generated and should not be included in the DataFrame.
-            - Ensures that only relevant columns are written to the database.
+        Processes and writes event data to the 'events' table in the database.
+        This method performs several data cleaning and transformation steps on the input DataFrame,
+        including renaming columns, handling missing values, formatting dates and times, and removing
+        outdated or incomplete events. It also logs relevant information and writes a record of the
+        processed URL to a separate table.
+            df (pandas.DataFrame): DataFrame containing raw event data to be processed and stored.
+            url (str): The URL from which the events data was sourced.
+            parent_url (str): The parent URL, if applicable, for hierarchical event sources.
+            source (str): The source identifier for the event data. If empty, it will be inferred from the URL.
+            keywords (str or list): Keywords or dance styles associated with the events. If a list, it will be joined into a string.
+            - The method automatically renames columns to match the database schema if the data is from a Google Calendar source.
+            - Missing or empty 'source' and 'url' fields are filled with appropriate values.
+            - Dates and times are coerced into standard formats; warnings during parsing are suppressed.
+            - The 'price' column is ensured to exist and is treated as text.
+            - A 'time_stamp' column is added to record the time of data insertion.
+            - The method cleans up the 'location' field and updates address IDs via a helper method.
+            - Rows with all important fields missing are dropped.
+            - Events older than a configurable number of days are excluded.
+            - If no valid events remain after cleaning, the method logs this and records the URL as not relevant.
+            - Cleaned data is saved to a CSV file for debugging and then written to the 'events' table in the database.
+            - The method logs key actions and outcomes for traceability.
+        Returns:
+            None
         """
         # — ensure url and parent_url are safe to search —
         url = '' if pd.isna(url) else str(url)
@@ -553,13 +759,21 @@ class DatabaseHandler():
     
     def update_event(self, event_identifier, new_data, best_url):
         """
-        Updates an event row in the database based on event_identifier criteria by overlaying new_data.
-        If new_data has information for a column, it replaces existing data. The best_url is also set.
-        
-        Args:
-            event_identifier (dict): Criteria to locate the event row (e.g. {'event_name': ..., 'start_date': ..., 'start_time': ...}).
-            new_data (dict): Data to overlay onto the existing event record.
-            best_url (str): The best URL to update for the event.
+        Update an existing event in the database by overlaying new data and setting the best URL.
+        This method locates an event row in the 'events' table using the provided event_identifier criteria.
+        It overlays the values from new_data onto the existing row, replacing only the fields present and non-empty in new_data.
+        The event's URL is updated to the provided best_url. The update is performed in-place; if no matching event is found,
+        the method logs an error and returns False.
+            event_identifier (dict): Dictionary specifying the criteria to uniquely identify the event row.
+                Example: {'event_name': ..., 'start_date': ..., 'start_time': ...}
+            new_data (dict): Dictionary containing new values to update in the event record. Only non-empty and non-null
+                values will overwrite existing fields.
+            best_url (str): The URL to set as the event's 'url' field.
+        Returns:
+            bool: True if the event was found and updated successfully, False otherwise.
+        Logs:
+            - Error if no matching event is found.
+            - Info when an event is successfully updated.
         """
         select_query = """
         SELECT * FROM events
@@ -594,14 +808,24 @@ class DatabaseHandler():
 
     def get_address_id(self, address_dict):
         """
-        Inserts a new address or updates the existing address using INSERT ... ON CONFLICT.
-        A time_stamp column is added and set to the current datetime.
+        Inserts a new address into the 'address' table or updates the existing address if a conflict occurs on 'full_address'.
+        Automatically updates the 'time_stamp' column to the current datetime on insert or update.
 
-        Args:
-            address_dict (dict): Dictionary containing address details.
+            address_dict (dict): A dictionary containing address fields. Must include:
+                - full_address (str)
+                - street_number (str or int)
+                - street_name (str)
+                - street_type (str)
+                - city (str)
+                - province_or_state (str)
+                - postal_code (str)
+                - country_id (int)
+            The function will add a 'time_stamp' key with the current datetime.
 
-        Returns:
-            int or None: The address_id if successful, else None.
+            int or None: The unique address_id of the inserted or updated address if successful, otherwise None.
+
+        Raises:
+            Logs SQLAlchemyError if a database error occurs.
         """
         # Add the current datetime to the address dictionary for the time_stamp column.
         address_dict['time_stamp'] = datetime.now()
@@ -654,14 +878,18 @@ class DatabaseHandler():
     
     def get_postal_code(self, address, api_key):
         """
-        Given an address string, query the Google Geocoding API and extract the postal code.
+        Retrieves the postal code for a given address using the Google Geocoding API.
 
         Args:
             address (str): The address string to geocode.
-            api_key (str): Your Google Maps Geocoding API key.
+            api_key (str): Google Maps Geocoding API key.
 
         Returns:
             str or None: The postal code if found, otherwise None.
+
+        Notes:
+            - Returns None if the API request fails or no postal code is found.
+            - Only the first postal_code component found in the results is returned.
         """
         endpoint = "https://maps.googleapis.com/maps/api/geocode/json"
         params = {
@@ -688,14 +916,16 @@ class DatabaseHandler():
 
     def get_municipality(self, address, api_key):
         """
-        Given an address string, query the Google Geocoding API and extract the municipality.
-
-        Args:
-            address (str): The address string to geocode.
-            api_key (str): Your Google Maps Geocoding API key.
-
-        Returns:
-            str or None: The municipality (locality) if found, otherwise None.
+        Retrieves the municipality (locality) from a given address using the Google Geocoding API.
+        This method sends a request to the Google Geocoding API with the provided address and API key,
+        parses the response, and extracts the municipality (typically represented by the "locality" 
+        address component). If the API request fails or the locality is not found, the method returns None.
+            api_key (str): Google Maps Geocoding API key.
+        Raises:
+            RequestsException: If the HTTP request encounters a network problem (not explicitly handled here).
+            ValueError: If the response cannot be parsed as JSON (not explicitly handled here).
+        Logs:
+            Warnings if the API request fails or if the API response status is not "OK".
         """
         endpoint = "https://maps.googleapis.com/maps/api/geocode/json"
         params = {
@@ -726,11 +956,16 @@ class DatabaseHandler():
 
     def clean_up_address(self, events_df):
         """
-        Cleans and standardizes address data from the 'events' table by:
-        1) Extracting or retrieving a Canadian postal code (regex or Google).
-        2) Attempting to fill in the address from the address DB.
-        3) Falling back to partial updates if no DB match.
-        4) If no postal code, uses Google municipality.
+        Cleans and standardizes address data in the provided events DataFrame.
+        This method processes each event's 'location' field to ensure address consistency and completeness by:
+            1. Attempting to match and update the event's address using an existing address database.
+            2. Extracting a Canadian postal code from the location string using regex.
+            3. If a postal code is found, updating the event's address fields using database information or fallback logic.
+            4. (Commented/Optional) If no postal code is found, optionally using Google API to retrieve a postal code or municipality.
+        Parameters:
+            events_df (pd.DataFrame): DataFrame containing event data, including 'location' and 'event_id' columns.
+        Returns:
+            pd.DataFrame: The updated DataFrame with standardized 'location' and 'address_id' fields.
         """
         logging.info("def clean_up_address(): Starting with events_df shape: %s", events_df.shape)
         
@@ -786,8 +1021,18 @@ class DatabaseHandler():
 
     def extract_canadian_postal_code(self, location_str):
         """
-        Extracts a Canadian postal code from a location string using regex.
-        Returns the postal code with spaces removed, or None if not found or invalid.
+        Extracts a valid Canadian postal code from a given location string.
+
+        This method uses a regular expression to search for a Canadian postal code pattern
+        within the provided string. If a match is found, it removes any spaces from the
+        postal code and validates it using the `is_canadian_postal_code` method. If the
+        postal code is valid, it returns the cleaned postal code; otherwise, it returns None.
+
+        Args:
+            location_str (str): The input string potentially containing a Canadian postal code.
+
+        Returns:
+            str or None: The valid Canadian postal code without spaces if found and valid, otherwise None.
         """
         match = re.search(r'[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d', location_str)
         if match:
@@ -828,11 +1073,22 @@ class DatabaseHandler():
 
     def populate_from_db_or_fallback(self, location_str, postal_code):
         """
-        Given a valid Canadian postal_code, tries to populate address from the DB.
-        If no match is found, returns a fallback partial location.
+        Attempts to populate a formatted address using a Canadian postal code by querying the local address database.
+        If no match is found in the database, returns a fallback value (currently returns None, None).
 
-        Returns:
-            (updated_location, address_id)
+        Args:
+            location_str (str): The raw location string, typically containing civic number and street information.
+            postal_code (str): The Canadian postal code to look up in the database.
+
+            tuple:
+                updated_location (str or None): The formatted address string if found, otherwise None.
+                address_id (Any or None): The unique identifier for the address if found, otherwise None.
+
+        Notes:
+            - If multiple database rows match the postal code, attempts to match the civic number from the location string.
+            - If no valid match is found, returns (None, None).
+            - Logging is used to provide information and warnings about the lookup process.
+            - Fallback logic for missing database entries is currently commented out.
         """
         numbers = re.findall(r'\d+', location_str)
         query = """
@@ -890,12 +1146,30 @@ class DatabaseHandler():
 
     def fallback_with_municipality(self, location_str):
         """
-        If no postal code is found, tries Google for the municipality.
-        If it's in BC, returns an updated location and partial address_id.
-        Otherwise returns (None, None).
+        Attempts to resolve a location string to a municipality using Google API as a fallback
+        when no postal code is found. If the municipality is recognized and located in British Columbia (BC),
+        returns an updated location string and a corresponding address ID. Otherwise, returns (None, None).
 
+        Args:
+            location_str (str): The input location string to resolve.
+
+            tuple:
+                - updated_location (str or None): The constructed location string including municipality, BC, and CA,
+                  or None if not found or not in BC.
+                - address_id (Any or None): The address ID corresponding to the updated location, or None if not found.
+
+        Side Effects:
+            - Reads the list of valid municipalities from the configured file.
+            - Logs the fallback action if a municipality is found.
+
+        Raises:
+            - Any exceptions raised by file I/O or called methods are propagated.
+        
         Returns:
-            (updated_location, address_id)
+            - updated_location (str or None): The constructed location string including the original location,
+              municipality, 'BC', and 'CA', or None if the municipality is not found or not in BC.
+        
+            - Propagates any exceptions raised by file I/O or called methods.
         """
         municipality = self.get_municipality(location_str, self.google_api_key)
         if not municipality:
@@ -917,9 +1191,14 @@ class DatabaseHandler():
 
     def match_civic_number(self, df, numbers):
         """
-        Given a DataFrame of addresses and numeric strings from the location,
-        attempts to match the first number to a civic_no. Returns the best row index,
-        or the first row if no match is found.
+        Attempts to match the first numeric string from a list to the 'civic_no' column in a DataFrame of addresses.
+        Parameters:
+            df (pd.DataFrame): DataFrame containing address information, including a 'civic_no' column.
+            numbers (list of str): List of numeric strings extracted from a location.
+        Returns:
+            int or None: The index of the row in the DataFrame where the first number matches the 'civic_no'.
+                         If no match is found, returns the index of the first row.
+                         Returns None if the DataFrame is empty.
         """
         if df.empty:
             logging.warning("match_civic_number(): Received empty DataFrame.")
@@ -940,8 +1219,28 @@ class DatabaseHandler():
 
     def format_address_from_db_row(self, db_row):
         """
-        Constructs a formatted address string from a single DB row,
-        explicitly including the city (mail_mun_name).
+        Constructs a formatted address string from a database row.
+
+        This method takes a database row object containing address components and constructs
+        a single formatted address string. The formatted address includes the street address,
+        city (municipality), province abbreviation, postal code, and country ("CA").
+        Missing components are omitted gracefully.
+
+        Args:
+            db_row: An object representing a database row with address fields. Expected attributes are:
+                - civic_no
+                - civic_no_suffix
+                - official_street_name
+                - official_street_type
+                - official_street_dir
+                - mail_mun_name (city/municipality)
+                - mail_prov_abvn (province abbreviation)
+                - mail_postal_code
+
+        Returns:
+            str: A formatted address string in the form:
+                "<street address>, <city>, <province abbreviation>, <postal code>, CA"
+            Any missing components are omitted from the output.
         """
         # Build the street portion
         parts = [
@@ -971,7 +1270,16 @@ class DatabaseHandler():
 
     def is_canadian_postal_code(self, postal_code):
         """
-        Checks if a postal code matches the Canadian format: A1A 1A1 (with optional space).
+        Determines whether the provided postal code matches the Canadian postal code format.
+
+        A valid Canadian postal code follows the pattern: A1A 1A1, where 'A' is a letter and '1' is a digit.
+        The space between the third and fourth characters is optional.
+
+        Args:
+            postal_code (str): The postal code string to validate.
+
+        Returns:
+            bool: True if the postal code matches the Canadian format, False otherwise.
         """
         pattern = r'^[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d$'
         return bool(re.match(pattern, postal_code.strip()))
@@ -979,13 +1287,17 @@ class DatabaseHandler():
 
     def dedup(self):
         """
-        Removes duplicates from the 'events' table in the database.
+        Removes duplicate entries from the 'events' table in the database.
 
-        For the 'events' table, duplicates are identified based on the combination of
-        'Name_of_the_Event' and 'Start_Date'. Only the latest entry is kept.
+        Duplicates in the 'events' table are identified based on matching 'address_id', 'start_date', 'end_date',
+        and start/end times within 15 minutes (900 seconds) of each other. Only the latest entry (with the highest event_id)
+        is retained for each group of duplicates; all others are deleted.
 
-        For the 'urls' table, duplicates are identified based on the 'link' column.
-        Only the latest entry is kept.
+        Returns:
+            int: The number of rows deleted from the 'events' table during deduplication.
+
+        Raises:
+            Exception: If an error occurs during the deduplication process, it is logged and re-raised.
         """
         try:
             # Deduplicate 'events' table based on 'Name_of_the_Event' and 'Start_Date'
@@ -1008,7 +1320,11 @@ class DatabaseHandler():
 
     def fetch_events_dataframe(self):
         """
-        Fetch all events from the database and return as a sorted DataFrame.
+        Fetch all events from the database and return them as a pandas DataFrame sorted by start date and time.
+
+        Returns:
+            pandas.DataFrame: A DataFrame containing all events from the 'events' table,
+            sorted by 'start_date' and 'start_time' columns.
         """
         query = "SELECT * FROM events"
         df = pd.read_sql(query, self.conn)
@@ -1017,13 +1333,16 @@ class DatabaseHandler():
 
     def decide_preferred_row(self, row1, row2):
         """
-        Decide which of the two rows to keep based on the specified criteria:
-        a. Prefer the one with a non-empty URL.
-        b. If neither has a URL, prefer the one with more filled columns.
-        c. If tied, keep the most recent based on time_stamp.
-        
-        Returns:
-            tuple: (preferred_row, other_row)
+        Determines the preferred row between two given rows based on the following criteria:
+            1. Prefer the row with a non-empty 'url' field.
+            2. If both or neither have a 'url', prefer the row with more filled (non-empty) columns, excluding 'event_id'.
+            3. If still tied, prefer the row with the most recent 'time_stamp'.
+        Args:
+            row1 (pandas.Series): The first row to compare.
+            row2 (pandas.Series): The second row to compare.
+            tuple:
+                preferred_row (pandas.Series): The row selected as preferred based on the criteria.
+                other_row (pandas.Series): The other row that was not preferred.
         """
         # Prefer row with URL
         if row1['url'] and not row2['url']:
@@ -1049,7 +1368,19 @@ class DatabaseHandler():
 
     def update_preferred_row_from_other(self, preferred, other, columns):
         """
-        Update missing columns in the preferred row using values from the other row.
+        Update missing values in the preferred row with corresponding values from the other row for specified columns.
+
+        For each column in `columns`, if the value in `preferred` is missing (NaN or empty string), 
+        and the value in `other` is present (not NaN and not empty string), the value from `other` 
+        is copied to `preferred`.
+
+        Args:
+            preferred (pd.Series): The row to be updated, typically the preferred or primary row.
+            other (pd.Series): The row to use as a source for missing values.
+            columns (Iterable[str]): List or iterable of column names to check and update.
+
+        Returns:
+            pd.Series: The updated preferred row with missing values filled from the other row where applicable.
         """
         for col in columns:
             if pd.isna(preferred[col]) or preferred[col] == '':
@@ -1060,18 +1391,21 @@ class DatabaseHandler():
 
     def fuzzy_duplicates(self):
         """
-        Identify and remove fuzzy duplicates from the events table.
-        
-        Steps:
-        1. Sort events by start_date, start_time.
-        2. For groups with same start_date and start_time:
-             a. Fuzzy match event_name for events in group.
-             b. If fuzzy score > 80, decide which row to keep:
-                i. Prefer row with URL.
-                ii. If neither has URL, keep row with more filled columns.
-                iii. If tied, keep most recent based on time_stamp.
-             c. Update kept row with missing data from duplicate.
-             d. Update the database: update kept row, delete duplicate row.
+        Identifies and removes fuzzy duplicate events from the events table in the database.
+        This method performs the following steps:
+            1. Fetches all events and sorts them by 'start_date' and 'start_time'.
+            2. Groups events that share the same 'start_date' and 'start_time'.
+            3. Within each group, compares event names using fuzzy string matching.
+            4. If two events have a fuzzy match score greater than 80:
+                a. Determines which event to keep based on the following criteria:
+                    i. Prefer the event with a URL.
+                    ii. If neither has a URL, prefer the event with more filled columns.
+                    iii. If still tied, prefer the most recently updated event.
+                b. Updates the kept event with any missing data from the duplicate.
+                c. Updates the database with the merged event and deletes the duplicate.
+            5. Logs actions taken during the process.
+        Returns:
+            None. The method updates the database in place and logs the actions performed.
         """
         # Fetch and sort events using self.conn
         events_df = self.fetch_events_dataframe()
@@ -1128,9 +1462,14 @@ class DatabaseHandler():
 
     def delete_old_events(self):
         """
-        Deletes events older than a specified number of days from the 'events' table.
+        The number of days is retrieved from the configuration under 'clean_up' -> 'old_events'.
+        Events with an 'End_Date' earlier than the current date minus the specified number of days are deleted.
 
-        The number of days is specified in the configuration under 'clean_up' -> 'old_events'.
+        Returns:
+            int: The number of events deleted from the database.
+
+        Raises:
+            Exception: If an error occurs during the deletion process, it is logged and re-raised.
         """
         try:
             days = int(self.config['clean_up']['old_events'])
@@ -1147,18 +1486,15 @@ class DatabaseHandler():
 
     def delete_likely_dud_events(self):
         """
-        1. If the event source, dance_style, and url == '', delete the event, UNLESS it has an address_id then keep it.
-        2. Drop events outside of British Columbia (BC).
-            a. However, not all events will have an address_id (Primary Key in address table, Foreign Key in events table).
-            b. Also, not all rows in the address table will have a province_or_state.
-            c. If they do have a province_or_state and it is not 'BC' then delete the event.
-        3. Drop events that are not in Canada.
-            a. However, NOT all events will have an address_id (Primary Key in address table, Foreign Key in events table). 
-            b. Also, not all rows in the address table will have a country_id. 
-            c. If they do have a country_id and it is not 'CA' then delete the event. 
-        4. Delete rows in events where dance_style and url are == '' AND event_type == 'other' AND location IS NULL and description IS NULL
+        Deletes likely invalid or irrelevant events from the database based on several criteria:
+        1. Deletes events where 'source', 'dance_style', and 'url' are empty strings, unless the event has an associated 'address_id'.
+        2. Deletes events whose associated address (if present) has a 'province_or_state' that is not 'BC' (British Columbia).
+        3. Deletes events whose associated address (if present) has a 'country_id' that is not 'CA' (Canada).
+        4. Deletes events where 'dance_style' and 'url' are empty strings, 'event_type' is 'other', and both 'location' and 'description' are NULL.
+        For each deletion step, logs the number of events deleted.
+        Returns:
+            None
         """
-
         # 1. Delete events where source, dance_style, and url are empty, unless they have an address_id
         delete_query_1 = """
         DELETE FROM events
@@ -1245,12 +1581,15 @@ class DatabaseHandler():
 
     def delete_event(self, url, event_name, start_date):
         """
-        Deletes an event from the 'events' table and the corresponding URL from the 'urls' table.
+        Deletes an event from the 'events' table based on the provided event name and start date.
 
-        Args:
-            url (str): The URL of the event to be deleted.
-            event_name (str): The name of the event to be deleted.
-            start_date (str): The start date of the event to be deleted.
+            url (str): The URL of the event to be deleted. (Note: This parameter is currently unused in the deletion query.)
+
+        Returns:
+            None
+
+        Raises:
+            Exception: If an error occurs during the deletion process, it is logged and the exception is propagated.
         """
         try:
             logging.info("delete_event: Deleting event with URL: %s, Event Name: %s, Start Date: %s", url, event_name, start_date)
@@ -1271,7 +1610,14 @@ class DatabaseHandler():
 
     def delete_events_with_nulls(self):
         """
-        Deletes events with start_date and start_time being null in the 'events' table.
+        Deletes events from the 'events' table where both 'start_date' and 'start_time' are NULL,
+        or both 'start_time' and 'end_time' are NULL.
+
+        Returns:
+            int: The number of events deleted from the table.
+
+        Raises:
+            Exception: If an error occurs during the deletion process.
         """
         try:
             delete_query = """
@@ -1288,7 +1634,16 @@ class DatabaseHandler():
 
     def delete_event_with_event_id(self, event_id):
         """
-        Deletes an event from the 'events' table based on the event_id.
+        Deletes an event from the 'events' table based on the provided event_id.
+
+        Args:
+            event_id (int): The unique identifier of the event to be deleted.
+
+        Returns:
+            None
+
+        Raises:
+            Exception: If the deletion fails, an exception is logged and propagated.
         """
         try:
             delete_query = """
@@ -1304,13 +1659,15 @@ class DatabaseHandler():
     
     def delete_multiple_events(self, event_ids):
         """
-        Deletes multiple events from the 'events' table based on a list of event_ids.
-
-        Args:
-            event_ids (list): List of event_id(s) to delete.
-
-        Returns:
-            bool: True if all deletions were successful, False otherwise.
+        Deletes multiple events from the 'events' table based on a list of event IDs.
+            event_ids (list): A list of event IDs (int) to be deleted from the database.
+            bool: 
+                - True if all specified events were successfully deleted.
+                - False if one or more deletions failed, or if the input list is empty.
+        Logs:
+            - A warning if no event IDs are provided.
+            - An error for each event ID that fails to be deleted.
+            - An info message summarizing the number of successful deletions.
         """
         if not event_ids:
             logging.warning("delete_multiple_events: No event_ids provided for deletion.")
@@ -1331,11 +1688,22 @@ class DatabaseHandler():
 
     def multiple_db_inserts(self, table_name, values):
         """
-        Inserts or updates multiple records in the specified table.
+        Inserts or updates multiple records in the specified table using an upsert strategy.
 
-        Parameters:
-            table_name (str): The name of the table to insert/update.
-            values (list of dict): List of dictionaries where each dict represents a row to insert/update.
+            table_name (str): The name of the table to insert or update. Supported values are "address" and "events".
+            values (list of dict): A list of dictionaries, each representing a row to insert or update. Each dictionary's keys should match the table's column names.
+
+        Returns:
+            None
+
+        Raises:
+            ValueError: If the specified table_name is not supported.
+            Exception: If an error occurs during the insert or update operation.
+
+        Logs:
+            - An info message if no values are provided.
+            - An info message upon successful insertion or update.
+            - An error message if an exception occurs during the operation.
         """
         if not values:
             logging.info("multiple_db_inserts(): No values to insert or update.")
@@ -1364,7 +1732,20 @@ class DatabaseHandler():
 
     def delete_address_with_address_id(self, address_id):
         """
-        Deletes an address from the 'address' table based on the address_id.
+        Deletes an address from the 'address' table based on the provided address_id.
+
+        Args:
+            address_id (int or str): The unique identifier of the address to be deleted. Can be an integer or a string that can be converted to an integer.
+
+        Returns:
+            None
+
+        Raises:
+            Exception: If the deletion fails due to a database error or invalid address_id.
+
+        Logs:
+            - Info log on successful deletion.
+            - Error log if deletion fails.
         """
         try:
             # Convert address_id to native Python int
@@ -1454,7 +1835,12 @@ class DatabaseHandler():
 
     def groupby_source(self):
         """
-        Runs a GROUP BY query against the events table to get event counts per source.
+        Executes a SQL query to aggregate and count the number of events per source in the events table.
+
+        Returns:
+            pandas.DataFrame: A DataFrame containing two columns:
+                - 'source': The source of each event.
+                - 'counted': The number of events associated with each source, sorted in descending order.
         """
         query = "SELECT source, COUNT(*) AS counted FROM events GROUP BY source ORDER BY counted DESC"
         groupby_df = pd.read_sql_query(query, self.conn)
@@ -1547,7 +1933,13 @@ class DatabaseHandler():
 
     def dedup_address(self):
         """
-        Deduplicates the 'address' table based on the street_number and street_name columns.
+        Deduplicates entries in the 'address' table based on the combination of 'street_number' and 'street_name' columns.
+
+        This method identifies duplicate addresses where both 'street_number' and 'street_name' are not null or empty.
+        For each set of duplicates, it retains the last occurrence and deletes the others by their 'address_id'.
+
+        Returns:
+            int: The number of duplicate address records deleted from the table.
         """
         # Create sql statement to select all rows where street_number and street_name are not null or empty
         sql = """
@@ -1577,13 +1969,18 @@ class DatabaseHandler():
 
     def get_address_update_for_event(self, event_id, location, address_df):
         """
-        Given an event's ID, its location, and the address DataFrame, 
-        extract the street number from the location using regex and 
-        then look for an address row in address_df that has a matching 
-        street_number and whose street_name appears in the location.
-        
-        Returns a list with a single update dictionary (if a match is found)
-        or an empty list if no match is found.
+        Given an event's ID, its location string, and a DataFrame of addresses, 
+        this method attempts to extract the street number from the location using a regular expression. 
+        It then searches the address DataFrame for a row where the 'street_number' matches the extracted number 
+        and the 'street_name' is present in the location string.
+        Parameters:
+            event_id (Any): The unique identifier for the event.
+            location (str): The location string containing address information.
+            address_df (pd.DataFrame): A DataFrame containing address data with at least 
+                'street_number', 'street_name', and 'address_id' columns.
+        Returns:
+            List[dict]: A list containing a single dictionary with 'event_id' and 'address_id' keys 
+            if a matching address is found; otherwise, an empty list.
         """
         updates = []
         if location is None:
@@ -1604,14 +2001,15 @@ class DatabaseHandler():
 
     def fix_address_id_in_events(self):
         """
-        Goes through the events table and ensures that the address_id in the events table 
-        matches the correct address_id from the address table.
-        For each event:
-        - Extracts the street number from the event's location using regex.
-        - If a match is found, looks for a matching row in the address table based on street_number.
-        - If an address row is found and its street_name is present in the location,
-        the event's address_id is updated.
-        - The event_id and updated address_id are collected in a list for a bulk update.
+        Synchronizes the address_id field in the events table with the correct address_id from the address table.
+            - Extracts the street number from the event's location using a regular expression.
+            - Searches for a matching address row in the address table based on the extracted street number.
+            - If a matching address is found and its street name is present in the event's location,
+              updates the event's address_id to the correct value.
+            - Collects all event_id and updated address_id pairs for a bulk update.
+        Performs a bulk update of the events table to ensure address_id consistency.
+        Returns:
+            None
         """
         # Read the events table into a DataFrame.
         sql = "SELECT * FROM events"
@@ -1640,17 +2038,21 @@ class DatabaseHandler():
 
     def stale_date(self, url):
         """
-        Check whether this URL's most recent event is “stale” (older than our allowed threshold).
+        Determines whether the most recent event associated with the given URL is considered "stale" based on a configurable age threshold.
 
-        Steps:
-        1. Query the `events` table for all rows where `url = :url`, ordered by `start_date` descending, limit 1.
-        2. If there are no events for this URL, return True (i.e. it's “stale” because nothing exists yet).
-        3. Otherwise, take that single most-recent `start_date`.
-            a. Convert it into a Python date object.
-        4. Compute `cutoff_date = (today's date) - (config['clean_up']['old_events'] days)`.
-            a. If `latest_start_date < cutoff_date`, then the URL is older than our threshold ⇒ return True.
-            b. Otherwise, return False (it's still fresh).
+        Args:
+            url (str): The URL whose most recent event's staleness is to be checked.
+
+        Returns:
+            bool: 
+                - True if there are no events for the URL, the most recent event's start date is older than the configured threshold, 
+                  or if an error occurs during the check (defaulting to stale).
+                - False if the most recent event's start date is within the allowed threshold (i.e., not stale).
+
+        Raises:
+            None: All exceptions are caught internally and logged; the method will return True in case of errors.
         """
+
         try:
             # 1. Fetch the most recent start_date for this URL
             query = """
@@ -1691,15 +2093,22 @@ class DatabaseHandler():
 
     def should_process_url(self, url):
         """
-        Decide whether to process the given URL based on:
-        1. The most recent 'relevant' value in self.urls_df.
-        2. The hit_ratio in self.urls_gb if the last 'relevant' was False.
+        Determines whether a given URL should be processed based on its history in the database.
 
-        Returns True if:
-        - The URL has never been seen before (no rows in self.urls_df), or
-        - The last time we saw it, 'relevant' was True, or
-        - The last time was False but hit_ratio > 0.1.
-        Otherwise returns False.
+        The decision is made according to the following rules:
+        1. If the URL has never been seen before (i.e., no records in `self.urls_df`), it should be processed.
+        2. If the most recent record for the URL has 'relevant' set to True, it should be processed.
+        3. If the most recent record for the URL has 'relevant' set to False, the method checks the grouped statistics in `self.urls_gb`:
+            - If the `hit_ratio` for the URL is greater than 0.1, or
+            - If the number of crawl attempts (`crawl_try`) is less than or equal to 3,
+            then the URL should be processed.
+        4. If none of the above conditions are met, the URL should not be processed.
+
+        Args:
+             url (str): The URL to evaluate for processing.
+
+        Returns:
+             bool: True if the URL should be processed according to the criteria above, False otherwise.
         """
         # 1. Filter all rows for this URL
         df_url = self.urls_df[self.urls_df['link'] == url]
@@ -1733,16 +2142,18 @@ class DatabaseHandler():
         # 4. Otherwise, do not process this URL
         logging.info(f"should_process_url: URL {url} does not meet criteria for processing, skipping it.")
         return False
-    
-
-    def avoid_domains(self, url):
-        pass
 
 
     def update_dow_date(self, event_id: int, corrected_date) -> bool:
         """
-        Updates both start_date and end_date of the event identified by event_id
-        to corrected_date. Returns True if the UPDATE succeeded.
+        Updates the start_date and end_date fields of the event with the specified event_id to the given corrected_date.
+
+        Args:
+            event_id (int): The unique identifier of the event to update.
+            corrected_date: The new date to set for both start_date and end_date. The expected type should match the database schema (e.g., str or datetime).
+
+        Returns:
+            bool: True if the update operation was executed (does not guarantee that a row was actually updated).
         """
         update_query = """
             UPDATE events
@@ -1760,13 +2171,18 @@ class DatabaseHandler():
 
     def check_dow_date_consistent(self) -> None:
         """
-        1. SELECT event_id, start_date, day_of_week, end_date FROM events.
-        2. For each tuple (event_id, start_date, day_of_week), check if
-           start_date.weekday() matches the stored day_of_week. If not, shift
-           ±k days (k in [-3..+3]) to hit the correct weekday.
-        3. Call update_dow_date(...) whenever a shift is needed, which now
-           updates both start_date and end_date.
-        4. Log every adjustment.
+        Ensures that the start_date of each event in the database matches its specified day_of_week.
+
+        This method performs the following steps:
+            1. Retrieves all events' event_id, start_date, and day_of_week from the database.
+            2. For each event, checks if the start_date's weekday matches the stored day_of_week.
+            3. If there is a mismatch, computes the minimal shift (within ±3 days) required to align the start_date
+               with the correct weekday.
+            4. Calls update_dow_date(...) to update both start_date and end_date when a shift is needed.
+            5. Logs every adjustment, including warnings for unrecognized day_of_week values and errors if updates fail.
+
+        Returns:
+            None
         """
         select_query = """
             SELECT event_id, start_date, day_of_week
@@ -1836,13 +2252,18 @@ class DatabaseHandler():
 
     def check_image_events_exist(self, image_url: str) -> bool:
         """
-        Determines whether there are any events associated with the specified image URL.
+        Checks if there are any events associated with the specified image URL.
 
-        Steps:
-        1. Check `events` table.
-        2. If none, check `events_history`.
-        3. If found in history, copy only the most‐recent version of each event
-        into `events` (grouped by all fields except time_stamp).
+        This method performs the following steps:
+        1. Checks the `events` table for any events with the given image URL.
+        2. If no events are found, checks the `events_history` table for matching events.
+        3. If events are found in the history, copies only the most recent version of each unique event (grouped by all fields except `time_stamp`) from `events_history` into the `events` table.
+
+        Args:
+            image_url (str): The URL of the image to check for associated events.
+
+        Returns:
+            bool: True if events exist for the given image URL (either already present or copied from history), False otherwise.
         """
         # 1) Check live events table
         sql_live = """
@@ -1915,7 +2336,18 @@ class DatabaseHandler():
 
     def driver(self):
         """
-        Main driver function to perform database operations.
+        Main driver function to perform database operations based on configuration.
+
+        If the 'drop_tables' flag in the testing configuration is set to True,
+        the function will recreate the database tables. Otherwise, it will perform
+        a series of data cleaning and maintenance operations, including deduplication,
+        deletion of old or invalid events, fuzzy duplicate detection, foreign key checks,
+        address deduplication, and fixing address IDs in events.
+
+        At the end of the process, the database connection is properly closed.
+
+        Returns:
+            None
         """
         if config['testing']['drop_tables'] == True:
             self.create_tables()
@@ -1936,7 +2368,6 @@ class DatabaseHandler():
         
 
 if __name__ == "__main__":
-
     # Load configuration from a YAML file
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)

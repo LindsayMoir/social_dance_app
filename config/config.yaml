@@ -14,14 +14,13 @@ constants:
   uvic_rueda_dict:
     dance_style: cuban salsa, rueda, salsa
     day_of_week: Wednesday
-    description: "Weekly UVic Rueda round\u2011the\u2011circle salsa dance. This happens\
-      \ most Wednesdays. Usually outside and sometimes inside at Vertigo. Please check\
+    description: "Weekly UVic cuban rueda salsa lesson, followed by a social dance. This happens\
+      \ most Wednesdays. Usually outside of the Students Union Building and sometimes inside at Vertigo. Please check\
       \ and see if it is on this week.\n"
     end_time: '21:00'
     event_name: UVic Salsa Rueda
     event_type: class, social dance
-    location: Uvic Students Union Building, 3800 Finnerty Rd A101E, Victoria, BC V8P
-      5C2
+    location: Uvic Students Union Building, 3800 Finnerty Rd A101E, Victoria, BC V8P 5C2
     source: Uvic Cuban Salsa Club
     start_date: ''
     start_time: '19:00'
