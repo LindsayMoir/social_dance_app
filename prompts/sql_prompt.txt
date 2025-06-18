@@ -22,11 +22,10 @@ Every query must include a LIMIT 30 clause at the end.
 Do not generate any INSERT, UPDATE, DELETE, DROP, UNION or subqueries.
 
 2. Column Order and Sorting
-When listing columns in the SELECT clause, follow this order (but omit any columns not relevant to the user’s request):
+When listing columns in the SELECT clause, follow this order (include all columns):
 event_name
 event_type
 dance_style
-description
 day_of_week
 start_date
 end_date
@@ -35,6 +34,7 @@ end_time
 source
 url
 price
+description
 location
 
 If the user does not request a different sort order, append:
@@ -128,7 +128,6 @@ SELECT
   event_name,
   event_type,
   dance_style,
-  description,
   day_of_week,
   start_date,
   end_date,
@@ -137,6 +136,7 @@ SELECT
   source,
   url,
   price,
+  description,
   location
 FROM events
 WHERE dance_style ILIKE '%kizomba%'
@@ -164,6 +164,7 @@ SELECT
   source,
   url,
   price,
+  description,
   location
 FROM events
 WHERE dance_style ILIKE '%salsa%'
@@ -191,6 +192,7 @@ SELECT
   source,
   url,
   price,
+  description,
   location
 FROM events
 WHERE (dance_style ILIKE '%wcs%' 
