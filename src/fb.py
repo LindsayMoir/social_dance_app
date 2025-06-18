@@ -26,7 +26,7 @@ Usage Example:
         with open('config/config.yaml', 'r') as file:
             config = yaml.safe_load(file)
         logging.basicConfig(
-            filename=config['logging']['log_file'],
+            filename=config['logging']['log_file_p2'],
             filemode='a',
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
@@ -94,7 +94,7 @@ with open('config/config.yaml', 'r') as file:
 
 # Configure logging
 logging.basicConfig(
-    filename=config['logging']['log_file'],
+    filename=config['logging']['log_file_p2'],
     filemode='a',
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -949,7 +949,7 @@ if __name__ == "__main__":
 
     # Configure logging
     logging.basicConfig(
-        filename=config['logging']['log_file'],
+        filename=config['logging']['log_file_p2'],
         filemode='a',
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",

@@ -674,7 +674,7 @@ async def main():
         config = yaml.safe_load(file)
 
     logging.basicConfig(
-        filename=config["logging"]["log_file"],
+        filename=config['logging']['log_file_p2'],
         filemode="a",
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",

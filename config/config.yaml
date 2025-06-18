@@ -14,13 +14,16 @@ constants:
   uvic_rueda_dict:
     dance_style: cuban salsa, rueda, salsa
     day_of_week: Wednesday
-    description: "Weekly UVic cuban rueda salsa lesson, followed by a social dance. This happens\
-      \ most Wednesdays. Usually outside of the Students Union Building and sometimes inside at Vertigo. Please check\
-      \ and see if it is on this week.\n"
+    description: 'Weekly UVic cuban rueda salsa lesson, followed by a social dance.
+      This happens most Wednesdays. Usually outside of the Students Union Building
+      and sometimes inside at Vertigo. Please check and see if it is on this week.
+
+      '
     end_time: '21:00'
     event_name: UVic Salsa Rueda
     event_type: class, social dance
-    location: Uvic Students Union Building, 3800 Finnerty Rd A101E, Victoria, BC V8P 5C2
+    location: Uvic Students Union Building, 3800 Finnerty Rd A101E, Victoria, BC V8P
+      5C2
     source: Uvic Cuban Salsa Club
     start_date: ''
     start_time: '19:00'
@@ -68,7 +71,7 @@ location:
 logging:
   extracted_text: output/extracted_text.csv
   log_file: logs/log.txt
-  read_pdfs: logs/read_pdfs.txt
+  log_file_p2: logs/log_file_p2.txt
   scraper_log_file: logs/scraper_log.txt
 output:
   dedup: output/dedup.csv

@@ -148,7 +148,7 @@ Usage Example:
             config = yaml.safe_load(file)
 
         logging.basicConfig(
-            filename=config['logging']['log_file'],
+            filename=config['logging']['log_file_p2'],
             filemode='a',
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
@@ -2374,7 +2374,7 @@ if __name__ == "__main__":
 
     # Set up logging
     logging.basicConfig(
-        filename=config['logging']['log_file'],
+        filename=config['logging']['log_file_p2'],
         filemode='a',  # Changed to append mode to preserve logs
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"

@@ -60,7 +60,7 @@ class DeduplicationHandler:
         Configures the logging settings for the application.
         """
         logging.basicConfig(
-            filename=self.config['logging']['log_file'],
+            filename=self.config['logging']['log_file_p2'],
             filemode='a',
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",

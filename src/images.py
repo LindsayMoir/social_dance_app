@@ -47,7 +47,7 @@ with config_path.open() as f:
     config = yaml.safe_load(f)
 
 # 2. Configure root logger
-log_path = Path(config['logging']['log_file'])
+log_path = Path(config['logging']['log_file_p2'])
 log_path.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     filename=str(log_path), filemode='a', level=logging.INFO,
