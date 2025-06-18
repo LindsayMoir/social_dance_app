@@ -46,11 +46,13 @@ config_path = Path("config/config.yaml")
 with config_path.open() as f:
     config = yaml.safe_load(f)
 
-# 2. Configure root logger
-log_path = Path(config['logging']['log_file_p2'])
-log_path.parent.mkdir(parents=True, exist_ok=True)
+ # Build log_file name
+script_name = os.path.splitext(os.path.basename(__file__))[0]
+logging_file = f"{script_name}_log" 
 logging.basicConfig(
-    filename=str(log_path), filemode='a', level=logging.INFO,
+    filename=logging_file,
+    filemode='a', 
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     datefmt='%Y-%m-%d %H:%M:%S'
 )

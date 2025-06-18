@@ -374,8 +374,11 @@ class EventSpider(scrapy.Spider):
         Runs the crawler inline via Scrapy's CrawlerProcess (no external subprocess).
         """
         logging.info("def run_crawler(): Starting crawler in-process.")
+         # Build log_file name
+        script_name = os.path.splitext(os.path.basename(__file__))[0]
+        logging_file = f"{script_name}_log" 
         process = CrawlerProcess(settings={
-            "LOG_FILE": self.config['logging']['scraper_log_file'],
+            "LOG_FILE": logging_file,
             "LOG_LEVEL": "INFO",
             "DEPTH_LIMIT": self.config['crawling']['depth_limit'],
             "FEEDS": {

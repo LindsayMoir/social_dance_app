@@ -16,7 +16,9 @@ with open('config/config.yaml', 'r') as f:
 
 # ── 2) Set up logging (console + file) ─────────────────────────────────────────
 handlers = [logging.StreamHandler()]
-log_file = config.get('logging', {}).get('log_file_p2')
+ # Build log_file name
+script_name = os.path.splitext(os.path.basename(__file__))[0]
+log_file = f"{script_name}_log" 
 if log_file:
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
     handlers.append(logging.FileHandler(log_file, mode='a'))

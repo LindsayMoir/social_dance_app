@@ -59,8 +59,11 @@ class DeduplicationHandler:
         """
         Configures the logging settings for the application.
         """
+         # Build log_file name
+        script_name = os.path.splitext(os.path.basename(__file__))[0]
+        logging_file = f"{script_name}_log" 
         logging.basicConfig(
-            filename=self.config['logging']['log_file_p2'],
+            filename=logging_file,
             filemode='a',
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",

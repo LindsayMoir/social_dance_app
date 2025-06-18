@@ -43,12 +43,15 @@ with open('config/config.yaml', "r") as file:
 
 from db import DatabaseHandler
 
+ # Build log_file name
+script_name = os.path.splitext(os.path.basename(__file__))[0]
+logging_file = f"{script_name}_log" 
 logging.basicConfig(
-                    filename=config["logging"]["log_file"],
-                    filemode="a",  # Append mode to preserve logs
-                    level=logging.INFO,
-                    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-                    )
+    filename=logging_file,
+    filemode="a",  # Append mode to preserve logs
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    )
 
 logging.info("\n\nStarting Gmail Processor...")
 

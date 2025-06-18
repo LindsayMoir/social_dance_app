@@ -19,35 +19,44 @@ import yaml
 # ————————————————
 CONFIG_PATH = "config/config.yaml"
 
-try:
-    # Load your YAML to find the configured log path
-    with open(CONFIG_PATH, "r") as f:
-        cfg = yaml.safe_load(f)
-    log_file = cfg.get("logging", {}).get("log_file", "")
+# ─── 1) Load your existing YAML config ────────────────────────────────────────
+with open(CONFIG_PATH, "r") as f:
+    cfg = yaml.safe_load(f)
 
-    if log_file and os.path.isfile(log_file):
-        # Build a timestamped filename
-        now = datetime.datetime.now()
-        date_str = now.strftime("%Y-%m-%d")
-        time_str = now.strftime("%H:%M:%S")
-        base_name = os.path.basename(log_file)
-        _, ext = os.path.splitext(base_name)
-        new_name = f"log_{date_str}_{time_str}{ext}"
+log_cfg = cfg.get("logging", {})
+old_log_file = log_cfg.get("log_file", "")
 
-        # Ensure the archive directory exists alongside the current log
-        log_dir = os.path.dirname(log_file) or "."
-        archive_dir = os.path.join(log_dir, "old_log_files")
-        os.makedirs(archive_dir, exist_ok=True)
+# ─── 2) Build a unique filename for *this* run ────────────────────────────────
+# Try Prefect v2 run ID, otherwise fall back to OS PID
+run_id = os.getenv("PREFECT__FLOW_RUN_ID") or str(os.getpid())
+ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S%f")
 
-        # Move/rename the old log
-        new_path = os.path.join(archive_dir, new_name)
-        shutil.move(log_file, new_path)
-        print(f"Archived old log file to: {new_path}")
-    else:
-        print(f"No existing log file to archive at {log_file}")
+# Determine the directory where logs live
+log_dir = log_cfg.get("dir") or os.path.dirname(old_log_file) or "logs"
+os.makedirs(log_dir, exist_ok=True)
 
-except Exception as e:
-    print(f"Could not archive log file ({e})")
+new_log_file = os.path.join(log_dir, f"pipeline_{run_id}_{ts}.log")
+
+# ─── 3) Archive the *previous* log if it exists ───────────────────────────────
+if old_log_file and os.path.isfile(old_log_file):
+    base, ext = os.path.splitext(os.path.basename(old_log_file))
+    archive_dir = os.path.join(log_dir, "old_log_files")
+    os.makedirs(archive_dir, exist_ok=True)
+
+    archival_name = f"{base}_{ts}{ext}"
+    shutil.move(old_log_file, os.path.join(archive_dir, archival_name))
+    print(f"Archived old log → {archive_dir}/{archival_name}")
+else:
+    print(f"No existing log to archive at {old_log_file!r}")
+
+# ─── 4) Point the config at the *new* log path ─────────────────────────────────
+cfg["logging"]["log_file"] = new_log_file
+
+# (Optional) Persist back to disk so any subprocess loading config.yaml picks it up
+with open(CONFIG_PATH, "w") as f:
+    yaml.safe_dump(cfg, f)
+
+print(f"Logging for this run → {new_log_file!r}")
 
 
 # Global logging configuration
