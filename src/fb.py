@@ -629,6 +629,10 @@ class FacebookEventScraper():
 
         # 4) Query LLM for structured event data
         prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
+        if len(prompt) > config['crawling']['prompt_max_length']:
+            logging.warning(f"def process_fb_url(): Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
+            return
+        
         llm_response = llm_handler.query_llm(url, prompt)
         if not llm_response or "No events found" in llm_response:
             logging.info(f"process_fb_url: LLM no events for {url}")

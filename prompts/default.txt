@@ -5,7 +5,7 @@ Extract relevant event details from the webpage's text (extracted_text) accordin
 The extracted_text is at the bottom of these instructions under the heading extracted_text.
 Follow these steps exactly:
 ________________________________________
-1. **Extract**  
+1. Extract  
 From the extracted_text below, find every event and build a JSON **array** where each element has exactly these keys:
 source, dance_style, url, event_type, event_name, day_of_week, start_date, end_date, start_time, end_time, price, location, description
 You MUST include all of these fields. If you do not have any information for one of the fields, put '' in the field. Always fill the url field as ''.
@@ -42,16 +42,16 @@ ________________________________________
 •	DO NOT return a list for a field. For example, if you found several "dance_style" (e.g. salsa, bachata, kizomba) put that in the "dance_style" field as "salsa, bachata, kizomba". Not as "[salsa, bachata, kizomba]"
 •	If an event has no specific dates or times mentioned, this is an invalid event. DO NOT create a JSON output for this event.
 ________________________________________
-7. **Validate**  
+7. Validate  
 Once you’ve built the JSON array, immediately parse it in your own “mind” (i.e. treat it as if you ran it through a JSON parser).  
 • 	**If it fails** (missing comma, unquoted string, trailing comma, wrong brackets…), **fix it**.  
 •	**Keep repeating** this “generate → parse → fix” loop until it is **valid JSON**.  
 ________________________________________
-8. **Output**  
+8. Output  
 •	 Only output the final JSON.  
 •	 Do **not** wrap it in markdown or add any comments.  
 
-9. **Example**  
+9. Example  
 Valid output must look like:
 [{
     "source": "<The original source of information for this event>",
@@ -101,7 +101,39 @@ Valid output must look like:
 ...
 ]
 ________________________________________
-10. **If no events are found**, output exactly:
+11. Incorrect Example
+This is not properly formatted JSON. It should not look like this as output.
+1. **Event**: Summer Firework Saturdays
+   - **Source**: The Butchart Gardens
+   - **Dance Style**: ''
+   - **URL**: ''
+   - **Event Type**: social dance
+   - **Event Name**: Summer Firework Saturdays
+   - **Day of the Week**: Saturday
+   - **Start Date**: 2025-06-21
+   - **End Date**: 2025-06-21
+   - **Start Time**: 20:00
+   - **End Time**: 00:00
+   - **Price**: ''
+   - **Location**: The Butchart Gardens
+   - **Description**: ''
+
+2. **Event**: Rose Garden
+   - **Source**: The Butchart Gardens
+   - **Dance Style**: ''
+   - **URL**: ''
+   - **Event Type**: other
+   - **Event Name**: Rose Garden
+   - **Day of the Week**: ''
+   - **Start Date**: 2025-01-06
+   - **End Date**: 2025-01-06
+   - **Start Time**: ''
+   - **End Time**: ''
+   - **Price**: ''
+   - **Location**: The Butchart Gardens
+   - **Description**: Vibrant colours and luscious scents
+________________________________________
+10. If no events are found, output exactly:
 No events found.
 ________________________________________
 extracted_text

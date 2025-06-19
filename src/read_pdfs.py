@@ -241,6 +241,10 @@ def parse_butchart_gardens_concerts(pdf_file) -> pd.DataFrame:
     logging.info("Parsing Butchart Gardens concerts PDF…")
     text = dump_pdf_text(pdf_file)
     prompt = llm_handler.generate_prompt(pdf_file, text, 'images')
+    if len(prompt) > config['crawling']['prompt_max_length']:
+            logging.warning(f"def process_llm_response: Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
+            return None
+    
     llm_response = llm_handler.query_openai(
         prompt=prompt,
         model=config['llm']['openai_model'],

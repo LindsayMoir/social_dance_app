@@ -214,6 +214,9 @@ class LLMHandler():
         """
         # Generate prompt, query LLM, and process the response.
         prompt = self.generate_prompt(url, extracted_text, prompt)
+        if len(prompt) > self.config['crawling']['prompt_max_length']:
+            logging.warning(f"def process_llm_response: Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
+            return False
         llm_response = self.query_llm(url, prompt)
 
         if llm_response:

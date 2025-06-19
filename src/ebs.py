@@ -96,8 +96,32 @@ class EventbriteScraper:
 
 
     async def eventbrite_search(self, query, source, keywords_list, prompt):
-        """ Searches Eventbrite for events based on the query, extracts event URLs,
-        retrieves event details, and processes them using LLM.
+        """
+        Searches Eventbrite for events matching the given query, filters and processes event URLs using LLM and database checks, and processes relevant events.
+
+        Args:
+            query (str): The search query to use on Eventbrite.
+            source (str): The source identifier for the search.
+            keywords_list (list): List of keywords to help with event relevance.
+            prompt (str): The initial prompt or context for LLM processing.
+
+        Workflow:
+            1. Navigates to the Eventbrite homepage.
+            2. Performs a search using the provided query.
+            3. Extracts event URLs from the search results.
+            4. For each unique event URL:
+                - Skips URLs already visited or exceeding configured limits.
+                - Uses LLM to determine if the URL is likely relevant.
+                - Checks historical relevancy via the database handler.
+                - If relevant and not previously processed, processes the event details.
+
+        Returns:
+            None
+
+        Notes:
+            - Uses LLM to filter URLs for relevance before processing.
+            - Respects crawling limits set in the configuration.
+            - Logs progress and errors throughout the process.
         """
         # Ensure event_urls is always defined
         event_urls = []

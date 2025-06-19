@@ -34,6 +34,7 @@ crawling:
   max_attempts: 3
   max_crawl_trys: 3
   max_website_urls: 10
+  prompt_max_length: 50000
   scroll_depth: 2
   urls_run_limit: 500
 date_range:
@@ -70,7 +71,7 @@ location:
   epicentre: Victoria, British Columbia, Canada
 logging:
   extracted_text: output/extracted_text.csv
-  log_file: logs/pipeline_46731_20250618_121330698902.log
+  log_file: logs/pipeline_163531_20250619_071354365245.log
   log_file_p2: logs/log_file_p2.txt
   scraper_log_file: logs/scraper_log.txt
 output:

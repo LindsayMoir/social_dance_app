@@ -121,6 +121,13 @@ class EventSpider(scrapy.Spider):
         if not isinstance(response, TextResponse):
             return
         
+        if any(dom in url for dom in ('facebook', 'instagram')):
+            # record it as unwanted and stop processing immediately
+            child_row = [url, '', source, [], False, 1, datetime.now()]
+            db_handler.write_url_to_db(child_row)
+            logging.info(f"def parse(): Skipping and recording unwanted original URL: {url}")
+            return
+        
         # 1) Get rendered page text
         extracted_text = response.text
 
@@ -243,7 +250,7 @@ class EventSpider(scrapy.Spider):
                 if decoded_calendar_id:
                     calendar_ids = [decoded_calendar_id]
                 else:
-                    logging.error(f"def fetch_google_calendar_events(): Failed to extract valid Calendar ID from {calendar_url}")
+                    logging.warning(f"def fetch_google_calendar_events(): Failed to extract valid Calendar ID from {calendar_url}")
                     return
         for calendar_id in calendar_ids:
             self.process_calendar_id(calendar_id, calendar_url, url, source, keywords)
@@ -374,17 +381,31 @@ class EventSpider(scrapy.Spider):
         Runs the crawler inline via Scrapy's CrawlerProcess (no external subprocess).
         """
         logging.info("def run_crawler(): Starting crawler in-process.")
-         # Build log_file name
+        # Build log_file name
         script_name = os.path.splitext(os.path.basename(__file__))[0]
         logging_file = f"logs/{script_name}_log.txt"
+
         process = CrawlerProcess(settings={
             "LOG_FILE": logging_file,
             "LOG_LEVEL": "INFO",
             "DEPTH_LIMIT": self.config['crawling']['depth_limit'],
             "FEEDS": {
                 "output/output.json": {"format": "json"}
-            }
+            },
+            # Pretend to be a real browser
+            "DEFAULT_REQUEST_HEADERS": {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/114.0.0.0 Safari/537.36"
+                ),
+            },
+            # Allow 406 so your parse() or Playwright steps still see it
+            "HTTPERROR_ALLOWED_CODES": [406],
         })
+
         process.crawl(EventSpider, config=self.config)
         process.start()  # will block until crawl finishes
         logging.info("def run_crawler(): Crawler completed successfully.")

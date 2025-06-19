@@ -296,7 +296,7 @@ class DeduplicationHandler:
                 row_str = ", ".join([f"{field}: {getattr(row, field)}" for field in row._fields])
                 prompt_lines.append(row_str)
             prompt = f"{prompt_template}\n" + "\n".join(prompt_lines)
-            logging.info(f"parse_address: Processing batch {i // batch_size + 1} with prompt:\n{prompt}")
+            logging.info(f"parse_address: Processing batch {i // batch_size + 1}")
 
             # Query the LLM once per batch.
             response = self.llm_handler.query_llm('', prompt)

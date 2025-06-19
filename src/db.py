@@ -2360,7 +2360,7 @@ class DatabaseHandler():
         if config['testing']['drop_tables'] == True:
             self.create_tables()
         else:
-            self.dedup()
+            self.check_dow_date_consistent()
             self.delete_old_events()
             self.delete_events_with_nulls()
             self.delete_likely_dud_events()
@@ -2368,7 +2368,7 @@ class DatabaseHandler():
             self.is_foreign()
             self.dedup_address()
             self.fix_address_id_in_events()
-            #self.check_dow_date_consistent()
+            self.dedup()
 
         # Close the database connection
         self.conn.dispose()  # Using dispose() for SQLAlchemy Engine
