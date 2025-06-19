@@ -1,0 +1,28 @@
+2025-06-18 13:21:59 - INFO - 
+
+Starting images.py ...
+2025-06-18 13:21:59 - INFO - Loaded 54 blacklisted domains.
+2025-06-18 13:21:59 - INFO - def __init__(): Running locally.
+2025-06-18 13:21:59 - INFO - def __init__(): Database connection established for social_dance_db.
+2025-06-18 13:21:59 - INFO - def __init__(): Database connection established for address_db.
+2025-06-18 13:21:59 - INFO - create_urls_df: Successfully created DataFrame from 'urls' table.
+2025-06-18 13:21:59 - INFO - create_urls_df: 'urls' table contains 7912 rows.
+2025-06-18 13:21:59 - INFO - __init__(): URLs DataFrame created with 7912 rows.
+2025-06-18 13:22:00 - INFO - __init__(): urls_gb has 4379 rows and 3 columns.
+2025-06-18 13:22:00 - INFO - Loaded 54 blacklisted domains.
+2025-06-18 13:22:00 - INFO - def __init__(): Running locally.
+2025-06-18 13:22:00 - INFO - def __init__(): Database connection established for social_dance_db.
+2025-06-18 13:22:00 - INFO - def __init__(): Database connection established for address_db.
+2025-06-18 13:22:00 - INFO - create_urls_df: Successfully created DataFrame from 'urls' table.
+2025-06-18 13:22:00 - INFO - create_urls_df: 'urls' table contains 7912 rows.
+2025-06-18 13:22:00 - INFO - __init__(): URLs DataFrame created with 7912 rows.
+2025-06-18 13:22:00 - INFO - __init__(): urls_gb has 4379 rows and 3 columns.
+2025-06-18 13:22:04 - INFO - login_to_website(): Reused session for instagram.
+2025-06-18 13:22:04 - INFO - process_images(): Starting batch processing of image/webpage links.
+2025-06-18 13:22:04 - INFO - get_image_links(): Retrieved 814 Instagram URLs from the database.
+2025-06-18 13:22:04 - INFO - process_images(): Retrieved 500 links to process.
+2025-06-18 13:22:04 - INFO - process_images(): [1/500] url=https://vlda.ca/wp-content/uploads/2025/05/summer-socials.webp, parent=https://vlda.ca/events/summer-event-calendar-2025/, source=Victoria Latin Dance Association
+2025-06-18 13:22:04 - INFO - should_process_url: URL https://vlda.ca/wp-content/uploads/2025/05/summer-socials.webp was last seen as relevant, processing it.
+2025-06-18 13:22:04 - INFO - process_images(): Detected direct image URL (https://vlda.ca/wp-content/uploads/2025/05/summer-socials.webp), invoking OCR pipeline.
+2025-06-18 13:22:04 - INFO - process_image_url(): Starting processing for https://vlda.ca/wp-content/uploads/2025/05/summer-socials.webp
+2025-06-18 13:22:04 - INFO - process_image_url(): Marked https://vlda.ca/wp-content/uploads/2025/05/summer-socials.webp as visited.

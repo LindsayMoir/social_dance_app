@@ -101,6 +101,22 @@ class LLMHandler():
         # Get the keywords      
         self.keywords_list = self.get_keywords()
 
+        # The exact fields every event must have
+        self.EVENT_KEYS = {
+            "source", "dance_style", "url", "event_type", "event_name",
+            "day_of_week", "start_date", "end_date", "start_time",
+            "end_time", "price", "location", "description"
+        }
+
+        self.ADDRESS_KEYS = {
+        "address_id", "full_address", "building_name", "street_number",
+        "street_name", "street_type", "direction", "city", "met_area",
+        "province_or_state", "postal_code", "country_id", "time_stamp"
+        }
+
+        # Regex to pull out each `"key": <rest-of-line>` pair
+        self.FIELD_RE = re.compile(r'^\s*"(?P<key>[^"]+)"\s*:\s*(?P<raw>.*)$')
+
 
     def driver(self, url, search_term, extracted_text, source, keywords_list):
         """
@@ -382,26 +398,74 @@ class LLMHandler():
         return chat_response.choices[0].message.content
 
 
-    def extract_and_parse_json(self, result, url):
+    def line_based_parse(self, raw_str: str) -> list[dict]:
         """
-        Parameters:
-            result (str): The response string from which JSON needs to be extracted.
-            url (str): The URL from which the response was obtained.
-        Returns:
-            list or None: Returns a list of complete events/addresses if JSON is successfully extracted
-                        and parsed, otherwise returns None.
+        Generic line-based parser:
+        - Chooses required_keys = ADDRESS_KEYS if 'address_id' appears,
+          otherwise EVENT_KEYS.
+        - Splits on lines, extracts "key": raw, strips all '"' from values,
+          and only keeps records with every required key.
         """
-        # ──────────────────────────────────────────────────────────────────────────────
-        #  Early exits for no data
+        # Decide whether these are addresses or events
+        required_keys = (
+            self.ADDRESS_KEYS
+            if '"address_id"' in raw_str
+            else self.EVENT_KEYS
+        )
+
+        records = []
+        current = None
+
+        for line in raw_str.splitlines():
+            line = line.strip()
+
+            # start of a new record
+            if line.startswith('{'):
+                current = {}
+                continue
+
+            # end of current record
+            if line.startswith('}'):
+                if current is not None:
+                    missing = required_keys - current.keys()
+                    if not missing:
+                        records.append(current)
+                    else:
+                        logging.warning(
+                            "Skipping incomplete record, missing %s: %r",
+                            missing, current
+                        )
+                current = None
+                continue
+
+            # match lines like: "key": raw_value,
+            m = self.FIELD_RE.match(line)
+            if not m or current is None:
+                continue
+
+            key, raw = m.group('key'), m.group('raw').rstrip(',')
+            if key in required_keys:
+                # remove all stray quotes and trim whitespace
+                current[key] = raw.replace('"', '').strip()
+
+        return records
+
+    def extract_and_parse_json(self, result: str, url: str):
+        """
+        1) Early-exit on no data.
+        2) Bracket-match to isolate the JSON-like blob.
+        3) Basic cleanup (comments, backticks, ellipses, stray commas).
+        4) Line-based parse into either events or addresses.
+        """
+        # 1) Early exits
         if "No events found" in result:
-            logging.info("def extract_and_parse_json(): No events found in result.")
+            logging.info("extract_and_parse_json(): No events found.")
             return None
         if len(result) <= 100:
-            logging.info("def extract_and_parse_json(): No valid events found in result.")
+            logging.info("extract_and_parse_json(): Result too short.")
             return None
 
-        # ──────────────────────────────────────────────────────────────────────────────
-        #  1) Attempt to isolate a JSON array blob with bracket matching
+        # 2) Isolate [ … ] or wrap { … } in […]
         start = result.find('[')
         if start == -1:
             start = 0
@@ -428,168 +492,35 @@ class LLMHandler():
                         end = i + 1
                         break
 
-        # 1a) If no proper array found, wrap top‐level objects in a list
         if end is None or end <= start:
-            first_brace = result.find('{')
-            last_brace = result.rfind('}')
-            if first_brace != -1 and last_brace > first_brace:
-                json_string = '[' + result[first_brace:last_brace+1] + ']'
+            fb, lb = result.find('{'), result.rfind('}')
+            if fb != -1 and lb > fb:
+                blob = '[' + result[fb:lb+1] + ']'
             else:
-                logging.error(f"def extract_and_parse_json(): couldn't isolate JSON blob in result from {url}")
+                logging.error(
+                    f"extract_and_parse_json(): Couldn't isolate JSON blob from {url}"
+                )
                 return None
         else:
-            json_string = result[start:end]
+            blob = result[start:end]
 
-        if len(json_string) < 100:
-            logging.info(f"def extract_and_parse_json(): malformed json: \n{json_string}")
+        if len(blob) < 100:
+            logging.info(f"extract_and_parse_json(): Blob too short:\n{blob}")
             return None
 
-        # ──────────────────────────────────────────────────────────────────────────────
-        #  2) Basic cleanups
-        cleaned_str = re.sub(r'(?<!:)//.*', '', json_string)       # Remove // comments
-        cleaned_str = cleaned_str.replace('...', '')               # Remove ellipses
-        cleaned_str = cleaned_str.strip()
-        cleaned_str = re.sub(r',\s*\]', ']', cleaned_str)          # Remove trailing commas before ]
-        cleaned_str = cleaned_str.replace("```json", "").replace("```", "")
+        # 3) Basic cleanup
+        cleaned = re.sub(r'(?<!:)//.*', '', blob)
+        cleaned = cleaned.replace('...', '').strip()
+        cleaned = re.sub(r',\s*\]', ']', cleaned)
+        cleaned = cleaned.replace("```json", "").replace("```", "")
 
-        # ──────────────────────────────────────────────────────────────────────────────
-        #  3) Fix common unterminated‐string cases
-        cleaned_str = re.sub(
-            r'("(?P<key>[^"\\n]+)":\s*"[^\\n"]*)(?=\s*}\s*\])',
-            r'\1"',
-            cleaned_str
-        )
-        cleaned_str = re.sub(
-            r'("(?P<key>[^"\\n]+)":\s*"(?:[^"\\]|\\.)*)(?=\s*\n\s*"[^"\\n]+":)',
-            r'\1"',
-            cleaned_str,
-            flags=re.DOTALL
-        )
-        cleaned_str = re.sub(
-            r'("(?P<key>[^"\\n]+)":\s*"(?:[^"\\]|\\.)*?)(?=,\s*"[^"\\n]+":)',
-            r'\1"',
-            cleaned_str,
-            flags=re.DOTALL
-        )
-        cleaned_str = re.sub(
-            r'("(?P<key>[^"\\n]+)":\s*"(?:[^\n"\\]|\\.)*)\r?\n\s*"',
-            r'\1"',
-            cleaned_str
-        )
-
-        # ──────────────────────────────────────────────────────────────────────────────
-        #  4) Split concatenated events into separate objects (if needed)
-        split_pattern = (
-            r'("description":\s*"(?:[^"\\]|\\.)*?")\s*'
-            r'(?="source":)'
-        )
-        split_repl = r'\1"},\n{"source":'
-        cleaned_str = re.sub(split_pattern, split_repl, cleaned_str, flags=re.DOTALL)
-
-        # ──────────────────────────────────────────────────────────────────────────────
-        #  5) Convert any single‐quoted value into a double‐quoted string
-        #     e.g.  "dance_style": ''    →  "dance_style": ""
-        #          "price": 'Free'       →  "price": "Free"
-        cleaned_str = re.sub(
-            r'(?P<field>"[^"]+"\s*:\s*)\'(?P<val>[^\'"]*)\'',
-            r'\g<field>"\g<val>"',
-            cleaned_str
-        )
-
-        # ──────────────────────────────────────────────────────────────────────────────
-        #  6) Escape \n and \t **only inside** JSON string literals
-        #
-        #     We match every JSON‐quoted string (allowing for existing \" or \\ inside),
-        #     then replace any real newline or tab in its contents with \\n or \\t.
-        def _escape_inside_string_literals(match):
-            contents = match.group(1)
-            # Normalize CRLF → LF
-            contents = contents.replace('\r\n', '\n').replace('\r', '\n')
-            # Now escape actual newlines/tabs:
-            contents = contents.replace('\n', '\\n').replace('\t', '\\t')
-            return f'"{contents}"'
-
-        # This regex captures the contents of every JSON string literal
-        cleaned_str = re.sub(
-            r'"((?:\\.|[^"\\])*)"',   # capture group 1 = everything inside the double‐quotes
-            _escape_inside_string_literals,
-            cleaned_str,
-            flags=re.DOTALL
-        )
-
-        logging.info(
-            f"def extract_and_parse_json(): for url {url}, \n"
-            f"Cleaned JSON ready for parsing:\n{cleaned_str}"
-        )
-
-        # ──────────────────────────────────────────────────────────────────────────────
-        #  6.5) Remove any extra '}' immediately before the final ']'
-        cleaned_str = re.sub(r'\}\s*\}\s*\]$', r'}\n]', cleaned_str)
-        # ──────────────────────────────────────────────────────────────────────────────
-        
-        #  7) First parse attempt
-        try:
-            data = json.loads(cleaned_str)
-        except json.JSONDecodeError as e:
-            msg = str(e)
-            # If it complains about an invalid \ escape or malformed \u, do a fallback
-            # that only escapes stray backslashes not part of a valid JSON escape.
-            if "Invalid \\escape" in msg or "Invalid \\u" in msg:
-                # Escape any '\' not followed by " or \ or / or b or f or n or r or t or u
-                fallback = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', cleaned_str)
-                try:
-                    data = json.loads(fallback)
-                except json.JSONDecodeError as e2:
-                    logging.error(f"def extract_and_parse_json(): second‐pass JSON parse failed: {e2}")
-                    return None
-            else:
-                logging.error(f"def extract_and_parse_json(): Error parsing JSON: {e}")
-                return None
-
-        # ──────────────────────────────────────────────────────────────────────────────
-        #  8) Ensure we have a list to iterate over
-        if isinstance(data, dict):
-            items = [data]
-        elif isinstance(data, list):
-            items = data
-        else:
-            logging.error(
-                "def extract_and_parse_json(): Expected list or dict, got %r",
-                type(data)
-            )
+        # 4) Line-based parse for events or addresses
+        records = self.line_based_parse(cleaned)
+        if not records:
+            logging.info("extract_and_parse_json(): No complete records parsed.")
             return None
 
-        if not items:
-            logging.info("def extract_and_parse_json(): No items to process.")
-            return None
-
-        # ──────────────────────────────────────────────────────────────────────────────
-        #  9) Filter out incomplete items
-        ADDRESS_KEYS = {
-            "address_id", "full_address", "building_name", "street_number",
-            "street_name", "street_type", "direction", "city", "met_area",
-            "province_or_state", "postal_code", "country_id", "time_stamp"
-        }
-        EVENT_KEYS = {
-            "source", "dance_style", "url", "event_type", "event_name",
-            "day_of_week", "start_date", "end_date", "start_time",
-            "end_time", "price", "location", "description"
-        }
-
-        required_keys = ADDRESS_KEYS if "address_id" in items[0] else EVENT_KEYS
-        filtered = []
-        for item in items:
-            missing = required_keys - item.keys()
-            if not missing:
-                filtered.append(item)
-            else:
-                logging.warning("Dropping incomplete record, missing %s: %r", missing, item)
-
-        if not filtered:
-            logging.info("def extract_and_parse_json(): No complete records after filtering.")
-            return None
-
-        return filtered
+        return records
 
 
 # Run the LLM

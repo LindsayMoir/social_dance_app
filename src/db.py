@@ -1850,7 +1850,7 @@ class DatabaseHandler():
 
     def count_events_urls_start(self, file_name):
         """
-        Counts the number of events and URLs in the database at the start time and returns a DataFrame with the results.
+        Counts the number of events and distinct URLs in the database at the start time and returns a DataFrame with the results.
 
         Args:
             file_name (str): The name of the .py file initiating the count.
@@ -1875,7 +1875,7 @@ class DatabaseHandler():
         events_count_start_df = pd.read_sql(sql, self.conn)
 
         # Count events in db at start
-        sql = "SELECT COUNT(*) as urls_count_start FROM urls"
+        sql = "SELECT COUNT(DISTINCT link) as urls_count_start FROM urls"
         urls_count_start_df = pd.read_sql(sql, self.conn)
 
         # Concatenate the above dataframes into a new dataframe called start_df
@@ -1910,7 +1910,7 @@ class DatabaseHandler():
         events_count_end_df = pd.read_sql(sql, self.conn)
 
         # Count events in db at end
-        sql = "SELECT COUNT(*) as urls_count_end FROM urls"
+        sql = "SELECT COUNT(DISTINCT link) as urls_count_end FROM urls"
         urls_count_end_df = pd.read_sql(sql, self.conn)
 
         # Create the dataframe

@@ -48,7 +48,7 @@ with config_path.open() as f:
 
  # Build log_file name
 script_name = os.path.splitext(os.path.basename(__file__))[0]
-logging_file = f"{script_name}_log" 
+logging_file = f"logs/{script_name}_log.txt" 
 logging.basicConfig(
     filename=logging_file,
     filemode='a', 
@@ -380,7 +380,7 @@ class ImageScraper:
         self.logger.info(f"process_image_url(): Marked {image_url} as visited.")
 
         # Skip if events already exist
-        if self.db.check_image_events_exist(image_url):
+        if self.db_handler.check_image_events_exist(image_url):
             self.logger.info(f"process_image_url(): Events already exist for {image_url}, skipping OCR.")
             url_row = (image_url, parent_url, source, keywords, True, 1, datetime.now())
             self.db_handler.write_url_to_db(url_row)

@@ -5,6 +5,7 @@ import copy
 import datetime
 from dotenv import load_dotenv
 load_dotenv()
+import logging
 import os
 import pandas as pd
 from prefect import flow, task
@@ -14,57 +15,37 @@ import sys
 import time
 import yaml
 
-# ————————————————
-# CONFIG & ARCHIVE OLD LOG FILE
-# ————————————————
-CONFIG_PATH = "config/config.yaml"
 
-# ─── 1) Load your existing YAML config ────────────────────────────────────────
+# ─── 1) Load YAML config ─────────────────────────────────────────────────────
+CONFIG_PATH = "config/config.yaml"
 with open(CONFIG_PATH, "r") as f:
     cfg = yaml.safe_load(f)
 
 log_cfg = cfg.get("logging", {})
-old_log_file = log_cfg.get("log_file", "")
-
-# ─── 2) Build a unique filename for *this* run ────────────────────────────────
-# Try Prefect v2 run ID, otherwise fall back to OS PID
-run_id = os.getenv("PREFECT__FLOW_RUN_ID") or str(os.getpid())
-ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S%f")
-
-# Determine the directory where logs live
-log_dir = log_cfg.get("dir") or os.path.dirname(old_log_file) or "logs"
+# fallback to a "dir" or default "logs" folder
+log_dir = log_cfg.get("dir") or os.path.dirname(log_cfg.get("log_file", "")) or "logs"
 os.makedirs(log_dir, exist_ok=True)
 
+# ─── 2) Build a unique log filename ───────────────────────────────────────────
+run_id = os.getenv("PREFECT__FLOW_RUN_ID") or str(os.getpid())
+ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S%f")
 new_log_file = os.path.join(log_dir, f"pipeline_{run_id}_{ts}.log")
 
-# ─── 3) Archive the *previous* log if it exists ───────────────────────────────
-if old_log_file and os.path.isfile(old_log_file):
-    base, ext = os.path.splitext(os.path.basename(old_log_file))
-    archive_dir = os.path.join(log_dir, "old_log_files")
-    os.makedirs(archive_dir, exist_ok=True)
-
-    archival_name = f"{base}_{ts}{ext}"
-    shutil.move(old_log_file, os.path.join(archive_dir, archival_name))
-    print(f"Archived old log → {archive_dir}/{archival_name}")
-else:
-    print(f"No existing log to archive at {old_log_file!r}")
-
-# ─── 4) Point the config at the *new* log path ─────────────────────────────────
-cfg["logging"]["log_file"] = new_log_file
-
-# (Optional) Persist back to disk so any subprocess loading config.yaml picks it up
+# ─── 3) Update config and persist ─────────────────────────────────────────────
+cfg.setdefault("logging", {})["log_file"] = new_log_file
 with open(CONFIG_PATH, "w") as f:
     yaml.safe_dump(cfg, f)
 
-print(f"Logging for this run → {new_log_file!r}")
+print(f"Logging this run to → {new_log_file}")
 
-
-# Global logging configuration
-import logging
+# ─── 4) Configure Python logging ─────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[
+        logging.FileHandler(new_log_file),
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger(__name__)
 
