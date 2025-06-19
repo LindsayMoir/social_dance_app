@@ -25,6 +25,7 @@ from googleapiclient.discovery import build
 import logging
 import os
 import pandas as pd
+from urllib.parse import urlparse
 import yaml
 
 # Import the DatabaseHandler and LLMHandler class
@@ -94,7 +95,24 @@ class GoogleSearch():
         else:
             logging.info(f"def relevant_dance_url(): LLM's opinion on the relevance of this URL: {url} is: {relevant}")
             return False
-        
+    
+
+    def get_domain(self, url: str) -> str:
+        """
+        Extracts the domain from a given URL.
+
+        Args:
+            url: The full URL string.
+        Returns:
+            The domain (e.g. "example.com").
+        """
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        # Remove 'www.' prefix, if you don't want it
+        if domain.startswith("www."):
+            domain = domain[4:]
+        return domain
+    
 
     def google_search(self, query, keyword, num_results=10):
         """
@@ -105,7 +123,7 @@ class GoogleSearch():
             num_results (int, optional): The number of search results to retrieve. Defaults to 10.
 
         Returns:
-            list: A list of dictionaries containing 'source', 'title', 'keywords', 'url', and 'snippet' for each search result.
+            list: A list of dictionaries containing 'source', 'keywords', and 'link' for each search result.
         """
         logging.info(f"Performing Google search for query: {query}")
         service = build("customsearch", "v1", developerKey=self.key_pw)
@@ -124,27 +142,28 @@ class GoogleSearch():
 
                 logging.info(f"google_search(): Title: {title}, URL: {url}")
 
-                if title.lower() != 'untitled' and title != 'No Title':
-                    #try:
-                    dance_url = self.relevant_dance_url(title, url, snippet)
-                    if dance_url:
-                        results.append({
-                            'source': title,
-                            'keywords': keyword,
-                            'link': url
-                        })
-                        logging.info(f"Added result: {title}")
-                    else:
-                        logging.info(f"Skipped irrelevant result: {title}")
-                    # except Exception as e:
-                    #     logging.error(f"Error processing item: {e}")
+                url_domain = self.get_domain(url)
+
+                # Skip if title is untitled/No Title OR domain is blacklisted
+                if title.lower() == 'untitled' or title == 'No Title' or db_handler.avoid_domains(url_domain):
+                    logging.info(f"Skipped result (bad title or blacklisted domain): {title} for query: {query}")
+                    continue
+
+                # Otherwise, process it
+                dance_url = self.relevant_dance_url(title, url, snippet)
+                if dance_url:
+                    results.append({
+                        'source': title,
+                        'keywords': keyword,
+                        'link': url
+                    })
+                    logging.info(f"Added result: {title}")
                 else:
-                    logging.info(f"Skipped untitled result for query: {query}")
+                    logging.info(f"Skipped irrelevant result: {title}")
         else:
             logging.info(f"No items found in response for query: {query}")
 
         logging.info(f"Found {len(results)} results for query: {query}")
-
         return results
 
 
@@ -164,7 +183,8 @@ class GoogleSearch():
             logging.info(f"def driver: {query}")
 
             results = self.google_search(query, keyword)
-            all_results.extend(results)
+            if results:
+                all_results.extend(results)
 
         logging.info(f"Driver completed with total {len(all_results)} results.")
         results_df = pd.DataFrame(all_results)
