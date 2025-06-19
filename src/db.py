@@ -2374,7 +2374,7 @@ if __name__ == "__main__":
 
      # Build log_file name
     script_name = os.path.splitext(os.path.basename(__file__))[0]
-    logging_file = f"{script_name}_log" 
+    logging_file = f"/logs{script_name}_log" 
     logging.basicConfig(
         filename=logging_file,
         filemode='a',  # Changed to append mode to preserve logs

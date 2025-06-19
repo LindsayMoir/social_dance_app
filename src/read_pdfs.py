@@ -18,7 +18,7 @@ with open('config/config.yaml', 'r') as f:
 handlers = [logging.StreamHandler()]
  # Build log_file name
 script_name = os.path.splitext(os.path.basename(__file__))[0]
-log_file = f"{script_name}_log" 
+log_file = f"/logs{script_name}_log" 
 if log_file:
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
     handlers.append(logging.FileHandler(log_file, mode='a'))
