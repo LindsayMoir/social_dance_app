@@ -376,7 +376,7 @@ class EventSpider(scrapy.Spider):
         logging.info("def run_crawler(): Starting crawler in-process.")
          # Build log_file name
         script_name = os.path.splitext(os.path.basename(__file__))[0]
-        logging_file = f"{script_name}_log" 
+        logging_file = f"logs/{script_name}_log.txt"
         process = CrawlerProcess(settings={
             "LOG_FILE": logging_file,
             "LOG_LEVEL": "INFO",

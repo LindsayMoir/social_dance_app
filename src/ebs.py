@@ -388,7 +388,7 @@ async def main():
 
      # Build log_file name
     script_name = os.path.splitext(os.path.basename(__file__))[0]
-    logging_file = f"/logs{script_name}_log" 
+    logging_file = f"logs/{script_name}_log.txt" 
     logging.basicConfig(
         filename=logging_file,
         filemode='a',

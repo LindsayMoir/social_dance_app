@@ -512,10 +512,6 @@ class DatabaseHandler():
             list: List of rows (as tuples) if the query returns rows.
             int: Number of rows affected for non-select queries.
             None: If the query fails or there is no database connection.
-
-        Notes:
-            - Handles NaN values in params by converting them to None (NULL in SQL).
-            - Logs errors if the query execution fails.
         """
         if self.conn is None:
             logging.error("execute_query: No database connection available.")
@@ -525,26 +521,37 @@ class DatabaseHandler():
         if params:
             for key, value in params.items():
                 if isinstance(value, (list, np.ndarray, pd.Series)):
-                    # Check if any element in the array-like object is NaN
                     if pd.isna(value).any():
-                        params[key] = None  # Set to None (NULL in SQL)
+                        params[key] = None
                 else:
-                    # For scalar values, check directly
                     if pd.isna(value):
-                        params[key] = None  # Set to None (NULL in SQL)
+                        params[key] = None
 
         try:
             with self.conn.connect() as connection:
                 result = connection.execute(text(query), params or {})
+
                 if result.returns_rows:
                     rows = result.fetchall()
+                    logging.info(
+                        "execute_query(): query returned %d rows", 
+                        len(rows)
+                    )
                     return rows
                 else:
+                    affected = result.rowcount
                     connection.commit()
-                    return result.rowcount  # Return the number of rows affected
-                    
+                    logging.info(
+                        "execute_query(): non-select query affected %d rows", 
+                        affected
+                    )
+                    return affected
+
         except SQLAlchemyError as e:
-            logging.error("def execute_query(): %s\nQuery execution failed: %s", query, e)
+            logging.error(
+                "execute_query(): Query execution failed (%s)\nQuery was: %s", 
+                e, query
+            )
             return None
 
     
@@ -2316,7 +2323,7 @@ class DatabaseHandler():
                 event_type, address_id, time_stamp
             FROM events_history
             WHERE url = :url
-            AND time_stamp > NOW() - (:days * INTERVAL '1 day')
+            AND start_date >= (CURRENT_DATE - (:days * INTERVAL '1 day'))
             ORDER BY
                 event_name, dance_style, description, day_of_week,
                 start_date, end_date, start_time, end_time,
@@ -2327,9 +2334,10 @@ class DatabaseHandler():
         """
         params_copy = {
             'url':  image_url,
-            'days': self.config['clean_up']['old_events']
+            'days': self.config['clean_up']['old_events']  # e.g. 3 → includes start_date ≥ today−3d
         }
         self.execute_query(sql_copy, params_copy)
+
         logging.info(f"check_image_events_exist(): Copied most‐recent history events into events for URL: {image_url}")
         return True
     
@@ -2374,7 +2382,7 @@ if __name__ == "__main__":
 
      # Build log_file name
     script_name = os.path.splitext(os.path.basename(__file__))[0]
-    logging_file = f"/logs{script_name}_log" 
+    logging_file = f"logs/{script_name}_log.txt" 
     logging.basicConfig(
         filename=logging_file,
         filemode='a',  # Changed to append mode to preserve logs

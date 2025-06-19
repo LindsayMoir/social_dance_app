@@ -18,7 +18,7 @@ with open('config/config.yaml', 'r') as f:
 handlers = [logging.StreamHandler()]
  # Build log_file name
 script_name = os.path.splitext(os.path.basename(__file__))[0]
-log_file = f"/logs{script_name}_log" 
+log_file = f"logs/{script_name}_log.txt" 
 if log_file:
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
     handlers.append(logging.FileHandler(log_file, mode='a'))
@@ -84,6 +84,7 @@ class ReadPDFs:
         self.db = DatabaseHandler(config)
         logging.info("DatabaseHandler initialized.")
 
+
     def read_write_pdf(self) -> pd.DataFrame:
         file_name = os.path.basename(__file__)
         start_df = self.db.count_events_urls_start(file_name)
@@ -97,29 +98,29 @@ class ReadPDFs:
             parent_url = row.get('parent_url', '')
             keywords   = row.get('keywords', None)
 
-            logging.info(f"[{idx}] source={source}, pdf_url={pdf_url}")
+            logging.info(f"read_write_pdf(): [{idx}] source={source}, pdf_url={pdf_url}")
 
             # Skip blacklisted
             if any(domain in pdf_url for domain in self.black_list_domains):
-                logging.info(f"Skipping blacklisted URL: {pdf_url}")
+                logging.info(f"read_write_pdf(): Skipping blacklisted URL: {pdf_url}")
                 continue
 
             # Skip if already in events (or copied from history)
             if self.db.check_image_events_exist(pdf_url):
-                logging.info(f"Already have events for URL: {pdf_url}")
+                logging.info(f"read_write_pdf(): Already have events for URL: {pdf_url}")
                 self.db.write_url_to_db((pdf_url, parent_url, source, keywords, True, 1, datetime.now()))
                 continue
 
             # Should we crawl it?
             if not self.db.should_process_url(pdf_url):
-                logging.info(f"should_process_url returned False for {pdf_url}")
+                logging.info(f"read_write_pdf():should_process_url returned False for {pdf_url}")
                 self.db.write_url_to_db((pdf_url, parent_url, source, keywords, False, 1, datetime.now()))
                 continue
 
             # Find the right parser
             parser = PARSER_REGISTRY.get(source)
             if not parser:
-                logging.warning(f"No parser registered for '{source}'")
+                logging.warning(f"read_write_pdf(): No parser registered for '{source}'")
                 continue
 
             # Download and parse
@@ -129,13 +130,13 @@ class ReadPDFs:
 
             df = parser(pdf_file)
             if df is None or df.empty:
-                logging.warning(f"Parser returned no events for '{source}'")
+                logging.warning(f"read_write_pdf(): Parser returned no events for '{source}'")
                 continue
 
             # Clean & enrich
             df = df.dropna(subset=['event_name', 'start_date'])
             if df.empty:
-                logging.warning(f"All rows dropped for '{source}' after cleaning")
+                logging.warning(f"read_write_pdf(): All rows dropped for '{source}' after cleaning")
                 continue
 
             df['source']    = source
@@ -144,7 +145,7 @@ class ReadPDFs:
             df['time_stamp']= datetime.now()
 
             records = df.to_dict(orient='records')
-            logging.info(f"Inserting {len(records)} events for '{source}'")
+            logging.info(f"read_write_pdf(): Inserting {len(records)} events for '{source}'")
             self.db.multiple_db_inserts('events', records)
 
             # Mark URL as done
@@ -153,7 +154,9 @@ class ReadPDFs:
 
         # No events at all?
         if not all_events:
-            logging.info("No events parsed; returning empty DataFrame.")
+            logging.info("read_write_pdf(): pdf_url is: {pdf_url}")
+            logging.info("read_write_pdf(): No NEW events parsed BUT events may have been copied from events_history.")
+            logging.info("read_write_pdf(): returning empty DataFrame.")
             self.db.count_events_urls_end(start_df, file_name)
             return pd.DataFrame(columns=[
                 'event_name','dance_style','description','day_of_week',
