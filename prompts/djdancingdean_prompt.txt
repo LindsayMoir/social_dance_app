@@ -8,11 +8,11 @@ For each identified event, provide the following details in JSON format.
 You MUST include all of these fields. If you do not have any information for one of the fields, put '' in the field. Always fill the url field as ''.
 [{
     "source": "<The original source of information for this event>",
-    "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
+    "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, hustle, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "djdancingdean@gmail.com",
     "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
     "event_name": "<event name or title>",
-    "day_of_week": "<e.g., Monday, Tuesday>",
+    "day_of_week": "Thursday",
     "start_date": "<YYYY-MM-DD>",
     "end_date": "<YYYY-MM-DD or same as Start_Date if single-day>",
     "start_time": "<HH:MM>",
@@ -23,11 +23,11 @@ You MUST include all of these fields. If you do not have any information for one
 },
 {
     "source": "<The original source of information for this event>",
-    "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
+    "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, hustle, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "djdancingdean@gmail.com",
     "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
     "event_name": "<event name or title>",
-    "day_of_week": "<e.g., Monday, Tuesday>",
+    "day_of_week": "Thursday",
     "start_date": "<YYYY-MM-DD>",
     "end_date": "<YYYY-MM-DD or same as Start_Date if single-day>",
     "start_time": "<HH:MM>",
@@ -38,11 +38,11 @@ You MUST include all of these fields. If you do not have any information for one
 },
 {
     "source": "<The original source of information for this event>",
-    "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
+    "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, hustle, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "djdancingdean@gmail.com",
     "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
     "event_name": "<event name or title>",
-    "day_of_week": "<e.g., Monday, Tuesday>",
+    "day_of_week": "Thursday",
     "start_date": "<YYYY-MM-DD>",
     "end_date": "<YYYY-MM-DD or same as Start_Date if single-day>",
     "start_time": "<HH:MM>",
@@ -65,6 +65,7 @@ ________________________________________
 •	If an event starts with Tomorrow, For example, this event "Tomorrow from 20:00-00:00 Hot Salsa " Would be interpreted as Sunday December 29, 2025 for the start_date and end_date, when your current date is December 28, 2024.
 _____________________________________
 3. day_of_week and start_date Consistency
+•	The events are ALWAYS on Thursday.
 •	Do not change the given day_of_week.
 •	If your computed start_date is not that weekday, shift the date by ±1 day (whichever is closer) until it matches.
 •	Adjust end_date accordingly (if single-day, set equal to start_date).
