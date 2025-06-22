@@ -31,15 +31,68 @@ from bs4 import BeautifulSoup
 import os
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 import random
+import urllib.parse
 
 from db import DatabaseHandler
 from llm import LLMHandler
 from credentials import get_credentials
 import os
 
+USER_AGENTS = [
+    # Chrome on Windows 10
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+
+    # Chrome on macOS
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+
+    # Firefox on Windows 10
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+
+    # Firefox on macOS
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13.5; rv:126.0) Gecko/20100101 Firefox/126.0",
+
+    # Edge on Windows 11
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.2535.79",
+
+    # Safari on macOS Ventura
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+
+    # Brave on Windows (uses Chrome user agent)
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+
+    # Opera on Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 OPR/109.0.5097.38",
+
+    # Vivaldi on Windows (also Chromium-based)
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Vivaldi/6.7.3329.29",
+
+    # Generic latest Chrome on Linux (useful for headless scraping profiles)
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+]
+
 
 class CleanUp:
+    """
+    CleanUp class for managing event data cleanup operations.
+    """
     def __init__(self, config):
+        """
+        Initialize the class with configuration, database handler, LLM handler, and Google API credentials.
+        Args:
+            config (dict): Configuration dictionary for initializing handlers and connections.
+        Raises:
+            ConnectionError: If the database connection cannot be established.
+        Attributes:
+            config (dict): The configuration dictionary.
+            db_handler (DatabaseHandler): Handler for database operations.
+            llm_handler (LLMHandler): Handler for language model operations.
+            conn (Any): Active database connection object.
+            api_key (str): Google API key retrieved from credentials.
+            cse_id (str): Google Custom Search Engine ID.
+            browser (Any): Reference to the async browser instance (initialized later).
+            context (Any): Reference to the browser context (initialized later).
+            logged_in_page (Any): Reference to the logged-in browser page (initialized later).
+        """
         self.config = config
         self.db_handler = DatabaseHandler(config)
         self.llm_handler = LLMHandler(config_path="config/config.yaml")
@@ -354,8 +407,21 @@ class CleanUp:
 
 
     def google_search(self, event_name):
-        """
-        Finds URLs for an event using Google Search. (Synchronous call)
+        """Performs a synchronous Google Custom Search for a given event name and location.
+
+        Args:
+            event_name (str): The name of the event to search for.
+
+        Returns:
+            pandas.DataFrame: A DataFrame containing the search results with columns 'event_name' (the title of the result)
+            and 'url' (the link to the result). Returns an empty DataFrame if no results are found.
+
+        Logs:
+            - The search query being performed.
+            - The number of results found or a message if no results are found.
+
+        Raises:
+            googleapiclient.errors.HttpError: If the Google API request fails.
         """
         location = self.config['location']['epicentre']
         query = f"{event_name} {location}"
@@ -431,8 +497,15 @@ class CleanUp:
 
     async def extract_text_with_playwright_async(self, url: str) -> str:
         """
-        Asynchronously extracts text from a web page using Playwright's async API.
-        Returns an empty string if any error or if sign-in pages are detected.
+        Asynchronously extracts visible text content from a web page using Playwright.
+        Navigates to the specified URL, waits for the page to render, and parses the HTML to extract all visible text.
+        If a Google sign-in page or sign-in input is detected, or if any error occurs (including timeouts), returns an empty string.
+        Args:
+            url (str): The URL of the web page to extract text from.
+        Returns:
+            str: The extracted visible text from the web page, or an empty string if extraction fails or a sign-in page is detected.
+        Raises:
+            None: All exceptions are handled internally and logged.
         """
         try:
             async with async_playwright() as p:
@@ -477,6 +550,17 @@ class CleanUp:
         
 
     def select_best_match(self, original_event_name, events_df):
+        """
+        Selects the best matching event from a DataFrame based on fuzzy string similarity.
+
+        Args:
+            original_event_name (str): The name of the event to match.
+            events_df (pd.DataFrame): DataFrame containing event data with an 'event_name' column.
+
+        Returns:
+            pandas.Series or None: The row from events_df with the highest fuzzy match score (>= 80),
+            or None if no suitable match is found.
+        """
         best_match = None
         best_score = 0
         for row in events_df.itertuples(index=False):
@@ -489,7 +573,19 @@ class CleanUp:
 
     def merge_rows(self, original_row, new_row):
         """
-        Merges data from new_row into original_row if new fields are longer or original fields are empty.
+        Merge two rows (namedtuples), preferring values from new_row if they are longer or if the original value is empty.
+
+        For each field in the rows:
+            - If the original value is empty or NaN, use the value from new_row.
+            - If the new value is not empty or NaN and is longer (as a string) than the original value, use the new value.
+            - Otherwise, keep the original value.
+
+        Args:
+            original_row (namedtuple): The original row to be updated.
+            new_row (namedtuple): The new row with potential updated values.
+
+        Returns:
+            dict: A dictionary representing the merged row, with updated values where applicable.
         """
         merged = original_row._asdict()  # Convert namedtuple to dict
         for col in original_row._fields:
@@ -504,6 +600,16 @@ class CleanUp:
     
 
     def update_event_row(self, merged_row):
+        """
+        Updates a row in the 'events' table with the values from the provided merged_row dictionary.
+        Parameters:
+            merged_row (dict): A dictionary containing the event data to update. Must include the 'event_id' key
+                               to identify the row, and any other columns to be updated as key-value pairs.
+        Returns:
+            None
+        Side Effects:
+            Executes an UPDATE SQL query on the 'events' table using the provided database handler.
+        """
         event_id = merged_row["event_id"]
         update_columns = [col for col in merged_row if col != "event_id"]
         set_clause = ", ".join([f"{col} = :{col}" for col in update_columns])
@@ -615,7 +721,8 @@ class CleanUp:
 
 
     def fetch_events_from_db(self):
-        """Fetch all events from the database."""
+        """Fetch all events from the database.
+        """
         query = "SELECT * FROM events"
         events_df = pd.read_sql(query, self.db_handler.conn)
         logging.info(f"fetch_events_from_db(): Retrieved {events_df.shape[0]} events.")
@@ -623,7 +730,12 @@ class CleanUp:
 
 
     def _load_keywords(self):
-        """Load and process dance style keywords from CSV."""
+        """
+        Loads dance style keywords from a CSV file specified in the configuration, processes them by splitting comma-separated values, stripping whitespace, removing duplicates, and sorting the final list.
+
+        Returns:
+            list: A sorted list of unique dance style keywords as strings.
+        """
         keywords_df = pd.read_csv(self.config['input']['data_keywords'])
         keywords_list = sorted(set(
             keyword.strip()
@@ -635,7 +747,19 @@ class CleanUp:
 
 
     def update_dance_style(self, row, keywords_list):
-        """Determine if a dance style needs updating based on event name/description."""
+        """
+        Checks if any keywords from the provided list are present in the event's name, description, or source fields.
+        If matches are found, returns a pandas Series with the matched keywords as a comma-separated string and a flag set to True,
+        indicating that the dance style should be updated. Otherwise, returns the original dance style and update flag.
+
+        Args:
+            row (pd.Series): A pandas Series representing a row from the DataFrame, expected to contain 'event_name', 'description', 'source', 'dance_style', and 'update' fields.
+            keywords_list (list of str): List of keywords to search for in the event's fields.
+
+        Returns:
+            pd.Series: A Series containing the updated dance style (comma-separated matched keywords or original value)
+                       and a boolean flag indicating whether an update is needed.
+        """
         event_name = row["event_name"] if isinstance(row["event_name"], str) else ""
         description = row["description"] if isinstance(row["description"], str) else ""
         source = row["source"] if isinstance(row["source"], str) else ""
@@ -649,7 +773,18 @@ class CleanUp:
 
 
     def _process_updated_events(self, events_df):
-        """Filter and update only the modified rows in the database."""
+        """
+        Filters the provided DataFrame for rows marked as updated, processes them, and updates the corresponding records in the database.
+        Args:
+            events_df (pd.DataFrame): DataFrame containing event records, including an 'update' boolean column indicating which rows require updating.
+        Behavior:
+            - Filters rows where 'update' is True.
+            - Drops the 'update' column from the filtered DataFrame.
+            - Ensures 'address_id' column is filled with 0 where missing and cast to integer type.
+            - Converts the filtered DataFrame to a list of dictionaries for batch database insertion.
+            - Calls the database handler to update the 'events' table with the modified records.
+            - Logs the number of records updated or if no updates are required.
+        """
         updated_df = events_df[events_df["update"]].drop(columns=["update"])
         
         if updated_df.empty:
@@ -664,6 +799,117 @@ class CleanUp:
         table_name = "events"
         self.db_handler.multiple_db_inserts(table_name, values)
         logging.info(f"_process_updated_events(): Updated {len(values)} records in the database.")
+
+
+    async def search_google_and_scrape_page(self, location: str) -> str:
+        """
+        Performs a Google search for the given location, scrapes the resulting page, and returns the extracted text content.
+        This asynchronous method uses Playwright to automate a Chromium browser, navigates to the Google search results
+        page for the specified location, scrolls the page, and extracts the HTML content. It checks for CAPTCHA or block
+        detection and parses the page content with BeautifulSoup to return a cleaned string of all visible text.
+        Args:
+            location (str): The location or query string to search for on Google.
+        Returns:
+            str: The concatenated and cleaned text content from the search results page, or an empty string if blocked or an error occurs.
+        Raises:
+            None. All exceptions are caught and logged; an empty string is returned on failure.
+        """
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=self.config['crawling']['headless'])
+                context = await browser.new_context(user_agent=random.choice(USER_AGENTS))
+                page = await context.new_page()
+
+                query = urllib.parse.quote(location)
+                search_url = f"https://www.google.com/search?q={query}"
+                await page.goto(search_url, timeout=15000)
+                await page.wait_for_timeout(random.randint(3000, 5000))
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await page.wait_for_timeout(random.randint(2000, 4000))
+
+                html = await page.content()
+                if "detected unusual traffic" in html or "sorry/index" in page.url:
+                    logging.warning("Google CAPTCHA or block detected.")
+                    return ""
+
+                soup = BeautifulSoup(html, "html.parser")
+                return " ".join(soup.stripped_strings)
+        except Exception as e:
+            logging.error(f"search_google_and_scrape_page(): {e}")
+            return ""
+        
+
+    def extract_location_snippet(self, full_text: str, location: str, buffer: int = 500) -> str:
+        """
+        Extracts a snippet of text surrounding a specified location string within the full text.
+        Searches for the first occurrence of the location string (case-insensitive) in the full_text.
+        If found, returns a substring of full_text that includes the location and a buffer of characters
+        before and after it. If the location is not found, returns an empty string.
+        Args:
+            full_text (str): The complete text to search within.
+            location (str): The location string to find in the text.
+            buffer (int, optional): Number of characters to include before and after the location. Defaults to 500.
+        Returns:
+            str: A snippet of the full_text containing the location and surrounding context, or an empty string if not found.
+        """
+        index = full_text.lower().find(location.lower())
+        if index == -1:
+            logging.warning("extract_location_snippet(): Location string not found.")
+            return ""
+        return full_text[max(0, index - buffer):min(len(full_text), index + len(location) + buffer)]
+
+
+    async def fix_null_addresses_in_events(self):
+        """
+        Fixes events with NULL address_id by scraping Google search results for the event location.
+        """
+        query = "SELECT event_id, location FROM events WHERE address_id IS NULL AND location IS NOT NULL"
+        events_df = pd.read_sql(query, self.conn)
+
+        if events_df.empty:
+            logging.info("fix_null_addresses_in_events(): No events with NULL address_id found.")
+            return
+        
+        events_df = events_df.head()   # ***TEMP***
+
+        for event in events_df.itertuples():
+            try:
+                logging.info(f"Processing event_id {event.event_id}, location: {event.location}")
+
+                # Step 1: Scrape Google Search page
+                full_text = await self.search_google_and_scrape_page(event.location)
+                if not full_text:
+                    continue
+
+                # Step 2: Extract ±500 char snippet around location string
+                snippet = self.extract_location_snippet(full_text, event.location)
+                if not snippet:
+                    continue
+
+                # Step 3: Ask LLM to extract structured address
+                if len(snippet.strip()) < 50:
+                    logging.warning(f"fix_null_addresses_in_events(): Snippet too short to extract address for event_id {event.event_id}")
+                    continue
+                prompt = self.llm_handler.generate_prompt(event.location, snippet, prompt_type="address")
+                llm_response = self.llm_handler.query_llm(event.location, prompt)
+                parsed = self.llm_handler.extract_and_parse_json(llm_response, event.location)
+
+                if not parsed:
+                    logging.warning(f"LLM failed to parse a valid address for event_id {event.event_id}")
+                    continue
+
+                parsed = parsed[0]  # Assume single address record from LLM
+
+                # Step 4: Upsert address and update address_id in events
+                address_id = self.db_handler.upsert_address(parsed)
+                update_sql = "UPDATE events SET address_id = %s WHERE event_id = %s"
+                self.db_handler.execute_query(update_sql, (address_id, event.event_id))
+
+                logging.info(f"Updated event_id {event.event_id} with address_id {address_id}")
+
+            except Exception as e:
+                logging.error(f"Error processing event_id {event.event_id}: {e}")
+
 
 # ------------------------------------------------------------------------
 # Main entry point - run asynchronously
@@ -699,17 +945,20 @@ async def main():
     # Count events and urls before cleanup
     start_df = db_handler.count_events_urls_start(file_name)
 
-    # Fix no urls in events
-    await clean_up_instance.process_events_without_url()
+    # # Fix no urls in events
+    # await clean_up_instance.process_events_without_url()
 
-    # Fix incorrect dance_styles
-    await clean_up_instance.fix_incorrect_dance_styles()
+    # # Fix incorrect dance_styles
+    # await clean_up_instance.fix_incorrect_dance_styles()
 
-    # Delete events outside of BC, Canada
-    await clean_up_instance.delete_events_outside_bc()
+    # # Delete events outside of BC, Canada
+    # await clean_up_instance.delete_events_outside_bc()
 
-    # Delete events more than 9 months in the future
-    await clean_up_instance.delete_events_more_than_9_months_future()
+    # # Delete events more than 9 months in the future
+    # await clean_up_instance.delete_events_more_than_9_months_future()
+
+    # Fix null addresses in events
+    await clean_up_instance.fix_null_addresses_in_events()
 
     # Delete events that you know are not relevant
     bad_urls = [url.strip() for url in config['constants']['delete_known_bad_urls'].split(',') if url.strip()]

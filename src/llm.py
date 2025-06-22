@@ -271,6 +271,7 @@ class LLMHandler():
 
         return prompt
     
+    
     def query_llm(self, url, prompt):
         """
         Query the configured LLM with a given prompt and return the response.

@@ -30,7 +30,7 @@ constants:
     url: https://www.facebook.com/groups/cubansalsaclub/
 crawling:
   depth_limit: 2
-  headless: true
+  headless: false
   max_attempts: 3
   max_crawl_trys: 3
   max_website_urls: 10
@@ -85,6 +85,7 @@ output:
   irrelevant_rows: output/irrelevant_rows.csv
   is_foreign: output/is_foreign.csv
 prompts:
+  address: prompts/address_from_raw_page.txt
   address_fix: prompts/address_fix_prompt.txt
   chatbot_instructions: prompts/chatbot_instructions.txt
   dedup: prompts/dedup_prompt.txt
