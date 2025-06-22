@@ -5,6 +5,9 @@ eventbrite_auth.json
 # ignore all logs
 logs/
 
+# ignore all json files
+*.json
+
 # ignore all images
 images/
 

@@ -180,6 +180,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 load_dotenv()
 from fuzzywuzzy import fuzz
+import json
 import logging
 import numpy as np
 import os
@@ -2342,6 +2343,34 @@ class DatabaseHandler():
         return True
     
 
+    def sql_input(self, file_path: str):
+        """
+        Reads a JSON file containing a flat dictionary of SQL fixes and executes them.
+
+        Args:
+            file_path (str): Path to the .json file containing SQL statements.
+        """
+        logging.info("sql_input(): Starting SQL input execution from %s", file_path)
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                sql_dict = json.load(f)
+            logging.info("sql_input(): Successfully loaded %d SQL entries", len(sql_dict))
+        except Exception as e:
+            logging.error("sql_input(): Failed to load or parse JSON file: %s", e)
+            return
+
+        for name, query in sql_dict.items():
+            logging.info("sql_input(): Executing [%s]: %s", name, query)
+            result = self.execute_query(query)
+            if result is None:
+                logging.error("sql_input(): Failed to execute [%s]", name)
+            else:
+                logging.info("sql_input(): Successfully executed [%s]", name)
+
+        logging.info("sql_input(): All queries processed.")
+    
+
     def driver(self):
         """
         Main driver function to perform database operations based on configuration.
@@ -2368,6 +2397,7 @@ class DatabaseHandler():
             self.is_foreign()
             self.dedup_address()
             self.fix_address_id_in_events()
+            self.sql_input(self.config['input']['sql_input'])
             self.dedup()
 
         # Close the database connection
