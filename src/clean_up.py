@@ -21,7 +21,7 @@ Dependencies:
 
 import asyncio
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
 from googleapiclient.discovery import build
@@ -35,7 +35,6 @@ import requests
 import re
 import urllib.parse
 import yaml
-
 
 from db import DatabaseHandler
 from llm import LLMHandler
@@ -895,6 +894,18 @@ class CleanUp:
         logging.info("Starting fix_null_addresses_in_events process...")
 
         nulls_csv = self.config['input']['nulls_addresses']
+
+        if not os.path.exists(nulls_csv):
+            logging.warning(f"CSV file {nulls_csv} does not exist. Skipping.")
+            return
+
+        modified_time = datetime.fromtimestamp(os.path.getmtime(nulls_csv))
+        if datetime.now() - modified_time > timedelta(days=3):
+            logging.info(f"CSV file {nulls_csv} is older than 3 days. Skipping update.")
+            return
+        else:
+            logging.info(f"CSV file {nulls_csv} has been modified recently. Proceeding.")
+
         try:
             address_df = pd.read_csv(nulls_csv).fillna("").drop_duplicates()
             address_df = address_df[address_df['full_address'].str.strip() != ""]
@@ -903,48 +914,49 @@ class CleanUp:
             return
 
         query = """
-            SELECT event_id, source, description, location, address_id 
+            SELECT event_id, location, address_id 
             FROM events 
-            WHERE location IS NULL
+            WHERE address_id IS NULL
         """
         try:
             events_df = pd.read_sql(query, self.conn)
         except Exception as e:
-            logging.error(f"Could not query events with NULL location: {e}")
+            logging.error(f"Could not query events with NULL address_id: {e}")
             return
 
         if events_df.empty:
-            logging.info("No events with NULL location found.")
+            logging.info("No events with NULL address_id found.")
             return
 
+        update_log = []
         updated_count = 0
         for row in address_df.itertuples():
             full_address = getattr(row, 'full_address').strip()
             building_name = getattr(row, 'location').strip()
-            source = getattr(row, 'source').strip()
-            description = getattr(row, 'description').strip()
-            csv_address_id = getattr(row, 'address_id').strip()
+            csv_address_id = str(getattr(row, 'address_id')).strip()
 
             if not full_address:
                 continue
 
             full_address_with_building = f"{building_name}, {full_address}" if building_name else full_address
 
-            if csv_address_id:
-                logging.info(f"Using provided address_id {csv_address_id} for source '{source}' or description '{description}'")
+            if csv_address_id and csv_address_id.lower() != "nan":
+                logging.info(f"Using provided address_id {csv_address_id} for location match '{building_name}'")
                 update_sql = """
                     UPDATE events 
                     SET location = :location, address_id = :address_id
-                    WHERE location IS NULL AND (source ILIKE :source OR description ILIKE :description)
+                    WHERE address_id IS NULL AND LOWER(location) = LOWER(:building_name)
+                    RETURNING event_id
                 """
-                self.db_handler.execute_query(update_sql, {
+                result = self.db_handler.execute_query(update_sql, {
                     "location": full_address_with_building,
                     "address_id": int(csv_address_id),
-                    "source": f"%{source}%",
-                    "description": f"%{description}%"
+                    "building_name": building_name
                 })
-                logging.info(f"Updated events using provided address_id {csv_address_id} and location '{full_address_with_building}'")
-                updated_count += 1
+                updated_event_ids = [r[0] for r in result] if result else []
+                for event_id in updated_event_ids:
+                    update_log.append({"event_id": event_id, "building_name": building_name, "full_address": full_address_with_building, "address_id": int(csv_address_id)})
+                updated_count += len(updated_event_ids)
                 continue
 
             check_sql = "SELECT address_id FROM address WHERE full_address = :full_address"
@@ -985,18 +997,24 @@ class CleanUp:
             update_sql = """
                 UPDATE events 
                 SET location = :location, address_id = :address_id
-                WHERE location IS NULL AND (description = :description OR source = :source)
+                WHERE address_id IS NULL AND LOWER(location) = LOWER(:building_name)
+                RETURNING event_id
             """
-            self.db_handler.execute_query(update_sql, {
+            result = self.db_handler.execute_query(update_sql, {
                 "location": full_address_with_building,
                 "address_id": address_id,
-                "description": description,
-                "source": source
+                "building_name": building_name
             })
-            logging.info(f"Updated events with location '{full_address_with_building}' and address_id {address_id}")
-            updated_count += 1
+            updated_event_ids = [r[0] for r in result] if result else []
+            for event_id in updated_event_ids:
+                update_log.append({"event_id": event_id, "building_name": building_name, "full_address": full_address_with_building, "address_id": address_id})
+            updated_count += len(updated_event_ids)
 
-        logging.info(f"fix_null_addresses_in_events(): Updated {updated_count} event(s) from CSV mapping.")
+        log_df = pd.DataFrame(update_log)
+        os.makedirs("output", exist_ok=True)
+        log_path = os.path.join("output", "update_null_address_ids.csv")
+        log_df.to_csv(log_path, index=False)
+        logging.info(f"fix_null_addresses_in_events(): Updated {updated_count} event(s). Log saved to {log_path}.")
 
 
 # ------------------------------------------------------------------------
@@ -1046,7 +1064,7 @@ async def main():
     # await clean_up_instance.delete_events_more_than_9_months_future()
 
     # Fix null addresses in events
-    await clean_up_instance.fix_null_addresses_in_events() ***TEMP*** Waiting for manual insert of addresses into events and address tables
+    await clean_up_instance.fix_null_addresses_in_events() # ***TEMP***
 
     # Delete events that you know are not relevant
     bad_urls = [url.strip() for url in config['constants']['delete_known_bad_urls'].split(',') if url.strip()]

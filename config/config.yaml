@@ -58,7 +58,7 @@ input:
   gs_urls: data/urls/gs_urls.csv
   images: data/other/images.csv
   municipalities: data/other/municipalities.txt
-  nulls_addresses: data/other/nulls_address.csv
+  nulls_addresses: data/other/nulls_addresses.csv
   pdfs: data/other/pdfs.csv
   predibase: data/other/duplicates_predibase.csv
   sql_input: data/other/sql_input.json
@@ -73,7 +73,7 @@ location:
   epicentre: Victoria, British Columbia, Canada
 logging:
   extracted_text: output/extracted_text.csv
-  log_file: logs/pipeline_16861_20250622_122516316404.log
+  log_file: logs/pipeline_32503_20250623_230405784191.log
   log_file_p2: logs/log_file_p2.txt
   scraper_log_file: logs/scraper_log.txt
 output:
