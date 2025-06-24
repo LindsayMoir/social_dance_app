@@ -58,6 +58,7 @@ input:
   gs_urls: data/urls/gs_urls.csv
   images: data/other/images.csv
   municipalities: data/other/municipalities.txt
+  nulls_addresses: data/other/nulls_address.csv
   pdfs: data/other/pdfs.csv
   predibase: data/other/duplicates_predibase.csv
   sql_input: data/other/sql_input.json

@@ -20,18 +20,22 @@ Dependencies:
 """
 
 import asyncio
-import logging
-import pandas as pd
-from fuzzywuzzy import fuzz
-import yaml
-from googleapiclient.discovery import build
-from datetime import datetime
-import re
 from bs4 import BeautifulSoup
+from datetime import datetime
+from dotenv import load_dotenv
+from fuzzywuzzy import fuzz
+from googleapiclient.discovery import build
+import logging
+import numpy as np
 import os
+import pandas as pd
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 import random
+import requests
+import re
 import urllib.parse
+import yaml
+
 
 from db import DatabaseHandler
 from llm import LLMHandler
@@ -101,6 +105,12 @@ class CleanUp:
         self.conn = self.db_handler.get_db_connection()
         if self.conn is None:
             raise ConnectionError("DatabaseHandler: Failed to establish a database connection.")
+        
+        # Get Brave API key from .env
+        load_dotenv()
+        self.brave_api_key = os.getenv("BRAVE_API_KEY")
+        if not self.brave_api_key:
+            raise ValueError("BRAVE_API_KEY not found in environment variables.")
 
         # Retrieve Google API credentials using credentials.py
         _, self.api_key, self.cse_id = get_credentials('Google')
@@ -109,6 +119,33 @@ class CleanUp:
         self.browser = None
         self.context = None
         self.logged_in_page = None
+
+
+    def brave_search(self, event_name):
+        """
+        Performs a Brave Search API query using the provided event name and location.
+        Returns a DataFrame with columns ['event_name', 'url'] or an empty one on failure.
+        """
+        location = self.config['location']['epicentre']
+        query = f"{event_name} {location} address"
+        logging.info(f"brave_search(): Searching for '{query}' using Brave Search API.")
+        url = "https://api.search.brave.com/res/v1/web/search"
+        headers = {"Accept": "application/json", "X-Subscription-Token": self.brave_api_key}
+        params = {"q": query, "count": self.config['search']['gs_num_results']}
+
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            results = []
+            for item in data.get("web", {}).get("results", []):
+                results.append({"event_name": item.get("title", ""), "url": item.get("url", "")})
+                logging.info(f"brave_search(): Found result: {results}")
+            return pd.DataFrame(results)
+        
+        except Exception as e:
+            logging.error(f"brave_search(): Failed to fetch results for {query}: {e}")
+            return pd.DataFrame(columns=["event_name", "url"])
 
 
     async def login_to_facebook(self, page, browser) -> bool:
@@ -349,8 +386,8 @@ class CleanUp:
         for event_row in no_urls_df.itertuples(index=False):
             event_name = event_row.event_name
 
-            # 1) Google search (synchronous, but that's usually fine)
-            results_df = self.google_search(event_name)
+            # 1) Brave search (synchronous, but that's usually fine)
+            results_df = self.serpapi_search(event_name)
 
             # 2) Find best URL
             best_url = self.find_best_url_for_event(event_name, results_df)
@@ -404,51 +441,6 @@ class CleanUp:
 
         logging.info("def process_events_without_url(): Deleted {delete_count} events without URLs.")
         logging.info("def process_events_without_url(): Finished processing events without URLs.")
-
-
-    def google_search(self, event_name):
-        """Performs a synchronous Google Custom Search for a given event name and location.
-
-        Args:
-            event_name (str): The name of the event to search for.
-
-        Returns:
-            pandas.DataFrame: A DataFrame containing the search results with columns 'event_name' (the title of the result)
-            and 'url' (the link to the result). Returns an empty DataFrame if no results are found.
-
-        Logs:
-            - The search query being performed.
-            - The number of results found or a message if no results are found.
-
-        Raises:
-            googleapiclient.errors.HttpError: If the Google API request fails.
-        """
-        location = self.config['location']['epicentre']
-        query = f"{event_name} {location}"
-
-        logging.info(f"def google_search(): Performing Google search for query: {query}")
-        service = build("customsearch", "v1", developerKey=self.api_key)
-        response = (
-            service.cse()
-            .list(
-                q=query,
-                cx=self.cse_id,
-                num=self.config['search']['gs_num_results'],
-            )
-            .execute()
-        )
-
-        results = []
-        if "items" in response:
-            for item in response["items"]:
-                title = item.get("title")
-                url = item.get("link")
-                results.append({"event_name": title, "url": url})
-            logging.info(f"def google_search(): Found {len(results)} results for query: {query}")
-        else:
-            logging.info(f"def google_search(): No results found for query: {query}")
-
-        return pd.DataFrame(results)
 
 
     def find_best_url_for_event(self, original_event_name, results_df):
@@ -803,41 +795,55 @@ class CleanUp:
 
     async def search_google_and_scrape_page(self, location: str) -> str:
         """
-        Performs a Google search for the given location, scrapes the resulting page, and returns the extracted text content.
-        This asynchronous method uses Playwright to automate a Chromium browser, navigates to the Google search results
-        page for the specified location, scrolls the page, and extracts the HTML content. It checks for CAPTCHA or block
-        detection and parses the page content with BeautifulSoup to return a cleaned string of all visible text.
-        Args:
-            location (str): The location or query string to search for on Google.
-        Returns:
-            str: The concatenated and cleaned text content from the search results page, or an empty string if blocked or an error occurs.
-        Raises:
-            None. All exceptions are caught and logged; an empty string is returned on failure.
+        Uses Playwright to search Google and scrape the entire results page.
+        Stores and reuses session to avoid repeated CAPTCHAs.
         """
         try:
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=self.config['crawling']['headless'])
-                context = await browser.new_context(user_agent=random.choice(USER_AGENTS))
+                storage_path = "auth/google_auth.json"
+                context_args = {}
+
+                if os.path.exists(storage_path):
+                    logging.info("Using saved Google session.")
+                    context_args["storage_state"] = storage_path
+
+                browser = await p.chromium.launch(headless=False)
+                context = await browser.new_context(**context_args)
                 page = await context.new_page()
 
+                # Visit Google Search
                 query = urllib.parse.quote(location)
                 search_url = f"https://www.google.com/search?q={query}"
-                await page.goto(search_url, timeout=15000)
-                await page.wait_for_timeout(random.randint(3000, 5000))
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await page.wait_for_timeout(random.randint(2000, 4000))
+                logging.info(f"Navigating to Google search URL: {search_url}")
+                await page.goto(search_url, timeout=20000)
 
-                html = await page.content()
-                if "detected unusual traffic" in html or "sorry/index" in page.url:
-                    logging.warning("Google CAPTCHA or block detected.")
-                    return ""
+                # Detect CAPTCHA
+                if "sorry" in page.url.lower() or await page.query_selector("form[action^='/sorry/']"):
+                    logging.warning("CAPTCHA detected. Please solve manually.")
+                    print("\n🔐 CAPTCHA DETECTED 🔐")
+                    print("Solve CAPTCHA in browser. Press Enter when complete.")
+                    await asyncio.get_running_loop().run_in_executor(None, input)
 
-                soup = BeautifulSoup(html, "html.parser")
-                return " ".join(soup.stripped_strings)
+                # Wait and scroll for more content
+                await page.wait_for_timeout(2000)
+                await page.keyboard.press("PageDown")
+                await page.wait_for_timeout(2000)
+
+                # Extract and save session
+                content = await page.content()
+                soup = BeautifulSoup(content, "html.parser")
+                extracted_text = " ".join(soup.stripped_strings)
+
+                await context.storage_state(path=storage_path)
+                logging.info("Saved session to google_auth.json")
+                await browser.close()
+
+                return extracted_text
+
         except Exception as e:
-            logging.error(f"search_google_and_scrape_page(): {e}")
+            logging.error(f"search_google_and_scrape_page(): Exception: {e}")
             return ""
-        
+
 
     def extract_location_snippet(self, full_text: str, location: str, buffer: int = 500) -> str:
         """
@@ -859,56 +865,138 @@ class CleanUp:
         return full_text[max(0, index - buffer):min(len(full_text), index + len(location) + buffer)]
 
 
+    def parse_full_address(self, full_address):
+        pattern = re.compile(
+            r"(?P<street_number>\d+)?\s*"
+            r"(?P<street_name>[\w\s]+?),\s*"
+            r"(?P<city>[\w\s]+?),\s*"
+            r"(?P<province_or_state>[A-Z]{2})\s*"
+            r"(?P<postal_code>[A-Z]\d[A-Z]\s?\d[A-Z]\d)?"
+        )
+        match = pattern.search(full_address)
+        if match:
+            groups = match.groupdict()
+            street_parts = groups.get("street_name", "").strip().split()
+            street_name = " ".join(street_parts[:-1]) if len(street_parts) > 1 else groups.get("street_name")
+            street_type = street_parts[-1] if len(street_parts) > 1 else None
+            return {
+                "street_number": groups.get("street_number"),
+                "street_name": street_name,
+                "street_type": street_type,
+                "direction": None,
+                "city": groups.get("city"),
+                "province_or_state": groups.get("province_or_state"),
+                "postal_code": groups.get("postal_code"),
+            }
+        return {}
+    
+
     async def fix_null_addresses_in_events(self):
+        logging.info("Starting fix_null_addresses_in_events process...")
+
+        nulls_csv = self.config['input']['nulls_addresses']
+        try:
+            address_df = pd.read_csv(nulls_csv).fillna("").drop_duplicates()
+            address_df = address_df[address_df['full_address'].str.strip() != ""]
+        except Exception as e:
+            logging.error(f"Could not load address CSV from {nulls_csv}: {e}")
+            return
+
+        query = """
+            SELECT event_id, source, description, location, address_id 
+            FROM events 
+            WHERE location IS NULL
         """
-        Fixes events with NULL address_id by scraping Google search results for the event location.
-        """
-        query = "SELECT event_id, location FROM events WHERE address_id IS NULL AND location IS NOT NULL"
-        events_df = pd.read_sql(query, self.conn)
+        try:
+            events_df = pd.read_sql(query, self.conn)
+        except Exception as e:
+            logging.error(f"Could not query events with NULL location: {e}")
+            return
 
         if events_df.empty:
-            logging.info("fix_null_addresses_in_events(): No events with NULL address_id found.")
+            logging.info("No events with NULL location found.")
             return
-        
-        events_df = events_df.head()   # ***TEMP***
 
-        for event in events_df.itertuples():
-            try:
-                logging.info(f"Processing event_id {event.event_id}, location: {event.location}")
+        updated_count = 0
+        for row in address_df.itertuples():
+            full_address = getattr(row, 'full_address').strip()
+            building_name = getattr(row, 'location').strip()
+            source = getattr(row, 'source').strip()
+            description = getattr(row, 'description').strip()
+            csv_address_id = getattr(row, 'address_id').strip()
 
-                # Step 1: Scrape Google Search page
-                full_text = await self.search_google_and_scrape_page(event.location)
-                if not full_text:
-                    continue
+            if not full_address:
+                continue
 
-                # Step 2: Extract ±500 char snippet around location string
-                snippet = self.extract_location_snippet(full_text, event.location)
-                if not snippet:
-                    continue
+            full_address_with_building = f"{building_name}, {full_address}" if building_name else full_address
 
-                # Step 3: Ask LLM to extract structured address
-                if len(snippet.strip()) < 50:
-                    logging.warning(f"fix_null_addresses_in_events(): Snippet too short to extract address for event_id {event.event_id}")
-                    continue
-                prompt = self.llm_handler.generate_prompt(event.location, snippet, prompt_type="address")
-                llm_response = self.llm_handler.query_llm(event.location, prompt)
-                parsed = self.llm_handler.extract_and_parse_json(llm_response, event.location)
+            if csv_address_id:
+                logging.info(f"Using provided address_id {csv_address_id} for source '{source}' or description '{description}'")
+                update_sql = """
+                    UPDATE events 
+                    SET location = :location, address_id = :address_id
+                    WHERE location IS NULL AND (source ILIKE :source OR description ILIKE :description)
+                """
+                self.db_handler.execute_query(update_sql, {
+                    "location": full_address_with_building,
+                    "address_id": int(csv_address_id),
+                    "source": f"%{source}%",
+                    "description": f"%{description}%"
+                })
+                logging.info(f"Updated events using provided address_id {csv_address_id} and location '{full_address_with_building}'")
+                updated_count += 1
+                continue
 
-                if not parsed:
-                    logging.warning(f"LLM failed to parse a valid address for event_id {event.event_id}")
-                    continue
+            check_sql = "SELECT address_id FROM address WHERE full_address = :full_address"
+            result = self.db_handler.execute_query(check_sql, {"full_address": full_address_with_building})
 
-                parsed = parsed[0]  # Assume single address record from LLM
+            if result:
+                address_id = result[0][0]
+                logging.info(f"Address already exists for '{full_address_with_building}', using address_id {address_id}")
+            else:
+                parsed = self.parse_full_address(full_address)
+                address_insert = {
+                    "full_address": full_address_with_building,
+                    "building_name": building_name if building_name else None,
+                    "street_number": parsed.get("street_number"),
+                    "street_name": parsed.get("street_name"),
+                    "street_type": parsed.get("street_type"),
+                    "direction": parsed.get("direction"),
+                    "city": parsed.get("city"),
+                    "met_area": None,
+                    "province_or_state": parsed.get("province_or_state"),
+                    "postal_code": parsed.get("postal_code"),
+                    "country_id": "CA",
+                    "time_stamp": datetime.now()
+                }
+                insert_sql = """
+                    INSERT INTO address 
+                    (full_address, building_name, street_number, street_name, street_type, direction, 
+                     city, met_area, province_or_state, postal_code, country_id, time_stamp)
+                    VALUES 
+                    (:full_address, :building_name, :street_number, :street_name, :street_type, :direction, 
+                     :city, :met_area, :province_or_state, :postal_code, :country_id, :time_stamp)
+                    RETURNING address_id
+                """
+                inserted = self.db_handler.execute_query(insert_sql, address_insert)
+                address_id = inserted[0][0] if inserted else None
+                logging.info(f"Inserted new address for '{full_address_with_building}' with address_id {address_id}")
 
-                # Step 4: Upsert address and update address_id in events
-                address_id = self.db_handler.upsert_address(parsed)
-                update_sql = "UPDATE events SET address_id = %s WHERE event_id = %s"
-                self.db_handler.execute_query(update_sql, (address_id, event.event_id))
+            update_sql = """
+                UPDATE events 
+                SET location = :location, address_id = :address_id
+                WHERE location IS NULL AND (description = :description OR source = :source)
+            """
+            self.db_handler.execute_query(update_sql, {
+                "location": full_address_with_building,
+                "address_id": address_id,
+                "description": description,
+                "source": source
+            })
+            logging.info(f"Updated events with location '{full_address_with_building}' and address_id {address_id}")
+            updated_count += 1
 
-                logging.info(f"Updated event_id {event.event_id} with address_id {address_id}")
-
-            except Exception as e:
-                logging.error(f"Error processing event_id {event.event_id}: {e}")
+        logging.info(f"fix_null_addresses_in_events(): Updated {updated_count} event(s) from CSV mapping.")
 
 
 # ------------------------------------------------------------------------
@@ -958,7 +1046,7 @@ async def main():
     # await clean_up_instance.delete_events_more_than_9_months_future()
 
     # Fix null addresses in events
-    await clean_up_instance.fix_null_addresses_in_events()
+    await clean_up_instance.fix_null_addresses_in_events() ***TEMP*** Waiting for manual insert of addresses into events and address tables
 
     # Delete events that you know are not relevant
     bad_urls = [url.strip() for url in config['constants']['delete_known_bad_urls'].split(',') if url.strip()]

@@ -501,6 +501,41 @@ class DatabaseHandler():
             return pd.DataFrame()
         
 
+    def upsert_address(self, address):
+        """
+        Inserts a new address into the 'addresses' table if it does not already exist,
+        or retrieves the existing address's ID if it does.
+
+        Args:
+            address (dict): A dictionary containing the address fields:
+                - street (str): The street address.
+                - city (str): The city name.
+                - province (str): The province or state.
+                - postal_code (str): The postal or ZIP code.
+                - country (str): The country name.
+
+        Returns:
+            int or None: The address_id of the existing or newly inserted address,
+            or None if the operation fails.
+        """
+        select_sql = """
+            SELECT address_id FROM addresses
+            WHERE street = :street AND city = :city AND province = :province
+                AND postal_code = :postal_code AND country = :country
+        """
+        result = self.execute_query(select_sql, address)
+        if result and len(result) > 0:
+            return result[0][0]  # address_id
+
+        insert_sql = """
+            INSERT INTO addresses (street, city, province, postal_code, country)
+            VALUES (:street, :city, :province, :postal_code, :country)
+            RETURNING address_id
+        """
+        inserted = self.execute_query(insert_sql, address)
+        return inserted[0][0] if inserted else None
+        
+
     def execute_query(self, query, params=None):
         """
         Executes a given SQL query with optional parameters.
