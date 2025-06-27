@@ -21,18 +21,25 @@ Dependencies:
 
 import asyncio
 from bs4 import BeautifulSoup
+from collections import Counter
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from fuzzywuzzy import fuzz
 from googleapiclient.discovery import build
+import json
 import logging
 import numpy as np
 import os
 import pandas as pd
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 import random
+from rapidfuzz import fuzz
 import requests
 import re
+from sentence_transformers import SentenceTransformer
+from sklearn.cluster import AgglomerativeClustering, DBSCAN
+from tabulate import tabulate
+from typing import List, Dict, Any
+import unicodedata
 import urllib.parse
 import yaml
 
@@ -1017,6 +1024,343 @@ class CleanUp:
         logging.info(f"fix_null_addresses_in_events(): Updated {updated_count} event(s). Log saved to {log_path}.")
 
 
+    def deduplicate_addresses_with_llm_semantic_clustering(self):
+        """
+        Deduplicates address records using an LLM by clustering semantically similar addresses
+        using SentenceTransformer and sending each subcluster (if < 5 rows) to the LLM. Logs results only.
+        """
+
+        logging.info("Starting LLM-based address deduplication with semantic clustering...")
+        os.makedirs("output", exist_ok=True)
+        log_file_path = os.path.join("output", "llm_fix_semantic_clustering.txt")
+
+        df = pd.read_sql("SELECT * FROM address", self.conn).fillna("")
+        if len(df) <= 1:
+            logging.info("Only one address row present. Nothing to deduplicate.")
+            return
+
+        for col in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                df.loc[:, col] = df[col].astype(str)
+
+        clusters = self.cluster_addresses_semantically(df, eps=0.2)
+
+        for i, group_ids in enumerate(clusters):
+            batch = df[df['address_id'].isin(group_ids)].copy()
+            if batch.empty:
+                continue
+            address_records = batch.to_dict(orient="records")
+            self.log_cluster_header(log_file_path, i, len(clusters), address_records)
+            subclusters = self.subcluster_by_building_name(address_records)
+
+            # Retry agglomerative clustering if subclusters are too large
+            final_subclusters = []
+            for subcluster in subclusters:
+                if len(subcluster) >= 5:
+                    refined = self.subcluster_by_building_name(subcluster, distance_threshold=15)
+                    final_subclusters.extend(refined)
+                else:
+                    final_subclusters.append(subcluster)
+
+            for subcluster in final_subclusters:
+                if len(subcluster) <= 1 or len(subcluster) >= 5:
+                    continue
+
+                # Step 1: Fuzzy match on building_name
+                if self.building_names_fuzzy_match(subcluster, log_file_path):
+                    logging.info(f"Sending cluster {i + 1} to LLM...")
+                    prompt = self.generate_prompt(subcluster)
+                    response = self.llm_handler.query_llm("address_dedup", prompt)
+                    self.log_llm_response(log_file_path, subcluster, 
+                                          prompt, 
+                                          self.llm_handler.query_llm("address_dedup", prompt))
+                    continue
+
+                # Step 2: Skip if street_numbers are all unique
+                if self.should_skip_cluster_by_rules(subcluster, log_file_path):
+                    continue
+
+                # Step 3: Try resolving based on completeness
+                if self.try_resolve_canonical_locally(subcluster, log_file_path):
+                    continue
+
+                # Step 4: Send to LLM if street numbers exist but building names differ
+                if self.has_conflicting_street_numbers_unless_same_building(subcluster):
+                    logging.info(f"Sending cluster {i + 1} to LLM...")
+                    prompt = self.generate_prompt(subcluster)
+                    response = self.llm_handler.query_llm("address_dedup", prompt)
+                    self.log_llm_response(log_file_path, subcluster, response)
+                    continue
+
+        logging.info("Finished LLM-based address deduplication (logging only, no DB updates).")
+
+
+    def generate_prompt(self, subcluster: List[Dict]) -> str:
+        """
+        Generate a complete LLM prompt from the semantic deduplication prompt template
+        and the given subcluster of address records.
+        """
+        template_path = self.config["prompts"]["fix_dup_addresses_semantic_clustering"]
+        with open(template_path, "r", encoding="utf-8") as f:
+            template = f.read().strip()
+
+        def safe_json(record):
+            clean = {}
+            for k, v in record.items():
+                if pd.isna(v):
+                    clean[k] = ""
+                elif isinstance(v, pd.Timestamp):
+                    clean[k] = v.isoformat()
+                else:
+                    clean[k] = v
+            return json.dumps(clean, ensure_ascii=False)
+
+        data_lines = [safe_json(record) for record in subcluster]
+        return f"{template}\n\n" + "\n".join(data_lines)
+
+    
+    def log_llm_response(self, log_file_path: str, subcluster: List[Dict], prompt: str, response: Any):
+        """
+        Logs the prompt and response from the LLM to the clustering log file.
+        """
+        with open(log_file_path, "a", encoding="utf-8") as f:
+            f.write("--- PROMPT ---\n")
+            f.write(prompt + "\n")
+            f.write("--- RESPONSE ---\n")
+            if isinstance(response, str):
+                f.write(response.strip() + "\n")
+            else:
+                f.write(json.dumps(response, indent=2, ensure_ascii=False) + "\n")
+
+
+    def log_cluster_header(self, log_file_path, cluster_index, total_clusters, address_records):
+        with open(log_file_path, "a", encoding="utf-8") as f:
+            f.write(f"=== Cluster {cluster_index + 1}/{total_clusters} ===\n")
+            f.write("--- RECORDS ---\n")
+            for record in address_records:
+                f.write(json.dumps(record, default=str) + "\n")
+
+
+    def subcluster_by_building_name(self, address_records: List[Dict], distance_threshold: int = 30) -> List[List[Dict]]:
+        """
+        Performs agglomerative clustering on building_name field using fuzzy matching.
+        Records without a usable building_name are excluded from clustering and added as separate subclusters.
+        """
+        from sklearn.cluster import AgglomerativeClustering
+        import numpy as np
+        from rapidfuzz import fuzz
+
+        records_with_names = [r for r in address_records if r.get("building_name", "").strip()]
+        records_without_names = [r for r in address_records if not r.get("building_name", "").strip()]
+
+        names = [r["building_name"] for r in records_with_names]
+        n = len(names)
+
+        if n <= 1:
+            return [records_with_names + records_without_names] if records_with_names else [address_records]
+
+        dist_matrix = np.zeros((n, n))
+        for x in range(n):
+            for y in range(x + 1, n):
+                score = fuzz.ratio(names[x], names[y])
+                dist = 100 - score
+                dist_matrix[x, y] = dist
+                dist_matrix[y, x] = dist
+        np.fill_diagonal(dist_matrix, 0)
+
+        clustering = AgglomerativeClustering(
+            n_clusters=None,
+            distance_threshold=distance_threshold,
+            metric="precomputed",
+            linkage="average"
+        )
+        labels = clustering.fit_predict(dist_matrix)
+
+        clusters = []
+        for label in set(labels):
+            group = [records_with_names[i] for i in range(n) if labels[i] == label]
+            clusters.append(group)
+
+        clusters.extend([[r] for r in records_without_names])
+        return clusters
+    
+
+    def identical_building_name_with_missing_street_fields(self, records, log_file_path):
+        def norm(val):
+            return str(val or '').strip().lower()
+
+        if len(records) <= 1:
+            return False
+
+        bnames = [norm(r.get("building_name")) for r in records]
+        if len(set(bnames)) != 1:
+            return False
+
+        filled = [r for r in records if r.get("street_name") or r.get("street_number") or r.get("postal_code")]
+        if not filled:
+            return False
+
+        canonical = filled[0]
+        canonical_id = canonical["address_id"]
+        duplicate_ids = [r["address_id"] for r in records if r["address_id"] != canonical_id]
+
+        self.log_resolution(log_file_path, canonical_id, duplicate_ids, "identical building name, missing fields")
+        return True
+    
+
+    def should_skip_cluster_by_rules(self, subcluster, log_file_path):
+        from collections import Counter
+
+        def normalize(val):
+            return unicodedata.normalize("NFKC", str(val).strip().lower().replace("null", ""))
+
+        streets = [normalize(r.get("street_number")) for r in subcluster]
+        street_names = [normalize(r.get("street_name")) for r in subcluster]
+        cities = [normalize(r.get("city")) for r in subcluster]
+
+        all_unique = len(set(streets)) == len(streets)
+        with open(log_file_path, "a") as f:
+            if all_unique:
+                f.write("--- STATUS ---\nSKIPPED: All street numbers are unique. No duplicates.\n")
+                return True
+
+            street_counts = Counter(streets)
+            shared_streets = [k for k, v in street_counts.items() if v > 1 and k]
+            for street in shared_streets:
+                matching_names = {street_names[i] for i in range(len(street_names)) if streets[i] == street}
+                matching_cities = {cities[i] for i in range(len(cities)) if streets[i] == street and cities[i]}
+                if len(matching_names) > 1:
+                    f.write(f"--- STATUS ---\nSKIPPED: Matching street number '{street}' has different street names.\n")
+                    return True
+                if len(matching_cities) > 1:
+                    f.write(f"--- STATUS ---\nSKIPPED: Matching street number '{street}' has conflicting cities.\n")
+                    return True
+        return False
+    
+
+    def try_resolve_canonical_locally(self, subcluster, log_file_path):
+        def score(r):
+            return (
+                int(bool(r.get("postal_code"))) +
+                int(bool(r.get("street_name"))) +
+                int(bool(r.get("time_stamp") and str(r["time_stamp"]).lower() != "nat"))
+            )
+
+        sorted_records = sorted(subcluster, key=lambda r: (-score(r), r.get("time_stamp", "")), reverse=True)
+        best = sorted_records[0]
+        others = [r for r in subcluster if r["address_id"] != best["address_id"]]
+
+        reason = []
+        if best.get("postal_code"): reason.append("has postal_code")
+        if best.get("street_name"): reason.append("has street_name")
+        if best.get("time_stamp") and str(best["time_stamp"]).lower() != "nat": reason.append("most recent time_stamp")
+
+        if len(set(r.get("building_name", "") for r in subcluster)) > 1:
+            msg = "SKIPPED: Multiple different building names detected. No duplicates."
+            with open(log_file_path, "a") as f:
+                f.write(f"--- STATUS ---\n{msg}\n")
+            return True
+
+        with open(log_file_path, "a") as f:
+            f.write(f"--- STATUS ---SELECTED CANONICAL WITHOUT LLM: {best['address_id']}. Reason: {', '.join(reason)}\n")
+
+        return True if reason else False
+
+    def building_names_fuzzy_match(self, records: List[Dict], log_file_path: str) -> bool:
+        """
+        Checks if there's a fuzzy match between non-empty building names.
+        Only returns True if fuzzy match ratio > 70 and fewer than 5 valid names exist.
+        """
+        from rapidfuzz import fuzz
+
+        valid = [r for r in records if r.get("building_name", "").strip().lower() not in {"", "null"}]
+        if len(valid) < 2:
+            with open(log_file_path, "a", encoding="utf-8") as f:
+                f.write("--- STATUS ---\nNo valid building names. Skipping fuzzy match.\n")
+            return False
+
+        names = [r["building_name"].strip() for r in valid]
+        for i in range(len(names)):
+            for j in range(i+1, len(names)):
+                score = fuzz.token_sort_ratio(names[i], names[j])
+                if score > 70:
+                    with open(log_file_path, "a", encoding="utf-8") as f:
+                        f.write("--- STATUS ---\n")
+                        f.write("Fuzzy match on building names above threshold. Sending to LLM.\n")
+                    return True
+        return False
+
+    
+    def has_conflicting_street_numbers_unless_same_building(self, records):
+        def norm(val):
+            return str(val).strip().lower() if val else ""
+
+        street_numbers = set(norm(r.get("street_number")) for r in records if r.get("street_number") and norm(r.get("street_number")) != "null")
+        building_names = [norm(r.get("building_name")) for r in records if norm(r.get("building_name"))]
+
+        if len(street_numbers) <= 1:
+            return False
+
+        if len(set(building_names)) == 1:
+            return False
+
+        for i in range(len(building_names)):
+            for j in range(i+1, len(building_names)):
+                if fuzz.token_set_ratio(building_names[i], building_names[j]) > 85:
+                    return False
+
+        return True
+
+    def submit_to_llm_and_log(self, subcluster, cluster_index, log_file_path):
+        df = pd.DataFrame(subcluster)
+        prompt_path = "prompts/fix_dup_addresses.txt"
+        with open(prompt_path) as f:
+            template = f.read()
+
+        columns = [
+            "address_id", "full_address", "building_name", "street_number", "street_name",
+            "street_type", "direction", "city", "met_area", "province_or_state", "postal_code",
+            "country_id", "time_stamp"
+        ]
+        df = df[columns].fillna("")
+        table = tabulate(df.values.tolist(), headers=columns, tablefmt="github")
+        prompt = f"""{template}\n\n{table}\n"""
+
+        logging.info(f"Sending cluster {cluster_index + 1} to LLM...")
+        response = self.llm_handler.query_llm("address_dedup", prompt)
+
+        with open(log_file_path, "a") as f:
+            f.write("--- PROMPT ---\n")
+            f.write(f"{prompt_path}\n\n")
+            f.write(f"{table}\n")
+            f.write("--- RESPONSE ---\n")
+            f.write(json.dumps(response, indent=2))
+            f.write("\n")
+
+        return response
+
+    def cluster_addresses_semantically(self, df: pd.DataFrame, eps: float = 0.1, min_samples: int = 2) -> List[List[int]]:
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        texts = df['full_address'].astype(str).tolist()
+        address_ids = df['address_id'].tolist()
+        embeddings = model.encode(texts, show_progress_bar=False)
+        clustering = DBSCAN(eps=eps, min_samples=min_samples, metric='cosine').fit(embeddings)
+        labels = clustering.labels_
+
+        clusters = {}
+        for label, addr_id in zip(labels, address_ids):
+            if label == -1:
+                continue
+            clusters.setdefault(label, []).append(addr_id)
+
+        return list(clusters.values())
+
+    def log_resolution(self, log_file_path, canonical_id, duplicates, reason):
+        with open(log_file_path, "a") as f:
+            f.write(f"--- STATUS ---\n")
+            f.write(f"Canonical: {canonical_id}, Duplicates: {duplicates}. Reason: {reason}\n")
+
+
 # ------------------------------------------------------------------------
 # Main entry point - run asynchronously
 # ------------------------------------------------------------------------
@@ -1025,14 +1369,14 @@ async def main():
     with open("config/config.yaml", "r") as file:
         config = yaml.safe_load(file)
 
-    # Build log_file name
-    script_name = os.path.splitext(os.path.basename(__file__))[0]
-    logging_file = f"logs/{script_name}_log.txt" 
+    # Set up logging
+    # Ensure the 'logs' directory exists
+    os.makedirs("logs", exist_ok=True)
     logging.basicConfig(
-        filename=logging_file,
-        filemode="a",
+        filename="logs/clean_up_log.txt" ,
+        filemode='a',  # Changed to append mode to preserve logs
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     )
     logging.info("clean_up.py starting...")
 
@@ -1051,6 +1395,9 @@ async def main():
     # Count events and urls before cleanup
     start_df = db_handler.count_events_urls_start(file_name)
 
+    # Fix duplicate rows in the address table
+    clean_up_instance.deduplicate_addresses_with_llm_semantic_clustering()
+
     # # Fix no urls in events
     # await clean_up_instance.process_events_without_url()
 
@@ -1063,13 +1410,13 @@ async def main():
     # # Delete events more than 9 months in the future
     # await clean_up_instance.delete_events_more_than_9_months_future()
 
-    # Fix null addresses in events
-    await clean_up_instance.fix_null_addresses_in_events() # ***TEMP***
+    # # Fix null addresses in events
+    # await clean_up_instance.fix_null_addresses_in_events()
 
-    # Delete events that you know are not relevant
-    bad_urls = [url.strip() for url in config['constants']['delete_known_bad_urls'].split(',') if url.strip()]
-    logging.info(f"known_incorrect(): Deleting events with URLs containing: {bad_urls}")
-    clean_up_instance.known_incorrect(bad_urls)
+    # # Delete events that you know are not relevant
+    # bad_urls = [url.strip() for url in config['constants']['delete_known_bad_urls'].split(',') if url.strip()]
+    # logging.info(f"known_incorrect(): Deleting events with URLs containing: {bad_urls}")
+    # clean_up_instance.known_incorrect(bad_urls)
 
     db_handler.count_events_urls_end(start_df, file_name)
     logging.info(f"Wrote events and urls statistics to: {file_name}")

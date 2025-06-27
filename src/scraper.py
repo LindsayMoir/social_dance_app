@@ -76,34 +76,33 @@ class EventSpider(scrapy.Spider):
             urls_df = pd.concat(dataframes, ignore_index=True)
 
         for _, row in urls_df.iterrows():
-
-            # Extract necessary fields from the row
             source = row['source']
             keywords = row['keywords']
             url = row['link']
 
-            # Check urls to see if they should be scraped
+            # ✳️ Skip Facebook or Instagram URLs immediately
+            if 'facebook.com' in url.lower() or 'instagram.com' in url.lower():
+                logging.info(f"start_requests(): Skipping social media URL (fb/ig): {url}")
+                child_row = [url, '', source, [], False, 1, datetime.now()]
+                db_handler.write_url_to_db(child_row)
+                continue
 
             if db_handler.avoid_domains(url):
-                logging.info(f"start_requests: Skipping blacklisted URL {url}.")
+                logging.info(f"start_requests(): Skipping blacklisted URL {url}.")
                 continue
 
             if not db_handler.should_process_url(url):
-                logging.info(f"def eventbrite_search(): Skipping URL {url} based on historical relevancy.")
+                logging.info(f"start_requests(): Skipping URL {url} based on historical relevancy.")
                 continue
 
-            logging.info(f"def start_requests(): Starting crawl for URL: {url}")
+            logging.info(f"start_requests(): Starting crawl for URL: {url}")
             yield scrapy.Request(
                 url=url,
                 callback=self.parse,
                 cb_kwargs={'keywords': keywords, 'source': source, 'url': url},
-                # ← Tell scrapy-playwright to spin up a browser for this request
                 meta={
                     "playwright": True,
-                    # optional: wait for network‐idle or body to render
-                    "playwright_page_methods": [
-                        PageMethod("wait_for_selector", "body")
-                    ],
+                    "playwright_page_methods": [PageMethod("wait_for_selector", "body")],
                 },
             )
 

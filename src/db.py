@@ -46,10 +46,8 @@ update_event(self, event_identifier, new_data, best_url)
     Update an event row in the database by overlaying new data and updating the URL.
 get_address_id(self, address_dict)
     Insert or update an address in the 'address' table and return its address_id.
-get_postal_code(self, address, api_key)
-    Retrieve the postal code for a given address using the Google Geocoding API.
-get_municipality(self, address, api_key)
-    Retrieve the municipality (locality) for a given address using the Google Geocoding API.
+get_municipality_foursqure(self, address, api_key)
+    Retrieve the municipality (locality) for a given address using the FourSquare Geocoding API.
 clean_up_address(self, events_df)
     Clean and standardize address data for events, associating them with address IDs.
 extract_canadian_postal_code(self, location_str)
@@ -244,6 +242,9 @@ class DatabaseHandler():
 
         # Get google api key
         self.google_api_key = os.getenv("GOOGLE_KEY_PW")
+
+        # Get Foursquare API key
+        self.foursquare_api_key = os.getenv("FOURSQUARE_API_KEY")
 
         # Create df from urls table.
         self.urls_df = self.create_urls_df()
@@ -918,84 +919,6 @@ class DatabaseHandler():
             logging.error(f"get_address_id: Database error: {e}")
             return None
 
-    
-    def get_postal_code(self, address, api_key):
-        """
-        Retrieves the postal code for a given address using the Google Geocoding API.
-
-        Args:
-            address (str): The address string to geocode.
-            api_key (str): Google Maps Geocoding API key.
-
-        Returns:
-            str or None: The postal code if found, otherwise None.
-
-        Notes:
-            - Returns None if the API request fails or no postal code is found.
-            - Only the first postal_code component found in the results is returned.
-        """
-        endpoint = "https://maps.googleapis.com/maps/api/geocode/json"
-        params = {
-            "address": address,
-            "key": api_key
-        }
-        
-        response = requests.get(endpoint, params=params)
-        if response.status_code != 200:
-            logging.warning(f"Geocoding API request failed with status code {response.status_code}")
-            return None
-        
-        data = response.json()
-        if data.get("status") != "OK":
-            logging.warning(f"def get_postal_code(): Geocoding API rejection: {data.get('status')}")
-            return None
-        
-        # Look for the postal_code component in the results.
-        for result in data.get("results", []):
-            for component in result.get("address_components", []):
-                if "postal_code" in component.get("types", []):
-                    return component.get("long_name")
-    
-
-    def get_municipality(self, address, api_key):
-        """
-        Retrieves the municipality (locality) from a given address using the Google Geocoding API.
-        This method sends a request to the Google Geocoding API with the provided address and API key,
-        parses the response, and extracts the municipality (typically represented by the "locality" 
-        address component). If the API request fails or the locality is not found, the method returns None.
-            api_key (str): Google Maps Geocoding API key.
-        Raises:
-            RequestsException: If the HTTP request encounters a network problem (not explicitly handled here).
-            ValueError: If the response cannot be parsed as JSON (not explicitly handled here).
-        Logs:
-            Warnings if the API request fails or if the API response status is not "OK".
-        """
-        endpoint = "https://maps.googleapis.com/maps/api/geocode/json"
-        params = {
-            "address": address,
-            "key": api_key
-        }
-        
-        response = requests.get(endpoint, params=params)
-        if response.status_code != 200:
-            logging.warning(f"Geocoding API request failed with status code {response.status_code}"
-                            f" for address '{address}'")
-            return None
-        
-        data = response.json()
-        if data.get("status") != "OK":
-            logging.warning(f"Geocoding API rejection: {data.get('status')}"
-                            f" for address '{address}'")
-            return None
-        
-        # Iterate through the results to find the "locality" component (which is typically the municipality)
-        for result in data.get("results", []):
-            for component in result.get("address_components", []):
-                if "locality" in component.get("types", []):
-                    return component.get("long_name")
-                else:
-                    return None
-
 
     def clean_up_address(self, events_df):
         """
@@ -1036,12 +959,11 @@ class DatabaseHandler():
             # 1) Try extracting a postal code via regex.
             postal_code = self.extract_canadian_postal_code(location)
 
-            # 2) If none found, try Google. ***TEMP
-            # if not postal_code:
-            #     google_pc = self.get_postal_code(location, self.google_api_key)
-            #     if google_pc and self.is_canadian_postal_code(google_pc):
-            #         postal_code = google_pc
-            #         logging.info("Got Canadian postal code '%s' from Google for '%s'", postal_code, location)
+            if not postal_code:
+                fs_postal = self.get_postal_code_foursquare(location)
+                if fs_postal and self.is_canadian_postal_code(fs_postal):
+                    postal_code = fs_postal
+                    logging.info("Got Canadian postal code '%s' from Foursquare for '%s'", postal_code, location)
 
             # 3) If postal code is found, query DB to get full address.
             if postal_code:
@@ -1148,21 +1070,18 @@ class DatabaseHandler():
             WHERE mail_postal_code = %s;
         """
         df = pd.read_sql(query, self.address_db_engine, params=(postal_code,))
-        # if df.empty: ***TEMP
-        #     # Fallback if no match in DB
-        #     municipality = self.get_municipality(location_str, self.google_api_key) 
-        #     updated_location = f"{location_str}, {municipality}, BC, {postal_code}, CA"
-        #     updated_location = updated_location.replace('None,', '').strip()
-        #     logging.info(f"updated_location is: {updated_location}")
-
-        #     address_dict = self.create_address_dict(
-        #         updated_location, None, None, None, None, municipality, 'BC', postal_code, 'CA'
-        #     )
-        #     logging.info(f"address_dict is: {address_dict}")
-
-        #     address_id = self.get_address_id(address_dict)
-        #     logging.info("No DB match for postal code '%s'. Using fallback: '%s'", postal_code, updated_location)
-        #     return updated_location, address_id
+        if df.empty:
+            city = self.get_municipality_foursquare(location_str)
+            if not city:
+                return None, None
+            updated_location = f"{location_str}, {city}, BC, {postal_code}, CA"
+            updated_location = updated_location.replace('None,', '').strip()
+            address_dict = self.create_address_dict(
+                updated_location, None, None, None, None, city, 'BC', postal_code, 'CA'
+            )
+            address_id = self.get_address_id(address_dict)
+            logging.info("No DB match for postal code '%s'. Using Foursquare fallback: '%s'", postal_code, updated_location)
+            return updated_location, address_id
 
         # Single or multiple rows
         if df.empty:
@@ -1186,6 +1105,51 @@ class DatabaseHandler():
         address_id = self.get_address_id(address_dict)
         logging.info("Populated from DB for postal code '%s': '%s'", postal_code, updated_location)
         return updated_location, address_id
+    
+
+    def get_postal_code_foursquare(self, address):
+        endpoint = "https://api.foursquare.com/v3/places/search"
+        headers = {
+            "Accept": "application/json",
+            "Authorization": self.foursquare_api_key
+        }
+        params = {
+            "query": address,
+            "limit": 1,
+            "fields": "location"
+        }
+        try:
+            response = requests.get(endpoint, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("results"):
+                return data["results"][0].get("location", {}).get("postal_code")
+        except Exception as e:
+            logging.warning(f"Foursquare postal lookup failed for '{address}': {e}")
+        return None
+
+
+    def get_municipality_foursquare(self, address):
+        endpoint = "https://api.foursquare.com/v3/places/search"
+        headers = {
+            "Accept": "application/json",
+            "Authorization": self.foursquare_api_key
+        }
+        params = {
+            "query": address,
+            "limit": 1,
+            "fields": "location"
+        }
+        try:
+            response = requests.get(endpoint, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("results"):
+                return data["results"][0].get("location", {}).get("locality")
+        except Exception as e:
+            logging.warning(f"Foursquare city lookup failed for '{address}': {e}")
+        return None
+
 
     def fallback_with_municipality(self, location_str):
         """
@@ -1214,7 +1178,7 @@ class DatabaseHandler():
         
             - Propagates any exceptions raised by file I/O or called methods.
         """
-        municipality = self.get_municipality(location_str, self.google_api_key)
+        municipality = self.get_municipality_foursquare(location_str)
         if not municipality:
             return None, None
 
@@ -2404,7 +2368,7 @@ class DatabaseHandler():
                 logging.info("sql_input(): Successfully executed [%s]", name)
 
         logging.info("sql_input(): All queries processed.")
-    
+
 
     def driver(self):
         """

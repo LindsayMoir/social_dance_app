@@ -1,6 +1,10 @@
 SELECT COUNT(*)
 FROM events
 
+SELECT *
+FROM events
+ORDER BY start_date
+
 SELECT source, COUNT (*) AS counted
 FROM events
 GROUP BY source
@@ -34,7 +38,7 @@ FROM events
 GROUP BY event_type
 ORDER BY counted DESC
 
-SELECT DISTINCT location AS distinct_location
+SELECT event_id, location
 FROM events
 WHERE address_id IS NULL
 ORDER BY location
