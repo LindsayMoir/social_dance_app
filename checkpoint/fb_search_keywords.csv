@@ -2,9 +2,9 @@ dance_style,keywords,processed
 ballroom,"dance, foxtrot, quickstep, rumba, samba, waltz",True
 country,"double shuffle, country waltz, line dance, nite club two, two step",True
 kizomba,"kizomba, urban kiz, semba",True
-latin,"bachata,  cha cha,  merengue, salsa,  zouk",False
-swing,"balboa, east coast swing, jive,  lindy hop, swing",False
-tango,"milonga tango, argentine tango, tango",False
-wcs,"west coast swing, wcs",False
-tango,"milonga, tango",False
-music,"live music, music festivals, outdoor music",False
+latin,"bachata,  cha cha,  merengue, salsa,  zouk",True
+swing,"balboa, east coast swing, jive,  lindy hop, swing",True
+tango,"milonga tango, argentine tango, tango",True
+wcs,"west coast swing, wcs",True
+tango,"milonga, tango",True
+music,"live music, music festivals, outdoor music",True

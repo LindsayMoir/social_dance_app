@@ -594,16 +594,18 @@ class FacebookEventScraper():
         Returns:
             None
         """
+        # Set up url_row for database writing
+        url_row = [url, parent_url, source, keywords, False, 1, datetime.now()]
+
         # Ensure we can access the page
         if not self.navigate_and_maybe_login(url):
             logging.info(f"process_fb_url: cannot access {url}")
-            db_handler.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
+            db_handler.write_url_to_db(url_row)
             return
 
         # Normalize URL and initialize tracking
         url = self.normalize_facebook_url(url)
         self.total_url_attempts += 1
-        url_row = [url, parent_url, source, keywords, False, 1, datetime.now()]
 
         # 1) Extract text: full event page vs relevant snippet
         if "event" in url:
@@ -718,10 +720,12 @@ class FacebookEventScraper():
                             logging.info(f"def driver_fb_search(): Events successfully written to DB for {url}.")
                         else:
                             logging.warning(f"def driver_fb_search(): No events extracted for {url}.")
-                            db_handler.write_url_to_db = [url, parent_url, source, found_keywords, False, 1, datetime.now()]
+                            url_row = [url, parent_url, source, found_keywords, False, 1, datetime.now()]
+                            db_handler.write_url_to_db(url_row)
                     else:
                         keywords = ''
-                        db_handler.write_url_to_db = [url, parent_url, source, keywords, False, 1, datetime.now()]
+                        url_row = [url, parent_url, source, keywords, False, 1, datetime.now()]
+                        db_handler.write_url_to_db(url_row)
                         logging.info(f"def driver_fb_search(): No keywords found in extracted text for URL: {url}.")
                     
                     # Add the event_url to the visited set
