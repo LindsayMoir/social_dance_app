@@ -1,4 +1,4 @@
-=== Cluster 1/29 ===
+=== Cluster 1/23 ===
 --- RECORDS ---
 {"address_id": 61, "full_address": "3800 Finnerty RD, VICTORIA, BC, V8P5C2, CA", "building_name": "", "street_number": "3800", "street_name": "Finnerty", "street_type": "RD", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8P5C2", "country_id": "CA", "time_stamp": "2025-03-09 17:06:47.374313"}
 {"address_id": 2083, "full_address": "704 Douglas ST, VICTORIA, BC, V8W3M6, CA", "building_name": "", "street_number": "704", "street_name": "Douglas", "street_type": "ST", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 3M6", "country_id": "CA", "time_stamp": "NaT"}
@@ -74,7 +74,7 @@
 {"address_id": 12661, "full_address": "Ship Point (Inner Harbour), Wharf and Broughton, Victoria, BC V8W 1T3", "building_name": "Ship Point (Inner Harbour)", "street_number": "null", "street_name": "Wharf and", "street_type": "Broughton", "direction": "null", "city": "Victoria", "met_area": "null", "province_or_state": "BC", "postal_code": "V8W 1T3", "country_id": "CA", "time_stamp": "2025-06-23 21:50:58.647093"}
 {"address_id": 12691, "full_address": "642 Johnson ST, VICTORIA, BC, V8W1M6, CA", "building_name": "null", "street_number": "642", "street_name": "Johnson", "street_type": "ST", "direction": "null", "city": "VICTORIA", "met_area": "null", "province_or_state": "BC", "postal_code": "V8W1M6", "country_id": "CA", "time_stamp": "2025-06-25 09:42:52.657867"}
 {"address_id": 8474, "full_address": "2010 Government ST, VICTORIA, BC, V8T4P1, CA", "building_name": "null", "street_number": "2010", "street_name": "Government", "street_type": "ST", "direction": "null", "city": "VICTORIA", "met_area": "null", "province_or_state": "BC", "postal_code": "V8T4P1", "country_id": "CA", "time_stamp": "2025-05-21 22:05:36.418549"}
-=== Cluster 2/29 ===
+=== Cluster 2/23 ===
 --- RECORDS ---
 {"address_id": 923, "full_address": "475 Gorge RD E, VICTORIA, BC, V8T2W1, CA", "building_name": "", "street_number": "475", "street_name": "Gorge", "street_type": "RD", "direction": "E", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8T 2W1", "country_id": "CA", "time_stamp": "NaT"}
 {"address_id": 6676, "full_address": "229 Gorge RD E, VICTORIA, BC, V9A1L1, CA", "building_name": "", "street_number": "229", "street_name": "Gorge", "street_type": "RD", "direction": "E", "city": "VICTORIA", "met_area": "", "province_or_state": "BC", "postal_code": "V9A1L1", "country_id": "CA", "time_stamp": "2025-06-25 10:23:32.420645"}
@@ -82,96 +82,7 @@
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 3/29 ===
---- RECORDS ---
-{"address_id": 2120, "full_address": "Victoria Event Centre, 1415 Broad St, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "1415", "street_name": "Broad", "street_type": "St", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-07 09:16:45.602244"}
-{"address_id": 3483, "full_address": "Victoria Event Centre, Victoria, British Columbia, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "null", "street_name": "null", "street_type": "null", "direction": "null", "city": "Victoria", "met_area": "null", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-29 17:18:16.519062"}
---- STATUS ---
-Fuzzy match on building names above threshold. Sending to LLM.
---- PROMPT ---
-SYSTEM: You are a JSON-producing deduplication assistant.
-You do not write explanations.  
-You do not return Markdown.  
-You do not return helpful advice.  
-You ONLY return valid JSON as described below — or the string: No Duplicates
-
-You are a data deduplication assistant.
-You will be given a list of address records. Each record is in JSON format and includes an `address_id`, `full_address`, and other fields such as postal code, city, province, and timestamp.
-Your job is to identify groups of addresses that refer to the **same physical location** (i.e., duplicates). If records are duplicates, choose one as the canonical address and return the others as its duplicates.
----
-
-✅ Output Format:
-Respond with **ONLY** JSON — nothing else. No Markdown. No text. No comments. No explanation. No notes.
-
-Use this format:
-```json
-[
-  {
-    "canonical_address_id": 123,
-    "duplicates": [456, 789]
-  }
-]
-
-If there are no duplicates, respond with this exact string (no quotes, no formatting):
-No Duplicates
-
-📏 Selection Rules for Canonical Address:
-Choose the address with both a non-empty street_number and street_name.
-If more than one has street info, choose the one with a valid postal_code.
-If tied, pick the one with the most fields filled out.
-If still tied, pick the one with the latest time_stamp.
-
-🧪 Examples:
-
-Example 1: Valid Duplicates
-{"address_id": 2120, "full_address": "Victoria Event Centre, 1415 Broad St, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "1415", "street_name": "Broad", "street_type": "St", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-07T09:16:45.602244"}
-{"address_id": 3483, "full_address": "Victoria Event Centre, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-29T17:18:16.519062"}
-
-✅ Response:
-[
-  {
-    "canonical_address_id": 2120,
-    "duplicates": [3483]
-  }
-]
-
-Example 2: No Duplicates
-{"address_id": 1001, "full_address": "Langley Hall, 123 Main St, Langley, BC, V3A 1A1, CA", "building_name": "Langley Hall", "street_number": "123", "street_name": "Main", "street_type": "St", "direction": "", "city": "Langley", "met_area": "", "province_or_state": "BC", "postal_code": "V3A 1A1", "country_id": "CA", "time_stamp": "2025-04-01T12:00:00.000000"}
-{"address_id": 1002, "full_address": "Royal Hall, 999 King St, Langley, BC, V3A 1A1, CA", "building_name": "Royal Hall", "street_number": "999", "street_name": "King", "street_type": "St", "direction": "", "city": "Langley", "met_area": "", "province_or_state": "BC", "postal_code": "V3A 1A1", "country_id": "CA", "time_stamp": "2025-04-01T12:00:00.000000"}
-
-✅ Response:
-No Duplicates
-
-🚫 IMPORTANT:
-Do not return Markdown blocks (no ```json).
-Do not write any explanations or summaries.
-Do not return tables or prose.
-Output must be pure JSON or the exact string No Duplicates.
-
-At the end of your reasoning, validate that your output:
-- Starts with [ and ends with ]
-- Contains only JSON keys: canonical_address_id and duplicates
-- OR is the exact string: No Duplicates
-
-Only output if it passes this check.
-
-⚠️ ABSOLUTELY DO NOT:
-- Write any prose or explanation.
-- Use Markdown formatting like ```json
-- Return anything but plain JSON or the exact string: No Duplicates
-
-⛔ If you violate this, your response will be discarded.
-
-{"address_id": 2120, "full_address": "Victoria Event Centre, 1415 Broad St, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "1415", "street_name": "Broad", "street_type": "St", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-07T09:16:45.602244"}
-{"address_id": 3483, "full_address": "Victoria Event Centre, Victoria, British Columbia, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "null", "street_name": "null", "street_type": "null", "direction": "null", "city": "Victoria", "met_area": "null", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-29T17:18:16.519062"}
---- RESPONSE ---
-[
-  {
-    "canonical_address_id": 2120,
-    "duplicates": [3483]
-  }
-]
-=== Cluster 4/29 ===
+=== Cluster 3/23 ===
 --- RECORDS ---
 {"address_id": 2129, "full_address": "3922 Corunna AVE, NANAIMO, BC, V9T3J7, CA", "building_name": "", "street_number": "3922", "street_name": "Corunna", "street_type": "AVE", "direction": "", "city": "Nanaimo", "met_area": "", "province_or_state": "BC", "postal_code": "V9T3J7", "country_id": "CA", "time_stamp": "2025-03-07 09:22:16.972835"}
 {"address_id": 8022, "full_address": "82 Commercial ST, NANAIMO, BC, V9R5G4, CA", "building_name": "null", "street_number": "82", "street_name": "Commercial", "street_type": "ST", "direction": "null", "city": "NANAIMO", "met_area": "null", "province_or_state": "BC", "postal_code": "V9R5G4", "country_id": "CA", "time_stamp": "2025-05-14 22:43:33.184734"}
@@ -182,98 +93,7 @@ Only output if it passes this check.
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 5/29 ===
---- RECORDS ---
-{"address_id": 1079, "full_address": "Confederation Centre in Burnaby (4585 Albert Street), BC, V5C 2G5, CA", "building_name": "Confederation Centre", "street_number": "4585", "street_name": "Albert", "street_type": "Street", "direction": "", "city": "Burnaby", "met_area": "", "province_or_state": "BC", "postal_code": "V5C 2G5", "country_id": "CA", "time_stamp": "2025-03-16 15:58:29.114422"}
-{"address_id": 1081, "full_address": "Confederation Centre in North Burnaby, BC, V5C 2G5, CA", "building_name": "Confederation Centre", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "North Burnaby", "met_area": "", "province_or_state": "BC", "postal_code": "V5C 2G5", "country_id": "CA", "time_stamp": "2025-03-16 16:02:32.998106"}
-{"address_id": 4000, "full_address": "Confederation Centre Ballroom, North Burnaby, BC, V5C 2G5, CA", "building_name": "Confederation Centre Ballroom", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "North Burnaby", "met_area": "", "province_or_state": "BC", "postal_code": "V5C 2G5", "country_id": "CA", "time_stamp": "2025-03-06 16:46:51.686411"}
---- STATUS ---
-Fuzzy match on building names above threshold. Sending to LLM.
---- PROMPT ---
-SYSTEM: You are a JSON-producing deduplication assistant.
-You do not write explanations.  
-You do not return Markdown.  
-You do not return helpful advice.  
-You ONLY return valid JSON as described below — or the string: No Duplicates
-
-You are a data deduplication assistant.
-You will be given a list of address records. Each record is in JSON format and includes an `address_id`, `full_address`, and other fields such as postal code, city, province, and timestamp.
-Your job is to identify groups of addresses that refer to the **same physical location** (i.e., duplicates). If records are duplicates, choose one as the canonical address and return the others as its duplicates.
----
-
-✅ Output Format:
-Respond with **ONLY** JSON — nothing else. No Markdown. No text. No comments. No explanation. No notes.
-
-Use this format:
-```json
-[
-  {
-    "canonical_address_id": 123,
-    "duplicates": [456, 789]
-  }
-]
-
-If there are no duplicates, respond with this exact string (no quotes, no formatting):
-No Duplicates
-
-📏 Selection Rules for Canonical Address:
-Choose the address with both a non-empty street_number and street_name.
-If more than one has street info, choose the one with a valid postal_code.
-If tied, pick the one with the most fields filled out.
-If still tied, pick the one with the latest time_stamp.
-
-🧪 Examples:
-
-Example 1: Valid Duplicates
-{"address_id": 2120, "full_address": "Victoria Event Centre, 1415 Broad St, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "1415", "street_name": "Broad", "street_type": "St", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-07T09:16:45.602244"}
-{"address_id": 3483, "full_address": "Victoria Event Centre, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-29T17:18:16.519062"}
-
-✅ Response:
-[
-  {
-    "canonical_address_id": 2120,
-    "duplicates": [3483]
-  }
-]
-
-Example 2: No Duplicates
-{"address_id": 1001, "full_address": "Langley Hall, 123 Main St, Langley, BC, V3A 1A1, CA", "building_name": "Langley Hall", "street_number": "123", "street_name": "Main", "street_type": "St", "direction": "", "city": "Langley", "met_area": "", "province_or_state": "BC", "postal_code": "V3A 1A1", "country_id": "CA", "time_stamp": "2025-04-01T12:00:00.000000"}
-{"address_id": 1002, "full_address": "Royal Hall, 999 King St, Langley, BC, V3A 1A1, CA", "building_name": "Royal Hall", "street_number": "999", "street_name": "King", "street_type": "St", "direction": "", "city": "Langley", "met_area": "", "province_or_state": "BC", "postal_code": "V3A 1A1", "country_id": "CA", "time_stamp": "2025-04-01T12:00:00.000000"}
-
-✅ Response:
-No Duplicates
-
-🚫 IMPORTANT:
-Do not return Markdown blocks (no ```json).
-Do not write any explanations or summaries.
-Do not return tables or prose.
-Output must be pure JSON or the exact string No Duplicates.
-
-At the end of your reasoning, validate that your output:
-- Starts with [ and ends with ]
-- Contains only JSON keys: canonical_address_id and duplicates
-- OR is the exact string: No Duplicates
-
-Only output if it passes this check.
-
-⚠️ ABSOLUTELY DO NOT:
-- Write any prose or explanation.
-- Use Markdown formatting like ```json
-- Return anything but plain JSON or the exact string: No Duplicates
-
-⛔ If you violate this, your response will be discarded.
-
-{"address_id": 1079, "full_address": "Confederation Centre in Burnaby (4585 Albert Street), BC, V5C 2G5, CA", "building_name": "Confederation Centre", "street_number": "4585", "street_name": "Albert", "street_type": "Street", "direction": "", "city": "Burnaby", "met_area": "", "province_or_state": "BC", "postal_code": "V5C 2G5", "country_id": "CA", "time_stamp": "2025-03-16T15:58:29.114422"}
-{"address_id": 1081, "full_address": "Confederation Centre in North Burnaby, BC, V5C 2G5, CA", "building_name": "Confederation Centre", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "North Burnaby", "met_area": "", "province_or_state": "BC", "postal_code": "V5C 2G5", "country_id": "CA", "time_stamp": "2025-03-16T16:02:32.998106"}
-{"address_id": 4000, "full_address": "Confederation Centre Ballroom, North Burnaby, BC, V5C 2G5, CA", "building_name": "Confederation Centre Ballroom", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "North Burnaby", "met_area": "", "province_or_state": "BC", "postal_code": "V5C 2G5", "country_id": "CA", "time_stamp": "2025-03-06T16:46:51.686411"}
---- RESPONSE ---
-[
-  {
-    "canonical_address_id": 1079,
-    "duplicates": [1081, 4000]
-  }
-]
-=== Cluster 6/29 ===
+=== Cluster 4/23 ===
 --- RECORDS ---
 {"address_id": 2110, "full_address": "3551 Moncton ST, RICHMOND, BC, V7E3A3, CA", "building_name": "", "street_number": "3551", "street_name": "Moncton", "street_type": "ST", "direction": "", "city": "Richmond", "met_area": "", "province_or_state": "BC", "postal_code": "V7E 3A3", "country_id": "CA", "time_stamp": "NaT"}
 {"address_id": 4350, "full_address": "7551 Westminster HWY, RICHMOND, BC, V6X1A3, CA", "building_name": "", "street_number": "7551", "street_name": "Westminster", "street_type": "HWY", "direction": "", "city": "Richmond", "met_area": "", "province_or_state": "BC", "postal_code": "V6X1A3", "country_id": "CA", "time_stamp": "2025-03-07 09:27:07.570538"}
@@ -283,7 +103,7 @@ Only output if it passes this check.
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 7/29 ===
+=== Cluster 5/23 ===
 --- RECORDS ---
 {"address_id": 1315, "full_address": "Northern Alberta Jubilee Auditorium, Edmonton, AB, BC, T6G 2T2, CA", "building_name": "Northern Alberta Jubilee Auditorium", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "Edmonton", "met_area": "", "province_or_state": "AB", "postal_code": "T6G 2T2", "country_id": "CA", "time_stamp": "2025-03-21 09:21:22.836879"}
 {"address_id": 1316, "full_address": "Southern Alberta Jubilee Auditorium, Calgary, AB, BC, T2N 1M4, CA", "building_name": "Southern Alberta Jubilee Auditorium", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "Calgary", "met_area": "", "province_or_state": "AB", "postal_code": "T2N 1M4", "country_id": "CA", "time_stamp": "2025-03-21 09:21:23.072365"}
@@ -367,102 +187,11 @@ Only output if it passes this check.
 {"address_id": 1316, "full_address": "Southern Alberta Jubilee Auditorium, Calgary, AB, BC, T2N 1M4, CA", "building_name": "Southern Alberta Jubilee Auditorium", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "Calgary", "met_area": "", "province_or_state": "AB", "postal_code": "T2N 1M4", "country_id": "CA", "time_stamp": "2025-03-21T09:21:23.072365"}
 --- RESPONSE ---
 No Duplicates
-=== Cluster 8/29 ===
---- RECORDS ---
-{"address_id": 2091, "full_address": "Cameron Band Shell, Beacon Hill Park, Circle Drive, Victoria, BC, V8V 2P2, CA", "building_name": "Cameron Band Shell", "street_number": "", "street_name": "Circle", "street_type": "Drive", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8V 2P2", "country_id": "CA", "time_stamp": "NaT"}
-{"address_id": 4302, "full_address": "Cameron Band Shell at Beacon Hill Park, Beacon Hill Park Circle Drive, Victoria, BC, V8V 2P2, CA", "building_name": "Cameron Band Shell", "street_number": "", "street_name": "Beacon Hill Park Circle", "street_type": "Drive", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8V 2P2", "country_id": "CA", "time_stamp": "2025-03-06 20:50:50.769176"}
-{"address_id": 2627, "full_address": "Cameron Band Shell, Beacon Hill Park Circle Drive, Victoria, British Columbia,  BC, V8V 2P2, CA", "building_name": "Cameron Band Shell", "street_number": "null", "street_name": "Beacon Hill Park Circle", "street_type": "Drive", "direction": "null", "city": "Victoria", "met_area": "null", "province_or_state": "BC", "postal_code": "V8V 2P2", "country_id": "CA", "time_stamp": "2025-03-21 12:36:08.674830"}
---- STATUS ---
-Fuzzy match on building names above threshold. Sending to LLM.
---- PROMPT ---
-SYSTEM: You are a JSON-producing deduplication assistant.
-You do not write explanations.  
-You do not return Markdown.  
-You do not return helpful advice.  
-You ONLY return valid JSON as described below — or the string: No Duplicates
-
-You are a data deduplication assistant.
-You will be given a list of address records. Each record is in JSON format and includes an `address_id`, `full_address`, and other fields such as postal code, city, province, and timestamp.
-Your job is to identify groups of addresses that refer to the **same physical location** (i.e., duplicates). If records are duplicates, choose one as the canonical address and return the others as its duplicates.
----
-
-✅ Output Format:
-Respond with **ONLY** JSON — nothing else. No Markdown. No text. No comments. No explanation. No notes.
-
-Use this format:
-```json
-[
-  {
-    "canonical_address_id": 123,
-    "duplicates": [456, 789]
-  }
-]
-
-If there are no duplicates, respond with this exact string (no quotes, no formatting):
-No Duplicates
-
-📏 Selection Rules for Canonical Address:
-Choose the address with both a non-empty street_number and street_name.
-If more than one has street info, choose the one with a valid postal_code.
-If tied, pick the one with the most fields filled out.
-If still tied, pick the one with the latest time_stamp.
-
-🧪 Examples:
-
-Example 1: Valid Duplicates
-{"address_id": 2120, "full_address": "Victoria Event Centre, 1415 Broad St, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "1415", "street_name": "Broad", "street_type": "St", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-07T09:16:45.602244"}
-{"address_id": 3483, "full_address": "Victoria Event Centre, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-29T17:18:16.519062"}
-
-✅ Response:
-[
-  {
-    "canonical_address_id": 2120,
-    "duplicates": [3483]
-  }
-]
-
-Example 2: No Duplicates
-{"address_id": 1001, "full_address": "Langley Hall, 123 Main St, Langley, BC, V3A 1A1, CA", "building_name": "Langley Hall", "street_number": "123", "street_name": "Main", "street_type": "St", "direction": "", "city": "Langley", "met_area": "", "province_or_state": "BC", "postal_code": "V3A 1A1", "country_id": "CA", "time_stamp": "2025-04-01T12:00:00.000000"}
-{"address_id": 1002, "full_address": "Royal Hall, 999 King St, Langley, BC, V3A 1A1, CA", "building_name": "Royal Hall", "street_number": "999", "street_name": "King", "street_type": "St", "direction": "", "city": "Langley", "met_area": "", "province_or_state": "BC", "postal_code": "V3A 1A1", "country_id": "CA", "time_stamp": "2025-04-01T12:00:00.000000"}
-
-✅ Response:
-No Duplicates
-
-🚫 IMPORTANT:
-Do not return Markdown blocks (no ```json).
-Do not write any explanations or summaries.
-Do not return tables or prose.
-Output must be pure JSON or the exact string No Duplicates.
-
-At the end of your reasoning, validate that your output:
-- Starts with [ and ends with ]
-- Contains only JSON keys: canonical_address_id and duplicates
-- OR is the exact string: No Duplicates
-
-Only output if it passes this check.
-
-⚠️ ABSOLUTELY DO NOT:
-- Write any prose or explanation.
-- Use Markdown formatting like ```json
-- Return anything but plain JSON or the exact string: No Duplicates
-
-⛔ If you violate this, your response will be discarded.
-
-{"address_id": 2091, "full_address": "Cameron Band Shell, Beacon Hill Park, Circle Drive, Victoria, BC, V8V 2P2, CA", "building_name": "Cameron Band Shell", "street_number": "", "street_name": "Circle", "street_type": "Drive", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8V 2P2", "country_id": "CA", "time_stamp": ""}
-{"address_id": 4302, "full_address": "Cameron Band Shell at Beacon Hill Park, Beacon Hill Park Circle Drive, Victoria, BC, V8V 2P2, CA", "building_name": "Cameron Band Shell", "street_number": "", "street_name": "Beacon Hill Park Circle", "street_type": "Drive", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8V 2P2", "country_id": "CA", "time_stamp": "2025-03-06T20:50:50.769176"}
-{"address_id": 2627, "full_address": "Cameron Band Shell, Beacon Hill Park Circle Drive, Victoria, British Columbia,  BC, V8V 2P2, CA", "building_name": "Cameron Band Shell", "street_number": "null", "street_name": "Beacon Hill Park Circle", "street_type": "Drive", "direction": "null", "city": "Victoria", "met_area": "null", "province_or_state": "BC", "postal_code": "V8V 2P2", "country_id": "CA", "time_stamp": "2025-03-21T12:36:08.674830"}
---- RESPONSE ---
-[
-  {
-    "canonical_address_id": 2627,
-    "duplicates": [2091, 4302]
-  }
-]
-=== Cluster 9/29 ===
+=== Cluster 6/23 ===
 --- RECORDS ---
 {"address_id": 58, "full_address": "The Wicket Hall (Strathcona Hotel), Victoria BC, V8W 2C2, CA", "building_name": "The Wicket Hall", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2C2", "country_id": "CA", "time_stamp": "NaT"}
 {"address_id": 12666, "full_address": "The Wicket Hall (Strathcona Hotel), 919 Douglas St, Victoria, BC V8W 2C2", "building_name": "The Wicket Hall (Strathcona Hotel)", "street_number": "919", "street_name": "Douglas", "street_type": "St", "direction": "null", "city": "Victoria", "met_area": "null", "province_or_state": "BC", "postal_code": "V8W 2C2", "country_id": "CA", "time_stamp": "2025-06-23 21:50:58.677613"}
-=== Cluster 10/29 ===
+=== Cluster 7/23 ===
 --- RECORDS ---
 {"address_id": 23, "full_address": "345 Broadway W, VANCOUVER, BC, V5Y1P8, CA", "building_name": "", "street_number": "345", "street_name": "Broadway", "street_type": "W", "direction": "", "city": "Vancouver", "met_area": "", "province_or_state": "BC", "postal_code": "V5Y1P8", "country_id": "CA", "time_stamp": "NaT"}
 {"address_id": 1089, "full_address": "1627 W Broadway, Vancouver (at Dance Vancouver Studio),  BC, V6J 1W9, CA", "building_name": "Dance Vancouver Studio", "street_number": "1627", "street_name": "W Broadway", "street_type": "", "direction": "", "city": "Vancouver", "met_area": "", "province_or_state": "BC", "postal_code": "V6J 1W9", "country_id": "CA", "time_stamp": "2025-03-16 16:04:37.457832"}
@@ -548,7 +277,7 @@ Only output if it passes this check.
 {"address_id": 12723, "full_address": "3737 27th AVE W, VANCOUVER, BC, V6S1R2, CA", "building_name": "null", "street_number": "3737", "street_name": "27th", "street_type": "AVE", "direction": "null", "city": "VANCOUVER", "met_area": "null", "province_or_state": "BC", "postal_code": "V6S1R2", "country_id": "CA", "time_stamp": "2025-06-25 10:02:11.300558"}
 {"address_id": 12670, "full_address": "1304 Seymour St, Vancouver, BC V6B 3P3", "building_name": "null", "street_number": "1304", "street_name": "Seymour", "street_type": "St", "direction": "null", "city": "Vancouver", "met_area": "null", "province_or_state": "BC", "postal_code": "V6B 3P3", "country_id": "CA", "time_stamp": "2025-06-23 21:50:58.703027"}
 {"address_id": 12698, "full_address": "560 Smithe ST, VANCOUVER, BC, V6B0A8, CA", "building_name": "null", "street_number": "560", "street_name": "Smithe", "street_type": "ST", "direction": "null", "city": "VANCOUVER", "met_area": "null", "province_or_state": "BC", "postal_code": "V6B0A8", "country_id": "CA", "time_stamp": "2025-06-25 09:48:54.292591"}
-=== Cluster 11/29 ===
+=== Cluster 8/23 ===
 --- RECORDS ---
 {"address_id": 2106, "full_address": "2900 Cliffe Avenue, Courtenay, BC, Canada, British Columbia V9N 071,  BC, V9N 2L9, CA", "building_name": "", "street_number": "2900", "street_name": "Cliffe", "street_type": "Avenue", "direction": "", "city": "Courtenay", "met_area": "", "province_or_state": "BC", "postal_code": "V9N 2L9", "country_id": "CA", "time_stamp": "2025-03-09 21:23:49.465586"}
 {"address_id": 20080, "full_address": "Dove Creek Hall, Courtenay, British Columbia,  BC, V9J 1S2, CA", "building_name": "Dove Creek Hall", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "Courtenay", "met_area": "", "province_or_state": "BC", "postal_code": "V9J 1S2", "country_id": "CA", "time_stamp": "2025-03-09 21:43:08.600259"}
@@ -557,185 +286,7 @@ Only output if it passes this check.
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 12/29 ===
---- RECORDS ---
-{"address_id": 1112, "full_address": "Hermann\u2019s Jazz Club,  BC, V8W 1J9, CA", "building_name": "Hermann\u2019s Jazz Club", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 1J9", "country_id": "CA", "time_stamp": "2025-03-16 17:03:28.432733"}
-{"address_id": 13073, "full_address": "Hermann's Jazz Club, 753 View Street,  Victoria, BC V8W 1J9", "building_name": "Hermann's Jazz Club", "street_number": "753", "street_name": "View", "street_type": "Street", "direction": "null", "city": "Victoria", "met_area": "null", "province_or_state": "BC", "postal_code": "V8W 1J9", "country_id": "CA", "time_stamp": "2025-06-25 16:11:34.968797"}
---- STATUS ---
-Fuzzy match on building names above threshold. Sending to LLM.
---- PROMPT ---
-SYSTEM: You are a JSON-producing deduplication assistant.
-You do not write explanations.  
-You do not return Markdown.  
-You do not return helpful advice.  
-You ONLY return valid JSON as described below — or the string: No Duplicates
-
-You are a data deduplication assistant.
-You will be given a list of address records. Each record is in JSON format and includes an `address_id`, `full_address`, and other fields such as postal code, city, province, and timestamp.
-Your job is to identify groups of addresses that refer to the **same physical location** (i.e., duplicates). If records are duplicates, choose one as the canonical address and return the others as its duplicates.
----
-
-✅ Output Format:
-Respond with **ONLY** JSON — nothing else. No Markdown. No text. No comments. No explanation. No notes.
-
-Use this format:
-```json
-[
-  {
-    "canonical_address_id": 123,
-    "duplicates": [456, 789]
-  }
-]
-
-If there are no duplicates, respond with this exact string (no quotes, no formatting):
-No Duplicates
-
-📏 Selection Rules for Canonical Address:
-Choose the address with both a non-empty street_number and street_name.
-If more than one has street info, choose the one with a valid postal_code.
-If tied, pick the one with the most fields filled out.
-If still tied, pick the one with the latest time_stamp.
-
-🧪 Examples:
-
-Example 1: Valid Duplicates
-{"address_id": 2120, "full_address": "Victoria Event Centre, 1415 Broad St, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "1415", "street_name": "Broad", "street_type": "St", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-07T09:16:45.602244"}
-{"address_id": 3483, "full_address": "Victoria Event Centre, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-29T17:18:16.519062"}
-
-✅ Response:
-[
-  {
-    "canonical_address_id": 2120,
-    "duplicates": [3483]
-  }
-]
-
-Example 2: No Duplicates
-{"address_id": 1001, "full_address": "Langley Hall, 123 Main St, Langley, BC, V3A 1A1, CA", "building_name": "Langley Hall", "street_number": "123", "street_name": "Main", "street_type": "St", "direction": "", "city": "Langley", "met_area": "", "province_or_state": "BC", "postal_code": "V3A 1A1", "country_id": "CA", "time_stamp": "2025-04-01T12:00:00.000000"}
-{"address_id": 1002, "full_address": "Royal Hall, 999 King St, Langley, BC, V3A 1A1, CA", "building_name": "Royal Hall", "street_number": "999", "street_name": "King", "street_type": "St", "direction": "", "city": "Langley", "met_area": "", "province_or_state": "BC", "postal_code": "V3A 1A1", "country_id": "CA", "time_stamp": "2025-04-01T12:00:00.000000"}
-
-✅ Response:
-No Duplicates
-
-🚫 IMPORTANT:
-Do not return Markdown blocks (no ```json).
-Do not write any explanations or summaries.
-Do not return tables or prose.
-Output must be pure JSON or the exact string No Duplicates.
-
-At the end of your reasoning, validate that your output:
-- Starts with [ and ends with ]
-- Contains only JSON keys: canonical_address_id and duplicates
-- OR is the exact string: No Duplicates
-
-Only output if it passes this check.
-
-⚠️ ABSOLUTELY DO NOT:
-- Write any prose or explanation.
-- Use Markdown formatting like ```json
-- Return anything but plain JSON or the exact string: No Duplicates
-
-⛔ If you violate this, your response will be discarded.
-
-{"address_id": 1112, "full_address": "Hermann’s Jazz Club,  BC, V8W 1J9, CA", "building_name": "Hermann’s Jazz Club", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 1J9", "country_id": "CA", "time_stamp": "2025-03-16T17:03:28.432733"}
-{"address_id": 13073, "full_address": "Hermann's Jazz Club, 753 View Street,  Victoria, BC V8W 1J9", "building_name": "Hermann's Jazz Club", "street_number": "753", "street_name": "View", "street_type": "Street", "direction": "null", "city": "Victoria", "met_area": "null", "province_or_state": "BC", "postal_code": "V8W 1J9", "country_id": "CA", "time_stamp": "2025-06-25T16:11:34.968797"}
---- RESPONSE ---
-[
-  {
-    "canonical_address_id": 13073,
-    "duplicates": [1112]
-  }
-]
-=== Cluster 13/29 ===
---- RECORDS ---
-{"address_id": 4360, "full_address": "Westshore Dance Studios, 109-2675 Wilfert Road, Victoria, Langford, BC, V9B 1H8, CA", "building_name": "Westshore Dance Studios", "street_number": "109-2675", "street_name": "Wilfert", "street_type": "Road", "direction": "", "city": "Langford", "met_area": "", "province_or_state": "BC", "postal_code": "V9B 1H8", "country_id": "CA", "time_stamp": "2025-03-07 09:37:48.797116"}
-{"address_id": 3479, "full_address": "Westshore Dance Studio, 109\u20132675 Wilfert Road, Colwood,  BC, V9B 1H8, CA", "building_name": "Westshore Dance Studio", "street_number": "109\u20132675", "street_name": "Wilfert", "street_type": "Road", "direction": "null", "city": "Colwood", "met_area": "null", "province_or_state": "BC", "postal_code": "V9B 1H8", "country_id": "CA", "time_stamp": "2025-03-29 20:04:13.148211"}
---- STATUS ---
-Fuzzy match on building names above threshold. Sending to LLM.
---- PROMPT ---
-SYSTEM: You are a JSON-producing deduplication assistant.
-You do not write explanations.  
-You do not return Markdown.  
-You do not return helpful advice.  
-You ONLY return valid JSON as described below — or the string: No Duplicates
-
-You are a data deduplication assistant.
-You will be given a list of address records. Each record is in JSON format and includes an `address_id`, `full_address`, and other fields such as postal code, city, province, and timestamp.
-Your job is to identify groups of addresses that refer to the **same physical location** (i.e., duplicates). If records are duplicates, choose one as the canonical address and return the others as its duplicates.
----
-
-✅ Output Format:
-Respond with **ONLY** JSON — nothing else. No Markdown. No text. No comments. No explanation. No notes.
-
-Use this format:
-```json
-[
-  {
-    "canonical_address_id": 123,
-    "duplicates": [456, 789]
-  }
-]
-
-If there are no duplicates, respond with this exact string (no quotes, no formatting):
-No Duplicates
-
-📏 Selection Rules for Canonical Address:
-Choose the address with both a non-empty street_number and street_name.
-If more than one has street info, choose the one with a valid postal_code.
-If tied, pick the one with the most fields filled out.
-If still tied, pick the one with the latest time_stamp.
-
-🧪 Examples:
-
-Example 1: Valid Duplicates
-{"address_id": 2120, "full_address": "Victoria Event Centre, 1415 Broad St, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "1415", "street_name": "Broad", "street_type": "St", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-07T09:16:45.602244"}
-{"address_id": 3483, "full_address": "Victoria Event Centre, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-29T17:18:16.519062"}
-
-✅ Response:
-[
-  {
-    "canonical_address_id": 2120,
-    "duplicates": [3483]
-  }
-]
-
-Example 2: No Duplicates
-{"address_id": 1001, "full_address": "Langley Hall, 123 Main St, Langley, BC, V3A 1A1, CA", "building_name": "Langley Hall", "street_number": "123", "street_name": "Main", "street_type": "St", "direction": "", "city": "Langley", "met_area": "", "province_or_state": "BC", "postal_code": "V3A 1A1", "country_id": "CA", "time_stamp": "2025-04-01T12:00:00.000000"}
-{"address_id": 1002, "full_address": "Royal Hall, 999 King St, Langley, BC, V3A 1A1, CA", "building_name": "Royal Hall", "street_number": "999", "street_name": "King", "street_type": "St", "direction": "", "city": "Langley", "met_area": "", "province_or_state": "BC", "postal_code": "V3A 1A1", "country_id": "CA", "time_stamp": "2025-04-01T12:00:00.000000"}
-
-✅ Response:
-No Duplicates
-
-🚫 IMPORTANT:
-Do not return Markdown blocks (no ```json).
-Do not write any explanations or summaries.
-Do not return tables or prose.
-Output must be pure JSON or the exact string No Duplicates.
-
-At the end of your reasoning, validate that your output:
-- Starts with [ and ends with ]
-- Contains only JSON keys: canonical_address_id and duplicates
-- OR is the exact string: No Duplicates
-
-Only output if it passes this check.
-
-⚠️ ABSOLUTELY DO NOT:
-- Write any prose or explanation.
-- Use Markdown formatting like ```json
-- Return anything but plain JSON or the exact string: No Duplicates
-
-⛔ If you violate this, your response will be discarded.
-
-{"address_id": 4360, "full_address": "Westshore Dance Studios, 109-2675 Wilfert Road, Victoria, Langford, BC, V9B 1H8, CA", "building_name": "Westshore Dance Studios", "street_number": "109-2675", "street_name": "Wilfert", "street_type": "Road", "direction": "", "city": "Langford", "met_area": "", "province_or_state": "BC", "postal_code": "V9B 1H8", "country_id": "CA", "time_stamp": "2025-03-07T09:37:48.797116"}
-{"address_id": 3479, "full_address": "Westshore Dance Studio, 109–2675 Wilfert Road, Colwood,  BC, V9B 1H8, CA", "building_name": "Westshore Dance Studio", "street_number": "109–2675", "street_name": "Wilfert", "street_type": "Road", "direction": "null", "city": "Colwood", "met_area": "null", "province_or_state": "BC", "postal_code": "V9B 1H8", "country_id": "CA", "time_stamp": "2025-03-29T20:04:13.148211"}
---- RESPONSE ---
-[
-  {
-    "canonical_address_id": 4360,
-    "duplicates": [3479]
-  }
-]
-=== Cluster 14/29 ===
+=== Cluster 9/23 ===
 --- RECORDS ---
 {"address_id": 20070, "full_address": "33676 St. Olaf AVE, ABBOTSFORD, BC, V4X1T6, CA", "building_name": "null", "street_number": "33676", "street_name": "St. Olaf", "street_type": "AVE", "direction": "null", "city": "ABBOTSFORD", "met_area": "null", "province_or_state": "BC", "postal_code": "V4X1T6", "country_id": "CA", "time_stamp": "2025-04-01 21:25:37.238075"}
 {"address_id": 2632, "full_address": "33719 Harris RD, ABBOTSFORD, BC, V4X1T5, CA", "building_name": "null", "street_number": "33719", "street_name": "Harris", "street_type": "RD", "direction": "null", "city": "ABBOTSFORD", "met_area": "null", "province_or_state": "BC", "postal_code": "V4X1T5", "country_id": "CA", "time_stamp": "2025-05-22 08:11:48.919231"}
@@ -743,7 +294,7 @@ Only output if it passes this check.
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 15/29 ===
+=== Cluster 10/23 ===
 --- RECORDS ---
 {"address_id": 2630, "full_address": "5365 Lane ST, BURNABY, BC, V5H0H2, CA", "building_name": "null", "street_number": "5365", "street_name": "Lane", "street_type": "ST", "direction": "null", "city": "BURNABY", "met_area": "null", "province_or_state": "BC", "postal_code": "V5H0H2", "country_id": "CA", "time_stamp": "2025-03-21 12:50:38.658893"}
 {"address_id": 2651, "full_address": "4858 Imperial ST, BURNABY, BC, V5J1C4, CA", "building_name": "null", "street_number": "4858", "street_name": "Imperial", "street_type": "ST", "direction": "null", "city": "BURNABY", "met_area": "null", "province_or_state": "BC", "postal_code": "V5J1C4", "country_id": "CA", "time_stamp": "2025-03-21 14:37:25.122626"}
@@ -752,7 +303,7 @@ SKIPPED: All street numbers are unique. No duplicates.
 {"address_id": 9742, "full_address": "490 Sperling AVE, BURNABY, BC, V5B4H3, CA", "building_name": "null", "street_number": "490", "street_name": "Sperling", "street_type": "AVE", "direction": "null", "city": "BURNABY", "met_area": "null", "province_or_state": "BC", "postal_code": "V5B4H3", "country_id": "CA", "time_stamp": "2025-05-29 17:41:58.855659"}
 {"address_id": 10324, "full_address": "4129 Lougheed HWY, BURNABY, BC, V5C3Y6, CA", "building_name": "null", "street_number": "4129", "street_name": "Lougheed", "street_type": "HWY", "direction": "null", "city": "BURNABY", "met_area": "null", "province_or_state": "BC", "postal_code": "V5C3Y6", "country_id": "CA", "time_stamp": "2025-06-03 15:21:59.066454"}
 {"address_id": 12739, "full_address": "4525 Lougheed HWY, BURNABY, BC, V5C0K3, CA", "building_name": "", "street_number": "4525", "street_name": "Lougheed", "street_type": "HWY", "direction": "", "city": "BURNABY", "met_area": "", "province_or_state": "BC", "postal_code": "V5C0K3", "country_id": "CA", "time_stamp": "2025-06-25 10:07:29.531116"}
-=== Cluster 16/29 ===
+=== Cluster 11/23 ===
 --- RECORDS ---
 {"address_id": 4640, "full_address": "6375 West Saanich RD, SAANICHTON, BC, V8M1W8, CA", "building_name": "", "street_number": "6375", "street_name": "West Saanich", "street_type": "RD", "direction": "", "city": "SAANICHTON", "met_area": "", "province_or_state": "BC", "postal_code": "V8M1W8", "country_id": "CA", "time_stamp": "2025-05-12 21:54:23.565966"}
 {"address_id": 8543, "full_address": "5575 West Saanich RD, VICTORIA, BC, V9E2G1, CA", "building_name": "null", "street_number": "5575", "street_name": "West Saanich", "street_type": "RD", "direction": "null", "city": "VICTORIA", "met_area": "null", "province_or_state": "BC", "postal_code": "V9E2G1", "country_id": "CA", "time_stamp": "2025-05-27 17:30:04.081370"}
@@ -762,7 +313,7 @@ SKIPPED: All street numbers are unique. No duplicates.
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 17/29 ===
+=== Cluster 12/23 ===
 --- RECORDS ---
 {"address_id": 5701, "full_address": "384 Wright RD, SALT SPRING ISLAND, BC, V8K2H8, CA", "building_name": "null", "street_number": "384", "street_name": "Wright", "street_type": "RD", "direction": "null", "city": "SALT SPRING ISLAND", "met_area": "null", "province_or_state": "BC", "postal_code": "V8K2H8", "country_id": "CA", "time_stamp": "2025-04-27 23:13:50.393835"}
 {"address_id": 5228, "full_address": "279 Rainbow RD, SALT SPRING ISLAND, BC, V8K2M3, CA", "building_name": "null", "street_number": "279", "street_name": "Rainbow", "street_type": "RD", "direction": "null", "city": "SALT SPRING ISLAND", "met_area": "null", "province_or_state": "BC", "postal_code": "V8K2M3", "country_id": "CA", "time_stamp": "2025-04-27 11:39:46.302763"}
@@ -773,7 +324,7 @@ SKIPPED: All street numbers are unique. No duplicates.
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 18/29 ===
+=== Cluster 13/23 ===
 --- RECORDS ---
 {"address_id": 8511, "full_address": "1710 Commercial DR, VANCOUVER, BC, V5N4A3, CA", "building_name": "null", "street_number": "1710", "street_name": "Commercial", "street_type": "DR", "direction": "null", "city": "VANCOUVER", "met_area": "null", "province_or_state": "BC", "postal_code": "V5N4A3", "country_id": "CA", "time_stamp": "2025-05-22 09:05:18.996704"}
 {"address_id": 12085, "full_address": "1641 Commercial DR, VANCOUVER, BC, V5L3Y3, CA", "building_name": "null", "street_number": "1641", "street_name": "Commercial", "street_type": "DR", "direction": "null", "city": "VANCOUVER", "met_area": "null", "province_or_state": "BC", "postal_code": "V5L3Y3", "country_id": "CA", "time_stamp": "2025-06-11 19:22:26.888306"}
@@ -782,7 +333,7 @@ SKIPPED: All street numbers are unique. No duplicates.
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 19/29 ===
+=== Cluster 14/23 ===
 --- RECORDS ---
 {"address_id": 8568, "full_address": "4385 Happy Valley RD, VICTORIA, BC, V9C3Z3, CA", "building_name": "null", "street_number": "4385", "street_name": "Happy Valley", "street_type": "RD", "direction": "null", "city": "VICTORIA", "met_area": "null", "province_or_state": "BC", "postal_code": "V9C3Z3", "country_id": "CA", "time_stamp": "2025-06-11 15:34:34.181128"}
 {"address_id": 8566, "full_address": "3291 Happy Valley RD, LANGFORD, BC, V9C2W3, CA", "building_name": "null", "street_number": "3291", "street_name": "Happy Valley", "street_type": "RD", "direction": "null", "city": "LANGFORD", "met_area": "null", "province_or_state": "BC", "postal_code": "V9C2W3", "country_id": "CA", "time_stamp": "2025-05-27 18:14:51.953197"}
@@ -791,7 +342,7 @@ SKIPPED: All street numbers are unique. No duplicates.
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 20/29 ===
+=== Cluster 15/23 ===
 --- RECORDS ---
 {"address_id": 8565, "full_address": "1128 Finlayson Arm RD, LANGFORD, BC, V9B6H7, CA", "building_name": "null", "street_number": "1128", "street_name": "Finlayson Arm", "street_type": "RD", "direction": "null", "city": "LANGFORD", "met_area": "null", "province_or_state": "BC", "postal_code": "V9B6H7", "country_id": "CA", "time_stamp": "2025-05-27 18:14:51.941144"}
 {"address_id": 12693, "full_address": "729 Finlayson Arm RD, VICTORIA, BC, V9B6E5, CA", "building_name": "null", "street_number": "729", "street_name": "Finlayson Arm", "street_type": "RD", "direction": "null", "city": "VICTORIA", "met_area": "null", "province_or_state": "BC", "postal_code": "V9B6E5", "country_id": "CA", "time_stamp": "2025-06-25 09:43:27.502360"}
@@ -799,7 +350,7 @@ SKIPPED: All street numbers are unique. No duplicates.
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 21/29 ===
+=== Cluster 16/23 ===
 --- RECORDS ---
 {"address_id": 9753, "full_address": "2429 152 ST, SURREY, BC, V4P1N4, CA", "building_name": "null", "street_number": "2429", "street_name": "152", "street_type": "ST", "direction": "null", "city": "SURREY", "met_area": "null", "province_or_state": "BC", "postal_code": "V4P1N4", "country_id": "CA", "time_stamp": "2025-05-29 20:46:03.615158"}
 {"address_id": 9857, "full_address": "13458 107A AVE, SURREY, BC, V3T0G4, CA", "building_name": "null", "street_number": "13458", "street_name": "107A", "street_type": "AVE", "direction": "null", "city": "SURREY", "met_area": "null", "province_or_state": "BC", "postal_code": "V3T0G4", "country_id": "CA", "time_stamp": "2025-06-02 11:10:24.577937"}
@@ -807,11 +358,11 @@ SKIPPED: All street numbers are unique. No duplicates.
 {"address_id": 11624, "full_address": "13030 76 AVE, SURREY, BC, V3W2V6, CA", "building_name": "null", "street_number": "13030", "street_name": "76", "street_type": "AVE", "direction": "null", "city": "SURREY", "met_area": "null", "province_or_state": "BC", "postal_code": "V3W2V6", "country_id": "CA", "time_stamp": "2025-06-11 00:17:36.238245"}
 {"address_id": 12170, "full_address": "12044 88 AVE, SURREY, BC, V3W3J2, CA", "building_name": "", "street_number": "12044", "street_name": "88", "street_type": "AVE", "direction": "", "city": "SURREY", "met_area": "", "province_or_state": "BC", "postal_code": "V3W3J2", "country_id": "CA", "time_stamp": "2025-06-25 09:29:42.581625"}
 {"address_id": 12682, "full_address": "11088 126A ST, SURREY, BC, V3V0G3, CA", "building_name": "null", "street_number": "11088", "street_name": "126A", "street_type": "ST", "direction": "null", "city": "SURREY", "met_area": "null", "province_or_state": "BC", "postal_code": "V3V0G3", "country_id": "CA", "time_stamp": "2025-06-25 09:31:45.248893"}
-=== Cluster 22/29 ===
+=== Cluster 17/23 ===
 --- RECORDS ---
 {"address_id": 8051, "full_address": "273 Prospect Lake RD, VICTORIA, BC, V9E1J7, CA", "building_name": "null", "street_number": "273", "street_name": "Prospect Lake", "street_type": "RD", "direction": "null", "city": "VICTORIA", "met_area": "null", "province_or_state": "BC", "postal_code": "V9E1J7", "country_id": "CA", "time_stamp": "2025-05-21 20:46:12.666623"}
 {"address_id": 12653, "full_address": "Prospect Lake, 331 Prospect Lake Road, Victoria, BC", "building_name": "Prospect Lake", "street_number": "331", "street_name": "Prospect Lake", "street_type": "Road", "direction": "null", "city": "Victoria", "met_area": "null", "province_or_state": "BC", "postal_code": "null", "country_id": "CA", "time_stamp": "2025-06-23 21:50:58.597892"}
-=== Cluster 23/29 ===
+=== Cluster 18/23 ===
 --- RECORDS ---
 {"address_id": 8541, "full_address": "2070 Phillips RD, SOOKE, BC, V9Z0Y3, CA", "building_name": "null", "street_number": "2070", "street_name": "Phillips", "street_type": "RD", "direction": "null", "city": "SOOKE", "met_area": "null", "province_or_state": "BC", "postal_code": "V9Z0Y3", "country_id": "CA", "time_stamp": "2025-05-27 17:29:26.809291"}
 {"address_id": 11590, "full_address": "6645 East Sooke RD, SOOKE, BC, V9Z1A5, CA", "building_name": "null", "street_number": "6645", "street_name": "East Sooke", "street_type": "RD", "direction": "null", "city": "SOOKE", "met_area": "null", "province_or_state": "BC", "postal_code": "V9Z1A5", "country_id": "CA", "time_stamp": "2025-06-25 09:44:54.740760"}
@@ -820,7 +371,7 @@ SKIPPED: All street numbers are unique. No duplicates.
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 24/29 ===
+=== Cluster 19/23 ===
 --- RECORDS ---
 {"address_id": 8561, "full_address": "1432 Craigflower RD, ESQUIMALT, BC, V9A2Y8, CA", "building_name": "null", "street_number": "1432", "street_name": "Craigflower", "street_type": "RD", "direction": "null", "city": "ESQUIMALT", "met_area": "null", "province_or_state": "BC", "postal_code": "V9A2Y8", "country_id": "CA", "time_stamp": "2025-06-11 15:34:34.088188"}
 {"address_id": 12197, "full_address": "424 Craigflower RD, VICTORIA, BC, V9A2V8, CA", "building_name": "", "street_number": "424", "street_name": "Craigflower", "street_type": "RD", "direction": "", "city": "VICTORIA", "met_area": "", "province_or_state": "BC", "postal_code": "V9A2V8", "country_id": "CA", "time_stamp": "2025-06-18 10:56:09.552693"}
@@ -828,7 +379,7 @@ SKIPPED: All street numbers are unique. No duplicates.
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 25/29 ===
+=== Cluster 20/23 ===
 --- RECORDS ---
 {"address_id": 10326, "full_address": "1777 2nd ST N, CRANBROOK, BC, V1C7G9, CA", "building_name": "null", "street_number": "1777", "street_name": "2nd", "street_type": "ST", "direction": "null", "city": "CRANBROOK", "met_area": "null", "province_or_state": "BC", "postal_code": "V1C7G9", "country_id": "CA", "time_stamp": "2025-06-03 15:36:52.626592"}
 {"address_id": 9754, "full_address": "37 11th AVE S, CRANBROOK, BC, V1C2N9, CA", "building_name": "null", "street_number": "37", "street_name": "11th", "street_type": "AVE", "direction": "S", "city": "CRANBROOK", "met_area": "null", "province_or_state": "BC", "postal_code": "V1C2N9", "country_id": "CA", "time_stamp": "2025-05-29 21:02:56.905282"}
@@ -836,104 +387,15 @@ SKIPPED: All street numbers are unique. No duplicates.
 No valid building names. Skipping fuzzy match.
 --- STATUS ---
 SKIPPED: All street numbers are unique. No duplicates.
-=== Cluster 26/29 ===
+=== Cluster 21/23 ===
 --- RECORDS ---
 {"address_id": 12626, "full_address": "Brydon Park, Viewmont Avenue or Vanguard Place, Royal Oak, BC", "building_name": "Brydon Park", "street_number": "", "street_name": "Viewmont Avenue or Vanguard", "street_type": "Place", "direction": "", "city": "Royal Oak", "met_area": "", "province_or_state": "BC", "postal_code": "", "country_id": "CA", "time_stamp": "2025-06-23 21:50:58.432638"}
 {"address_id": 12627, "full_address": "Brydon Park, End of Viewmont Ave, Viewmont Avenue or Vanguard Place, Royal Oak, BC", "building_name": "Brydon Park, End of Viewmont Ave", "street_number": "", "street_name": "Viewmont Avenue or Vanguard", "street_type": "Place", "direction": "", "city": "Royal Oak", "met_area": "", "province_or_state": "BC", "postal_code": "", "country_id": "CA", "time_stamp": "2025-06-23 21:50:58.439411"}
-=== Cluster 27/29 ===
+=== Cluster 22/23 ===
 --- RECORDS ---
 {"address_id": 12644, "full_address": "Lagoon West Park, 170 Goldfinch Road, Colwood, BC", "building_name": "Lagoon West Park", "street_number": "170", "street_name": "Goldfinch", "street_type": "Road", "direction": "null", "city": "Colwood", "met_area": "null", "province_or_state": "BC", "postal_code": "null", "country_id": "CA", "time_stamp": "2025-06-23 21:50:58.544778"}
 {"address_id": 13075, "full_address": "Lagoon Beach, 170 Goldfinch Road, Colwood, BC", "building_name": "Lagoon Beach", "street_number": "170", "street_name": "Goldfinch", "street_type": "Road", "direction": "", "city": "Colwood", "met_area": "", "province_or_state": "BC", "postal_code": "", "country_id": "CA", "time_stamp": "2025-06-25 16:11:34.991719"}
-=== Cluster 28/29 ===
---- RECORDS ---
-{"address_id": 13076, "full_address": "Paradise Within Farm, Salt Spring Island, 255 Musgrave Rd, Salt Spring Island, BC V8K 1V3", "building_name": "Paradise Within Farm", "street_number": "", "street_name": "255 Musgrave", "street_type": "Rd", "direction": "", "city": "Salt Spring Island", "met_area": "", "province_or_state": "BC", "postal_code": "V8K 1V3", "country_id": "CA", "time_stamp": "2025-06-25 16:11:35.015840"}
-{"address_id": 12652, "full_address": "Paradise Within Farm, 255 musgrave rd saltspring island, BC V8K, Salt Spring Island, 255 Musgrave Rd, Salt Spring Island, BC V8K 1V3", "building_name": "Paradise Within Farm", "street_number": "255", "street_name": "Musgrave", "street_type": "Rd", "direction": "null", "city": "Salt Spring Island", "met_area": "null", "province_or_state": "BC", "postal_code": "V8K 1V3", "country_id": "CA", "time_stamp": "2025-06-23 21:50:58.591118"}
---- STATUS ---
-Fuzzy match on building names above threshold. Sending to LLM.
---- PROMPT ---
-SYSTEM: You are a JSON-producing deduplication assistant.
-You do not write explanations.  
-You do not return Markdown.  
-You do not return helpful advice.  
-You ONLY return valid JSON as described below — or the string: No Duplicates
-
-You are a data deduplication assistant.
-You will be given a list of address records. Each record is in JSON format and includes an `address_id`, `full_address`, and other fields such as postal code, city, province, and timestamp.
-Your job is to identify groups of addresses that refer to the **same physical location** (i.e., duplicates). If records are duplicates, choose one as the canonical address and return the others as its duplicates.
----
-
-✅ Output Format:
-Respond with **ONLY** JSON — nothing else. No Markdown. No text. No comments. No explanation. No notes.
-
-Use this format:
-```json
-[
-  {
-    "canonical_address_id": 123,
-    "duplicates": [456, 789]
-  }
-]
-
-If there are no duplicates, respond with this exact string (no quotes, no formatting):
-No Duplicates
-
-📏 Selection Rules for Canonical Address:
-Choose the address with both a non-empty street_number and street_name.
-If more than one has street info, choose the one with a valid postal_code.
-If tied, pick the one with the most fields filled out.
-If still tied, pick the one with the latest time_stamp.
-
-🧪 Examples:
-
-Example 1: Valid Duplicates
-{"address_id": 2120, "full_address": "Victoria Event Centre, 1415 Broad St, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "1415", "street_name": "Broad", "street_type": "St", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-07T09:16:45.602244"}
-{"address_id": 3483, "full_address": "Victoria Event Centre, Victoria, BC, V8W 2B2, CA", "building_name": "Victoria Event Centre", "street_number": "", "street_name": "", "street_type": "", "direction": "", "city": "Victoria", "met_area": "", "province_or_state": "BC", "postal_code": "V8W 2B2", "country_id": "CA", "time_stamp": "2025-03-29T17:18:16.519062"}
-
-✅ Response:
-[
-  {
-    "canonical_address_id": 2120,
-    "duplicates": [3483]
-  }
-]
-
-Example 2: No Duplicates
-{"address_id": 1001, "full_address": "Langley Hall, 123 Main St, Langley, BC, V3A 1A1, CA", "building_name": "Langley Hall", "street_number": "123", "street_name": "Main", "street_type": "St", "direction": "", "city": "Langley", "met_area": "", "province_or_state": "BC", "postal_code": "V3A 1A1", "country_id": "CA", "time_stamp": "2025-04-01T12:00:00.000000"}
-{"address_id": 1002, "full_address": "Royal Hall, 999 King St, Langley, BC, V3A 1A1, CA", "building_name": "Royal Hall", "street_number": "999", "street_name": "King", "street_type": "St", "direction": "", "city": "Langley", "met_area": "", "province_or_state": "BC", "postal_code": "V3A 1A1", "country_id": "CA", "time_stamp": "2025-04-01T12:00:00.000000"}
-
-✅ Response:
-No Duplicates
-
-🚫 IMPORTANT:
-Do not return Markdown blocks (no ```json).
-Do not write any explanations or summaries.
-Do not return tables or prose.
-Output must be pure JSON or the exact string No Duplicates.
-
-At the end of your reasoning, validate that your output:
-- Starts with [ and ends with ]
-- Contains only JSON keys: canonical_address_id and duplicates
-- OR is the exact string: No Duplicates
-
-Only output if it passes this check.
-
-⚠️ ABSOLUTELY DO NOT:
-- Write any prose or explanation.
-- Use Markdown formatting like ```json
-- Return anything but plain JSON or the exact string: No Duplicates
-
-⛔ If you violate this, your response will be discarded.
-
-{"address_id": 13076, "full_address": "Paradise Within Farm, Salt Spring Island, 255 Musgrave Rd, Salt Spring Island, BC V8K 1V3", "building_name": "Paradise Within Farm", "street_number": "", "street_name": "255 Musgrave", "street_type": "Rd", "direction": "", "city": "Salt Spring Island", "met_area": "", "province_or_state": "BC", "postal_code": "V8K 1V3", "country_id": "CA", "time_stamp": "2025-06-25T16:11:35.015840"}
-{"address_id": 12652, "full_address": "Paradise Within Farm, 255 musgrave rd saltspring island, BC V8K, Salt Spring Island, 255 Musgrave Rd, Salt Spring Island, BC V8K 1V3", "building_name": "Paradise Within Farm", "street_number": "255", "street_name": "Musgrave", "street_type": "Rd", "direction": "null", "city": "Salt Spring Island", "met_area": "null", "province_or_state": "BC", "postal_code": "V8K 1V3", "country_id": "CA", "time_stamp": "2025-06-23T21:50:58.591118"}
---- RESPONSE ---
-[
-  {
-    "canonical_address_id": 12652,
-    "duplicates": [13076]
-  }
-]
-=== Cluster 29/29 ===
+=== Cluster 23/23 ===
 --- RECORDS ---
 {"address_id": 12656, "full_address": "Rudd Park, 3366 Whittier Ave, Victoria, BC V8Z 3P9", "building_name": "Rudd Park", "street_number": "3366", "street_name": "Whittier", "street_type": "Ave", "direction": "null", "city": "Victoria", "met_area": "null", "province_or_state": "BC", "postal_code": "V8Z 3P9", "country_id": "CA", "time_stamp": "2025-06-23 21:50:58.616247"}
 {"address_id": 12657, "full_address": "Rudd Park, 3259 Irma, 3249 Irma St, Saanich, BC V8Z, CA", "building_name": "Rudd Park", "street_number": "3249", "street_name": "Irma", "street_type": "St", "direction": "null", "city": "Saanich", "met_area": "null", "province_or_state": "BC", "postal_code": "null", "country_id": "CA", "time_stamp": "2025-06-23 21:50:58.622233"}

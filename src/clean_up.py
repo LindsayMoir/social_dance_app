@@ -1024,75 +1024,70 @@ class CleanUp:
         logging.info(f"fix_null_addresses_in_events(): Updated {updated_count} event(s). Log saved to {log_path}.")
 
 
-    def deduplicate_addresses_with_llm_semantic_clustering(self):
+    def apply_deduplication_response(self, response):
         """
-        Deduplicates address records using an LLM by clustering semantically similar addresses
-        using SentenceTransformer and sending each subcluster (if < 5 rows) to the LLM. Logs results only.
+        Apply deduplication results to the database.
+        Delete duplicate addresses and update events table to point to the canonical address.
         """
+        # Parse JSON string if needed
+        if isinstance(response, str):
+            response = response.strip()
+            if not response or "no duplicates" in response.lower():
+                logging.info("apply_deduplication_response(): LLM response indicates no duplicates.")
+                return
+            try:
+                response = json.loads(response)
+            except json.JSONDecodeError as e:
+                logging.warning(f"apply_deduplication_response(): JSON parsing failed: {e}")
+                return
 
-        logging.info("Starting LLM-based address deduplication with semantic clustering...")
-        os.makedirs("output", exist_ok=True)
-        log_file_path = os.path.join("output", "llm_fix_semantic_clustering.txt")
-
-        df = pd.read_sql("SELECT * FROM address", self.conn).fillna("")
-        if len(df) <= 1:
-            logging.info("Only one address row present. Nothing to deduplicate.")
+        if not isinstance(response, list):
+            logging.warning("apply_deduplication_response(): Skipping due to malformed LLM response.")
             return
 
-        for col in df.columns:
-            if pd.api.types.is_datetime64_any_dtype(df[col]):
-                df.loc[:, col] = df[col].astype(str)
+        for group in response:
+            canonical_id = group.get("canonical_address_id")
+            duplicates = group.get("duplicates", [])
 
-        clusters = self.cluster_addresses_semantically(df, eps=0.2)
-
-        for i, group_ids in enumerate(clusters):
-            batch = df[df['address_id'].isin(group_ids)].copy()
-            if batch.empty:
+            if not canonical_id or not duplicates:
                 continue
-            address_records = batch.to_dict(orient="records")
-            self.log_cluster_header(log_file_path, i, len(clusters), address_records)
-            subclusters = self.subcluster_by_building_name(address_records)
 
-            # Retry agglomerative clustering if subclusters are too large
-            final_subclusters = []
-            for subcluster in subclusters:
-                if len(subcluster) >= 5:
-                    refined = self.subcluster_by_building_name(subcluster, distance_threshold=15)
-                    final_subclusters.extend(refined)
-                else:
-                    final_subclusters.append(subcluster)
+            # Use db_handler instead of db
+            full_address_result = self.db_handler.execute_query(
+                "SELECT full_address FROM address WHERE address_id = :id",
+                {"id": canonical_id}
+            )
+            if not full_address_result:
+                logging.warning(f"apply_deduplication_response(): No full_address found for ID {canonical_id}")
+                continue
+            canonical_address = full_address_result[0][0]
 
-            for subcluster in final_subclusters:
-                if len(subcluster) <= 1 or len(subcluster) >= 5:
-                    continue
+            total_events_updated = 0
+            for dup_id in duplicates:
+                logging.info(f"apply_deduplication_response(): Repointing events from {dup_id} → {canonical_id}")
 
-                # Step 1: Fuzzy match on building_name
-                if self.building_names_fuzzy_match(subcluster, log_file_path):
-                    logging.info(f"Sending cluster {i + 1} to LLM...")
-                    prompt = self.generate_prompt(subcluster)
-                    response = self.llm_handler.query_llm("address_dedup", prompt)
-                    self.log_llm_response(log_file_path, subcluster, 
-                                          prompt, 
-                                          self.llm_handler.query_llm("address_dedup", prompt))
-                    continue
+                num_events_updated = self.db_handler.execute_query(
+                    """
+                    UPDATE events 
+                    SET address_id = :canonical, location = :full_address 
+                    WHERE address_id = :duplicate
+                    """,
+                    {
+                        "canonical": canonical_id,
+                        "duplicate": dup_id,
+                        "full_address": canonical_address
+                    }
+                )
+                total_events_updated += num_events_updated or 0
+                logging.info(f"apply_deduplication_response(): Updated {num_events_updated} events from {dup_id} to {canonical_id}")
 
-                # Step 2: Skip if street_numbers are all unique
-                if self.should_skip_cluster_by_rules(subcluster, log_file_path):
-                    continue
+                logging.info(f"apply_deduplication_response(): Deleting address_id {dup_id} from address table")
+                self.db_handler.execute_query("DELETE FROM address WHERE address_id = :id", {"id": dup_id})
 
-                # Step 3: Try resolving based on completeness
-                if self.try_resolve_canonical_locally(subcluster, log_file_path):
-                    continue
-
-                # Step 4: Send to LLM if street numbers exist but building names differ
-                if self.has_conflicting_street_numbers_unless_same_building(subcluster):
-                    logging.info(f"Sending cluster {i + 1} to LLM...")
-                    prompt = self.generate_prompt(subcluster)
-                    response = self.llm_handler.query_llm("address_dedup", prompt)
-                    self.log_llm_response(log_file_path, subcluster, response)
-                    continue
-
-        logging.info("Finished LLM-based address deduplication (logging only, no DB updates).")
+            logging.info(
+                f"apply_deduplication_response(): Cluster update summary → canonical_id {canonical_id}, "
+                f"total events updated: {total_events_updated}, duplicates removed: {len(duplicates)}"
+            )
 
 
     def generate_prompt(self, subcluster: List[Dict]) -> str:
@@ -1306,10 +1301,11 @@ class CleanUp:
 
         for i in range(len(building_names)):
             for j in range(i+1, len(building_names)):
-                if fuzz.token_set_ratio(building_names[i], building_names[j]) > 85:
+                if fuzz.token_set_ratio(building_names[i], building_names[j]) > 70:
                     return False
 
         return True
+    
 
     def submit_to_llm_and_log(self, subcluster, cluster_index, log_file_path):
         df = pd.DataFrame(subcluster)
@@ -1360,6 +1356,74 @@ class CleanUp:
             f.write(f"--- STATUS ---\n")
             f.write(f"Canonical: {canonical_id}, Duplicates: {duplicates}. Reason: {reason}\n")
 
+
+    def deduplicate_addresses_with_llm_semantic_clustering(self):
+        """
+        Deduplicates address records using an LLM by clustering semantically similar addresses
+        using SentenceTransformer and sending each subcluster (if < 5 rows) to the LLM. Logs results only.
+        """
+        logging.info("Starting LLM-based address deduplication with semantic clustering...")
+        os.makedirs("output", exist_ok=True)
+        log_file_path = os.path.join("output", "llm_fix_semantic_clustering.txt")
+
+        df = pd.read_sql("SELECT * FROM address", self.conn).fillna("")
+        if len(df) <= 1:
+            logging.info("Only one address row present. Nothing to deduplicate.")
+            return
+
+        for col in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                df.loc[:, col] = df[col].astype(str)
+
+        clusters = self.cluster_addresses_semantically(df, eps=0.2)
+
+        for i, group_ids in enumerate(clusters):
+            batch = df[df['address_id'].isin(group_ids)].copy()
+            if batch.empty:
+                continue
+            address_records = batch.to_dict(orient="records")
+            self.log_cluster_header(log_file_path, i, len(clusters), address_records)
+            subclusters = self.subcluster_by_building_name(address_records)
+
+            final_subclusters = []
+            for subcluster in subclusters:
+                if len(subcluster) >= 5:
+                    refined = self.subcluster_by_building_name(subcluster, distance_threshold=15)
+                    final_subclusters.extend(refined)
+                else:
+                    final_subclusters.append(subcluster)
+
+            for subcluster in final_subclusters:
+                if len(subcluster) <= 1 or len(subcluster) >= 5:
+                    continue
+
+                # STEP 1: If building names match fuzzily → send to LLM
+                if self.building_names_fuzzy_match(subcluster, log_file_path):
+                    logging.info(f"Sending cluster {i + 1} to LLM due to building name match...")
+                    prompt = self.generate_prompt(subcluster)
+                    response = self.llm_handler.query_llm("address_dedup", prompt)
+                    self.log_llm_response(log_file_path, subcluster, prompt, response)
+                    self.apply_deduplication_response(response)
+                    continue
+
+                # STEP 2: Only if no building match, consider skipping by street rules
+                if self.should_skip_cluster_by_rules(subcluster, log_file_path):
+                    continue
+
+                # STEP 3: Fallback: try resolving locally
+                if self.try_resolve_canonical_locally(subcluster, log_file_path):
+                    continue
+
+                # STEP 4: Final fallback: LLM if conflicting street numbers
+                if self.has_conflicting_street_numbers_unless_same_building(subcluster):
+                    logging.info(f"Sending cluster {i + 1} to LLM due to conflicting street numbers...")
+                    prompt = self.generate_prompt(subcluster)
+                    response = self.llm_handler.query_llm("address_dedup", prompt)
+                    self.log_llm_response(log_file_path, subcluster, prompt, response)
+                    self.apply_deduplication_response(response)
+                    continue
+
+        logging.info("Finished LLM-based address deduplication and database updates.")
 
 # ------------------------------------------------------------------------
 # Main entry point - run asynchronously
