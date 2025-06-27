@@ -1462,25 +1462,25 @@ async def main():
     # Fix duplicate rows in the address table
     clean_up_instance.deduplicate_addresses_with_llm_semantic_clustering()
 
-    # # Fix no urls in events
-    # await clean_up_instance.process_events_without_url()
+    # Fix no urls in events
+    await clean_up_instance.process_events_without_url()
 
-    # # Fix incorrect dance_styles
-    # await clean_up_instance.fix_incorrect_dance_styles()
+    # Fix incorrect dance_styles
+    await clean_up_instance.fix_incorrect_dance_styles()
 
-    # # Delete events outside of BC, Canada
-    # await clean_up_instance.delete_events_outside_bc()
+    # Delete events outside of BC, Canada
+    await clean_up_instance.delete_events_outside_bc()
 
-    # # Delete events more than 9 months in the future
-    # await clean_up_instance.delete_events_more_than_9_months_future()
+    # Delete events more than 9 months in the future
+    await clean_up_instance.delete_events_more_than_9_months_future()
 
-    # # Fix null addresses in events
-    # await clean_up_instance.fix_null_addresses_in_events()
+    # Fix null addresses in events
+    await clean_up_instance.fix_null_addresses_in_events()
 
-    # # Delete events that you know are not relevant
-    # bad_urls = [url.strip() for url in config['constants']['delete_known_bad_urls'].split(',') if url.strip()]
-    # logging.info(f"known_incorrect(): Deleting events with URLs containing: {bad_urls}")
-    # clean_up_instance.known_incorrect(bad_urls)
+    # Delete events that you know are not relevant
+    bad_urls = [url.strip() for url in config['constants']['delete_known_bad_urls'].split(',') if url.strip()]
+    logging.info(f"known_incorrect(): Deleting events with URLs containing: {bad_urls}")
+    clean_up_instance.known_incorrect(bad_urls)
 
     db_handler.count_events_urls_end(start_df, file_name)
     logging.info(f"Wrote events and urls statistics to: {file_name}")
