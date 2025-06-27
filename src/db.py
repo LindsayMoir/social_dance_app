@@ -970,13 +970,13 @@ class DatabaseHandler():
                 updated_location, address_id = self.populate_from_db_or_fallback(location, postal_code)
                 events_df.loc[index, 'location'] = updated_location
                 events_df.loc[index, 'address_id'] = address_id
-            # else: ***TEMP
-            #     # 4) If still no postal code, fallback to municipality from Google.
-            #     updated_location, address_id = self.fallback_with_municipality(location)
-            #     if updated_location:
-            #         events_df.loc[index, 'location'] = updated_location
-            #     if address_id:
-            #         events_df.loc[index, 'address_id'] = address_id
+            else:
+                # 4) If still no postal code, fallback to municipality from Google.
+                updated_location, address_id = self.fallback_with_municipality(location)
+                if updated_location:
+                    events_df.loc[index, 'location'] = updated_location
+                if address_id:
+                    events_df.loc[index, 'address_id'] = address_id
 
         return events_df
 
