@@ -231,6 +231,45 @@ class LLMHandler():
         else:
             logging.error(f"def process_llm_response: Failed to process LLM response for URL: {url}")
             return False
+        
+
+    def generate_prompt(self, url, extracted_text, prompt_type):
+        """
+        Generate a prompt for a language model using extracted text and configuration details.
+
+        Args:
+            url (str): The URL of the webpage from which the text was extracted.
+            extracted_text (str): The text extracted from the webpage.
+            prompt_type (str): Chooses which prompt to use from config
+
+        Returns:
+            str: A formatted prompt string for the language model.
+        """
+        # Generate the LLM prompt using the extracted text and configuration details.
+        logging.info(f"def generate_prompt(): Generating prompt for URL: {url}")
+
+        # If this errors, then prompt_type is 'default'
+        try:
+            txt_file_path = self.config['prompts'][prompt_type]
+        except KeyError:
+            txt_file_path = self.config['prompts']['default']
+        logging.info(f"def generate_prompt(): prompt type: text file path: {txt_file_path}")
+        
+        # Get the prompt file
+        with open(txt_file_path, 'r') as file:
+            is_relevant_txt = file.read()
+
+        # Generate the full prompt
+        today_date = datetime.now().strftime("%Y-%m-%d")
+        prompt = (
+            f"Today's date is: {today_date}. Use this for all date calculations.\n"
+            f"{is_relevant_txt}\n"
+            f"{extracted_text}\n"
+        )
+
+        logging.info(f"def generate_prompt(): {txt_file_path}")
+
+        return prompt
 
 
     def query_llm(self, url, prompt):
