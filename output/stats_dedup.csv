@@ -1,0 +1,6 @@
+timestamp,total_rows,clustered_rows,num_clusters,canonical_rows,duplicate_rows,eps,min_samples,model,method,git_commit
+2025-06-28 21:37:53,1000,952,10,10,942,0.3,2,all-MiniLM-L6-v2,DBSCAN,b8a03d385ac4b97d022269ab8dc0b83c8e23872b
+2025-06-28 21:43:04,1277,1199,9,9,1190,0.3,2,all-MiniLM-L6-v2,DBSCAN,b8a03d385ac4b97d022269ab8dc0b83c8e23872b
+2025-06-28 21:51:21,1277,572,203,203,369,0.3,2,all-MiniLM-L6-v2,DBSCAN,b8a03d385ac4b97d022269ab8dc0b83c8e23872b
+2025-06-28 22:01:27,1277,166,74,74,92,0.3,2,all-MiniLM-L6-v2,DBSCAN,b8a03d385ac4b97d022269ab8dc0b83c8e23872b
+2025-06-28 22:09:29,1277,114,56,56,58,0.3,2,all-MiniLM-L6-v2,DBSCAN,b8a03d385ac4b97d022269ab8dc0b83c8e23872b

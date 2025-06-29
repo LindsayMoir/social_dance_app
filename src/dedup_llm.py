@@ -30,7 +30,11 @@ import logging
 import os
 import pandas as pd
 import re
+from sentence_transformers import SentenceTransformer
+from sklearn.cluster import DBSCAN
 from sqlalchemy import create_engine, text
+import subprocess
+from datetime import datetime, timedelta
 import yaml
 
 from llm import LLMHandler
@@ -329,20 +333,231 @@ class DeduplicationHandler:
         logging.info(f"_flush_batch: Successfully inserted {len(values)} records into the database.")
 
 
+    def deduplicate_with_embeddings(self, eps=0.3, min_samples=2):
+        """
+        Detects potential duplicate events using sentence embeddings and DBSCAN clustering.
+        Only compares events with the same start_date and within 30 minutes of each other.
+        If address_id is set, it must be the same across rows in the cluster (null address_ids are allowed).
+        Saves results to output/dups_trans_db_scan.csv and stats to output/stats_dedup.csv.
+        """
+        logging.info("Starting embedding-based deduplication...")
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+
+        query = """
+            SELECT event_id, event_name, dance_style, description, day_of_week,
+                   start_date, end_date, start_time, end_time, source, location,
+                   price, url, event_type, address_id
+            FROM events
+            ORDER BY start_date DESC
+        """
+        df = pd.read_sql(query, self.engine)
+
+        if df.empty:
+            logging.info("No events found for deduplication.")
+            return
+
+        string_cols = df.select_dtypes(include='object').columns
+        df[string_cols] = df[string_cols].fillna('')
+        df['start_datetime'] = pd.to_datetime(df['start_date'].astype(str) + ' ' + df['start_time'].astype(str))
+
+        address_query = "SELECT address_id, postal_code FROM address"
+        address_df = pd.read_sql(address_query, self.engine)
+
+        os.makedirs("output", exist_ok=True)
+        results = []
+        cluster_id_counter = 0
+
+        for start_date, group in df.groupby('start_date'):
+            group = group.copy()
+            group.sort_values('start_time', inplace=True)
+            processed_indices = set()
+
+            for idx, row in group.iterrows():
+                if idx in processed_indices:
+                    continue
+
+                base_time = row['start_datetime']
+                base_address_id = row['address_id']
+
+                time_window = group[(group['start_datetime'] >= base_time - timedelta(minutes=30)) &
+                                    (group['start_datetime'] <= base_time + timedelta(minutes=30))]
+                time_window = time_window[~time_window.index.isin(processed_indices)]
+
+                # Address ID restriction
+                if pd.notnull(base_address_id):
+                    time_window = time_window[(time_window['address_id'].isnull()) |
+                                              (time_window['address_id'] == base_address_id)]
+
+                if len(time_window) < 2:
+                    processed_indices.update(time_window.index)
+                    continue
+
+                time_window['text'] = time_window.apply(lambda r: ' | '.join([
+                    str(r['event_name']), str(r['dance_style']), str(r['description']),
+                    str(r['day_of_week']), str(r['start_date']), str(r['end_date']),
+                    str(r['start_time']), str(r['end_time']), str(r['source']),
+                    str(r['location']), str(r['price']), str(r['url']), str(r['event_type'])
+                ]), axis=1)
+
+                embeddings = model.encode(time_window['text'].tolist(), convert_to_numpy=True)
+                clustering = DBSCAN(eps=eps, min_samples=min_samples, metric='cosine').fit(embeddings)
+                time_window['cluster'] = clustering.labels_
+
+                for cluster_id, subgroup in time_window[time_window['cluster'] != -1].groupby('cluster'):
+                    deduped_cluster = self.find_canonical_event(subgroup, address_df)
+                    deduped_cluster['cluster_id'] = cluster_id_counter
+                    deduped_cluster['score_correct'] = None
+                    results.append(deduped_cluster)
+                    cluster_id_counter += 1
+
+                processed_indices.update(time_window.index)
+
+        if results:
+            output_df = pd.concat(results, ignore_index=True)
+            output_df.to_csv("output/dups_trans_db_scan.csv", index=False)
+            logging.info("Saved deduplication results to output/dups_trans_db_scan.csv")
+
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            total_rows = len(df)
+            clustered_rows = len(output_df)
+            canonical_rows = output_df['is_canonical'].sum()
+            duplicate_rows = clustered_rows - canonical_rows
+            num_clusters = output_df['cluster_id'].nunique()
+            git_commit = self.get_git_version()
+
+            stats_row = pd.DataFrame([{
+                'timestamp': timestamp,
+                'total_rows': total_rows,
+                'clustered_rows': clustered_rows,
+                'num_clusters': num_clusters,
+                'canonical_rows': canonical_rows,
+                'duplicate_rows': duplicate_rows,
+                'eps': eps,
+                'min_samples': min_samples,
+                'model': 'all-MiniLM-L6-v2',
+                'method': 'DBSCAN',
+                'git_commit': git_commit
+            }])
+
+            stats_file = "output/stats_dedup.csv"
+            if os.path.exists(stats_file):
+                stats_row.to_csv(stats_file, mode='a', header=False, index=False)
+            else:
+                stats_row.to_csv(stats_file, mode='w', header=True, index=False)
+
+            logging.info("Appended deduplication stats to output/stats_dedup.csv")
+        else:
+            logging.info("No clusters found to output.")
+
+
+    def evaluate_scored_clusters(self, input_file="output/dups_trans_db_scan.csv", stats_file="output/stats_dedup.csv"):
+        """
+        Loads manually scored results and logs evaluation statistics.
+        Appends evaluation details to the same stats CSV used during deduplication.
+        """
+        if not os.path.exists(input_file):
+            logging.warning(f"evaluate_scored_clusters: File not found: {input_file}")
+            return
+
+        df = pd.read_csv(input_file)
+        if 'score_correct' not in df.columns:
+            logging.warning("evaluate_scored_clusters: 'score_correct' column missing.")
+            return
+
+        if df['score_correct'].isnull().all():
+            logging.warning("evaluate_scored_clusters: No manual scores entered yet.")
+            return
+
+        evaluated = df[df['score_correct'].isin([0, 1])]
+        if evaluated.empty:
+            logging.warning("evaluate_scored_clusters: No usable score entries found.")
+            return
+
+        total = len(evaluated)
+        correct = evaluated['score_correct'].sum()
+        accuracy = round(correct / total, 4)
+
+        logging.info(f"Evaluation accuracy: {accuracy} ({correct}/{total} correct)")
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        git_commit = self.get_git_version()
+
+        eval_row = pd.DataFrame([{
+            'timestamp': timestamp,
+            'eval_total_scored': total,
+            'eval_correct': correct,
+            'eval_accuracy': accuracy,
+            'git_commit': git_commit
+        }])
+
+        if os.path.exists(stats_file):
+            eval_row.to_csv(stats_file, mode='a', header=False, index=False)
+        else:
+            eval_row.to_csv(stats_file, mode='w', header=True, index=False)
+
+        logging.info("Appended evaluation stats to output/stats_dedup.csv")
+
+
+    def get_git_version(self):
+        try:
+            return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
+        except Exception:
+            return "unknown"
+
+
+    def score_event_row(self, row, address_df):
+        if not row['location']:
+            return -float('inf')
+
+        score = 0
+
+        if pd.notnull(row['address_id']):
+            score += 1
+            matching_address = address_df[address_df['address_id'] == row['address_id']]
+            if not matching_address.empty and pd.notnull(matching_address.iloc[0].get('postal_code')):
+                score += 1
+
+        for field in ['location', 'description', 'event_name']:
+            if not row[field]:
+                score -= 1
+
+        for field in ['source', 'dance_style', 'event_type', 'start_time', 'url']:
+            if row[field]:
+                score += 0.5
+
+        score += 0.01 * len(row['description']) if row['description'] else 0
+        return score
+
+
+    def find_canonical_event(self, cluster_df, address_df):
+        cluster_df = cluster_df.copy()
+        cluster_df['score'] = cluster_df.apply(lambda row: self.score_event_row(row, address_df), axis=1)
+        canonical = cluster_df.sort_values('score', ascending=False).iloc[0]
+        duplicates = cluster_df[cluster_df['event_id'] != canonical['event_id']].copy()
+        canonical['is_canonical'] = True
+        duplicates['is_canonical'] = False
+        return pd.concat([canonical.to_frame().T, duplicates])
+
+
     def driver(self):
         """
         Main driver function for the deduplication process.
         """
-        # Loop until no duplicates are flagged for deletion (i.e. total_deleted == 0)
-        while True:
-            total_deleted = self.process_duplicates()
-            logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
-            if total_deleted == 0:
-                logging.info("No duplicates found. Exiting deduplication loop.")
-                break
-        
-        # Parse the address data
-        self.parse_address()
+        # while True:
+        #     total_deleted = self.process_duplicates()
+        #     logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
+        #     if total_deleted == 0:
+        #         logging.info("No duplicates found. Exiting deduplication loop.")
+        #         break
+
+        # self.parse_address()   ***TEMP*** We have commented out everything except the deduplication process for now.
+        self.deduplicate_with_embeddings()
+
+        if self.config.get('score', {}).get('dup_trans_db_scan', False):
+            self.evaluate_scored_clusters()
+        else:
+            logging.info("Skipping evaluation scoring due to config setting.")
+
         logging.info("dedup.py finished.")
 
 

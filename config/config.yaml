@@ -73,7 +73,7 @@ location:
   epicentre: Victoria, British Columbia, Canada
 logging:
   extracted_text: output/extracted_text.csv
-  log_file: logs/pipeline_51914_20250625_163310694967.log
+  log_file: logs/pipeline_96682_20250627_151013143204.log
   log_file_p2: logs/log_file_p2.txt
   scraper_log_file: logs/scraper_log.txt
 output:
@@ -88,12 +88,12 @@ output:
 prompts:
   address: prompts/address_from_raw_page.txt
   address_fix: prompts/address_fix_prompt.txt
-  fix_dup_addresses_semantic_clustering: prompts/fix_dup_addresses.txt
   chatbot_instructions: prompts/chatbot_instructions.txt
   dedup: prompts/dedup_prompt.txt
   default: prompts/default.txt
   djdancingdean: prompts/djdancingdean_prompt.txt
   fb: prompts/fb_prompt.txt
+  fix_dup_addresses_semantic_clustering: prompts/fix_dup_addresses.txt
   https://gotothecoda.com/calendar: prompts/the_coda_prompt.txt
   https://vbds.org/other-dancing-opportunities/: prompts/default.txt
   https://www.bardandbanker.com/live-music: prompts/bard_and_banker_prompt.txt
