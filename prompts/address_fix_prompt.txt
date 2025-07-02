@@ -179,7 +179,9 @@ Task Instructions:
 Parsing: Extract the individual components (e.g., building name, street number, street name, street type, direction, postal box, city, met_area, province_or_state, postal code, country_id, time_stamp) from the full_address field.
 Mapping: Assign each extracted component to its corresponding column in the address table schema.
 The full_address field should be copied directly from the input.
+The building_name should be populated. Please look carefully and extract it. It is usually building_name, street_number street_name.
 The direction field should only be populated if a direction is explicitly provided; otherwise, use null.
+The country_id field should be set to "CA".
 Output: Return the final results in JSON format. Each record should be represented as an object with keys exactly matching the column names defined in the address table schema.
 Return:
 Only the JSON results representing the parsed records.

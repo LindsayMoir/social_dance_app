@@ -898,6 +898,21 @@ class CleanUp:
     
 
     async def fix_null_addresses_in_events(self):
+        """
+        Fixes events in the database that have NULL address_id fields by updating them with valid address information.
+        This method performs the following steps:
+            1. Checks for the existence and recency (within 3 days) of a CSV file containing events with missing addresses.
+            2. Loads and cleans the CSV data, ensuring only rows with non-empty 'full_address' are processed.
+            3. Queries the database for events where address_id is NULL.
+            4. For each entry in the CSV:
+                - If an address_id is provided, updates matching events with this address_id and the full address.
+                - If not, checks if the address already exists in the address table; if not, inserts it.
+                - Updates events with the new or existing address_id and full address.
+            5. Logs all updates to an output CSV file for auditing.
+        Logging is used throughout to provide information and error messages. The method is asynchronous and intended to be run as part of a data cleanup or migration process.
+        Returns:
+            None
+        """
         logging.info("Starting fix_null_addresses_in_events process...")
 
         nulls_csv = self.config['input']['nulls_addresses']

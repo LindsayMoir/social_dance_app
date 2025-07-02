@@ -1,0 +1,6 @@
+event_id,new_location,new_address_id,address_id,full_address,building_name,street_number,street_name,street_type,direction,city,met_area,province_or_state,postal_code,country_id,time_stamp
+103,Free Online Event,13113,0,Free Online Event,null,null,null,null,null,null,null,null,null,CA,2025-07-01
+1297,"Puerto Vallarta Amigos at Fisherman's Wharf, 1 Dallas Rd",-1,0,"Puerto Vallarta Amigos at Fisherman's Wharf, 1 Dallas Rd",Puerto Vallarta Amigos,1,Dallas,Rd,null,null,null,null,null,CA,2025-07-01T04:18:32.449715
+1335,"Puerto Vallarta Amigos at Fisherman's Wharf, 1 Dallas Rd",-1,0,"Puerto Vallarta Amigos at Fisherman's Wharf, 1 Dallas Rd",Puerto Vallarta Amigos,1,Dallas,Rd,null,null,null,null,null,CA,2025-07-01T04:18:32.449715
+126,Wesbrook Community Centre,-1,0,Wesbrook Community Centre,Wesbrook Community Centre,null,null,null,null,null,null,BC,null,CA,2025-07-01T04:18:34.731052
+112,null,-1,0,null,Space Toast,null,null,null,null,null,null,null,null,CA,2025-07-01T04:18:39.803702

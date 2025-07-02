@@ -404,11 +404,18 @@ class LLMHandler():
 
     def line_based_parse(self, raw_str: str) -> list[dict]:
         """
-        Generic line-based parser:
-        - Chooses required_keys = ADDRESS_KEYS if 'address_id' appears,
-          otherwise EVENT_KEYS.
-        - Splits on lines, extracts "key": raw, strips all '"' from values,
-          and only keeps records with every required key.
+        Parses a JSON-like string into a list of dictionaries, one per record.
+
+        - Determines whether to use ADDRESS_KEYS or EVENT_KEYS based on the presence of 'address_id' in the input.
+        - Splits the input into lines and looks for lines of the form: "key": value,
+        - Strips all quotes from values and collects key-value pairs into a record.
+        - Only records containing all required keys are included in the output list.
+
+        Args:
+            raw_str (str): The raw string containing JSON-like records.
+
+        Returns:
+            list[dict]: A list of dictionaries, each representing a parsed record.
         """
         # Decide whether these are addresses or events
         required_keys = (
@@ -419,6 +426,9 @@ class LLMHandler():
 
         records = []
         current = None
+
+        if raw_str.startswith("[") and raw_str.endswith("]"):
+            raw_str = raw_str[1:-1].strip()
 
         for line in raw_str.splitlines():
             line = line.strip()
@@ -433,8 +443,10 @@ class LLMHandler():
                 if current is not None:
                     missing = required_keys - current.keys()
                     if not missing:
+                        logging.debug("line_based_parse: Parsed record: %s", current)
                         records.append(current)
                     else:
+                        logging.debug("line_based_parse: Missing keys: %s", missing)
                         logging.warning(
                             "Skipping incomplete record, missing %s: %r",
                             missing, current
@@ -452,7 +464,9 @@ class LLMHandler():
                 # remove all stray quotes and trim whitespace
                 current[key] = raw.replace('"', '').strip()
 
+        logging.info(f"line_based_parse(): Here is what the records look like: \n{records}.")
         return records
+    
 
     def extract_and_parse_json(self, result: str, url: str):
         """

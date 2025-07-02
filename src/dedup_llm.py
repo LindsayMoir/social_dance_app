@@ -1,29 +1,29 @@
 # dedup_llm.py
+
 """
-DeduplicationHandler is a class responsible for handling the deduplication of events in a database.
-It initializes with a configuration file, sets up logging, connects to the database, and interfaces
-with the llm API for deduplication tasks.
-    Attributes:
-        config (dict): Configuration settings loaded from a YAML file.
-        db_handler (DatabaseHandler): Handler for database operations.
-        db_conn_str (str): Database connection string.
-        engine (sqlalchemy.engine.Engine): SQLAlchemy engine for database connection.
-        api_key (str): API key for llm.
-        model (str): Model name for llm API.
-        client (llm): llm API client.
-        prompt_template (str): Template for the deduplication prompt.
-    Methods:
-        _load_config(config_path): Loads the configuration from a YAML file.
-        _setup_logging(): Configures logging settings.
-        _setup_database(): Sets up the database connection.
-        load_prompt(): Loads the deduplication prompt template.
-        fetch_possible_duplicates(): Fetches possible duplicate events from the database.
-        query_llm(df): Queries the llm API with event data to identify duplicates.
-        process_duplicates(): Processes and deletes duplicate events based on llm API response.
-        delete_duplicates(df): Deletes duplicate events from the database.
+This script provides the DeduplicationHandler class and related logic for identifying and removing duplicate event records from a database. It supports multiple deduplication strategies, including LLM-based and embedding-based clustering, and manages the full deduplication workflow: configuration, logging, database access, LLM prompting, result parsing, and database updates.
+
+Key Features:
+- Loads configuration and logging settings from YAML.
+- Connects to a database using SQLAlchemy.
+- Fetches potential duplicate events using SQL queries.
+- Uses LLMs to classify duplicates and embedding models (DBSCAN) for clustering.
+- Supports address parsing and correction via LLM.
+- Merges, saves, and deletes duplicates based on LLM or clustering results.
+- Tracks deduplication statistics and supports manual evaluation of results.
+
+Classes:
+    DeduplicationHandler: Orchestrates deduplication, LLM interaction, clustering, and database updates.
+
+Typical Usage:
+    python dedup_llm.py
+
+Dependencies:
+    - pandas, SQLAlchemy, sentence-transformers, scikit-learn, dotenv, yaml, etc.
 """
 from datetime import datetime
 from dotenv import load_dotenv
+from fuzzywuzzy import process, fuzz
 import json
 from io import StringIO
 import logging
@@ -333,6 +333,266 @@ class DeduplicationHandler:
         logging.info(f"_flush_batch: Successfully inserted {len(values)} records into the database.")
 
 
+    def fix_problem_events(self, dry_run=False):
+        """
+        Identifies and fixes events with missing or problematic location/address information.
+        Groups events by (event_name, description, location) to avoid redundant processing.
+        Uses LLM and regex to repair address data and update both address and event tables.
+        """
+        logging.info("fix_problem_events: Retrieving problematic events...")
+        sql = """
+            SELECT * FROM events
+            WHERE 
+                address_id IS NULL 
+                OR address_id = 0
+                OR location IS NULL 
+                OR LENGTH(TRIM(location)) < 20
+                OR LENGTH(event_name) > 100
+        """
+        df = pd.read_sql(text(sql), self.engine)
+
+        df.to_csv("output/test/problematic_events_raw.csv", index=False)
+
+        if df.empty:
+            logging.info("fix_problem_events: No problematic events found.")
+            return
+
+        fix_events = []
+        fix_addresses = []
+        processed_event_ids = set()
+
+        os.makedirs("output/test", exist_ok=True)
+
+        groups = df.groupby(['event_name', 'description', 'location'], dropna=False)
+
+        grouped_df = pd.concat([group for _, group in groups])
+        grouped_df.to_csv("output/test/groups.csv", index=False)
+
+        grouped_df_ids = grouped_df['event_id'].tolist()
+        missing_rows = df[~df['event_id'].isin(grouped_df_ids)]
+        if not missing_rows.empty:
+            logging.warning(f"{len(missing_rows)} rows missing from groupby result. Saved to output/test/missing_from_groups.csv")
+            missing_rows.to_csv("output/test/missing_from_groups.csv", index=False)
+
+        for i, ((event_name, description, location), group) in enumerate(groups):
+            logging.info(f"--- Processing event group {i+1} ---")
+            row = group.iloc[0]
+            event_ids = [int(eid) for eid in group['event_id'].tolist()]
+            processed_event_ids.update(event_ids)
+
+            if len(event_name) > 100:
+                logging.info(f"Group {i+1}: Event name exceeds 100 characters. Calling handle_long_event_name")
+                short_name = " ".join(event_name.split()[:5])
+                self.handle_long_event_name(short_name, event_name, description, group, dry_run, fix_events, fix_addresses)
+                continue
+
+            if location and isinstance(location, str) and location.strip() != '':
+                logging.info(f"Group {i+1}: Attempting fuzzy match for location '{location}'")
+                matched = self.match_location_to_building(location, group, dry_run, fix_events)
+                if matched:
+                    logging.info(f"Group {i+1}: Matched location to known building. Skipping further processing.")
+                    continue
+                if self.handle_existing_location(location, group, dry_run, fix_events):
+                    logging.info(f"Group {i+1}: Found existing location match. Skipping further processing.")
+                    continue
+                self.handle_llm_address_fix(location, group, dry_run, fix_events, fix_addresses)
+                continue
+
+            if (pd.isna(location) or (isinstance(location, str) and location.strip() == '')) and len(event_name) > 100:
+                logging.info(f"Group {i+1}: Location missing and long event name. Using fallback.")
+                self.handle_fallback_llm(event_name, description, group, dry_run, fix_events, fix_addresses)
+                continue
+
+        remaining_df = df[~df['event_id'].isin(processed_event_ids)].copy()
+        if remaining_df.empty:
+            logging.info("No remaining rows to process in match_location_to_building().")
+        else:
+            logging.info(f"Processing {len(remaining_df)} unmatched rows using match_location_to_building()...")
+            for _, row in remaining_df.iterrows():
+                location = row.get("location", "")
+                if location and isinstance(location, str) and location.strip():
+                    group = pd.DataFrame([row])
+                    self.match_location_to_building(location, group, dry_run, fix_events)
+
+        if dry_run:
+            pd.DataFrame(fix_events).to_csv("output/test/fix_events.csv", index=False)
+            pd.DataFrame(fix_addresses).to_csv("output/test/fix_address.csv", index=False)
+        else:
+            logging.info("fix_problem_events: Updates committed to database.")
+
+
+    def match_location_to_building(self, location, group, dry_run, fix_events):
+        building_query = "SELECT address_id, building_name, full_address FROM address WHERE building_name IS NOT NULL"
+        building_df = pd.read_sql(text(building_query), self.engine)
+        building_list = building_df.to_dict('records')
+
+        best_score = 0
+        best_record = None
+        for record in building_list:
+            score = fuzz.partial_ratio(location.lower(), record['building_name'].lower())
+            if score > best_score:
+                best_score = score
+                best_record = record
+
+        if best_score >= 85 and best_record:
+            address_id = int(best_record['address_id'])
+            full_address = best_record['full_address']
+            logging.info(f"match_location_to_building: Fuzzy match found for location '{location}' "
+                        f"→ building_name '{best_record['building_name']}' (score {best_score}). "
+                        f"Updating events with address_id {address_id} and location '{full_address}'")
+            for _, row in group.iterrows():
+                new_data = {"address_id": address_id, "location": full_address}
+                if dry_run:
+                    fix_events.append({**row.to_dict(), **new_data})
+                else:
+                    self.update_event_with_sql(row, new_data)
+            return True
+        else:
+            logging.info(f"match_location_to_building: No suitable fuzzy match found for location '{location}'. Best score: {best_score}.")
+        return False
+
+
+    def handle_long_event_name(self, event_name, description, group, dry_run, fix_events, fix_addresses):
+        short_name = " ".join(event_name.split()[:5])
+        logging.info(f"handle_long_event_name: Truncated event_name to: {short_name}")
+        
+        prompt = self.llm_handler.generate_prompt(
+            url="address",
+            extracted_text=description,
+            prompt_type="address_fix"
+        )
+        response = self.llm_handler.query_llm("address", prompt)
+        parsed = self.llm_handler.extract_and_parse_json(response, "address")
+        
+        if isinstance(parsed, list):
+            parsed = parsed[0] if parsed else {}
+        if not parsed:
+            logging.warning("handle_long_event_name: Parsed result is empty or None")
+            return
+        
+        address_id = int(self.db_handler.get_address_id(parsed))
+        logging.info(f"handle_long_event_name: Generated address_id = {address_id}")
+        
+        for _, row in group.iterrows():
+            new_data = {
+                "event_name": short_name,
+                "address_id": address_id,
+                "location": parsed.get("full_address")
+            }
+            logging.info(f"handle_long_event_name: Preparing update for event_id {row['event_id']} with {new_data}")
+            if dry_run:
+                fix_events.append({**row.to_dict(), **new_data})
+                fix_addresses.append(parsed)
+            else:
+                self.update_event_with_sql(row, new_data)
+
+
+    def handle_existing_location(self, location, group, dry_run, fix_events):
+        address_id = self.find_address_id_by_location(location)
+        logging.info(f"handle_existing_location: Found address_id {address_id} for location '{location}'")
+        
+        if address_id:
+            for _, row in group.iterrows():
+                new_data = {"address_id": int(address_id)}
+                logging.info(f"handle_existing_location: Preparing update for event_id {row['event_id']} with {new_data}")
+                if dry_run:
+                    fix_events.append({**row.to_dict(), **new_data})
+                else:
+                    self.update_event_with_sql(row, new_data)
+            return True
+        return False
+    
+
+    def handle_llm_address_fix(self, location, group, dry_run, fix_events, fix_addresses):
+        prompt = self.llm_handler.generate_prompt(
+            url="address",
+            extracted_text=location,
+            prompt_type="address_fix"
+        )
+        response = self.llm_handler.query_llm("address", prompt)
+        parsed = self.llm_handler.extract_and_parse_json(response, "address")
+        
+        if isinstance(parsed, list):
+            parsed = parsed[0] if parsed else {}
+        if not parsed:
+            logging.warning("handle_llm_address_fix: Parsed result is empty or None")
+            return
+        
+        address_id = int(self.db_handler.get_address_id(parsed))
+        logging.info(f"handle_llm_address_fix: Generated address_id = {address_id}")
+        
+        for _, row in group.iterrows():
+            new_data = {
+                "address_id": address_id,
+                "location": parsed.get("full_address")
+            }
+            logging.info(f"handle_llm_address_fix: Preparing update for event_id {row['event_id']} with {new_data}")
+            if dry_run:
+                fix_events.append({**row.to_dict(), **new_data})
+                fix_addresses.append(parsed)
+            else:
+                self.update_event_with_sql(row, new_data)
+
+
+    def handle_fallback_llm(self, event_name, description, group, dry_run, fix_events, fix_addresses):
+        prompt = self.llm_handler.generate_prompt(
+            url="address",
+            extracted_text=description,
+            prompt_type="address_fix"
+        )
+        response = self.llm_handler.query_llm("address", prompt)
+        parsed = self.llm_handler.extract_and_parse_json(response, "address")
+        
+        if isinstance(parsed, list):
+            parsed = parsed[0] if parsed else {}
+        if not parsed:
+            logging.warning("handle_fallback_llm: Parsed result is empty or None")
+            return
+        
+        address_id = int(self.db_handler.get_address_id(parsed))
+        logging.info(f"handle_fallback_llm: Generated address_id = {address_id}")
+        
+        for _, row in group.iterrows():
+            new_data = {
+                "address_id": address_id,
+                "location": parsed.get("full_address")
+            }
+            logging.info(f"handle_fallback_llm: Preparing update for event_id {row['event_id']} with {new_data}")
+            if dry_run:
+                fix_events.append({**row.to_dict(), **new_data})
+                fix_addresses.append(parsed)
+            else:
+                self.update_event_with_sql(row, new_data)
+
+
+    def update_event_with_sql(self, row, new_data):
+        event_id = int(row["event_id"])
+        logging.info(f"update_event_with_sql: Updating event_id {event_id} with {new_data}")
+        
+        update_cols = [f"{key} = :{key}" for key in new_data.keys()]
+        query = f"UPDATE events SET {', '.join(update_cols)} WHERE event_id = :event_id"
+        params = {**new_data, "event_id": event_id}
+        
+        self.db_handler.execute_query(query, params)
+
+
+    def find_address_id_by_location(self, location):
+        sql = "SELECT address_id FROM address WHERE full_address = :location"
+        result = self.db_handler.execute_query(sql, {"location": location})
+        return int(result[0][0]) if result else None
+    
+
+    def delete_event_if_completely_empty(self, row, dry_run, fix_events):
+        event_id = int(row["event_id"])
+        
+        if dry_run:
+            fix_events.append({**row.to_dict(), "delete": True})
+        else:
+            delete_sql = "DELETE FROM events WHERE event_id = :event_id"
+            self.db_handler.execute_query(delete_sql, {"event_id": event_id})
+            logging.info("delete_event_if_completely_empty: Deleted event_id %s", event_id)
+
+
     def deduplicate_with_embeddings(self, eps=0.3, min_samples=2):
         """
         Detects potential duplicate events using sentence embeddings and DBSCAN clustering.
@@ -543,16 +803,26 @@ class DeduplicationHandler:
         """
         Main driver function for the deduplication process.
         """
-        # while True:
-        #     total_deleted = self.process_duplicates()
-        #     logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
-        #     if total_deleted == 0:
-        #         logging.info("No duplicates found. Exiting deduplication loop.")
-        #         break
+        while True:
+            total_deleted = self.process_duplicates()
+            logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
+            if total_deleted == 0:
+                logging.info("No duplicates found. Exiting deduplication loop.")
+                break
 
-        # self.parse_address()   ***TEMP*** We have commented out everything except the deduplication process for now.
+        # Fix null locations and addresses
+        logging.info("Starting fix_null_locations_and_addresses()...")
+        self.fix_problem_events(dry_run=False)
+
+        # This calls a LLM and parses the address.full_address into the appropriate columns.
+        # It does not seem like much of an issue anymore. Only run it when it does become an issue.
+        # You may have to change the sql. Right now it gets EVERY row in the address table.
+        # self.parse_address()
+
+        # This uses transformers and DBSCAN to find duplicates based on embeddings.
         self.deduplicate_with_embeddings()
 
+        # In order to improve deduplication we really need to evaluate the clusters that were scored.
         if self.config.get('score', {}).get('dup_trans_db_scan', False):
             self.evaluate_scored_clusters()
         else:

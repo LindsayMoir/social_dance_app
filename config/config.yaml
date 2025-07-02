@@ -87,11 +87,13 @@ output:
   is_foreign: output/is_foreign.csv
 prompts:
   address: prompts/address_from_raw_page.txt
+  address_0_null_loc_fix: prompts/address_0_null_location_fix_prompt.txt
   address_fix: prompts/address_fix_prompt.txt
   chatbot_instructions: prompts/chatbot_instructions.txt
   dedup: prompts/dedup_prompt.txt
   default: prompts/default.txt
   djdancingdean: prompts/djdancingdean_prompt.txt
+  event_name_location_fix: prompts/event_name_location_fix_prompt.txt
   fb: prompts/fb_prompt.txt
   fix_dup_addresses_semantic_clustering: prompts/fix_dup_addresses.txt
   https://gotothecoda.com/calendar: prompts/the_coda_prompt.txt
@@ -103,6 +105,8 @@ prompts:
   relevant_dance_url: prompts/relevant_dance_url.txt
   single_event: prompts/single_event.txt
   sql: prompts/sql_prompt.txt
+score:
+  dup_trans_db_scan: false
 search:
   gs_num_results: 10
 startup:
