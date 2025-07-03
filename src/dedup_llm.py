@@ -383,7 +383,7 @@ class DeduplicationHandler:
             if len(event_name) > 100:
                 logging.info(f"Group {i+1}: Event name exceeds 100 characters. Calling handle_long_event_name")
                 short_name = " ".join(event_name.split()[:5])
-                self.handle_long_event_name(short_name, event_name, description, group, dry_run, fix_events, fix_addresses)
+                self.handle_long_event_name(event_name, description, group, dry_run, fix_events, fix_addresses)
                 continue
 
             if location and isinstance(location, str) and location.strip() != '':
@@ -803,12 +803,12 @@ class DeduplicationHandler:
         """
         Main driver function for the deduplication process.
         """
-        while True:
-            total_deleted = self.process_duplicates()
-            logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
-            if total_deleted == 0:
-                logging.info("No duplicates found. Exiting deduplication loop.")
-                break
+        # while True:   ***Temp
+        #     total_deleted = self.process_duplicates()
+        #     logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
+        #     if total_deleted == 0:
+        #         logging.info("No duplicates found. Exiting deduplication loop.")
+        #         break
 
         # Fix null locations and addresses
         logging.info("Starting fix_null_locations_and_addresses()...")
