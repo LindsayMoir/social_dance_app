@@ -98,9 +98,33 @@ class DeduplicationHandler:
     
     def fetch_possible_duplicates(self):
         """
-        Fetches possible duplicate events from the database based on start and end times.
+        Identify and retrieve potential duplicate events from the database based on similar start and end times.
+
+        This method queries the events table to find groups of events that occur on the same date and have start and end times
+        rounded to the nearest 15-minute interval. Only groups containing more than one event are considered possible duplicates.
+        The method returns a pandas DataFrame with one representative event per duplicate group, including relevant event details.
+
+        Parameters:
+            None
+
         Returns:
-            pd.DataFrame: DataFrame with potential duplicates.
+            pd.DataFrame: A DataFrame containing possible duplicate events with the following columns:
+                - group_id (int): Identifier for each group of potential duplicates.
+                - event_id (int): Unique identifier for the event.
+                - event_name (str): Name of the event.
+                - event_type (str): Type or category of the event.
+                - source (str): Source from which the event was obtained.
+                - dance_style (str): Dance style associated with the event.
+                - url (str): URL with more information about the event.
+                - price (float or str): Price of the event.
+                - location (str): Location of the event.
+                - address_id (int): Address identifier.
+                - description (str): Description of the event.
+                - time_stamp (datetime): Timestamp of the event record.
+
+        Notes:
+            - Only events with start_date after '2025-02-13' are considered.
+            - Events are grouped by date and 15-minute rounded start/end times.
         """
         sql = """
         WITH DuplicateStartTimes AS (
@@ -143,9 +167,16 @@ class DeduplicationHandler:
 
     def process_duplicates(self):
         """
-        Processes duplicate entries in chunks and deletes duplicates.
-        Returns:
-            int: The number of events deleted during this run.
+        Processes duplicate entries in the dataset by fetching, filtering, and handling them in manageable chunks.
+        Deletes duplicates based on responses from an LLM and saves the results.
+
+        Inputs:
+            None (operates on the instance's internal state and methods).
+
+            int: The number of events deleted during this run. Returns 0 if no valid duplicates are found or if no valid responses are received from the LLM.
+
+        Raises:
+            None directly, but logs warnings if no duplicates are found or if no valid responses are received from the LLM.
         """
         df = self.fetch_possible_duplicates()
         df = self.filter_valid_duplicates(df)
@@ -164,7 +195,11 @@ class DeduplicationHandler:
 
     def filter_valid_duplicates(self, df):
         """
-        Filters out groups that have fewer than 2 rows.
+        Filters the input DataFrame to retain only groups (based on 'group_id') that contain more than one row.
+        Parameters:
+            df (pandas.DataFrame): The input DataFrame. Must contain a 'group_id' column.
+        Returns:
+            pandas.DataFrame: A DataFrame containing only the rows from groups with more than one member.
         """
         if df.empty:
             logging.warning("def filter_valid_duplicates(): No duplicates found.")
@@ -180,7 +215,14 @@ class DeduplicationHandler:
 
     def process_in_chunks(self, df, chunk_size=50):
         """
-        Processes the dataset in chunks and queries the LLM.
+        Processes the input DataFrame in chunks and queries the LLM for each chunk.
+
+        Args:
+            df (pd.DataFrame): The input DataFrame to be processed in chunks.
+            chunk_size (int, optional): The number of rows per chunk. Defaults to 50.
+
+        Returns:
+            list of pd.DataFrame: A list of DataFrames containing the responses from the LLM for each processed chunk.
         """
         response_dfs = []
 
@@ -199,7 +241,18 @@ class DeduplicationHandler:
 
     def process_chunk_with_llm(self, chunk, chunk_index):
         """
-        Queries the LLM with a batch of duplicate records and returns a DataFrame.
+        Processes a batch (chunk) of duplicate records using a Large Language Model (LLM).
+
+        Args:
+            chunk (pd.DataFrame): A DataFrame containing a batch of duplicate records to be processed.
+            chunk_index (int): The index of the current chunk, used for logging and tracking.
+
+        Returns:
+            pd.DataFrame or None: A DataFrame containing the processed results from the LLM if successful,
+            or None if an error occurs or the LLM response is empty.
+
+        Raises:
+            None: All exceptions are caught and logged internally.
         """
         try:
             prompt = self.load_prompt(chunk.to_markdown())
@@ -219,7 +272,14 @@ class DeduplicationHandler:
 
     def parse_llm_response(self, response_chunk):
         """
-        Extracts the structured JSON from the LLM response and converts it into a DataFrame.
+        Parses a response chunk from an LLM to extract a JSON array of objects and convert it into a pandas DataFrame.
+        The method searches for a JSON array structure within the input string, attempts to parse it,
+        and validates that the resulting DataFrame contains the required columns: 'group_id', 'event_id', and 'Label'.
+        If parsing fails or required columns are missing, an empty DataFrame is returned.
+        Args:
+            response_chunk (str): The raw string response from the LLM, expected to contain a JSON array.
+        Returns:
+            pd.DataFrame: A DataFrame containing the extracted data if successful, otherwise an empty DataFrame.
         """
         try:
             json_match = re.search(r'\[\s*\{.*\}\s*\]', response_chunk, re.DOTALL)
@@ -242,12 +302,18 @@ class DeduplicationHandler:
         except (json.JSONDecodeError, ValueError) as e:
             logging.error(f"def clean_response(): Error parsing LLM response to JSON: {e}")
             return pd.DataFrame()
+        
 
     def merge_and_save_results(self, df, response_dfs):
         """
-        Merges the LLM responses with the dataset, saves the results, and deletes duplicates.
-        Returns:
-            int: The number of events deleted.
+        Merges the provided DataFrame with a list of LLM response DataFrames on the 'event_id' column,
+        saves the merged results to a CSV file, and deletes duplicate events.
+
+        Args:
+            df (pd.DataFrame): The original DataFrame containing event data.
+            response_dfs (List[pd.DataFrame]): A list of DataFrames containing LLM responses to be merged.
+
+            int: The number of duplicate events deleted after merging and saving the results.
         """
         response_df = pd.concat(response_dfs, ignore_index=True)
         df = df.merge(response_df, on="event_id", how="left")
@@ -259,6 +325,16 @@ class DeduplicationHandler:
     def delete_duplicates(self, df):
         """
         Deletes duplicate events from the database based on the provided DataFrame.
+        Args:
+            df (pandas.DataFrame): A DataFrame containing event data. Duplicate events are identified by rows where the "Label" column equals 1. The "event_id" column is used to specify which events to delete.
+
+            int: The number of events that were marked for deletion (i.e., the number of event IDs found with "Label" == 1).
+
+        Logs:
+            - The number of events marked for deletion.
+            - Success or failure of the deletion operation.
+            - If no events are marked for deletion.
+
         Returns:
             int: The number of events that were marked for deletion.
         """
@@ -422,6 +498,21 @@ class DeduplicationHandler:
 
 
     def match_location_to_building(self, location, group, dry_run, fix_events):
+        """
+        Attempts to match a given location string to a building name in the address database using fuzzy string matching.
+        If a sufficiently close match is found, updates the associated events with the matched address information.
+        Args:
+            location (str): The location string to match against building names.
+            group (pandas.DataFrame): DataFrame containing event rows to potentially update.
+            dry_run (bool): If True, do not perform updates but append proposed changes to fix_events.
+            fix_events (list): List to collect proposed event updates when dry_run is True.
+        Returns:
+            bool: True if a suitable match was found and events were updated (or proposed for update), False otherwise.
+        Side Effects:
+            - May update events in the database if dry_run is False.
+            - Appends proposed updates to fix_events if dry_run is True.
+            - Logs information about the matching process.
+        """
         building_query = "SELECT address_id, building_name, full_address FROM address WHERE building_name IS NOT NULL"
         building_df = pd.read_sql(text(building_query), self.engine)
         building_list = building_df.to_dict('records')
@@ -453,6 +544,27 @@ class DeduplicationHandler:
 
 
     def handle_long_event_name(self, event_name, description, group, dry_run, fix_events, fix_addresses):
+        """
+        Handles events with long names by truncating the event name, extracting and fixing address information using an LLM,
+        and updating event records accordingly.
+        This method performs the following steps:
+            1. Truncates the event name to the first five words.
+            2. Uses an LLM to generate and fix address information based on the event description.
+            3. Parses the LLM response to extract address details.
+            4. Retrieves or creates an address ID from the database.
+            5. Prepares updated event data with the truncated name and fixed address.
+            6. Depending on the dry_run flag, either appends the changes to the provided lists or updates the database.
+        Args:
+            event_name (str): The original name of the event.
+            description (str): The event description, used for extracting address information.
+            group (pandas.DataFrame): A DataFrame containing event records to update.
+            dry_run (bool): If True, changes are collected but not committed to the database.
+            fix_events (list): A list to collect updated event data in dry run mode.
+            fix_addresses (list): A list to collect fixed address data in dry run mode.
+        Returns:
+            None
+        """
+        
         short_name = " ".join(event_name.split()[:5])
         logging.info(f"handle_long_event_name: Truncated event_name to: {short_name}")
         
@@ -488,6 +600,21 @@ class DeduplicationHandler:
 
 
     def handle_existing_location(self, location, group, dry_run, fix_events):
+        """
+        Handles events associated with an existing location by updating their address IDs.
+        This method checks if the given location exists and retrieves its corresponding address ID.
+        For each event in the provided group, it prepares to update the event's address ID.
+        If `dry_run` is True, the updates are appended to the `fix_events` list for review without making changes to the database.
+        Otherwise, the events are updated in the database using SQL.
+        Args:
+            location (str): The location name to check for an existing address ID.
+            group (pandas.DataFrame): A DataFrame containing event rows to be updated.
+            dry_run (bool): If True, no database updates are performed; changes are collected in `fix_events`.
+            fix_events (list): A list to collect event updates when in dry run mode.
+        Returns:
+            bool: True if the location exists and events were processed; False otherwise.
+        """
+
         address_id = self.find_address_id_by_location(location)
         logging.info(f"handle_existing_location: Found address_id {address_id} for location '{location}'")
         
@@ -504,6 +631,24 @@ class DeduplicationHandler:
     
 
     def handle_llm_address_fix(self, location, group, dry_run, fix_events, fix_addresses):
+        """
+        Processes and fixes address information for a group of events using an LLM (Large Language Model).
+        This method generates a prompt for the LLM to correct or standardize the given location string,
+        parses the LLM's response, and updates the corresponding events in the database with the fixed address.
+        Supports a dry run mode for previewing changes without applying them.
+        Args:
+            location (str): The raw location string to be fixed.
+            group (pandas.DataFrame): DataFrame containing event rows to update.
+            dry_run (bool): If True, changes are collected in fix_events and fix_addresses instead of being applied.
+            fix_events (list): List to collect event updates during dry run.
+            fix_addresses (list): List to collect address updates during dry run.
+        Returns:
+            None
+        Logs:
+            - Warnings if the LLM response is empty or cannot be parsed.
+            - Info about generated address IDs and prepared updates.
+        """
+
         prompt = self.llm_handler.generate_prompt(
             url="address",
             extracted_text=location,
@@ -535,6 +680,24 @@ class DeduplicationHandler:
 
 
     def handle_fallback_llm(self, event_name, description, group, dry_run, fix_events, fix_addresses):
+        """
+        Handles fallback logic for resolving and updating event addresses using an LLM (Large Language Model).
+        This method generates a prompt based on the event description, queries the LLM for address correction,
+        parses the response, and updates the event records with the resolved address information. If `dry_run` is True,
+        the updates are collected in the provided lists instead of being committed to the database.
+        Args:
+            event_name (str): The name of the event being processed.
+            description (str): The textual description of the event, used for address extraction.
+            group (pandas.DataFrame): A DataFrame containing event records to be updated.
+            dry_run (bool): If True, do not perform database updates; collect changes in `fix_events` and `fix_addresses`.
+            fix_events (list): A list to collect event update data when `dry_run` is True.
+            fix_addresses (list): A list to collect address data when `dry_run` is True.
+        Returns:
+            None
+        Logs:
+            - Warnings if the LLM response cannot be parsed or is empty.
+            - Information about generated address IDs and prepared updates.
+        """
         prompt = self.llm_handler.generate_prompt(
             url="address",
             extracted_text=description,
@@ -566,6 +729,20 @@ class DeduplicationHandler:
 
 
     def update_event_with_sql(self, row, new_data):
+        """
+        Updates an event record in the database using the provided new data.
+        Args:
+            row (dict): A dictionary containing at least the "event_id" key, representing the event to update.
+            new_data (dict): A dictionary of column-value pairs to update in the event record.
+        Returns:
+            None
+        Side Effects:
+            Executes an SQL UPDATE statement on the "events" table to modify the specified event.
+        Logs:
+            Logs the update operation with the event ID and new data.
+        Raises:
+            Any exceptions raised by the underlying database handler's execute_query method.
+        """
         event_id = int(row["event_id"])
         logging.info(f"update_event_with_sql: Updating event_id {event_id} with {new_data}")
         
@@ -577,12 +754,37 @@ class DeduplicationHandler:
 
 
     def find_address_id_by_location(self, location):
+        """
+        Retrieves the address ID corresponding to a given location.
+        Args:
+            location (str): The full address to search for in the database.
+        Returns:
+            int or None: The address ID if found, otherwise None.
+        Raises:
+            Exception: If there is an error executing the database query.
+        """
         sql = "SELECT address_id FROM address WHERE full_address = :location"
         result = self.db_handler.execute_query(sql, {"location": location})
         return int(result[0][0]) if result else None
     
 
     def delete_event_if_completely_empty(self, row, dry_run, fix_events):
+        """
+        Deletes an event from the database if it is determined to be completely empty.
+        If dry_run is True, the event is not actually deleted; instead, the event data is appended
+        to the fix_events list with a "delete" flag for review. If dry_run is False, the event is
+        deleted from the database.
+        Args:
+            row (pandas.Series): A row containing event data, including the "event_id".
+            dry_run (bool): If True, do not perform deletion, only log the action.
+            fix_events (list): A list to which event data is appended if dry_run is True.
+        Returns:
+            None
+        Side Effects:
+            - Appends to fix_events if dry_run is True.
+            - Deletes the event from the database if dry_run is False.
+            - Logs the deletion action.
+        """
         event_id = int(row["event_id"])
         
         if dry_run:
@@ -595,14 +797,36 @@ class DeduplicationHandler:
 
     def deduplicate_with_embeddings(self, eps=0.3, min_samples=2):
         """
-        Detects potential duplicate events using sentence embeddings and DBSCAN clustering.
-        Only compares events with the same start_date and within 30 minutes of each other.
-        If address_id is set, it must be the same across rows in the cluster (null address_ids are allowed).
-        Saves results to output/dups_trans_db_scan.csv and stats to output/stats_dedup.csv.
-        """
+        Perform deduplication of event records using sentence embeddings and DBSCAN clustering.
+        This method retrieves event data from the database, generates text embeddings for each event,
+        and clusters similar events based on their semantic similarity using the DBSCAN algorithm.
+        Events are grouped by start date and clustered within a 30-minute time window and, if available,
+        by address ID. For each cluster of similar events, a canonical event is selected.
+        The deduplication results and statistics are saved to CSV files in the "output" directory.
+
+        Args:
+            eps (float, optional): The maximum distance between two samples for them to be considered
+                as in the same neighborhood (DBSCAN epsilon parameter). Defaults to 0.3.
+            min_samples (int, optional): The number of samples in a neighborhood for a point to be
+                considered as a core point (DBSCAN min_samples parameter). Defaults to 2.
+
+        Outputs:
+            - "output/dups_trans_db_scan.csv": CSV file containing deduplicated event clusters.
+            - "output/stats_dedup.csv": CSV file containing deduplication run statistics.
+
+        Logs:
+            - Information about the deduplication process, including progress and output file locations.
+
+        Raises:
+            Any exceptions raised by database access, file I/O, or model inference are propagated.
+
+        Dependencies:
+            - Requires the 'SentenceTransformer' model 'all-MiniLM-L6-v2'.
+            - Requires pandas, scikit-learn, and other standard libraries.
+        
         logging.info("Starting embedding-based deduplication...")
         model = SentenceTransformer('all-MiniLM-L6-v2')
-
+        """
         query = """
             SELECT event_id, event_name, dance_style, description, day_of_week,
                    start_date, end_date, start_time, end_time, source, location,
@@ -759,6 +983,13 @@ class DeduplicationHandler:
 
 
     def get_git_version(self):
+        """
+        Retrieves the current Git commit hash for the repository.
+        Returns:
+            str: The current Git commit hash as a string if available, otherwise "unknown".
+        Exceptions:
+            Returns "unknown" if the Git command fails or if an exception occurs.
+        """
         try:
             return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
         except Exception:
@@ -766,6 +997,19 @@ class DeduplicationHandler:
 
 
     def score_event_row(self, row, address_df):
+        """
+        Calculates a score for an event row based on the presence and quality of its fields.
+        The scoring algorithm rewards rows with non-null and non-empty values in key fields such as
+        'location', 'description', and 'event_name'. Additional points are given if the row has a valid
+        'address_id' and the corresponding address has a postal code. Optional fields like 'source',
+        'dance_style', 'event_type', 'start_time', and 'url' contribute fractional points if present.
+        The length of the 'description' field also slightly increases the score.
+        Args:
+            row (pd.Series): A pandas Series representing a single event row with expected fields.
+            address_df (pd.DataFrame): A DataFrame containing address information, indexed by 'address_id'.
+        Returns:
+            float: The computed score for the event row. Returns negative infinity if 'location' is missing.
+        """
         if not row['location']:
             return -float('inf')
 
@@ -790,6 +1034,18 @@ class DeduplicationHandler:
 
 
     def find_canonical_event(self, cluster_df, address_df):
+        """
+        Identifies the canonical event within a cluster of potentially duplicate events and marks duplicates.
+        This method scores each event in the provided cluster DataFrame using the `score_event_row` method,
+        selects the event with the highest score as the canonical event, and marks all other events as duplicates.
+        The canonical event is flagged with `is_canonical = True`, while duplicates are flagged with `is_canonical = False`.
+        Args:
+            cluster_df (pd.DataFrame): DataFrame containing events that are considered potential duplicates.
+            address_df (pd.DataFrame): DataFrame containing address information used for scoring events.
+        Returns:
+            pd.DataFrame: DataFrame with the canonical event and its duplicates, each row annotated with an
+            `is_canonical` boolean column indicating whether the event is canonical.
+        """
         cluster_df = cluster_df.copy()
         cluster_df['score'] = cluster_df.apply(lambda row: self.score_event_row(row, address_df), axis=1)
         canonical = cluster_df.sort_values('score', ascending=False).iloc[0]
@@ -803,12 +1059,12 @@ class DeduplicationHandler:
         """
         Main driver function for the deduplication process.
         """
-        # while True:   ***Temp
-        #     total_deleted = self.process_duplicates()
-        #     logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
-        #     if total_deleted == 0:
-        #         logging.info("No duplicates found. Exiting deduplication loop.")
-        #         break
+        while True:
+            total_deleted = self.process_duplicates()
+            logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
+            if total_deleted == 0:
+                logging.info("No duplicates found. Exiting deduplication loop.")
+                break
 
         # Fix null locations and addresses
         logging.info("Starting fix_null_locations_and_addresses()...")
@@ -849,4 +1105,4 @@ if __name__ == "__main__":
     deduper.driver()
     
     db_handler.count_events_urls_end(start_df, file_name)
-
+    
