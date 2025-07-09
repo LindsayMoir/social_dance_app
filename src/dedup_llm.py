@@ -823,10 +823,9 @@ class DeduplicationHandler:
         Dependencies:
             - Requires the 'SentenceTransformer' model 'all-MiniLM-L6-v2'.
             - Requires pandas, scikit-learn, and other standard libraries.
-        
+        """
         logging.info("Starting embedding-based deduplication...")
         model = SentenceTransformer('all-MiniLM-L6-v2')
-        """
         query = """
             SELECT event_id, event_name, dance_style, description, day_of_week,
                    start_date, end_date, start_time, end_time, source, location,
