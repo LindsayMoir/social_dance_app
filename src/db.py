@@ -246,6 +246,9 @@ class DatabaseHandler():
         # Get Foursquare API key
         self.foursquare_api_key = os.getenv("FOURSQUARE_API_KEY")
 
+        # Initialize a cache for Foursquare queries
+        self.fsq_cache = {}
+
         # Create df from urls table.
         self.urls_df = self.create_urls_df()
         logging.info("__init__(): URLs DataFrame created with %d rows.", len(self.urls_df))
@@ -502,41 +505,6 @@ class DatabaseHandler():
             return pd.DataFrame()
         
 
-    def upsert_address(self, address):
-        """
-        Inserts a new address into the 'addresses' table if it does not already exist,
-        or retrieves the existing address's ID if it does.
-
-        Args:
-            address (dict): A dictionary containing the address fields:
-                - street (str): The street address.
-                - city (str): The city name.
-                - province (str): The province or state.
-                - postal_code (str): The postal or ZIP code.
-                - country (str): The country name.
-
-        Returns:
-            int or None: The address_id of the existing or newly inserted address,
-            or None if the operation fails.
-        """
-        select_sql = """
-            SELECT address_id FROM addresses
-            WHERE street = :street AND city = :city AND province = :province
-                AND postal_code = :postal_code AND country = :country
-        """
-        result = self.execute_query(select_sql, address)
-        if result and len(result) > 0:
-            return result[0][0]  # address_id
-
-        insert_sql = """
-            INSERT INTO addresses (street, city, province, postal_code, country)
-            VALUES (:street, :city, :province, :postal_code, :country)
-            RETURNING address_id
-        """
-        inserted = self.execute_query(insert_sql, address)
-        return inserted[0][0] if inserted else None
-        
-
     def execute_query(self, query, params=None):
         """
         Executes a given SQL query with optional parameters.
@@ -695,110 +663,107 @@ class DatabaseHandler():
         Returns:
             None
         """
-        # — ensure url and parent_url are safe to search —
         url = '' if pd.isna(url) else str(url)
         parent_url = '' if pd.isna(parent_url) else str(parent_url)
 
-        # Need to check if it is from google calendar or from the LLM.
         if 'calendar' in url or 'calendar' in parent_url:
-            
-            # Rename columns to match the database schema
-            df = df.rename(columns={
-                'URL': 'url',
-                'Type_of_Event': 'event_type',
-                'Name_of_the_Event': 'event_name',
-                'Day_of_Week': 'day_of_week',
-                'Start_Date': 'start_date',
-                'End_Date': 'end_date',
-                'Start_Time': 'start_time',
-                'End_Time': 'end_time',
-                'Price': 'price',
-                'Location': 'location',
-                'Description': 'description'
-            })
-            
-            # Check data type and assign dance_style
-            if isinstance(keywords, list):
-                keywords = ', '.join(keywords)
-            df['dance_style'] = keywords
-        
-        # Fill a blank source
-        if source == '':
-            source = url.split('.')[-2]
-        if source in df.columns:
-            # If df['source'] is null or '', use source from the function argument
-            df['source'] = df['source'].fillna('').replace('', source)
-        else:
-            df['source'] = source
-        
-        # fill missing or empty strings with the current URL
-        df['url'] = df['url'].fillna('').replace('', url)
+            df = self._rename_google_calendar_columns(df)
+            df['dance_style'] = ', '.join(keywords) if isinstance(keywords, list) else keywords
 
-        # Suppress warnings for date parsing
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
+        source = source if source else url.split('.')[-2]
+        df['source'] = df.get('source', pd.Series([''] * len(df))).replace('', source).fillna(source)
+        df['url'] = df.get('url', pd.Series([''] * len(df))).replace('', url).fillna(url)
 
-            # Ensure 'start_date' and 'start_date' are in datetime.date format
-            for col in ['start_date', 'end_date']:
-                df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
+        self._convert_datetime_fields(df)
 
-            # Ensure 'start_time' and 'end_time' are in datetime.time format
-            for col in ['start_time', 'end_time']:
-                df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
-
-            # Turn warnings back on
-            warnings.resetwarnings()
-
-        # No need to clean and convert the 'price' column to numeric format as it should remain as text
         if 'price' not in df.columns:
             logging.warning("write_events_to_db: 'price' column is missing. Filling with empty string.")
             df['price'] = ''
 
-        # Add a 'time_stamp' column with the current timestamp
         df['time_stamp'] = datetime.now()
+        df = self.clean_up_address_basic(df)
 
-        # Clean up the 'location' column and update address_ids
-        cleaned_df = self.clean_up_address(df)
+        df = self._filter_events(df)
 
-        # Delete the rows if the majority of important columns are empty
-        important_columns = ['start_date', 'end_date', 'start_time', 'end_time', 'location', 'description']
+        if df.empty:
+            logging.info("write_events_to_db: No events remain after filtering, skipping write.")
+            self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
+            return
 
-        # Replace empty strings (and strings containing only whitespace) with NA in the entire DataFrame for just the important columns
-        cleaned_df[important_columns] = cleaned_df[important_columns].replace(r'^\s*$', pd.NA, regex=True)
-
-        # Now drop rows where all important columns are NA
-        cleaned_df = cleaned_df.dropna(subset=important_columns, how='all')
-
-        # Drop rows older than “today minus N days”
-        # Ensure 'end_date' is datetime64[ns]
-        cleaned_df['end_date'] = pd.to_datetime(cleaned_df['end_date'], errors='coerce')
-
-        # Drop rows older than “today minus N days”
-        cutoff = pd.Timestamp.now() - pd.Timedelta(days=self.config['clean_up']['old_events'])
-        cleaned_df = cleaned_df.loc[cleaned_df['end_date'] >= cutoff].reset_index(drop=True)
-
-        # If there are no events left, bail out early
-        if cleaned_df.empty:
-            logging.info("write_events_to_db: No events remain after checking for end_date, skipping write.")
-            relevant, crawl_try, time_stamp = False, 1, datetime.now()
-            url_row = [url, parent_url, source, keywords, relevant, crawl_try, time_stamp]
-            self.write_url_to_db(url_row)
-            return None
-
-        # Save the cleaned events data to a CSV file for debugging purposes
-        cleaned_df.to_csv('output/cleaned_events.csv', index=False)
-
-        # Log the number of events to be written
+        df.to_csv('output/cleaned_events.csv', index=False)
         logging.info(f"write_events_to_db: Number of events to write: {len(df)}")
 
-        cleaned_df.to_csv('output/cleaned_events.csv', index=False)
-
-        # Write the cleaned events data to the 'events' table
-        cleaned_df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
-        relevant, crawl_try, time_stamp = True, 1, datetime.now()
-        url_row = [url, parent_url, source, keywords, relevant, crawl_try, time_stamp]
-        self.write_url_to_db(url_row)
+        df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
+        self.write_url_to_db([url, parent_url, source, keywords, True, 1, datetime.now()])
         logging.info("write_events_to_db: Events data written to the 'events' table.")
+
+
+    def _rename_google_calendar_columns(self, df):
+        """
+        Renames columns of a DataFrame containing Google Calendar event data to standardized column names.
+        Parameters:
+            df (pandas.DataFrame): The input DataFrame with original Google Calendar column names.
+        Returns:
+            pandas.DataFrame: A DataFrame with columns renamed to standardized names:
+                - 'URL' -> 'url'
+                - 'Type_of_Event' -> 'event_type'
+                - 'Name_of_the_Event' -> 'event_name'
+                - 'Day_of_Week' -> 'day_of_week'
+                - 'Start_Date' -> 'start_date'
+                - 'End_Date' -> 'end_date'
+                - 'Start_Time' -> 'start_time'
+                - 'End_Time' -> 'end_time'
+                - 'Price' -> 'price'
+                - 'Location' -> 'location'
+                - 'Description' -> 'description'
+        """
+        return df.rename(columns={
+            'URL': 'url', 'Type_of_Event': 'event_type', 'Name_of_the_Event': 'event_name',
+            'Day_of_Week': 'day_of_week', 'Start_Date': 'start_date', 'End_Date': 'end_date',
+            'Start_Time': 'start_time', 'End_Time': 'end_time', 'Price': 'price',
+            'Location': 'location', 'Description': 'description'
+        })
+
+    def _convert_datetime_fields(self, df):
+        """
+        Converts specific datetime-related columns in a pandas DataFrame to appropriate date and time types.
+        This method processes the following columns:
+            - 'start_date' and 'end_date': Converts to `datetime.date` objects.
+            - 'start_time' and 'end_time': Converts to `datetime.time` objects.
+        Any parsing errors are coerced to NaT/NaN. UserWarnings during conversion are suppressed.
+        Args:
+            df (pandas.DataFrame): The DataFrame containing the columns to convert.
+        Returns:
+            None: The DataFrame is modified in place.
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            for col in ['start_date', 'end_date']:
+                df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
+            for col in ['start_time', 'end_time']:
+                df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
+            warnings.resetwarnings()
+
+    def _filter_events(self, df):
+        """
+        Filters a DataFrame of events by removing rows with all important columns empty and excluding old events.
+        This method performs the following steps:
+        1. Replaces empty or whitespace-only strings in important columns with pandas NA values.
+        2. Drops rows where all important columns ('start_date', 'end_date', 'start_time', 'end_time', 'location', 'description') are missing.
+        3. Converts the 'end_date' column to datetime, coercing errors to NaT.
+        4. Removes events whose 'end_date' is older than the cutoff date, defined as the current time minus the number of days specified in the configuration under 'clean_up' -> 'old_events'.
+        Args:
+            df (pd.DataFrame): DataFrame containing event data.
+        Returns:
+            pd.DataFrame: Filtered DataFrame with only relevant and recent events.
+        """
+        important_cols = ['start_date', 'end_date', 'start_time', 'end_time', 'location', 'description']
+        df[important_cols] = df[important_cols].replace(r'^\s*$', pd.NA, regex=True)
+        df = df.dropna(subset=important_cols, how='all')
+
+        df['end_date'] = pd.to_datetime(df['end_date'], errors='coerce')
+        cutoff = pd.Timestamp.now() - pd.Timedelta(days=self.config['clean_up']['old_events'])
+        return df[df['end_date'] >= cutoff].reset_index(drop=True)
     
     
     def update_event(self, event_identifier, new_data, best_url):
@@ -918,67 +883,130 @@ class DatabaseHandler():
         except SQLAlchemyError as e:
             logging.error(f"get_address_id: Database error: {e}")
             return None
-
-
-    def clean_up_address(self, events_df):
-        """
-        Cleans and standardizes address data in the provided events DataFrame.
-        This method processes each event's 'location' field to ensure address consistency and completeness by:
-            1. Attempting to match and update the event's address using an existing address database.
-            2. Extracting a Canadian postal code from the location string using regex.
-            3. If a postal code is found, updating the event's address fields using database information or fallback logic.
-            4. (Commented/Optional) If no postal code is found, optionally using Google API to retrieve a postal code or municipality.
-        Parameters:
-            events_df (pd.DataFrame): DataFrame containing event data, including 'location' and 'event_id' columns.
-        Returns:
-            pd.DataFrame: The updated DataFrame with standardized 'location' and 'address_id' fields.
-        """
-        logging.info("def clean_up_address(): Starting with events_df shape: %s", events_df.shape)
         
-        # Load address table once from the database.
+
+    def try_resolve_address(self, event_id, location, address_df=None, use_foursquare=False):
+        """
+        Tries to resolve an address_id for a given location.
+        Can optionally use Foursquare fallbacks.
+        """
+        if not location or pd.isna(location):
+            return None, None
+
+        location = str(location).strip()
+
+        # 1. Try DB match
+        if address_df is not None:
+            update_list = self.get_address_update_for_event(event_id, location, address_df)
+            if update_list:
+                return update_list[0]['address_id'], location
+
+        # 2. Try local regex postal code extraction
+        postal_code = self.extract_canadian_postal_code(location)
+        if postal_code:
+            updated_location, address_id = self.populate_from_db_or_fallback(location, postal_code)
+            if address_id:
+                return address_id, updated_location
+
+        if use_foursquare:
+            # 3. Try Foursquare postal code
+            postal_code = self.get_postal_code_foursquare(location)
+            if postal_code and self.is_canadian_postal_code(postal_code):
+                updated_location, address_id = self.populate_from_db_or_fallback(location, postal_code)
+                if address_id:
+                    return address_id, updated_location
+
+            # 4. Try Foursquare municipality fallback
+            updated_location, address_id = self.fallback_with_municipality(location)
+            if address_id:
+                return address_id, updated_location
+
+        return None, location
+
+
+    def clean_up_address_basic(self, events_df):
+        """
+        Cleans events using only local DB and regex methods (no Foursquare).
+        """
+        logging.info("clean_up_address_basic(): Starting with shape %s", events_df.shape)
+
         address_df = pd.read_sql("SELECT * FROM address", self.conn)
 
         for index, row in events_df.iterrows():
-            raw_location = row.get('location')
             event_id = row.get('event_id')
-            if not raw_location or pd.isna(raw_location):
-                continue
+            location = row.get('location')
 
-            location = str(raw_location).strip()
-            logging.info(f"def clean_up_address(): Processing location '{location}' (event_id: {event_id})")
-            
-            # INSERT HERE: Try using the existing address update method.
-            update_list = self.get_address_update_for_event(event_id, location, address_df)
-            if update_list:
-                # If there's a match, update the address_id and skip further processing.
-                new_address_id = update_list[0]['address_id']
-                events_df.loc[index, 'address_id'] = new_address_id
-                logging.info("def clean_up_address(): Updated event %s with address_id %s using DB match", event_id, new_address_id)
-                continue  # Skip remaining logic for this row.
-            
-            # 1) Try extracting a postal code via regex.
-            postal_code = self.extract_canadian_postal_code(location)
+            address_id, new_location = self.try_resolve_address(
+                event_id, location, address_df=address_df, use_foursquare=False
+            )
 
-            if not postal_code:
-                fs_postal = self.get_postal_code_foursquare(location)
-                if fs_postal and self.is_canadian_postal_code(fs_postal):
-                    postal_code = fs_postal
-                    logging.info("Got Canadian postal code '%s' from Foursquare for '%s'", postal_code, location)
-
-            # 3) If postal code is found, query DB to get full address.
-            if postal_code:
-                updated_location, address_id = self.populate_from_db_or_fallback(location, postal_code)
-                events_df.loc[index, 'location'] = updated_location
-                events_df.loc[index, 'address_id'] = address_id
-            else:
-                # 4) If still no postal code, fallback to municipality from Google.
-                updated_location, address_id = self.fallback_with_municipality(location)
-                if updated_location:
-                    events_df.loc[index, 'location'] = updated_location
-                if address_id:
-                    events_df.loc[index, 'address_id'] = address_id
+            if address_id:
+                events_df.at[index, 'address_id'] = address_id
+                events_df.at[index, 'location'] = new_location
 
         return events_df
+
+
+    def clean_up_address_with_foursquare(self, events_df):
+        """
+        Cleans events using local DB, regex, and Foursquare fallbacks.
+        """
+        logging.info("clean_up_address_with_foursquare(): Starting with shape %s", events_df.shape)
+
+        address_df = pd.read_sql("SELECT * FROM address", self.conn)
+
+        for index, row in events_df.iterrows():
+            event_id = row.get('event_id')
+            location = row.get('location')
+
+            address_id, new_location = self.try_resolve_address(
+                event_id, location, address_df=address_df, use_foursquare=True
+            )
+
+            if address_id:
+                events_df.at[index, 'address_id'] = address_id
+                events_df.at[index, 'location'] = new_location
+
+        return events_df
+
+
+    def enhance_addresses_with_foursquare(self):
+        """
+        Enhances rows with NULL address_id using Foursquare after initial SQL input.
+        """
+        logging.info("enhance_addresses_with_foursquare(): Starting enhancement pass")
+
+        query = """
+            SELECT event_id, location
+            FROM events
+            WHERE address_id IS NULL
+            AND location IS NOT NULL
+        """
+        events_df = pd.read_sql(query, self.conn)
+
+        address_df = pd.read_sql("SELECT * FROM address", self.conn)
+        updated_rows = []
+
+        for row in events_df.itertuples(index=False):
+            event_id = row.event_id
+            location = row.location
+
+            address_id, new_location = self.try_resolve_address(
+                event_id, location, address_df=address_df, use_foursquare=True
+            )
+
+            if address_id:
+                updated_rows.append({
+                    'event_id': event_id,
+                    'address_id': address_id,
+                    'location': new_location or location
+                })
+
+        logging.info("enhance_addresses_with_foursquare(): Enhanced %d rows", len(updated_rows))
+
+        if updated_rows:
+            self.multiple_db_inserts('events', updated_rows)
+
 
     # ─────────────────────────────────────────────────────────────────────────────
     # Helper Methods
@@ -1053,7 +1081,7 @@ class DatabaseHandler():
             - If multiple database rows match the postal code, attempts to match the civic number from the location string.
             - If no valid match is found, returns (None, None).
             - Logging is used to provide information and warnings about the lookup process.
-            - Fallback logic for missing database entries is currently commented out.
+            - Fallback logic for missing database entries.
         """
         numbers = re.findall(r'\d+', location_str)
         query = """
@@ -1108,6 +1136,19 @@ class DatabaseHandler():
     
 
     def get_postal_code_foursquare(self, address):
+        if address in self.fsq_cache and 'postal_code' in self.fsq_cache[address]:
+            return self.fsq_cache[address]['postal_code']
+
+        postal_code = self._call_foursquare_for_postal_code(address)
+
+        if address not in self.fsq_cache:
+            self.fsq_cache[address] = {}
+        self.fsq_cache[address]['postal_code'] = postal_code
+
+        return postal_code
+    
+
+    def _call_foursquare_for_postal_code(self, address):
         endpoint = "https://api.foursquare.com/v3/places/search"
         headers = {
             "Accept": "application/json",
@@ -1130,6 +1171,18 @@ class DatabaseHandler():
 
 
     def get_municipality_foursquare(self, address):
+        if address in self.fsq_cache and 'municipality' in self.fsq_cache[address]:
+            return self.fsq_cache[address]['municipality']
+
+        municipality = self._call_foursquare_for_municipality(address)
+
+        if address not in self.fsq_cache:
+            self.fsq_cache[address] = {}
+        self.fsq_cache[address]['municipality'] = municipality
+
+        return municipality
+
+    def _call_foursquare_for_municipality(self, address):
         endpoint = "https://api.foursquare.com/v3/places/search"
         headers = {
             "Accept": "application/json",
@@ -1147,7 +1200,7 @@ class DatabaseHandler():
             if data.get("results"):
                 return data["results"][0].get("location", {}).get("locality")
         except Exception as e:
-            logging.warning(f"Foursquare city lookup failed for '{address}': {e}")
+            logging.warning(f"Foursquare municipality lookup failed for '{address}': {e}")
         return None
 
 
@@ -2126,7 +2179,7 @@ class DatabaseHandler():
 
         # 2. Look at the most recent "relevant" value
         last_relevant = df_url.iloc[-1]['relevant']
-        if last_relevant and self.stale_date:
+        if last_relevant and self.stale_date(url):
             logging.info(f"should_process_url: URL {url} was last seen as relevant, processing it.")
             return True
 
@@ -2385,7 +2438,7 @@ class DatabaseHandler():
         Returns:
             None
         """
-        if config['testing']['drop_tables'] == True:
+        if self.config['testing']['drop_tables'] == True:
             self.create_tables()
         else:
             self.check_dow_date_consistent()
@@ -2397,6 +2450,7 @@ class DatabaseHandler():
             self.dedup_address()
             self.fix_address_id_in_events()
             self.sql_input(self.config['input']['sql_input'])
+            self.enhance_addresses_with_foursquare()
             self.dedup()
 
         # Close the database connection
