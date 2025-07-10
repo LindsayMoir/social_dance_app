@@ -1056,12 +1056,12 @@ class DeduplicationHandler:
         """
         Main driver function for the deduplication process.
         """
-        while True:
-            total_deleted = self.process_duplicates()
-            logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
-            if total_deleted == 0:
-                logging.info("No duplicates found. Exiting deduplication loop.")
-                break
+        # while True:   ***TEMP***
+        #     total_deleted = self.process_duplicates()
+        #     logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
+        #     if total_deleted == 0:
+        #         logging.info("No duplicates found. Exiting deduplication loop.")
+        #         break
 
         # Fix null locations and addresses
         logging.info("Starting fix_problem_events()...")
@@ -1073,7 +1073,7 @@ class DeduplicationHandler:
         # self.parse_address()
 
         # This uses transformers and DBSCAN to find duplicates based on embeddings.
-        self.deduplicate_with_embeddings()
+        # self.deduplicate_with_embeddings() ***TEMP***
 
         # In order to improve deduplication we really need to evaluate the clusters that were scored.
         if self.config.get('score', {}).get('dup_trans_db_scan', False):

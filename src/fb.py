@@ -70,7 +70,7 @@ Note:
 
 from bs4 import BeautifulSoup
 from datetime import datetime
-from fuzzywuzzy import fuzz
+from rapidfuzz import fuzz
 import logging
 from openpyxl import load_workbook
 import os
