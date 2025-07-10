@@ -177,7 +177,7 @@ Note:
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 load_dotenv()
-from fuzzywuzzy import fuzz
+from rapidfuzz import fuzz
 import json
 import logging
 import numpy as np
@@ -815,33 +815,164 @@ class DatabaseHandler():
         return True
 
 
+    def find_matching_address_id(self, building_name, street_number, street_name, city, province):
+        """
+        Attempts to find an existing address_id via fuzzy or exact match logic.
+        - Fuzzy: building_name similarity > 85
+        - Exact: same street_number and street_name (case-insensitive)
+
+        Returns: matching address_id or None
+        """
+        try:
+            query = """
+                SELECT address_id, building_name, street_number, street_name, full_address
+                FROM address
+                WHERE city = :city AND province_or_state = :province
+            """
+            params = {"city": city, "province": province}
+            candidates = self.session.execute(text(query), params).fetchall()
+
+            for row in candidates:
+                addr_id, bldg, snum, sname, full = row
+
+                # Fuzzy match on building_name
+                if building_name and bldg:
+                    score = fuzz.token_sort_ratio(building_name.lower(), bldg.lower())
+                    if score >= 85:
+                        logging.info(f"Fuzzy building_name match → {addr_id} ({score})")
+                        return addr_id
+
+                # Exact match on street_number + street_name
+                if snum and sname and street_number and street_name:
+                    if (
+                        snum.strip().lower() == street_number.strip().lower() and
+                        sname.strip().lower() == street_name.strip().lower()
+                    ):
+                        logging.info(f"Exact street match → {addr_id}")
+                        return addr_id
+
+            return None
+
+        except Exception as e:
+            logging.error(f"find_matching_address_id: {e}")
+            return None
+
+
+    def deduplicate_address_table(self):
+        """
+        Loads address table into a DataFrame using self.conn.
+        For each address row, finds a fuzzy/exact match, reuses existing address_id,
+        updates event.location, and removes duplicate address rows.
+        """
+        try:
+            # Load all addresses into a DataFrame
+            df = pd.read_sql("""
+                SELECT address_id, building_name, street_number, street_name,
+                    city, province_or_state, full_address
+                FROM address
+                ORDER BY address_id
+            """, self.conn)
+
+            for index, row in df.iterrows():
+                addr_id = row["address_id"]
+                bldg = row["building_name"]
+                snum = row["street_number"]
+                sname = row["street_name"]
+                city = row["city"]
+                prov = row["province_or_state"]
+                full = row["full_address"]
+
+                match_id = self.find_matching_address_id(bldg, snum, sname, city, prov)
+
+                if match_id and match_id != addr_id:
+                    # Reassign all events with old address_id to match_id
+                    self.session.execute(text("""
+                        UPDATE events SET address_id = :new_id WHERE address_id = :old_id
+                    """), {"new_id": match_id, "old_id": addr_id})
+
+                    # Update event location from the full_address of the canonical address
+                    self.update_event_locations(match_id, full)
+
+                    # Delete duplicate address
+                    self.session.execute(text("""
+                        DELETE FROM address WHERE address_id = :aid
+                    """), {"aid": addr_id})
+
+                    logging.info(f"deduplicated: {addr_id} → {match_id}")
+
+            self.session.commit()
+            logging.info("deduplicate_address_table: Completed successfully.")
+
+        except Exception as e:
+            logging.error(f"deduplicate_address_table: {e}")
+            self.session.rollback()
+
+
+    def update_event_locations(self, address_id, full_address):
+        """
+        Updates location field in events table for a given address_id.
+        Uses self.execute_query (assumes autocommit or commit follows).
+        """
+        try:
+            self.execute_query("""
+                UPDATE events
+                SET location = :full_address
+                WHERE address_id = :address_id;
+            """, {
+                "full_address": full_address,
+                "address_id": address_id
+            })
+            logging.info(f"Updated location for events with address_id {address_id}")
+        except Exception as e:
+            logging.error(f"update_event_locations: {e}")
+
+
     def get_address_id(self, address_dict):
         """
-        Inserts a new address into the 'address' table or updates the existing address if a conflict occurs on 'full_address'.
-        Automatically updates the 'time_stamp' column to the current datetime on insert or update.
-
-            address_dict (dict): A dictionary containing address fields. Must include:
-                - full_address (str)
-                - street_number (str or int)
-                - street_name (str)
-                - street_type (str)
-                - city (str)
-                - province_or_state (str)
-                - postal_code (str)
-                - country_id (int)
-            The function will add a 'time_stamp' key with the current datetime.
-
-            int or None: The unique address_id of the inserted or updated address if successful, otherwise None.
-
-        Raises:
-            Logs SQLAlchemyError if a database error occurs.
+        Attempts to find an existing address_id by:
+        1. Fuzzy matching building_name
+        2. Exact match on street_number and street_name
+        If no match, inserts/updates address using ON CONFLICT on full_address.
+        In all cases, updates events.location with the full_address of the matched/injected row.
         """
-        # Add the current datetime to the address dictionary for the time_stamp column.
         address_dict['time_stamp'] = datetime.now()
 
         try:
-            # Define the INSERT query with ON CONFLICT DO UPDATE and RETURNING address_id,
-            # including the time_stamp column.
+            # Step 1: Load address table using Pandas
+            address_df = pd.read_sql("""
+                SELECT address_id, building_name, street_number, street_name,
+                    city, province_or_state, full_address
+                FROM address
+            """, self.conn)
+
+            # Step 2: Try fuzzy/exact match
+            bldg = address_dict.get("building_name", "")
+            snum = address_dict.get("street_number", "")
+            sname = address_dict.get("street_name", "")
+            city = address_dict.get("city", "")
+            prov = address_dict.get("province_or_state", "")
+
+            for _, row in address_df.iterrows():
+                if row["city"] != city or row["province_or_state"] != prov:
+                    continue
+
+                # Fuzzy building_name match
+                if bldg and row["building_name"]:
+                    score = fuzz.token_sort_ratio(bldg.lower(), row["building_name"].lower())
+                    if score >= 85:
+                        self.update_event_locations(row["address_id"], row["full_address"])
+                        return int(row["address_id"])
+
+                # Exact street number + name match (case-insensitive)
+                if snum and sname and row["street_number"] and row["street_name"]:
+                    if (
+                        str(snum).strip().lower() == str(row["street_number"]).strip().lower() and
+                        str(sname).strip().lower() == str(row["street_name"]).strip().lower()
+                    ):
+                        self.update_event_locations(row["address_id"], row["full_address"])
+                        return int(row["address_id"])
+
+            # Step 3: Insert or update the address using ON CONFLICT
             insert_query = """
                 INSERT INTO address (
                     full_address, street_number, street_name, street_type, 
@@ -861,27 +992,17 @@ class DatabaseHandler():
                     time_stamp = EXCLUDED.time_stamp
                 RETURNING address_id;
             """
+            result = self.execute_query(insert_query, address_dict)
 
-            # Execute the INSERT query
-            insert_result = self.execute_query(insert_query, address_dict)
-
-            if insert_result:
-                # Insert succeeded or update occurred; retrieve the address_id
-                row = insert_result[0]
-                address_id = row[0]  # address_id is the first column in the result
-
-                # Convert to Python int
-                if isinstance(address_id, np.int64):
-                    address_id = int(address_id)
-
-                logging.info(f"get_address_id: Inserted or updated address_id {address_id} for address '{address_dict['full_address']}'.")
+            if result:
+                address_id = int(result[0][0])
+                self.update_event_locations(address_id, address_dict["full_address"])
                 return address_id
 
-            logging.error(f"get_address_id: Failed to insert or update address_id for '{address_dict['full_address']}'.")
             return None
 
-        except SQLAlchemyError as e:
-            logging.error(f"get_address_id: Database error: {e}")
+        except Exception as e:
+            logging.error(f"get_address_id: {e}")
             return None
         
 
@@ -2451,6 +2572,7 @@ class DatabaseHandler():
             self.fix_address_id_in_events()
             self.sql_input(self.config['input']['sql_input'])
             self.enhance_addresses_with_foursquare()
+            self.deduplicate_address_table()
             self.dedup()
 
         # Close the database connection

@@ -1,189 +1,48 @@
-Context:
-You are an experienced Quality Assurance expert. 
-Your task is to parse the full_address field from a dataset and correctly assign its parts into the corresponding columns of an address table. 
-The table columns include details such as building name, street number, street name, street type, direction, postal box, city, met_area, province_or_state, postal code, and country ID.
+You are an experienced information extractor. 
+Your task is to carefully analyze a noisy, real-world event description and extract a complete, structured address for the venue where the event takes place.
+The Input Data is below.
 
-Address Table Schema:
-CREATE TABLE IF NOT EXISTS address (
-    address_id SERIAL PRIMARY KEY,
-    full_address TEXT UNIQUE,
-    building_name TEXT,
-    street_number TEXT,
-    street_name TEXT,
-    street_type TEXT,
-    direction TEXT,
-    city TEXT,
-    met_area TEXT,
-    province_or_state TEXT,
-    postal_code TEXT,
-    country_id TEXT,
-    time_stamp TIMESTAMP
-);
+The description may include:
+- The venue name (e.g., "Puerto Vallarta Amigos at Fisherman's Wharf")
+- A street address (e.g., "1 Dallas Rd")
+- Parenthetical notes, links, performer names, and unrelated text (IGNORE these)
+- Links to social media or artist bios (IGNORE these)
 
-__________
-Input Example:
-address_id  full_address                                                          building_name  street_number  street_name  street_type  direction   city       met_area  province_or_state  postal_code  country_id	time_stamp
-56          Les Passmore Centre,  Saanich,  BC, V8Z 1H3, CA                     NULL           NULL           NULL         NULL         NULL      Saanich    NULL      BC               V8Z 1H3      CA	NULL      
-1928        Solwood Studio @1303 Broad Street,  BC, V8W 2A8, CA                NULL           NULL           NULL         NULL         NULL      Victoria   NULL      BC               V8W 2A8     CA	NULL      
-861         STUDIO 4 ATHLETICS, 715 YATES ST,  BC, V8W 1L6, CA                     NULL           NULL           NULL         NULL         NULL      NULL       NULL      BC               V8W 1L6     CA	NULL      
-15          Eastern Star Hall, 3281 Harriet Road,  BC, V8Z 3S3, CA                NULL           NULL           NULL         NULL         NULL      NULL       NULL      BC               V8Z 3S3     CA	NULL      
-16          Propat Legion, 411 Gorge Road East,  BC, V8T 2W1, CA                 NULL           NULL           NULL         NULL         NULL      NULL       NULL      BC               V8T 2W1     CA	NULL      
-18          Kirk Hall, 680 Courtney Street,  BC, V8W 1C1, CA                     NULL           NULL           NULL         NULL         NULL      NULL       NULL      BC               V8W 1C1     CA	NULL      
-17          Dance Victoria Studios, 2750 Quadra Street,  BC, V8T 4E8, CA           NULL           NULL           NULL         NULL         NULL      NULL       NULL      BC               V8T 4E8     CA	NULL      
-22          Eden West Gourmet, 96 Kyle Street, Port Moody, BC V3H 1Z3,  BC, V3H1Z3, CA  NULL    NULL           NULL         NULL         NULL      Port Moody NULL      BC               V3H1Z3     CA	NULL      
-1970        Da Vinci Centre, Victoria,  BC, V9A 3K4, CA                         NULL           NULL           NULL         NULL         NULL      NULL       NULL      BC               V9A 3K4     CA	NULL      
+You must identify and return the venue’s address in a structured JSON format.
 
-__________
-Expected Output (JSON Example):
-After parsing, the output should assign each address component to its correct column. For example, your output should look like this:
-[
-  {
-    "address_id": 56,
-    "full_address": "Les Passmore Centre, Saanich,  BC, V8Z 1H3, CA",
-    "building_name": "Les Passmore",
-    "street_number": null,
-    "street_name": null,
-    "street_type": null,
-    "direction": null,
-    "city": "Saanich",
-    "met_area": null,
-    "province_or_state": "BC",
-    "postal_code": "V8Z 1H3",
-    "country_id": "CA",
-    "time_stamp": null
-  },
-  {
-    "address_id": 1928,
-    "full_address": "Solwood Studio @1303 Broad Street,  BC, V8W 2A8, CA",
-    "building_name": "Solwood Studios",
-    "street_number": "1303",
-    "street_name": "Broad",
-    "street_type": "Street",
-    "direction": null,
-    "city": "Victoria",
-    "met_area": null,
-    "province_or_state": "BC",
-    "postal_code": "V8W 2A8",
-    "country_id": "CA",
-    "time_stamp": null
-  },
-  {
-    "address_id": 861,
-    "full_address": "STUDIO 4 ATHLETICS, 715 YATES ST,  BC, V8W 1L6, CA",
-    "building_name": "Studio 4 Athletics",
-    "street_number": "715",
-    "street_name": "Yates",
-    "street_type": "ST",
-    "direction": null,
-    "city": null,
-    "met_area": null,
-    "province_or_state": "BC",
-    "postal_code": "V8W 1L6",
-    "country_id": "CA",
-    "time_stamp": null
-  },
-  {
-    "address_id": 15,
-    "full_address": "Eastern Star Hall, 3281 Harriet Road,  BC, V8Z 3S3, CA",
-    "building_name": "Eastern Star Hall",
-    "street_number": "3281",
-    "street_name": "Harriet",
-    "street_type": "Road",
-    "direction": null,
-    "city": null,
-    "met_area": null,
-    "province_or_state": "BC",
-    "postal_code": "V8Z 3S3",
-    "country_id": "CA",
-    "time_stamp": null
-  },
-  {
-    "address_id": 16,
-    "full_address": "Propat Legion, 411 Gorge Road East,  BC, V8T 2W1, CA",
-    "building_name": "Propat Legion",
-    "street_number": "411",
-    "street_name": "Gorge",
-    "street_type": "Road",
-    "direction": "East",
-    "city": null,
-    "met_area": null,
-    "province_or_state": "BC",
-    "postal_code": "V8T 2W1",
-    "country_id": "CA",
-    "time_stamp": null
-  },
-  {
-    "address_id": 18,
-    "full_address": "Kirk Hall, 680 Courtney Street,  BC, V8W 1C1, CA",
-    "building_name": "Kirk Hall",
-    "street_number": "680",
-    "street_name": "Courtney",
-    "street_type": "Street",
-    "direction": null,
-    "city": null,
-    "met_area": null,
-    "province_or_state": "BC",
-    "postal_code": "V8W 1C1",
-    "country_id": "CA",
-    "time_stamp": null
-  },
-  {
-    "address_id": 17,
-    "full_address": "Dance Victoria Studios, 2750 Quadra Street,  BC, V8T 4E8, CA",
-    "building_name": "Dance Victoria Studios",
-    "street_number": "2750",
-    "street_name": "Quadra",
-    "street_type": "Street",
-    "direction": null,
-    "city": null,
-    "met_area": null,
-    "province_or_state": "BC",
-    "postal_code": "V8T 4E8",
-    "country_id": "CA",
-    "time_stamp": null
-  },
-  {
-    "address_id": 22,
-    "full_address": "Eden West Gourmet, 96 Kyle Street, Port Moody, BC V3H 1Z3,  BC, V3H1Z3, CA",
-    "building_name": "Eden West Gourmet",
-    "street_number": "96",
-    "street_name": "Kyle",
-    "street_type": "Street",
-    "direction": null,
-    "city": "Port Moody",
-    "met_area": null,
-    "province_or_state": "BC",
-    "postal_code": "V3H1Z3",
-    "country_id": "CA",
-    "time_stamp": null
-  },
-  {
-    "address_id": 1970,
-    "full_address": "Da Vinci Centre, Victoria,  BC, V9A 3K4, CA",
-    "building_name": "Da Vinci Centre",
-    "street_number": null,
-    "street_name": null,
-    "street_type": null,
-    "direction": null,
-    "city": "Victoria",
-    "met_area": null,
-    "province_or_state": "BC",
-    "postal_code": "V9A 3K4",
-    "country_id": "CA",
-    "time_stamp": null
-  }
-]
+Extract the following fields:
+- building_name (e.g., "Fisherman's Wharf" or "Puerto Vallarta Amigos")
+- street_number (e.g., "1")
+- street_name (e.g., "Dallas")
+- street_type (e.g., "Road")
+- direction (e.g., "East" or "West", if provided; otherwise null)
+- city (use "Victoria" unless clearly another BC city is mentioned)
+- province_or_state (always "BC")
+- postal_code (if present)
+- country_id (always "CA")
 
-__________
-Task Instructions:
-Parsing: Extract the individual components (e.g., building name, street number, street name, street type, direction, postal box, city, met_area, province_or_state, postal code, country_id, time_stamp) from the full_address field.
-Mapping: Assign each extracted component to its corresponding column in the address table schema.
-The full_address field should be copied directly from the input.
-The building_name should be populated. Please look carefully and extract it. It is usually building_name, street_number street_name.
-The direction field should only be populated if a direction is explicitly provided; otherwise, use null.
-The country_id field should be set to "CA".
-Output: Return the final results in JSON format. Each record should be represented as an object with keys exactly matching the column names defined in the address table schema.
-Return:
-Only the JSON results representing the parsed records.
-__________
-Data Input
+---
+Example Input:
+"Miguelito Valdés' Cuban band (salsa, etc.) at Puerto Vallarta Amigos at Fisherman's Wharf (1 Dallas Rd) (weather-permitting) (outdoor; flat shoes are good) (no cover-charge) (around 5:30pm–8pm) (not far from downtown; on bus-route; free street-parking and pay-parking close by). If it's on, there should be a post on https://www.facebook.com/pvamigos ..."
+
+Expected Output:
+```json
+{
+  "building_name": "Puerto Vallarta Amigos at Fisherman's Wharf",
+  "street_number": "1",
+  "street_name": "Dallas",
+  "street_type": "Road",
+  "direction": null,
+  "city": "Victoria",
+  "province_or_state": "BC",
+  "postal_code": null,
+  "country_id": "CA"
+}
+
+Instructions:
+Use your judgment to extract the clearest address mentioned in the text.
+If multiple venues or addresses are mentioned, choose the most likely location of the event.
+Do not include event times, artist bios, or website links.
+Only return the structured JSON result — no extra text.
+
+Input Data

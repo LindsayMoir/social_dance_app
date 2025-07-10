@@ -459,7 +459,7 @@ class DeduplicationHandler:
             if len(event_name) > 100:
                 logging.info(f"Group {i+1}: Event name exceeds 100 characters. Calling handle_long_event_name")
                 short_name = " ".join(event_name.split()[:5])
-                self.handle_long_event_name(event_name, description, group, dry_run, fix_events, fix_addresses)
+                self.handle_long_event_name(short_name, event_name, description, group, dry_run, fix_events, fix_addresses)
                 continue
 
             if location and isinstance(location, str) and location.strip() != '':
@@ -543,7 +543,7 @@ class DeduplicationHandler:
         return False
 
 
-    def handle_long_event_name(self, event_name, description, group, dry_run, fix_events, fix_addresses):
+    def handle_long_event_name(self, short_name, event_name, description, group, dry_run, fix_events, fix_addresses):
         """
         Handles events with long names by truncating the event name, extracting and fixing address information using an LLM,
         and updating event records accordingly.
@@ -564,9 +564,7 @@ class DeduplicationHandler:
         Returns:
             None
         """
-        
-        short_name = " ".join(event_name.split()[:5])
-        logging.info(f"handle_long_event_name: Truncated event_name to: {short_name}")
+        logging.info(f"handle_long_event_name: Using short_name: {short_name}")
         
         prompt = self.llm_handler.generate_prompt(
             url="address",
@@ -1066,7 +1064,7 @@ class DeduplicationHandler:
                 break
 
         # Fix null locations and addresses
-        logging.info("Starting fix_null_locations_and_addresses()...")
+        logging.info("Starting fix_problem_events()...")
         self.fix_problem_events(dry_run=False)
 
         # This calls a LLM and parses the address.full_address into the appropriate columns.
