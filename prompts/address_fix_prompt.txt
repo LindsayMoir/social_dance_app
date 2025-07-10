@@ -11,15 +11,19 @@ The description may include:
 You must identify and return the venue’s address in a structured JSON format.
 
 Extract the following fields:
+- address_id (always 0)
+- full_address (always NULL)
 - building_name (e.g., "Fisherman's Wharf" or "Puerto Vallarta Amigos")
 - street_number (e.g., "1")
 - street_name (e.g., "Dallas")
 - street_type (e.g., "Road")
 - direction (e.g., "East" or "West", if provided; otherwise null)
 - city (use "Victoria" unless clearly another BC city is mentioned)
+- met_area (always NULL)
 - province_or_state (always "BC")
 - postal_code (if present)
 - country_id (always "CA")
+- time_stamp (always NULL)
 
 ---
 Example Input:
@@ -27,16 +31,20 @@ Example Input:
 
 Expected Output:
 ```json
-{
+{ 
+  "address_id": 0,
+  "full_address: null,
   "building_name": "Puerto Vallarta Amigos at Fisherman's Wharf",
   "street_number": "1",
   "street_name": "Dallas",
   "street_type": "Road",
   "direction": null,
   "city": "Victoria",
+  "met_area: null,
   "province_or_state": "BC",
   "postal_code": null,
-  "country_id": "CA"
+  "country_id": "CA",
+  "time_stamp: null
 }
 
 Instructions:

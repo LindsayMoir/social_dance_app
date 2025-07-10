@@ -420,7 +420,7 @@ class LLMHandler():
         # Decide whether these are addresses or events
         required_keys = (
             self.ADDRESS_KEYS
-            if '"address_id"' in raw_str
+            if 'building_name' in raw_str
             else self.EVENT_KEYS
         )
 
