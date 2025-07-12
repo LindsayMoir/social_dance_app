@@ -87,6 +87,7 @@ output:
   is_foreign: output/is_foreign.csv
 prompts:
   address: prompts/address_from_raw_page.txt
+  address_internet_fix: prompts/address_internet_fix.txt
   address_0_null_loc_fix: prompts/address_0_null_location_fix_prompt.txt
   address_fix: prompts/address_fix_prompt.txt
   chatbot_instructions: prompts/chatbot_instructions.txt

@@ -74,7 +74,7 @@ import yaml
 from db import DatabaseHandler
 
 
-class LLMHandler():
+class LLMHandler:
     def __init__(self, config_path=None):
         # Calculate the path to config.yaml
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -84,10 +84,11 @@ class LLMHandler():
         with open(config_path, 'r') as file:
             self.config = yaml.safe_load(file)
 
-        # Instantiate DatabaseHandler if not already in globals
-        if 'db_handler' not in globals():
-            global db_handler
-            db_handler = DatabaseHandler(self.config)
+        # Instantiate DatabaseHandler
+        self.db_handler = DatabaseHandler(self.config)
+
+        # Inject LLMHandler back into DatabaseHandler to break circular import
+        self.db_handler.set_llm_handler(self)
 
         # Set up OpenAI client
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -109,12 +110,10 @@ class LLMHandler():
         }
 
         self.ADDRESS_KEYS = {
-        "address_id", "full_address", "building_name", "street_number",
-        "street_name", "street_type", "direction", "city", "met_area",
-        "province_or_state", "postal_code", "country_id", "time_stamp"
+            "address_id", "full_address", "building_name", "street_number",
+            "street_name", "street_type", "direction", "city", "met_area",
+            "province_or_state", "postal_code", "country_id", "time_stamp"
         }
-
-        # Regex to pull out each `"key": <rest-of-line>` pair
         self.FIELD_RE = re.compile(r'^\s*"(?P<key>[^"]+)"\s*:\s*(?P<raw>.*)$')
 
 
@@ -157,23 +156,23 @@ class LLMHandler():
                 if llm_status:
                     # Mark the event link as relevant
                     relevant = True
-                    db_handler.write_url_to_db(url_row)
+                    self.db_handler.write_url_to_db(url_row)
                     return True
                 else:
                     # Mark the event link as irrelevant
                     relevant = False
-                    db_handler.write_url_to_db(url_row)
+                    self.db_handler.write_url_to_db(url_row)
                     return False
             else:
                 # Mark the event link as irrelevant
                 relevant = False
-                db_handler.write_url_to_db(url_row)
+                self.db_handler.write_url_to_db(url_row)
                 return False
         else:
             logging.info(f"def driver(): No keywords found in text for URL {url}\n search_term {search_term}.")
             # Mark the event link as irrelevant
             relevant = False
-            db_handler.write_url_to_db(url_row)
+            self.db_handler.write_url_to_db(url_row)
             return False
     
 
@@ -224,7 +223,7 @@ class LLMHandler():
 
             if parsed_result:
                 events_df = pd.DataFrame(parsed_result)
-                db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_list)
+                self.db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_list)
                 logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
                 return True
         
@@ -539,7 +538,22 @@ class LLMHandler():
             return None
 
         return records
+    
 
+    def parse_location(self, location_str: str, prompt_type: str = "address") -> dict:
+        """
+        Uses the LLM to parse a free-form location string into a structured address dict.
+        """
+        prompt = self.generate_prompt("synthetic_url_for_address", location_str, prompt_type=prompt_type)
+        response = self.query_llm("synthetic_url_for_address", prompt)
+
+        if response:
+            results = self.extract_and_parse_json(response, "synthetic_url_for_address")
+            if results and isinstance(results, list):
+                return results[0]  # Use the first valid address
+
+        return {}
+        
 
 # Run the LLM
 if __name__ == "__main__":

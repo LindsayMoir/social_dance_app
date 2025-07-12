@@ -78,12 +78,6 @@ class DatabaseHandler():
         # Get google api key
         self.google_api_key = os.getenv("GOOGLE_KEY_PW")
 
-        # Get Foursquare API key
-        self.foursquare_api_key = os.getenv("FOURSQUARE_API_KEY")
-
-        # Initialize a cache for Foursquare queries
-        self.fsq_cache = {}
-
         # Create df from urls table.
         self.urls_df = self.create_urls_df()
         logging.info("__init__(): URLs DataFrame created with %d rows.", len(self.urls_df))
@@ -114,7 +108,14 @@ class DatabaseHandler():
             .reset_index()
         )
         logging.info(f"__init__(): urls_gb has {len(self.urls_gb)} rows and {len(self.urls_gb.columns)} columns.")
-            
+
+
+    def set_llm_handler(self, llm_handler):
+        """
+        Inject an instance of LLMHandler after both classes are constructed.
+        """
+        self.llm_handler = llm_handler
+        
 
     def load_blacklist_domains(self):
         """
@@ -472,6 +473,262 @@ class DatabaseHandler():
             logging.error("write_url_to_db(): failed to append URL '%s': %s", link, e)
     
 
+    def clean_up_address_basic(self, events_df):
+        """
+        Cleans events using only local DB and regex methods (no Foursquare).
+        """
+        logging.info("clean_up_address_basic(): Starting with shape %s", events_df.shape)
+
+        address_df = pd.read_sql("SELECT * FROM address", self.conn)
+
+        for index, row in events_df.iterrows():
+            event_id = row.get('event_id')
+            location = row.get('location')
+
+            address_id, new_location = self.try_resolve_address(
+                event_id, location, address_df=address_df, use_foursquare=False
+            )
+
+            if address_id:
+                events_df.at[index, 'address_id'] = address_id
+                events_df.at[index, 'location'] = new_location
+
+        return events_df
+    
+
+    def get_address_update_for_event(self, event_id, location, address_df):
+        """
+        Given an event's ID, its location string, and a DataFrame of addresses, 
+        this method attempts to extract the street number from the location using a regular expression. 
+        It then searches the address DataFrame for a row where the 'street_number' matches the extracted number 
+        and the 'street_name' is present in the location string.
+        Parameters:
+            event_id (Any): The unique identifier for the event.
+            location (str): The location string containing address information.
+            address_df (pd.DataFrame): A DataFrame containing address data with at least 
+                'street_number', 'street_name', and 'address_id' columns.
+        Returns:
+            List[dict]: A list containing a single dictionary with 'event_id' and 'address_id' keys 
+            if a matching address is found; otherwise, an empty list.
+        """
+        updates = []
+        if location is None:
+            return updates
+        match = re.search(r'\d+', location)
+        if match:
+            extracted_number = match.group()
+            matching_addresses = address_df[address_df['street_number'] == extracted_number]
+            for _, addr_row in matching_addresses.iterrows():
+                if pd.notnull(addr_row['street_name']) and addr_row['street_name'] in location:
+                    new_address_id = addr_row['address_id']
+                    updates.append({
+                        "event_id": event_id,
+                        "address_id": new_address_id
+                    })
+                    break  # Stop after the first match is found.
+        return updates
+    
+
+    def extract_canadian_postal_code(self, location_str):
+        """
+        Extracts a valid Canadian postal code from a given location string.
+
+        This method uses a regular expression to search for a Canadian postal code pattern
+        within the provided string. If a match is found, it removes any spaces from the
+        postal code and validates it using the `is_canadian_postal_code` method. If the
+        postal code is valid, it returns the cleaned postal code; otherwise, it returns None.
+
+        Args:
+            location_str (str): The input string potentially containing a Canadian postal code.
+
+        Returns:
+            str or None: The valid Canadian postal code without spaces if found and valid, otherwise None.
+        """
+        match = re.search(r'[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d', location_str)
+        if match:
+            possible_pc = match.group().replace(' ', '')
+            if self.is_canadian_postal_code(possible_pc):
+                return possible_pc
+        return None
+
+    def create_address_dict(self, full_address, street_number, street_name, street_type, postal_box, city, province_or_state, postal_code, country_id):
+        """
+        Creates an address dictionary with the given parameters.
+
+        Args:
+            full_address (str): The full address.
+            street_number (str): The street number.
+            street_name (str): The street name.
+            street_type (str): The street type.
+            postal_box (str): The postal box.
+            city (str): The city.
+            province_or_state (str): The province or state.
+            postal_code (str): The postal code.
+            country_id (str): The country ID.
+
+        Returns:
+            dict: The address dictionary.
+        """
+        return {
+            'full_address': full_address,
+            'street_number': street_number,
+            'street_name': street_name,
+            'street_type': street_type,
+            'postal_box': postal_box,
+            'city': city,
+            'province_or_state': province_or_state,
+            'postal_code': postal_code,
+            'country_id': country_id
+        }
+
+    def populate_from_db_or_fallback(self, location_str, postal_code):
+        """
+        Attempts to populate a formatted address using a Canadian postal code by querying the local address database.
+        If no match is found in the database, returns a fallback value (currently returns None, None).
+
+        Args:
+            location_str (str): The raw location string, typically containing civic number and street information.
+            postal_code (str): The Canadian postal code to look up in the database.
+
+            tuple:
+                updated_location (str or None): The formatted address string if found, otherwise None.
+                address_id (Any or None): The unique identifier for the address if found, otherwise None.
+
+        Notes:
+            - If multiple database rows match the postal code, attempts to match the civic number from the location string.
+            - If no valid match is found, returns (None, None).
+            - Logging is used to provide information and warnings about the lookup process.
+            - Fallback logic for missing database entries.
+        """
+        numbers = re.findall(r'\d+', location_str)
+        query = """
+            SELECT
+                civic_no,
+                civic_no_suffix,
+                official_street_name,
+                official_street_type,
+                official_street_dir,
+                mail_mun_name,
+                mail_prov_abvn,
+                mail_postal_code
+            FROM locations
+            WHERE mail_postal_code = %s;
+        """
+        df = pd.read_sql(query, self.address_db_engine, params=(postal_code,))
+        if df.empty:
+            city = self.get_municipality_foursquare(location_str)
+            if not city:
+                return None, None
+            updated_location = f"{location_str}, {city}, BC, {postal_code}, CA"
+            updated_location = updated_location.replace('None,', '').strip()
+            address_dict = self.create_address_dict(
+                updated_location, None, None, None, None, city, 'BC', postal_code, 'CA'
+            )
+            address_id = self.resolve_or_insert_address(address_dict)
+            logging.info("No DB match for postal code '%s'. Using Foursquare fallback: '%s'", postal_code, updated_location)
+            return updated_location, address_id
+
+        # Single or multiple rows
+        if df.empty:
+            return None, None
+
+        if df.shape[0] == 1:
+            row = df.iloc[0]
+        else:
+            match_index = self.match_civic_number(df, numbers)
+            if match_index is None or match_index not in df.index:
+                logging.warning("populate_from_db_or_fallback(): No valid match found.")
+                return None, None
+            row = df.loc[match_index]
+
+        updated_location = self.format_address_from_db_row(row)
+
+        address_dict = self.create_address_dict(
+            updated_location, str(row.civic_no) if row.civic_no else None, row.official_street_name,
+            row.official_street_type, None, row.mail_mun_name, row.mail_prov_abvn, row.mail_postal_code, 'CA'
+        )
+        address_id = self.resolve_or_insert_address(address_dict)
+        logging.info("Populated from DB for postal code '%s': '%s'", postal_code, updated_location)
+        return updated_location, address_id
+    
+
+    def get_postal_code_from_address_db(self, parsed_address: dict) -> str:
+        """
+        Tries to retrieve a postal code from the address DB using civic_no, street_name, and city.
+        """
+        civic_no = parsed_address.get("street_number", "").strip()
+        street_name = parsed_address.get("street_name", "").strip()
+        city = parsed_address.get("city", "").strip()
+
+        if not (civic_no and street_name and city):
+            logging.warning("get_postal_code_from_address_db: Missing components for lookup.")
+            return ""
+
+        query = """
+            SELECT mail_postal_code
+            FROM locations
+            WHERE LOWER(civic_no) = LOWER(:civic_no)
+            AND LOWER(official_street_name) = LOWER(:street_name)
+            AND LOWER(mail_mun_name) = LOWER(:city)
+            LIMIT 1;
+        """
+        try:
+            result_df = pd.read_sql(
+                query,
+                self.address_db_engine,
+                params={"civic_no": civic_no, "street_name": street_name, "city": city}
+            )
+            if not result_df.empty:
+                postal_code = result_df.iloc[0]["mail_postal_code"]
+                logging.info("get_postal_code_from_address_db: Found postal_code: %s", postal_code)
+                return postal_code
+            else:
+                logging.warning("get_postal_code_from_address_db: No postal code found for %s", parsed_address)
+                return ""
+        except Exception as e:
+            logging.error("get_postal_code_from_address_db: Postal code lookup failed: %s", str(e))
+            return ""
+
+
+    def try_resolve_address(self, event_id, location, address_df=None, use_foursquare=False):
+        """
+        Tries to resolve an address_id for a given location.
+        Can optionally use Foursquare fallbacks.
+        """
+        if not location or pd.isna(location):
+            return None, None
+
+        location = str(location).strip()
+
+        # 1. Try DB match
+        if address_df is not None:
+            update_list = self.get_address_update_for_event(event_id, location, address_df)
+            if update_list:
+                return update_list[0]['address_id'], location
+
+        # 2. Try local regex postal code extraction
+        postal_code = self.extract_canadian_postal_code(location)
+        if postal_code:
+            updated_location, address_id = self.populate_from_db_or_fallback(location, postal_code)
+            if address_id:
+                return address_id, updated_location
+
+        if use_foursquare:
+            # 3. Try Foursquare postal code
+            postal_code = self.get_postal_code_foursquare(location)
+            if postal_code and self.is_canadian_postal_code(postal_code):
+                updated_location, address_id = self.populate_from_db_or_fallback(location, postal_code)
+                if address_id:
+                    return address_id, updated_location
+
+            # 4. Try Foursquare municipality fallback
+            updated_location, address_id = self.fallback_with_municipality(location)
+            if address_id:
+                return address_id, updated_location
+
+        return None, location
+    
+
     def write_events_to_db(self, df, url, parent_url, source, keywords):
         """
         Processes and writes event data to the 'events' table in the database.
@@ -516,8 +773,23 @@ class DatabaseHandler():
             df['price'] = ''
 
         df['time_stamp'] = datetime.now()
+
+        # Basic location cleanup
         df = self.clean_up_address_basic(df)
 
+        # Resolve structured addresses using LLM + match/insert logic
+        updated_rows = []
+        for i, row in df.iterrows():
+            event_dict = row.to_dict()
+            updated_event = self.process_event_address(event_dict)
+            for key in ["address_id", "location"]:
+                if key in updated_event:
+                    df.at[i, key] = updated_event[key]
+            updated_rows.append(updated_event)
+
+        logging.info(f"write_events_to_db: Address processing complete for {len(updated_rows)} events.")
+
+        # Remove old or incomplete events
         df = self._filter_events(df)
 
         if df.empty:
@@ -650,754 +922,248 @@ class DatabaseHandler():
         return True
 
 
-    def find_matching_address_id(self, building_name, street_number, street_name, city, province):
+    def get_address_id(self, address_dict: dict) -> int:
         """
-        Attempts to find an existing address_id using:
-        - Fuzzy building_name match (within city + province, score ≥ 90)
-        - Exact street_number + exact street_name match (within same area)
-
-        Returns:
-            address_id (int) if found, else None
+        Attempts to find an existing address in the database using exact or fuzzy match,
+        and returns its address_id. Returns 0 if no match is found.
         """
-        try:
-            # ✅ Check: city and province must be non-null and non-empty
-            if not city or not province or city.strip() == "" or province.strip() == "":
-                logging.warning("Missing city or province; cannot proceed with address match.")
-                return None
 
-            query = f"""
-                SELECT address_id, building_name, street_number, street_name, full_address
-                FROM address
-                WHERE city = '{city}' AND province_or_state = '{province}'
-            """
-            df = pd.read_sql(query, self.conn)
-
-            # ✅ Check: building_name must be non-null and non-empty
-            if building_name and building_name.strip():
-                for _, row in df.iterrows():
-                    bldg = row["building_name"]
-                    # ✅ Check: row building_name must be non-null and non-empty
-                    if bldg and str(bldg).strip():
-                        score = fuzz.token_sort_ratio(building_name.lower().strip(), bldg.lower().strip())
-                        if score >= 90:
-                            logging.info(f"Fuzzy building_name match → {row['address_id']} ({score})")
-                            return row["address_id"]
-
-            # ✅ Check: street_number and street_name must be non-null and non-empty
-            if street_number and street_name and str(street_number).strip() and str(street_name).strip():
-                for _, row in df.iterrows():
-                    snum = row["street_number"]
-                    sname = row["street_name"]
-                    # ✅ Check: row street_number and street_name must be non-null and non-empty
-                    if snum and sname and str(snum).strip() and str(sname).strip():
-                        if (
-                            str(snum).strip().lower() == str(street_number).strip().lower() and
-                            str(sname).strip().lower() == str(street_name).strip().lower()
-                        ):
-                            logging.info(f"Exact street number + street name match → {row['address_id']}")
-                            return row["address_id"]
-
-            return None
-
-        except Exception as e:
-            logging.error(f"find_matching_address_id: {e}")
-            return None
-
-
-    def deduplicate_address_table(self):
-        """
-        Loads address table into a DataFrame using self.conn.
-        For each address row, finds a fuzzy/exact match, reuses existing address_id,
-        updates event.location, and removes duplicate address rows.
-        """
-        try:
-            # Load all addresses into a DataFrame
-            df = pd.read_sql("""
-                SELECT address_id, building_name, street_number, street_name,
-                    city, province_or_state, full_address
-                FROM address
-                ORDER BY address_id
-            """, self.conn)
-
-            for index, row in df.iterrows():
-                addr_id = row["address_id"]
-                bldg = row["building_name"]
-                snum = row["street_number"]
-                sname = row["street_name"]
-                city = row["city"]
-                prov = row["province_or_state"]
-                full = row["full_address"]
-
-                # Attempt to find matching address (fuzzy/exact)
-                match_id = self.find_matching_address_id(bldg, snum, sname, city, prov)
-
-                if match_id and match_id != addr_id:
-                    # 1. Reassign events
-                    update_query = """
-                        UPDATE events
-                        SET address_id = :new_id
-                        WHERE address_id = :old_id;
-                    """
-                    self.execute_query(update_query, {"new_id": match_id, "old_id": addr_id})
-
-                    # 2. Update event.location with canonical address
-                    self.update_event_locations(match_id, full)
-
-                    # 3. Delete duplicate address row
-                    delete_query = """
-                        DELETE FROM address
-                        WHERE address_id = :aid;
-                    """
-                    self.execute_query(delete_query, {"aid": addr_id})
-
-                    logging.info(f"deduplicate_address_table: Deduplicated address_id {addr_id} → {match_id}")
-
-            logging.info("deduplicate_address_table: Completed successfully.")
-
-        except Exception as e:
-            logging.error(f"deduplicate_address_table: {e}")
-
-
-    def update_event_locations(self, address_id, full_address):
-        """
-        Updates location field in events table for a given address_id.
-        Uses self.execute_query (assumes autocommit or commit follows).
-        """
-        try:
-            self.execute_query("""
-                UPDATE events
-                SET location = :full_address
-                WHERE address_id = :address_id;
-            """, {
-                "full_address": full_address,
-                "address_id": address_id
-            })
-            logging.info(f"Updated location for events with address_id {address_id}")
-        except Exception as e:
-            logging.error(f"update_event_locations: {e}")
-
-
-    def resolve_or_insert_address(self, address_dict):
-        """
-        Attempts to resolve an address by:
-        1. Fuzzy matching on building_name (>85)
-        2. Exact match on street_number and street_name (case-insensitive)
-        
-        If found, returns the existing address_id and updates events.location.
-        Otherwise, inserts the address and returns the new address_id.
-
-        Args:
-            address_dict (dict): Must include:
-                - full_address
-                - building_name
-                - street_number
-                - street_name
-                - street_type
-                - city
-                - province_or_state
-                - postal_code
-                - country_id
-
-        Returns:
-            int or None: address_id
-        """
-        try:
-            # Load existing address table
-            address_df = pd.read_sql("SELECT * FROM address", self.conn)
-
-            # Normalize input
-            building_name = (address_dict.get("building_name") or "").strip().lower()
-            street_number = str(address_dict.get("street_number") or "").strip()
-            street_name = (address_dict.get("street_name") or "").strip().lower()
-
-            for _, row in address_df.iterrows():
-                row_building = (row["building_name"] or "").strip().lower()
-                row_street_number = str(row["street_number"] or "").strip().lower()
-                row_street_name = (row["street_name"] or "").strip().lower()
-
-                # Fuzzy match on building name
-                if building_name and fuzz.token_set_ratio(building_name, row_building) >= 85:
-                    self.update_event_locations(row["address_id"], row["full_address"])
-                    logging.info(f"Resolved address by fuzzy building_name match: {row['address_id']}")
-                    return row["address_id"]
-
-                # Exact match on street number + name
-                if street_number and street_name and street_number == row_street_number and street_name == row_street_name:
-                    self.update_event_locations(row["address_id"], row["full_address"])
-                    logging.info(f"Resolved address by exact street match: {row['address_id']}")
-                    return row["address_id"]
-
-            # No match found — fallback to insert
-            logging.info("resolve_or_insert_address: No match found, calling get_address_id()")
-            return self.get_address_id(address_dict)
-
-        except Exception as e:
-            logging.error(f"resolve_or_insert_address: Failed to resolve/insert address: {e}")
-            return None
-
-
-    def find_existing_address(self, building_name, street_number, street_name):
-        """
-        Checks for an existing address row that matches either:
-        - Fuzzy match on building_name (>85)
-        - Exact match on street_number and street_name (case-insensitive)
-
-        Returns:
-            dict with full row or None
-        """
-        from fuzzywuzzy import fuzz
-
-        address_df = pd.read_sql("SELECT * FROM address", self.conn)
-
-        # Normalize for comparison
-        building_name = (building_name or "").strip().lower()
-        street_number = str(street_number or "").strip()
-        street_name = (street_name or "").strip().lower()
-
-        for _, row in address_df.iterrows():
-            score = fuzz.token_set_ratio(building_name, (row['building_name'] or "").strip().lower())
-
-            if score >= 85:
-                return row.to_dict()
-
-            if (
-                street_number.lower() == str(row['street_number'] or "").strip().lower() and
-                street_name == (row['street_name'] or "").strip().lower()
-            ):
-                return row.to_dict()
-
-        return None
-
-
-    def get_address_id(self, address_dict):
-        """
-        Inserts or updates an address in the 'address' table. Ensures all events using this
-        address_id get their 'location' field updated to the canonical full_address.
-
-        Args:
-            address_dict (dict): Must include:
-                - full_address (str)
-                - building_name (str or None)
-                - street_number (str or int)
-                - street_name (str)
-                - street_type (str)
-                - city (str)
-                - province_or_state (str)
-                - postal_code (str)
-                - country_id (str)
-
-        Returns:
-            int or None: address_id of inserted/updated row
-        """
-        from datetime import datetime
-        import numpy as np
-        from sqlalchemy.exc import SQLAlchemyError
-
-        address_dict['time_stamp'] = datetime.now()
-
-        try:
-            insert_query = """
-                INSERT INTO address (
-                    full_address, building_name, street_number, street_name, street_type, 
-                    city, province_or_state, postal_code, country_id, time_stamp
-                ) VALUES (
-                    :full_address, :building_name, :street_number, :street_name, :street_type,
-                    :city, :province_or_state, :postal_code, :country_id, :time_stamp
-                )
-                ON CONFLICT (full_address) DO UPDATE SET
-                    building_name = EXCLUDED.building_name,
-                    street_number = EXCLUDED.street_number,
-                    street_name = EXCLUDED.street_name,
-                    street_type = EXCLUDED.street_type,
-                    city = EXCLUDED.city,
-                    province_or_state = EXCLUDED.province_or_state,
-                    postal_code = EXCLUDED.postal_code,
-                    country_id = EXCLUDED.country_id,
-                    time_stamp = EXCLUDED.time_stamp
-                RETURNING address_id;
-            """
-
-            insert_result = self.execute_query(insert_query, address_dict)
-
-            if insert_result:
-                address_id = insert_result[0][0]
-                if isinstance(address_id, np.int64):
-                    address_id = int(address_id)
-
-                logging.info(f"get_address_id: Inserted or updated address_id {address_id} for address '{address_dict['full_address']}'.")
-
-                # Ensure all events tied to this address_id get the canonical full_address
-                self.update_event_locations(address_id, address_dict['full_address'])
-
-                return address_id
-
-            logging.error(f"get_address_id: Failed to insert or update address_id for '{address_dict['full_address']}'.")
-            return None
-
-        except SQLAlchemyError as e:
-            logging.error(f"get_address_id: Database error: {e}")
-            return None
-        
-
-    def try_resolve_address(self, event_id, location, address_df=None, use_foursquare=False):
-        """
-        Tries to resolve an address_id for a given location.
-        Can optionally use Foursquare fallbacks.
-        """
-        if not location or pd.isna(location):
-            return None, None
-
-        location = str(location).strip()
-
-        # 1. Try DB match
-        if address_df is not None:
-            update_list = self.get_address_update_for_event(event_id, location, address_df)
-            if update_list:
-                return update_list[0]['address_id'], location
-
-        # 2. Try local regex postal code extraction
-        postal_code = self.extract_canadian_postal_code(location)
-        if postal_code:
-            updated_location, address_id = self.populate_from_db_or_fallback(location, postal_code)
-            if address_id:
-                return address_id, updated_location
-
-        if use_foursquare:
-            # 3. Try Foursquare postal code
-            postal_code = self.get_postal_code_foursquare(location)
-            if postal_code and self.is_canadian_postal_code(postal_code):
-                updated_location, address_id = self.populate_from_db_or_fallback(location, postal_code)
-                if address_id:
-                    return address_id, updated_location
-
-            # 4. Try Foursquare municipality fallback
-            updated_location, address_id = self.fallback_with_municipality(location)
-            if address_id:
-                return address_id, updated_location
-
-        return None, location
-
-
-    def clean_up_address_basic(self, events_df):
-        """
-        Cleans events using only local DB and regex methods (no Foursquare).
-        """
-        logging.info("clean_up_address_basic(): Starting with shape %s", events_df.shape)
-
-        address_df = pd.read_sql("SELECT * FROM address", self.conn)
-
-        for index, row in events_df.iterrows():
-            event_id = row.get('event_id')
-            location = row.get('location')
-
-            address_id, new_location = self.try_resolve_address(
-                event_id, location, address_df=address_df, use_foursquare=False
-            )
-
-            if address_id:
-                events_df.at[index, 'address_id'] = address_id
-                events_df.at[index, 'location'] = new_location
-
-        return events_df
-
-
-    def clean_up_address_with_foursquare(self, events_df):
-        """
-        Cleans events using local DB, regex, and Foursquare fallbacks.
-        """
-        logging.info("clean_up_address_with_foursquare(): Starting with shape %s", events_df.shape)
-
-        address_df = pd.read_sql("SELECT * FROM address", self.conn)
-
-        for index, row in events_df.iterrows():
-            event_id = row.get('event_id')
-            location = row.get('location')
-
-            address_id, new_location = self.try_resolve_address(
-                event_id, location, address_df=address_df, use_foursquare=True
-            )
-
-            if address_id:
-                events_df.at[index, 'address_id'] = address_id
-                events_df.at[index, 'location'] = new_location
-
-        return events_df
-
-
-    def enhance_addresses_with_foursquare(self):
-        """
-        Enhances rows with NULL address_id using Foursquare after initial SQL input.
-        """
-        logging.info("enhance_addresses_with_foursquare(): Starting enhancement pass")
-
+        # 1. Try exact match on key fields
         query = """
-            SELECT event_id, location
-            FROM events
-            WHERE address_id IS NULL
-            AND location IS NOT NULL
+            SELECT address_id FROM address
+            WHERE LOWER(street_number) = LOWER(:street_number)
+            AND LOWER(street_name) = LOWER(:street_name)
+            AND LOWER(city) = LOWER(:city)
+            AND LOWER(postal_code) = LOWER(:postal_code)
+            LIMIT 1;
         """
-        events_df = pd.read_sql(query, self.conn)
-
-        address_df = pd.read_sql("SELECT * FROM address", self.conn)
-        updated_rows = []
-
-        for row in events_df.itertuples(index=False):
-            event_id = row.event_id
-            location = row.location
-
-            address_id, new_location = self.try_resolve_address(
-                event_id, location, address_df=address_df, use_foursquare=True
-            )
-
-            if address_id:
-                updated_rows.append({
-                    'event_id': event_id,
-                    'address_id': address_id,
-                    'location': new_location or location
-                })
-
-        logging.info("enhance_addresses_with_foursquare(): Enhanced %d rows", len(updated_rows))
-
-        if updated_rows:
-            self.multiple_db_inserts('events', updated_rows)
-
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # Helper Methods
-    # ─────────────────────────────────────────────────────────────────────────────
-
-    def extract_canadian_postal_code(self, location_str):
-        """
-        Extracts a valid Canadian postal code from a given location string.
-
-        This method uses a regular expression to search for a Canadian postal code pattern
-        within the provided string. If a match is found, it removes any spaces from the
-        postal code and validates it using the `is_canadian_postal_code` method. If the
-        postal code is valid, it returns the cleaned postal code; otherwise, it returns None.
-
-        Args:
-            location_str (str): The input string potentially containing a Canadian postal code.
-
-        Returns:
-            str or None: The valid Canadian postal code without spaces if found and valid, otherwise None.
-        """
-        match = re.search(r'[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d', location_str)
-        if match:
-            possible_pc = match.group().replace(' ', '')
-            if self.is_canadian_postal_code(possible_pc):
-                return possible_pc
-        return None
-
-    def create_address_dict(self, full_address, street_number, street_name, street_type, postal_box, city, province_or_state, postal_code, country_id):
-        """
-        Creates an address dictionary with the given parameters.
-
-        Args:
-            full_address (str): The full address.
-            street_number (str): The street number.
-            street_name (str): The street name.
-            street_type (str): The street type.
-            postal_box (str): The postal box.
-            city (str): The city.
-            province_or_state (str): The province or state.
-            postal_code (str): The postal code.
-            country_id (str): The country ID.
-
-        Returns:
-            dict: The address dictionary.
-        """
-        return {
-            'full_address': full_address,
-            'street_number': street_number,
-            'street_name': street_name,
-            'street_type': street_type,
-            'postal_box': postal_box,
-            'city': city,
-            'province_or_state': province_or_state,
-            'postal_code': postal_code,
-            'country_id': country_id
+        params = {
+            "street_number": address_dict.get("street_number", ""),
+            "street_name": address_dict.get("street_name", ""),
+            "city": address_dict.get("city", ""),
+            "postal_code": address_dict.get("postal_code", "")
         }
 
-    def populate_from_db_or_fallback(self, location_str, postal_code):
+        result = self.execute_query(query, params)
+        if result:
+            logging.info("get_address_id(): Exact match found for address: %s", json.dumps(params))
+            return result[0][0]
+
+        # 2. Try fuzzy match on building_name
+        building_name = address_dict.get("building_name", "").strip()
+        if building_name:
+            logging.info("get_address_id(): No exact match. Trying fuzzy match for building_name='%s'", building_name)
+
+            query = "SELECT address_id, building_name FROM address WHERE building_name IS NOT NULL;"
+            all_rows = self.execute_query(query)
+            if not all_rows:
+                logging.warning("get_address_id(): No rows returned for building_name fuzzy search.")
+                return 0
+
+            for row in all_rows:
+                existing_id, existing_name = row
+                if existing_name and self.fuzzy_match(building_name, existing_name):
+                    logging.info("get_address_id(): Fuzzy matched '%s' to '%s' with address_id=%d",
+                                building_name, existing_name, existing_id)
+                    return existing_id
+
+        logging.info("get_address_id(): No match found. Returning 0.")
+        return 0
+
+
+    def fuzzy_match(self, a: str, b: str, threshold: int = 85) -> bool:
         """
-        Attempts to populate a formatted address using a Canadian postal code by querying the local address database.
-        If no match is found in the database, returns a fallback value (currently returns None, None).
-
-        Args:
-            location_str (str): The raw location string, typically containing civic number and street information.
-            postal_code (str): The Canadian postal code to look up in the database.
-
-            tuple:
-                updated_location (str or None): The formatted address string if found, otherwise None.
-                address_id (Any or None): The unique identifier for the address if found, otherwise None.
-
-        Notes:
-            - If multiple database rows match the postal code, attempts to match the civic number from the location string.
-            - If no valid match is found, returns (None, None).
-            - Logging is used to provide information and warnings about the lookup process.
-            - Fallback logic for missing database entries.
+        Returns True if the fuzzy match score between two strings exceeds the threshold.
+        Uses token sort ratio for better match on rearranged terms.
         """
-        numbers = re.findall(r'\d+', location_str)
+        score = fuzz.token_sort_ratio(a, b)
+        return score >= threshold
+
+
+    def parse_location_with_llm(self, location_str: str, prompt_type: str = "address_internet_fix") -> dict:
+        """
+        Sends the location string to the LLM with a specified prompt type and returns a parsed address dictionary.
+        Forces OpenAI use for address_internet_fix only, without changing global config.
+        """
+        if not location_str or len(location_str.strip()) < 15:
+            logging.info("parse_location_with_llm: Skipping short/empty location string: %s", location_str)
+            return {"address_id": 0}
+
+        # Load the prompt text from config
+        try:
+            prompt_text = self.config["prompts"][prompt_type]
+        except KeyError:
+            logging.error("parse_location_with_llm: No prompt found in config for prompt_type: %s", prompt_type)
+            return {"address_id": 0}
+
+        prompt = f"{prompt_text}\n\n{location_str.strip()}"
+        logging.info("parse_location_with_llm: Prompting LLM with: %s", prompt_type)
+
+        # --- Temporarily override LLM provider if needed ---
+        original_provider = self.llm_handler.config["llm"].get("provider")
+        if prompt_type == "address_internet_fix":
+            self.llm_handler.config["llm"]["provider"] = "openai"
+
+        # Query the LLM
+        llm_response = self.llm_handler.query_llm(prompt)
+
+        # Restore original provider
+        self.llm_handler.config["llm"]["provider"] = original_provider
+
+        # Parse the response
+        parsed_address = self.llm_handler.extract_and_parse_json(llm_response)
+        logging.info("parse_location_with_llm: Parsed address from LLM:\n%s", json.dumps(parsed_address, indent=2))
+
+        if not parsed_address:
+            logging.warning("parse_location_with_llm: No valid address returned by LLM. Returning address_id=0")
+            return {"address_id": 0}
+
+        # Attempt to fill missing postal_code from external address DB
+        if not parsed_address.get("postal_code") or parsed_address["postal_code"].lower() == "null":
+            postal = self.lookup_postal_code_external_db(
+                street_number=parsed_address.get("street_number", ""),
+                street_name=parsed_address.get("street_name", ""),
+                city=parsed_address.get("city", "")
+            )
+            if postal:
+                parsed_address["postal_code"] = postal
+                logging.info("parse_location_with_llm: Filled missing postal_code from external DB: %s", postal)
+
+        # Insert into address table (or get existing ID)
+        address_id = self.get_address_id(parsed_address)
+        parsed_address["address_id"] = address_id
+
+        return parsed_address
+
+
+    def lookup_postal_code_external_db(self, street_number, street_name, city):
+        """
+        Queries the external address database to find a postal code based on the civic number, street, and city.
+        """
+        if not self.address_db_engine:
+            logging.warning("lookup_postal_code_external_db: No external address DB connection available.")
+            return None
+
         query = """
-            SELECT
-                civic_no,
-                civic_no_suffix,
-                official_street_name,
-                official_street_type,
-                official_street_dir,
-                mail_mun_name,
-                mail_prov_abvn,
-                mail_postal_code
+            SELECT mail_postal_code
             FROM locations
-            WHERE mail_postal_code = %s;
+            WHERE LOWER(civic_no) = LOWER(%s)
+            AND LOWER(official_street_name) = LOWER(%s)
+            AND LOWER(mail_mun_name) = LOWER(%s)
+            LIMIT 1;
         """
-        df = pd.read_sql(query, self.address_db_engine, params=(postal_code,))
-        if df.empty:
-            city = self.get_municipality_foursquare(location_str)
-            if not city:
-                return None, None
-            updated_location = f"{location_str}, {city}, BC, {postal_code}, CA"
-            updated_location = updated_location.replace('None,', '').strip()
-            address_dict = self.create_address_dict(
-                updated_location, None, None, None, None, city, 'BC', postal_code, 'CA'
-            )
-            address_id = self.resolve_or_insert_address(address_dict)
-            logging.info("No DB match for postal code '%s'. Using Foursquare fallback: '%s'", postal_code, updated_location)
-            return updated_location, address_id
-
-        # Single or multiple rows
-        if df.empty:
-            return None, None
-
-        if df.shape[0] == 1:
-            row = df.iloc[0]
-        else:
-            match_index = self.match_civic_number(df, numbers)
-            if match_index is None or match_index not in df.index:
-                logging.warning("populate_from_db_or_fallback(): No valid match found.")
-                return None, None
-            row = df.loc[match_index]
-
-        updated_location = self.format_address_from_db_row(row)
-
-        address_dict = self.create_address_dict(
-            updated_location, str(row.civic_no) if row.civic_no else None, row.official_street_name,
-            row.official_street_type, None, row.mail_mun_name, row.mail_prov_abvn, row.mail_postal_code, 'CA'
-        )
-        address_id = self.resolve_or_insert_address(address_dict)
-        logging.info("Populated from DB for postal code '%s': '%s'", postal_code, updated_location)
-        return updated_location, address_id
-    
-
-    def get_postal_code_foursquare(self, address):
-        if address in self.fsq_cache and 'postal_code' in self.fsq_cache[address]:
-            return self.fsq_cache[address]['postal_code']
-
-        postal_code = self._call_foursquare_for_postal_code(address)
-
-        if address not in self.fsq_cache:
-            self.fsq_cache[address] = {}
-        self.fsq_cache[address]['postal_code'] = postal_code
-
-        return postal_code
-    
-
-    def _call_foursquare_for_postal_code(self, address):
-        endpoint = "https://api.foursquare.com/v3/places/search"
-        headers = {
-            "Accept": "application/json",
-            "Authorization": self.foursquare_api_key
-        }
-        params = {
-            "query": address,
-            "limit": 1,
-            "fields": "location"
-        }
         try:
-            response = requests.get(endpoint, headers=headers, params=params)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("results"):
-                return data["results"][0].get("location", {}).get("postal_code")
+            result_df = pd.read_sql(query, self.address_db_engine, params=(street_number, street_name, city))
+            if not result_df.empty:
+                return result_df.iloc[0]["mail_postal_code"]
         except Exception as e:
-            logging.warning(f"Foursquare postal lookup failed for '{address}': {e}")
+            logging.error("lookup_postal_code_external_db: Error querying external DB: %s", e)
+
         return None
 
 
-    def get_municipality_foursquare(self, address):
-        if address in self.fsq_cache and 'municipality' in self.fsq_cache[address]:
-            return self.fsq_cache[address]['municipality']
-
-        municipality = self._call_foursquare_for_municipality(address)
-
-        if address not in self.fsq_cache:
-            self.fsq_cache[address] = {}
-        self.fsq_cache[address]['municipality'] = municipality
-
-        return municipality
-
-    def _call_foursquare_for_municipality(self, address):
-        endpoint = "https://api.foursquare.com/v3/places/search"
-        headers = {
-            "Accept": "application/json",
-            "Authorization": self.foursquare_api_key
-        }
-        params = {
-            "query": address,
-            "limit": 1,
-            "fields": "location"
-        }
-        try:
-            response = requests.get(endpoint, headers=headers, params=params)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("results"):
-                return data["results"][0].get("location", {}).get("locality")
-        except Exception as e:
-            logging.warning(f"Foursquare municipality lookup failed for '{address}': {e}")
-        return None
-
-
-    def fallback_with_municipality(self, location_str):
+    def insert_address_and_return_id(self, address_dict: dict) -> int:
         """
-        Attempts to resolve a location string to a municipality using Google API as a fallback
-        when no postal code is found. If the municipality is recognized and located in British Columbia (BC),
-        returns an updated location string and a corresponding address ID. Otherwise, returns (None, None).
-
-        Args:
-            location_str (str): The input location string to resolve.
-
-            tuple:
-                - updated_location (str or None): The constructed location string including municipality, BC, and CA,
-                  or None if not found or not in BC.
-                - address_id (Any or None): The address ID corresponding to the updated location, or None if not found.
-
-        Side Effects:
-            - Reads the list of valid municipalities from the configured file.
-            - Logs the fallback action if a municipality is found.
-
-        Raises:
-            - Any exceptions raised by file I/O or called methods are propagated.
-        
-        Returns:
-            - updated_location (str or None): The constructed location string including the original location,
-              municipality, 'BC', and 'CA', or None if the municipality is not found or not in BC.
-        
-            - Propagates any exceptions raised by file I/O or called methods.
+        Inserts a new address record into the address table and returns the address_id.
         """
-        municipality = self.get_municipality_foursquare(location_str)
-        if not municipality:
-            return None, None
+        address_dict["time_stamp"] = datetime.now().isoformat()
+        full_address = address_dict.get("full_address")
+        if not full_address:
+            full_address_parts = [
+                address_dict.get("building_name"),
+                address_dict.get("street_number"),
+                address_dict.get("street_name"),
+                address_dict.get("street_type"),
+                address_dict.get("direction"),
+                address_dict.get("city"),
+                address_dict.get("province_or_state"),
+                address_dict.get("postal_code"),
+                "Canada"
+            ]
+            full_address = " ".join([str(part) for part in full_address_parts if part])
+            address_dict["full_address"] = full_address
 
-        with open(self.config['input']['municipalities'], 'r', encoding='utf-8') as f:
-            muni_list = [line.strip() for line in f if line.strip()]
-        if municipality in muni_list:
-            updated_location = f"{location_str}, {municipality}, BC, CA"
-            updated_location = updated_location.replace('None', '').replace(',,', ',').strip()
-            address_dict = self.create_address_dict(
-                updated_location, None, None, None, None, municipality, 'BC', None, 'CA'
-            )
-            address_id = self.resolve_or_insert_address(address_dict)
-            logging.info("Fallback with municipality: '%s'", updated_location)
-            return updated_location, address_id
-        return None, None
+        query = """
+            INSERT INTO address (
+                full_address, building_name, street_number, street_name, street_type,
+                direction, city, met_area, province_or_state, postal_code, country_id, time_stamp
+            ) VALUES (%(full_address)s, %(building_name)s, %(street_number)s, %(street_name)s,
+                      %(street_type)s, %(direction)s, %(city)s, %(met_area)s, %(province_or_state)s,
+                      %(postal_code)s, %(country_id)s, %(time_stamp)s)
+            RETURNING address_id;
+        """
+        return self.execute_returning_id(query, address_dict)
+
+
+    def process_event_address(self, event: dict) -> dict:
+        """
+        Enhances an event with address_id and cleaned-up location string.
+
+        - If event['location'] is null/empty or too short, skip LLM parsing.
+        - Otherwise, parse it via LLM and store in address table.
+        - If postal_code is missing from LLM, attempt to fetch it from the address DB.
+        - Then update event['location'] and assign address_id.
+        """
+        location = event.get("location")
+        if not location or location.lower() in {"null", "none"} or len(location.strip()) < 15:
+            logging.info("process_event_address: Skipping LLM call due to short/empty location.")
+            return event
+
+        parsed_address = self.parse_location_with_llm(location)
+
+        if not parsed_address:
+            logging.warning("process_event_address: LLM returned no parsed address.")
+            return event
+
+        # Try to fill in missing postal code if we have enough to look up
+        if (
+            not parsed_address.get("postal_code") or
+            parsed_address["postal_code"].lower() in {"null", "none", ""}
+        ):
+            enriched = self.lookup_postal_code_from_address_db(parsed_address)
+            if enriched:
+                parsed_address.update(enriched)
+
+        # Rebuild full_address with building_name if not already present
+        building_name = parsed_address.get("building_name", "")
+        full_address = parsed_address.get("full_address", "")
+        if building_name and not full_address.lower().startswith(building_name.lower()):
+            parsed_address["full_address"] = f"{building_name}, {full_address}"
+
+        # Set event['location'] to reflect cleaned up version
+        event["location"] = parsed_address["full_address"]
+
+        # Lookup address_id (insert if needed)
+        address_id = self.get_address_id(parsed_address)
+        parsed_address["address_id"] = address_id
+        event["address"] = address_id
+
+        # Optional: log the parsed + updated address
+        logging.info("process_event_address: Parsed address from LLM:\n%s", json.dumps(parsed_address, indent=2))
+
+        return event
+
     
-
-    def match_civic_number(self, df, numbers):
+    def batch_fix_event_addresses(self, limit: int = 100):
         """
-        Attempts to match the first numeric string from a list to the 'civic_no' column in a DataFrame of addresses.
-        Parameters:
-            df (pd.DataFrame): DataFrame containing address information, including a 'civic_no' column.
-            numbers (list of str): List of numeric strings extracted from a location.
-        Returns:
-            int or None: The index of the row in the DataFrame where the first number matches the 'civic_no'.
-                         If no match is found, returns the index of the first row.
-                         Returns None if the DataFrame is empty.
+        Run through a batch of events with address_id = 0 or NULL, or missing address fields,
+        and update them using the LLM address resolution logic.
         """
-        if df.empty:
-            logging.warning("match_civic_number(): Received empty DataFrame.")
-            return None
-        
-        if not numbers:
-            return df.index[0]
-        for i, addr_row in df.iterrows():
-            if addr_row.civic_no is not None:
-                try:
-                    if int(numbers[0]) == int(addr_row.civic_no):
-                        return i
-                except ValueError:
-                    continue
-
-        return df.index[0]
-    
-
-    def format_address_from_db_row(self, db_row):
+        query = """
+            SELECT * FROM events
+            WHERE (address_id IS NULL OR address_id = 0)
+               OR location IS NULL OR location = ''
+            LIMIT %s;
         """
-        Constructs a formatted address string from a database row.
+        rows = self.execute_query(query, (limit,))
 
-        This method takes a database row object containing address components and constructs
-        a single formatted address string. The formatted address includes the street address,
-        city (municipality), province abbreviation, postal code, and country ("CA").
-        Missing components are omitted gracefully.
+        for row in rows:
+            event_dict = dict(zip(self.get_column_names("events"), row))
+            updated = self.process_event_address(event_dict)
+            if updated.get("address_id") != row[self.get_column_names("events").index("address_id")]:
+                logging.info(f"Updated event_id {updated.get('event_id')} with new address_id {updated.get('address_id')} and location '{updated.get('location')}'")
+            self.update_event(updated)
 
-        Args:
-            db_row: An object representing a database row with address fields. Expected attributes are:
-                - civic_no
-                - civic_no_suffix
-                - official_street_name
-                - official_street_type
-                - official_street_dir
-                - mail_mun_name (city/municipality)
-                - mail_prov_abvn (province abbreviation)
-                - mail_postal_code
-
-        Returns:
-            str: A formatted address string in the form:
-                "<street address>, <city>, <province abbreviation>, <postal code>, CA"
-            Any missing components are omitted from the output.
-        """
-        # Build the street portion
-        parts = [
-            str(db_row.civic_no) if db_row.civic_no else "",
-            str(db_row.civic_no_suffix) if db_row.civic_no_suffix else "",
-            db_row.official_street_name or "",
-            db_row.official_street_type or "",
-            db_row.official_street_dir or ""
-        ]
-        street_address = " ".join(part for part in parts if part).strip()
-
-        # Insert the city if available
-        city = db_row.mail_mun_name or ""
-
-        # Construct final location string
-        formatted = (
-            f"{street_address}, "
-            f"{city}, "                      # <─ Include municipality
-            f"{db_row.mail_prov_abvn or ''}, "
-            f"{db_row.mail_postal_code or ''}, CA"
-        )
-        # Clean up spacing
-        formatted = re.sub(r'\s+,', ',', formatted)
-        formatted = re.sub(r',\s+,', ',', formatted)
-        formatted = re.sub(r'\s+', ' ', formatted).strip()
-        return formatted
-
-    def is_canadian_postal_code(self, postal_code):
-        """
-        Determines whether the provided postal code matches the Canadian postal code format.
-
-        A valid Canadian postal code follows the pattern: A1A 1A1, where 'A' is a letter and '1' is a digit.
-        The space between the third and fourth characters is optional.
-
-        Args:
-            postal_code (str): The postal code string to validate.
-
-        Returns:
-            bool: True if the postal code matches the Canadian format, False otherwise.
-        """
-        pattern = r'^[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d$'
-        return bool(re.match(pattern, postal_code.strip()))
-    
 
     def dedup(self):
         """
@@ -1844,37 +1610,6 @@ class DatabaseHandler():
             logging.error(f"multiple_db_inserts(): Error inserting/updating records in {table_name} table - {e}")
 
 
-    def delete_address_with_address_id(self, address_id):
-        """
-        Deletes an address from the 'address' table based on the provided address_id.
-
-        Args:
-            address_id (int or str): The unique identifier of the address to be deleted. Can be an integer or a string that can be converted to an integer.
-
-        Returns:
-            None
-
-        Raises:
-            Exception: If the deletion fails due to a database error or invalid address_id.
-
-        Logs:
-            - Info log on successful deletion.
-            - Error log if deletion fails.
-        """
-        try:
-            # Convert address_id to native Python int
-            address_id = int(address_id)
-            delete_query = """
-                DELETE FROM address
-                WHERE address_id = :address_id;
-            """
-            params = {'address_id': address_id}
-            self.execute_query(delete_query, params)
-            logging.info("delete_address_with_address_id: Deleted address with address_id %d successfully.", address_id)
-        except Exception as e:
-            logging.error("delete_address_with_address_id: Failed to delete address with address_id %d: %s", address_id, e)
-
-
     def is_foreign(self):
         """
         Determines which events are likely not in British Columbia (BC) by comparing the event location
@@ -2043,111 +1778,6 @@ class DatabaseHandler():
             results_df.to_csv(output_file, mode='a', header=False, index=False)
 
         logging.info(f"def count_events_urls_end(): Wrote events and urls statistics to: {file_name}")
-
-
-    def dedup_address(self):
-        """
-        Deduplicates entries in the 'address' table based on the combination of 'street_number' and 'street_name' columns.
-
-        This method identifies duplicate addresses where both 'street_number' and 'street_name' are not null or empty.
-        For each set of duplicates, it retains the last occurrence and deletes the others by their 'address_id'.
-
-        Returns:
-            int: The number of duplicate address records deleted from the table.
-        """
-        # Create sql statement to select all rows where street_number and street_name are not null or empty
-        sql = """
-                SELECT *
-                FROM address
-                WHERE street_number IS NOT NULL 
-                AND street_number <> ''
-                AND street_name IS NOT NULL 
-                AND street_name <> '';
-            """
-        df = pd.read_sql(sql, self.conn)
-
-        # Get duplicates
-        duplicates = df[df.duplicated(subset=['street_number', 'street_name'], keep='last')]
-        if duplicates.empty:
-            logging.info("dedup_address(): No duplicates found in the 'address' table.")
-
-        else:
-            # Get the address_ids of the duplicates
-            address_ids = duplicates['address_id'].tolist()
-
-            # Delete the duplicates
-            for address_id in address_ids:
-                self.delete_address_with_address_id(address_id)
-            logging.info("dedup_address(): Deleted %d duplicate addresses.", len(address_ids))
-
-
-    def get_address_update_for_event(self, event_id, location, address_df):
-        """
-        Given an event's ID, its location string, and a DataFrame of addresses, 
-        this method attempts to extract the street number from the location using a regular expression. 
-        It then searches the address DataFrame for a row where the 'street_number' matches the extracted number 
-        and the 'street_name' is present in the location string.
-        Parameters:
-            event_id (Any): The unique identifier for the event.
-            location (str): The location string containing address information.
-            address_df (pd.DataFrame): A DataFrame containing address data with at least 
-                'street_number', 'street_name', and 'address_id' columns.
-        Returns:
-            List[dict]: A list containing a single dictionary with 'event_id' and 'address_id' keys 
-            if a matching address is found; otherwise, an empty list.
-        """
-        updates = []
-        if location is None:
-            return updates
-        match = re.search(r'\d+', location)
-        if match:
-            extracted_number = match.group()
-            matching_addresses = address_df[address_df['street_number'] == extracted_number]
-            for _, addr_row in matching_addresses.iterrows():
-                if pd.notnull(addr_row['street_name']) and addr_row['street_name'] in location:
-                    new_address_id = addr_row['address_id']
-                    updates.append({
-                        "event_id": event_id,
-                        "address_id": new_address_id
-                    })
-                    break  # Stop after the first match is found.
-        return updates
-
-    def fix_address_id_in_events(self):
-        """
-        Synchronizes the address_id field in the events table with the correct address_id from the address table.
-            - Extracts the street number from the event's location using a regular expression.
-            - Searches for a matching address row in the address table based on the extracted street number.
-            - If a matching address is found and its street name is present in the event's location,
-              updates the event's address_id to the correct value.
-            - Collects all event_id and updated address_id pairs for a bulk update.
-        Performs a bulk update of the events table to ensure address_id consistency.
-        Returns:
-            None
-        """
-        # Read the events table into a DataFrame.
-        sql = "SELECT * FROM events"
-        events_df = pd.read_sql(sql, self.conn)
-        
-        # Read the address table into a DataFrame.
-        sql = "SELECT * FROM address ORDER BY street_number, street_name"
-        address_df = pd.read_sql(sql, self.conn)
-        
-        # List to hold updates for the events table.
-        events_address_ids_to_be_updated_list = []
-        
-        # Process each event row.
-        for row in events_df.itertuples(index=False):
-            event_id = row.event_id
-            location = row.location
-            
-            updates = self.get_address_update_for_event(event_id, location, address_df)
-            events_address_ids_to_be_updated_list.extend(updates)
-        
-        logging.info("fix_address_id_in_events: events_address_ids_to_be_updated_list: %s", len(events_address_ids_to_be_updated_list))
-        
-        # Bulk update the events table using the provided multiple_db_inserts method.
-        self.multiple_db_inserts("events", events_address_ids_to_be_updated_list)
 
 
     def stale_date(self, url):
@@ -2501,11 +2131,7 @@ class DatabaseHandler():
             self.delete_likely_dud_events()
             self.fuzzy_duplicates()
             self.is_foreign()
-            self.dedup_address()
-            self.fix_address_id_in_events()
             self.sql_input(self.config['input']['sql_input'])
-            self.enhance_addresses_with_foursquare()
-            self.deduplicate_address_table()
             self.dedup()
 
         # Close the database connection
