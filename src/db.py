@@ -980,62 +980,6 @@ class DatabaseHandler():
         return score >= threshold
 
 
-    def parse_location_with_llm(self, location_str: str, prompt_type: str = "address_internet_fix") -> dict:
-        """
-        Sends the location string to the LLM with a specified prompt type and returns a parsed address dictionary.
-        Forces OpenAI use for address_internet_fix only, without changing global config.
-        """
-        if not location_str or len(location_str.strip()) < 15:
-            logging.info("parse_location_with_llm: Skipping short/empty location string: %s", location_str)
-            return {"address_id": 0}
-
-        # Load the prompt text from config
-        try:
-            prompt_text = self.config["prompts"][prompt_type]
-        except KeyError:
-            logging.error("parse_location_with_llm: No prompt found in config for prompt_type: %s", prompt_type)
-            return {"address_id": 0}
-
-        prompt = f"{prompt_text}\n\n{location_str.strip()}"
-        logging.info("parse_location_with_llm: Prompting LLM with: %s", prompt_type)
-
-        # --- Temporarily override LLM provider if needed ---
-        original_provider = self.llm_handler.config["llm"].get("provider")
-        if prompt_type == "address_internet_fix":
-            self.llm_handler.config["llm"]["provider"] = "openai"
-
-        # Query the LLM
-        llm_response = self.llm_handler.query_llm(prompt)
-
-        # Restore original provider
-        self.llm_handler.config["llm"]["provider"] = original_provider
-
-        # Parse the response
-        parsed_address = self.llm_handler.extract_and_parse_json(llm_response)
-        logging.info("parse_location_with_llm: Parsed address from LLM:\n%s", json.dumps(parsed_address, indent=2))
-
-        if not parsed_address:
-            logging.warning("parse_location_with_llm: No valid address returned by LLM. Returning address_id=0")
-            return {"address_id": 0}
-
-        # Attempt to fill missing postal_code from external address DB
-        if not parsed_address.get("postal_code") or parsed_address["postal_code"].lower() == "null":
-            postal = self.lookup_postal_code_external_db(
-                street_number=parsed_address.get("street_number", ""),
-                street_name=parsed_address.get("street_name", ""),
-                city=parsed_address.get("city", "")
-            )
-            if postal:
-                parsed_address["postal_code"] = postal
-                logging.info("parse_location_with_llm: Filled missing postal_code from external DB: %s", postal)
-
-        # Insert into address table (or get existing ID)
-        address_id = self.get_address_id(parsed_address)
-        parsed_address["address_id"] = address_id
-
-        return parsed_address
-
-
     def lookup_postal_code_external_db(self, street_number, street_name, city):
         """
         Queries the external address database to find a postal code based on the civic number, street, and city.
@@ -1093,54 +1037,92 @@ class DatabaseHandler():
             RETURNING address_id;
         """
         return self.execute_returning_id(query, address_dict)
+    
+
+    def parse_location_basic(self, location: str) -> dict:
+        """
+        Attempts to extract basic address components from a location string using simple rules.
+        This is a lightweight alternative to LLM parsing.
+
+        Returns a dictionary compatible with address table schema.
+        """
+        import re
+
+        location = location.strip()
+        parsed = {
+            "full_address": location,
+            "building_name": "",
+            "street_number": "",
+            "street_name": "",
+            "street_type": "",
+            "direction": "",
+            "city": "",
+            "met_area": "",
+            "province_or_state": "",
+            "postal_code": "",
+            "country_id": "CA",
+            "time_stamp": ""
+        }
+
+        # Optional: try to extract building name if there's a comma
+        if "," in location:
+            parts = [p.strip() for p in location.split(",")]
+            if len(parts) > 1 and not any(char.isdigit() for char in parts[0]):
+                parsed["building_name"] = parts[0]
+
+        # Very crude street number + name extractor
+        street_pattern = re.search(r"(\d+)\s+([\w\s]+?)\s+(Ave|St|Rd|Blvd|Dr|Way|Lane|Court|Cres|Trail|Pl|Circle|Drive|Street|Road|Avenue|Boulevard)", location, re.IGNORECASE)
+        if street_pattern:
+            parsed["street_number"] = street_pattern.group(1)
+            parsed["street_name"] = street_pattern.group(2).strip()
+            parsed["street_type"] = street_pattern.group(3).strip()
+
+        # Crude postal code extractor (Canadian format)
+        postal_match = re.search(r"[A-Za-z]\d[A-Za-z][ -]?\d[A-Za-z]\d", location)
+        if postal_match:
+            parsed["postal_code"] = postal_match.group(0).strip().upper()
+
+        # Try to infer province and country if mentioned
+        if "BC" in location:
+            parsed["province_or_state"] = "BC"
+
+        if "Victoria" in location:
+            parsed["city"] = "Victoria"
+            parsed["met_area"] = "Victoria"
+
+        return parsed
 
 
     def process_event_address(self, event: dict) -> dict:
         """
-        Enhances an event with address_id and cleaned-up location string.
-
-        - If event['location'] is null/empty or too short, skip LLM parsing.
-        - Otherwise, parse it via LLM and store in address table.
-        - If postal_code is missing from LLM, attempt to fetch it from the address DB.
-        - Then update event['location'] and assign address_id.
+        Ensures the event has an address_id by looking up the address if not present,
+        using either the building name or street components. If address_id is found or inferred,
+        fills in event['address_id'] and returns updated event.
         """
-        location = event.get("location")
-        if not location or location.lower() in {"null", "none"} or len(location.strip()) < 15:
-            logging.info("process_event_address: Skipping LLM call due to short/empty location.")
+        location = event.get("location", "").strip()
+
+        # Skip if no location
+        if not location:
+            event["address_id"] = 0
             return event
 
-        parsed_address = self.parse_location_with_llm(location)
+        # First try to parse a best guess from the existing location (no LLM)
+        parsed_address = self.parse_location_basic(location)
 
-        if not parsed_address:
-            logging.warning("process_event_address: LLM returned no parsed address.")
-            return event
-
-        # Try to fill in missing postal code if we have enough to look up
-        if (
-            not parsed_address.get("postal_code") or
-            parsed_address["postal_code"].lower() in {"null", "none", ""}
-        ):
-            enriched = self.lookup_postal_code_from_address_db(parsed_address)
-            if enriched:
-                parsed_address.update(enriched)
-
-        # Rebuild full_address with building_name if not already present
-        building_name = parsed_address.get("building_name", "")
-        full_address = parsed_address.get("full_address", "")
-        if building_name and not full_address.lower().startswith(building_name.lower()):
-            parsed_address["full_address"] = f"{building_name}, {full_address}"
-
-        # Set event['location'] to reflect cleaned up version
-        event["location"] = parsed_address["full_address"]
-
-        # Lookup address_id (insert if needed)
+        # If we got enough components to try matching, do that
         address_id = self.get_address_id(parsed_address)
         parsed_address["address_id"] = address_id
-        event["address"] = address_id
 
-        # Optional: log the parsed + updated address
-        logging.info("process_event_address: Parsed address from LLM:\n%s", json.dumps(parsed_address, indent=2))
+        # Overwrite event["location"] with the best known full_address if we found one
+        if address_id and address_id > 0:
+            query = "SELECT full_address FROM address WHERE address_id = :id"
+            result = self.execute_query(query, {"id": address_id})
+            if result:
+                full_address = result[0][0]
+                if full_address:
+                    event["location"] = full_address
 
+        event["address_id"] = parsed_address.get("address_id", 0)
         return event
 
     

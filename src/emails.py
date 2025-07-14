@@ -58,6 +58,7 @@ logging.info("\n\nStarting Gmail Processor...")
 # Load environment variables from .env
 load_dotenv()
 
+
 class GmailProcessor:
     def __init__(self, llm_handler=None):
         self.llm_handler = llm_handler

@@ -64,11 +64,13 @@ load_dotenv()
 import json
 import logging
 from mistralai import Mistral
+import numpy as np
 from openai import OpenAI
 import os
 import openai
 import pandas as pd
 import re
+from sqlalchemy.exc import SQLAlchemyError
 import yaml
 
 from db import DatabaseHandler
@@ -540,12 +542,168 @@ class LLMHandler:
         return records
     
 
+    def is_incomplete_address(self, row):
+        """Check if any required field is missing or empty."""
+        required_fields = [
+            "full_address", "street_number", "street_name", 
+            "city", "province_or_state", "postal_code", "country_id"
+        ]
+        return any(
+            pd.isna(row[col]) or str(row[col]).strip() == ""
+            for col in required_fields
+        )
+
+
+    def fix_incomplete_addresses_batch(self, limit: int = 10):
+        """
+        Batch process to fix incomplete addresses in the database using OpenAI LLM.
+        Only rows missing required address fields will be processed.
+        Processes up to `limit` rows. Logs updated rows and tracks failed address_ids.
+        """
+        # 1. Load all address rows
+        sql = "SELECT * FROM address"
+        df = pd.read_sql(sql, self.db_handler.conn)
+        logging.info("Loaded %d address rows from database.", len(df))
+
+        # 2. Filter for incomplete addresses using instance method
+        incomplete_df = df[df.apply(self.is_incomplete_address, axis=1)].copy()
+        logging.info("Identified %d incomplete address rows.", len(incomplete_df))
+
+        # 3. Limit the number of rows to process
+        incomplete_df = incomplete_df.head(limit)
+        logging.info("Processing up to %d incomplete rows.", len(incomplete_df))
+
+        updated_rows = []
+        failed_ids = []
+
+        for _, row in incomplete_df.iterrows():
+            address_id = row["address_id"]
+            location_str = row.get("full_address") or row.get("building_name") or ""
+
+            # Skip empty or short location strings
+            if not location_str or len(location_str.strip()) < 15:
+                logging.info("Skipping address_id=%d due to short location string.", address_id)
+                failed_ids.append(address_id)
+                continue
+
+            try:
+                # 4. Fix address using LLM (OpenAI forced)
+                parsed_address = self.parse_location_with_llm(location_str, prompt_type="address_internet_fix")
+
+                if parsed_address.get("address_id", 0) == 0:
+                    logging.warning("LLM returned invalid result for address_id=%d", address_id)
+                    failed_ids.append(address_id)
+                    continue
+
+                # 5. Assign correct address_id to target row
+                parsed_address["address_id"] = address_id
+
+                # 6. Update using execute_query
+                update_sql = """
+                    UPDATE address
+                    SET full_address = :full_address,
+                        building_name = :building_name,
+                        street_number = :street_number,
+                        street_name = :street_name,
+                        street_type = :street_type,
+                        direction = :direction,
+                        city = :city,
+                        met_area = :met_area,
+                        province_or_state = :province_or_state,
+                        postal_code = :postal_code,
+                        country_id = :country_id,
+                        time_stamp = CURRENT_TIMESTAMP
+                    WHERE address_id = :address_id
+                """
+
+                result = self.db_handler.execute_query(update_sql, parsed_address)
+                if result is None:
+                    logging.warning("Update failed for address_id=%d", address_id)
+                    failed_ids.append(address_id)
+                    continue
+
+                updated_rows.append(parsed_address)
+                logging.info("Updated address_id=%d successfully.", address_id)
+
+            except Exception as e:
+                logging.exception("Exception while processing address_id=%d: %s", address_id, str(e))
+                failed_ids.append(address_id)
+
+        # 7. Save successful results to CSV
+        if updated_rows:
+            os.makedirs("output/test", exist_ok=True)
+            pd.DataFrame(updated_rows).to_csv("output/test/batch_address_llm_update.csv", index=False)
+            logging.info("Saved %d parsed addresses to audit CSV.", len(updated_rows))
+
+        # 8. Log failures
+        if failed_ids:
+            logging.warning("Failed to update %d address rows. IDs: %s", len(failed_ids), failed_ids)
+        else:
+            logging.info("All rows processed successfully.")
+
+    
+    def parse_location_with_llm(self, location_str: str, prompt_type: str = "address_internet_fix") -> dict:
+        """
+        Sends the location string to the LLM with a specified prompt type and returns a parsed address dictionary.
+        Forces OpenAI use for address_internet_fix only, without changing global config.
+        """
+        if not location_str or len(location_str.strip()) < 15:
+            logging.info("parse_location_with_llm: Skipping short/empty location string: %s", location_str)
+            return {"address_id": 0}
+
+        # Load the prompt text from config
+        try:
+            prompt_text = self.config["prompts"][prompt_type]
+        except KeyError:
+            logging.error("parse_location_with_llm: No prompt found in config for prompt_type: %s", prompt_type)
+            return {"address_id": 0}
+
+        prompt = f"{prompt_text}\n\n{location_str.strip()}"
+        logging.info("parse_location_with_llm: Prompting LLM with: %s", prompt_type)
+
+        # --- Temporarily override LLM provider if needed ---
+        original_provider = self.config["llm"].get("provider")
+        if prompt_type == "address_internet_fix":
+            self.config["llm"]["provider"] = "openai"
+
+        # Query the LLM
+        llm_response = self.query_llm('address_fix', prompt)
+
+        # Restore original provider
+        self.config["llm"]["provider"] = original_provider
+
+        # Parse the response
+        parsed_address = self.extract_and_parse_json(llm_response, "address_fix")
+        logging.info("parse_location_with_llm: Parsed address from LLM:\n%s", json.dumps(parsed_address, indent=2))
+
+        if not parsed_address:
+            logging.warning("parse_location_with_llm: No valid address returned by LLM. Returning address_id=0")
+            return {"address_id": 0}
+
+        # Fill postal code if missing
+        if not parsed_address.get("postal_code") or parsed_address["postal_code"].lower() == "null":
+            postal = self.lookup_postal_code_external_db(
+                street_number=parsed_address.get("street_number", ""),
+                street_name=parsed_address.get("street_name", ""),
+                city=parsed_address.get("city", "")
+            )
+            if postal:
+                parsed_address["postal_code"] = postal
+                logging.info("parse_location_with_llm: Filled missing postal_code from external DB: %s", postal)
+
+        # Insert into address table (or get existing ID)
+        address_id = self.get_address_id(parsed_address)
+        parsed_address["address_id"] = address_id
+
+        return parsed_address
+
+
     def parse_location(self, location_str: str, prompt_type: str = "address") -> dict:
         """
         Uses the LLM to parse a free-form location string into a structured address dict.
         """
         prompt = self.generate_prompt("synthetic_url_for_address", location_str, prompt_type=prompt_type)
-        response = self.query_llm("synthetic_url_for_address", prompt)
+        response = self.query_llm("address_fix", prompt)
 
         if response:
             results = self.extract_and_parse_json(response, "synthetic_url_for_address")
@@ -571,14 +729,14 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
-    logging.info("llm.py starting...")
+    logging.info("\n\nllm.py starting...")
 
     # Get the start time
     start_time = datetime.now()
     logging.info(f"__main__: Starting the crawler process at {start_time}")
 
     # Instantiate the LLM handler
-    llm = LLMHandler(config_path="config/config.yaml")
+    llm_handler = LLMHandler(config_path="config/config.yaml")
 
     # Instantiate the database handler
     db_handler = DatabaseHandler(config)
@@ -589,31 +747,9 @@ if __name__ == "__main__":
     # Count events and urls before llm.py
     start_df = db_handler.count_events_urls_start(file_name)
 
-    # Get a test file
-    extracted_text_df = pd.read_csv(config['output']['fb_search_results'])
-
-    # Shrink it down to just the first 5 rows
-    extracted_text_df = extracted_text_df.head(5)
-
-    # Establish the constants
-    keywords = ['bachata']
-    search_term = 'https://facebook.com/search/top?q=events%20victoria%20bc%20canada%20dance%20bachata'
-
-    # Call the driver function
-    results_json_list = []
-    for index, row in extracted_text_df.iterrows():
-        url = row['url']
-        extracted_text = row['extracted_text']
-        
-        # Check for keywords in extracted_text
-        found_keywords = [kw for kw in llm.keywords_list if kw in extracted_text.lower()]
-        logging.info(f"__main__: Found keywords in text for URL {url}: {found_keywords}")
-        if found_keywords:
-            llm.driver(url, search_term, extracted_text, '', keywords)
-        else:
-            logging.info(f"__main__: No keywords found in text for URL {url}.")
-            url_row = [url, search_term, 'Facebook', found_keywords, False, 1, datetime.now()]
-            db_handler.write_url_to_db(url_row)
+    # Run the LLM handler to fix incomplete addresses
+    # Does not work currenctly (July 13 2025) because OpenAI does not allow api access to the internet
+    # llm_handler.fix_incomplete_addresses_batch()   ***TEMP***
 
     # Count the event and urls after llm.py
     db_handler.count_events_urls_end(start_df, file_name)
