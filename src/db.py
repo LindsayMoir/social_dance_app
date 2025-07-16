@@ -18,11 +18,13 @@ import logging
 import numpy as np
 import os
 import pandas as pd
+from rapidfuzz.fuzz import ratio
 import re  # Added missing import
 import requests
 from sqlalchemy import create_engine, MetaData, Table, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
+from typing import Optional, List, Dict
 import sys
 import yaml
 import warnings
@@ -709,6 +711,111 @@ class DatabaseHandler():
         return updated_location, address_id
     
 
+    def resolve_or_insert_address(self, parsed_address: dict) -> Optional[int]:
+        """
+        Resolves an address by checking for a match in the address table.
+        Uses exact match for street_number and street_name, and fuzzy match for building_name.
+
+        Args:
+            parsed_address (dict): Dictionary of address fields.
+
+        Returns:
+            int or None: address_id if resolved or newly inserted.
+        """
+        if not parsed_address:
+            logging.warning("resolve_or_insert_address: No parsed address provided.")
+            return None
+
+        # Step 1: Find candidates with exact match on street_number and street_name
+        select_query = """
+            SELECT address_id, building_name FROM address
+            WHERE
+                LOWER(street_number) = LOWER(:street_number) AND
+                LOWER(street_name) = LOWER(:street_name)
+        """
+
+        candidates = self.execute_query(select_query, parsed_address)
+
+        for addr_id, candidate_building in candidates or []:
+            sim_score = ratio(parsed_address.get("building_name", "") or "", candidate_building or "")
+            if sim_score >= 85:
+                logging.info(f"Fuzzy matched building_name (score={sim_score}) to existing address_id: {addr_id}")
+                return addr_id
+
+        # Step 2: No match — insert new address
+        insert_query = """
+            INSERT INTO address (
+                building_name, street_number, street_name, city,
+                province_or_state, postal_code, country, full_address
+            ) VALUES (
+                :building_name, :street_number, :street_name, :city,
+                :province_or_state, :postal_code, :country, :full_address
+            )
+            RETURNING address_id;
+        """
+
+        result = self.execute_query(insert_query, parsed_address)
+        if result:
+            address_id = result[0][0]
+            logging.info(f"Inserted new address with address_id: {address_id}")
+            return address_id
+        else:
+            logging.error("resolve_or_insert_address: Failed to insert address.")
+            return None
+    
+
+    def format_address_from_db_row(self, db_row):
+        """
+        Constructs a formatted address string from a database row.
+
+        This method takes a database row object containing address components and constructs
+        a single formatted address string. The formatted address includes the street address,
+        city (municipality), province abbreviation, postal code, and country ("CA").
+        Missing components are omitted gracefully.
+
+        Args:
+            db_row: An object representing a database row with address fields. Expected attributes are:
+                - civic_no
+                - civic_no_suffix
+                - official_street_name
+                - official_street_type
+                - official_street_dir
+                - mail_mun_name (city/municipality)
+                - mail_prov_abvn (province abbreviation)
+                - mail_postal_code
+
+        Returns:
+            str: A formatted address string in the form:
+                "<street address>, <city>, <province abbreviation>, <postal code>, CA"
+            Any missing components are omitted from the output.
+        """
+        # Build the street portion
+        parts = [
+            str(db_row.civic_no) if db_row.civic_no else "",
+            str(db_row.civic_no_suffix) if db_row.civic_no_suffix else "",
+            db_row.official_street_name or "",
+            db_row.official_street_type or "",
+            db_row.official_street_dir or ""
+        ]
+        street_address = " ".join(part for part in parts if part).strip()
+
+        # Insert the city if available
+        city = db_row.mail_mun_name or ""
+
+        # Construct final location string
+        formatted = (
+            f"{street_address}, "
+            f"{city}, "                      # <─ Include municipality
+            f"{db_row.mail_prov_abvn or ''}, "
+            f"{db_row.mail_postal_code or ''}, CA"
+        )
+        # Clean up spacing
+        formatted = re.sub(r'\s+,', ',', formatted)
+        formatted = re.sub(r',\s+,', ',', formatted)
+        formatted = re.sub(r'\s+', ' ', formatted).strip()
+        return formatted
+    
+
     def write_events_to_db(self, df, url, parent_url, source, keywords):
         """
         Processes and writes event data to the 'events' table in the database.
@@ -1000,6 +1107,34 @@ class DatabaseHandler():
         else:
             logging.error("insert_address_and_return_id(): Failed to insert address.")
             return 0
+        
+
+    def match_civic_number(self, df, numbers):
+        """
+        Attempts to match the first numeric string from a list to the 'civic_no' column in a DataFrame of addresses.
+        Parameters:
+            df (pd.DataFrame): DataFrame containing address information, including a 'civic_no' column.
+            numbers (list of str): List of numeric strings extracted from a location.
+        Returns:
+            int or None: The index of the row in the DataFrame where the first number matches the 'civic_no'.
+                         If no match is found, returns the index of the first row.
+                         Returns None if the DataFrame is empty.
+        """
+        if df.empty:
+            logging.warning("match_civic_number(): Received empty DataFrame.")
+            return None
+        
+        if not numbers:
+            return df.index[0]
+        for i, addr_row in df.iterrows():
+            if addr_row.civic_no is not None:
+                try:
+                    if int(numbers[0]) == int(addr_row.civic_no):
+                        return i
+                except ValueError:
+                    continue
+
+        return df.index[0]
 
 
     def process_event_address(self, event: dict) -> dict:
