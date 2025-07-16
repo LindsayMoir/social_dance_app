@@ -1026,9 +1026,7 @@ class DatabaseHandler():
         """
         params = {
             "street_number": address_dict.get("street_number", ""),
-            "street_name": address_dict.get("street_name", ""),
-            "city": address_dict.get("city", ""),
-            "postal_code": address_dict.get("postal_code", "")
+            "street_name": address_dict.get("street_name", "")
         }
 
         result = self.execute_query(query, params)
