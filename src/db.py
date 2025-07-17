@@ -713,52 +713,96 @@ class DatabaseHandler():
 
     def resolve_or_insert_address(self, parsed_address: dict) -> Optional[int]:
         """
-        Resolves an address by checking for a match in the address table.
-        Uses exact match for street_number and street_name, and fuzzy match for building_name.
-
-        Args:
-            parsed_address (dict): Dictionary of address fields.
-
-        Returns:
-            int or None: address_id if resolved or newly inserted.
+        Resolves an address by matching on street_number and street_name.
+        Step 1: Exact match on street_number + street_name.
+        Step 2: Fuzzy/exact match on building_name.
+        Step 3: Insert and return address_id if no match is found.
         """
         if not parsed_address:
-            logging.warning("resolve_or_insert_address: No parsed address provided.")
+            logging.info("resolve_or_insert_address: No parsed address provided.")
             return None
 
-        # Step 1: Find candidates with exact match on street_number and street_name
-        select_query = """
-            SELECT address_id, building_name FROM address
-            WHERE
-                LOWER(street_number) = LOWER(:street_number) AND
-                LOWER(street_name) = LOWER(:street_name)
+        # Normalize fields
+        def norm(val): return val.strip().lower() if isinstance(val, str) else ''
+
+        street_number = norm(parsed_address.get("street_number"))
+        street_name = norm(parsed_address.get("street_name"))
+        building_name = parsed_address.get("building_name", "").strip()
+
+        if not street_number or not street_name:
+            logging.info("resolve_or_insert_address: Missing street_number or street_name. Cannot resolve.")
+            return None
+
+        # Step 1: Exact match on street_number and street_name
+        exact_query = """
+            SELECT address_id FROM address
+            WHERE LOWER(street_number) = LOWER(:street_number)
+            AND LOWER(street_name) = LOWER(:street_name)
+            LIMIT 1;
         """
+        result = self.execute_query(exact_query, {
+            "street_number": street_number,
+            "street_name": street_name
+        })
 
-        candidates = self.execute_query(select_query, parsed_address)
+        if result:
+            addr_id = result[0][0]
+            logging.info(f"resolve_or_insert_address: Matched on street_number and street_name; using address_id={addr_id}")
+            return addr_id
 
-        for addr_id, candidate_building in candidates or []:
-            sim_score = ratio(parsed_address.get("building_name", "") or "", candidate_building or "")
-            if sim_score >= 85:
-                logging.info(f"Fuzzy matched building_name (score={sim_score}) to existing address_id: {addr_id}")
-                return addr_id
+        # Step 2: Try exact/fuzzy match on building_name
+        if building_name:
+            query = "SELECT address_id, building_name FROM address WHERE building_name IS NOT NULL;"
+            candidates = self.execute_query(query)
 
-        # Step 2: No match — insert new address
+            for addr_id, existing_name in candidates or []:
+                if building_name.lower() == (existing_name or "").strip().lower():
+                    logging.info(f"resolve_or_insert_address: Exact building_name match; using address_id={addr_id}")
+                    return addr_id
+
+            for addr_id, existing_name in candidates or []:
+                sim_score = ratio(building_name, existing_name or "")
+                if sim_score >= 85:
+                    logging.info(f"resolve_or_insert_address: Fuzzy matched building_name (score={sim_score}) to address_id={addr_id}")
+                    return addr_id
+
+        # Step 3: Insert new address
+        parsed_address["time_stamp"] = datetime.now().isoformat()
+
+        if not parsed_address.get("full_address"):
+            parts = [
+                parsed_address.get("building_name"),
+                parsed_address.get("street_number"),
+                parsed_address.get("street_name"),
+                parsed_address.get("street_type"),
+                parsed_address.get("direction"),
+                parsed_address.get("city"),
+                parsed_address.get("province_or_state"),
+                parsed_address.get("postal_code"),
+                "Canada"
+            ]
+            parsed_address["full_address"] = ", ".join([str(p).strip() for p in parts if p])
+
+        if not parsed_address.get("country_id"):
+            parsed_address["country_id"] = "CA"
+
         insert_query = """
             INSERT INTO address (
-                building_name, street_number, street_name, city,
-                province_or_state, postal_code, country, full_address
+                full_address, building_name, street_number, street_name, street_type,
+                direction, city, met_area, province_or_state, postal_code,
+                country_id, time_stamp
             ) VALUES (
-                :building_name, :street_number, :street_name, :city,
-                :province_or_state, :postal_code, :country, :full_address
-            )
-            RETURNING address_id;
+                :full_address, :building_name, :street_number, :street_name, :street_type,
+                :direction, :city, :met_area, :province_or_state, :postal_code,
+                :country_id, :time_stamp
+            ) RETURNING address_id;
         """
 
         result = self.execute_query(insert_query, parsed_address)
         if result:
-            address_id = result[0][0]
-            logging.info(f"Inserted new address with address_id: {address_id}")
-            return address_id
+            new_id = result[0][0]
+            logging.info(f"resolve_or_insert_address: Inserted new address with address_id={new_id}")
+            return new_id
         else:
             logging.error("resolve_or_insert_address: Failed to insert address.")
             return None
@@ -1009,53 +1053,6 @@ class DatabaseHandler():
         return True
 
 
-    def get_address_id(self, address_dict: dict) -> int:
-        """
-        Attempts to find an existing address in the database using exact or fuzzy match,
-        and returns its address_id. Returns 0 if no match is found.
-        """
-
-        # 1. Try exact match on key fields
-        query = """
-            SELECT address_id FROM address
-            WHERE LOWER(street_number) = LOWER(:street_number)
-            AND LOWER(street_name) = LOWER(:street_name)
-            AND LOWER(city) = LOWER(:city)
-            AND LOWER(postal_code) = LOWER(:postal_code)
-            LIMIT 1;
-        """
-        params = {
-            "street_number": address_dict.get("street_number", ""),
-            "street_name": address_dict.get("street_name", "")
-        }
-
-        result = self.execute_query(query, params)
-        if result:
-            logging.info("get_address_id(): Exact match found for address: %s", json.dumps(params))
-            return result[0][0]
-
-        # 2. Try fuzzy match on building_name
-        building_name = address_dict.get("building_name", "").strip()
-        if building_name:
-            logging.info("get_address_id(): No exact match. Trying fuzzy match for building_name='%s'", building_name)
-
-            query = "SELECT address_id, building_name FROM address WHERE building_name IS NOT NULL;"
-            all_rows = self.execute_query(query)
-            if not all_rows:
-                logging.warning("get_address_id(): No rows returned for building_name fuzzy search.")
-                return 0
-
-            for row in all_rows:
-                existing_id, existing_name = row
-                if existing_name and self.fuzzy_match(building_name, existing_name):
-                    logging.info("get_address_id(): Fuzzy matched '%s' to '%s' with address_id=%d",
-                                building_name, existing_name, existing_id)
-                    return existing_id
-
-        logging.info("get_address_id(): No match found. Returning 0.")
-        return 0
-
-
     def fuzzy_match(self, a: str, b: str, threshold: int = 85) -> bool:
         """
         Returns True if the fuzzy match score between two strings exceeds the threshold.
@@ -1161,7 +1158,7 @@ class DatabaseHandler():
         parsed_address = parsed_results[0]
 
         # Step 4: Get or insert address_id
-        address_id = self.get_address_id(parsed_address)
+        address_id = self.resolve_or_insert_address(parsed_address)
         if not address_id:
             address_id = self.insert_address_and_return_id(parsed_address)
 
