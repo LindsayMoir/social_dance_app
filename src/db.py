@@ -1154,11 +1154,7 @@ class DatabaseHandler():
         parsed_address = self.normalize_nulls(parsed_results[0])
 
         # Step 4: Get or insert address_id
-        cleaned_address = self.normalize_nulls(parsed_address)
-        address_id = self.resolve_or_insert_address(cleaned_address)
-
-        if not address_id:
-            address_id = self.resolve_or_insert_address(cleaned_address)
+        address_id = self.resolve_or_insert_address(parsed_address)
 
         # Step 5: Force consistency: always use address.full_address
         full_address = self.get_full_address_from_id(address_id)
