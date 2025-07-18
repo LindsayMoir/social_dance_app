@@ -36,7 +36,7 @@ crawling:
   max_website_urls: 10
   prompt_max_length: 50000
   scroll_depth: 2
-  urls_run_limit: 1500
+  urls_run_limit: 500
 date_range:
   days_ahead: 365
   months: 3

@@ -546,8 +546,11 @@ class DatabaseHandler():
         """
         if not location or pd.isna(location):
             return None, None
-
-        location = str(location).strip()
+        
+        if location is None:
+            pass  # Keep it as None
+        elif isinstance(location, str):
+            location = location.strip()
 
         # 1. Try DB match using street number/name
         if address_df is not None:
@@ -1132,7 +1135,11 @@ class DatabaseHandler():
         Uses the LLM to parse a structured address from the location, inserts or reuses the address in the DB,
         and updates the event with address_id and location = full_address from address table.
         """
-        location = event.get("location", "").strip()
+        if location is None:
+            pass  # Keep it as None
+        elif isinstance(location, str):
+            location = location.strip()
+
         if not location or len(location) < 15:
             event["address_id"] = 0
             return event
