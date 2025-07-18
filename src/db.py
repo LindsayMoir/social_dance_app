@@ -713,100 +713,93 @@ class DatabaseHandler():
 
     def resolve_or_insert_address(self, parsed_address: dict) -> Optional[int]:
         """
-        Resolves an address by matching on street_number and street_name.
-        Step 1: Exact match on street_number + street_name.
-        Step 2: Fuzzy/exact match on building_name.
-        Step 3: Insert and return address_id if no match is found.
+        Resolves an address by checking for an exact match on street_number and street_name,
+        followed by fuzzy matching on building_name. Inserts the address if no match is found.
+
+        Args:
+            parsed_address (dict): Dictionary of parsed address fields.
+
+        Returns:
+            int or None: The address_id of the matched or newly inserted address.
         """
         if not parsed_address:
             logging.info("resolve_or_insert_address: No parsed address provided.")
             return None
 
-        # Normalize fields
-        def norm(val): return val.strip().lower() if isinstance(val, str) else ''
+        building_name = (parsed_address.get("building_name") or "").strip()
+        street_number = (parsed_address.get("street_number") or "").strip()
+        street_name = (parsed_address.get("street_name") or "").strip()
 
-        street_number = norm(parsed_address.get("street_number"))
-        street_name = norm(parsed_address.get("street_name"))
-        building_name = parsed_address.get("building_name", "").strip()
+        # Step 1: Only try street_number + street_name match if both are present
+        if street_number and street_name:
+            select_query = """
+                SELECT address_id, building_name, street_number, street_name
+                FROM address
+                WHERE LOWER(street_number) = LOWER(:street_number)
+                AND LOWER(street_name) = LOWER(:street_name)
+            """
+            params = {
+                "street_number": street_number,
+                "street_name": street_name,
+            }
+            street_matches = self.execute_query(select_query, params)
 
-        if not street_number or not street_name:
-            logging.info("resolve_or_insert_address: Missing street_number or street_name. Cannot resolve.")
-            return None
+            for addr_id, b_name, s_num, s_name in street_matches or []:
+                # Confirm fields actually match (avoid nulls acting as wildcard)
+                if s_num.lower() == street_number.lower() and s_name.lower() == street_name.lower():
+                    if building_name:
+                        sim_score = ratio(building_name, b_name or "")
+                        if sim_score >= 85:
+                            logging.info(f"Street+fuzzy building_name match (score={sim_score}) → address_id={addr_id}")
+                            return addr_id
+                    else:
+                        logging.info(f"Exact match on street_number and street_name (no building_name) → address_id={addr_id}")
+                        return addr_id
+        else:
+            logging.info("resolve_or_insert_address: Missing street_number or street_name; skipping street match")
 
-        # Step 1: Exact match on street_number and street_name
-        exact_query = """
-            SELECT address_id FROM address
-            WHERE LOWER(street_number) = LOWER(:street_number)
-            AND LOWER(street_name) = LOWER(:street_name)
-            LIMIT 1;
-        """
-        result = self.execute_query(exact_query, {
-            "street_number": street_number,
-            "street_name": street_name
-        })
-
-        if result:
-            addr_id = result[0][0]
-            logging.info(f"resolve_or_insert_address: Matched on street_number and street_name; using address_id={addr_id}")
-            return addr_id
-
-        # Step 2: Try exact/fuzzy match on building_name
+        # Step 2: Try fuzzy match on building_name across all known addresses
         if building_name:
-            query = "SELECT address_id, building_name FROM address WHERE building_name IS NOT NULL;"
+            logging.info(f"resolve_or_insert_address: No street match; trying fuzzy match on building_name='{building_name}'")
+
+            query = "SELECT address_id, building_name FROM address WHERE building_name IS NOT NULL"
             candidates = self.execute_query(query)
 
             for addr_id, existing_name in candidates or []:
-                if building_name.lower() == (existing_name or "").strip().lower():
-                    logging.info(f"resolve_or_insert_address: Exact building_name match; using address_id={addr_id}")
+                if existing_name and ratio(building_name, existing_name) >= 85:
+                    logging.info(f"Fuzzy match on building_name → '{existing_name}' (score ≥ 85) → address_id={addr_id}")
                     return addr_id
 
-            for addr_id, existing_name in candidates or []:
-                sim_score = ratio(building_name, existing_name or "")
-                if sim_score >= 85:
-                    logging.info(f"resolve_or_insert_address: Fuzzy matched building_name (score={sim_score}) to address_id={addr_id}")
-                    return addr_id
-
-        # Step 3: Insert new address
-        parsed_address["time_stamp"] = datetime.now().isoformat()
-
-        if not parsed_address.get("full_address"):
-            parts = [
-                parsed_address.get("building_name"),
-                parsed_address.get("street_number"),
-                parsed_address.get("street_name"),
-                parsed_address.get("street_type"),
-                parsed_address.get("direction"),
-                parsed_address.get("city"),
-                parsed_address.get("province_or_state"),
-                parsed_address.get("postal_code"),
-                "Canada"
-            ]
-            parsed_address["full_address"] = ", ".join([str(p).strip() for p in parts if p])
-
-        if not parsed_address.get("country_id"):
-            parsed_address["country_id"] = "CA"
-
+        # Step 3: Insert the new address
         insert_query = """
             INSERT INTO address (
-                full_address, building_name, street_number, street_name, street_type,
-                direction, city, met_area, province_or_state, postal_code,
-                country_id, time_stamp
+                building_name, street_number, street_name, city,
+                province_or_state, postal_code, country, full_address
             ) VALUES (
-                :full_address, :building_name, :street_number, :street_name, :street_type,
-                :direction, :city, :met_area, :province_or_state, :postal_code,
-                :country_id, :time_stamp
-            ) RETURNING address_id;
+                :building_name, :street_number, :street_name, :city,
+                :province_or_state, :postal_code, :country, :full_address
+            )
+            RETURNING address_id;
         """
 
         result = self.execute_query(insert_query, parsed_address)
         if result:
-            new_id = result[0][0]
-            logging.info(f"resolve_or_insert_address: Inserted new address with address_id={new_id}")
-            return new_id
+            address_id = result[0][0]
+            logging.info(f"Inserted new address with address_id: {address_id}")
+            return address_id
         else:
-            logging.error("resolve_or_insert_address: Failed to insert address.")
+            logging.error("resolve_or_insert_address: Failed to insert new address")
             return None
     
+
+    def get_full_address_from_id(self, address_id: int) -> Optional[str]:
+        """
+        Returns the full_address from the address table for the given address_id.
+        """
+        query = "SELECT full_address FROM address WHERE address_id = :address_id"
+        result = self.execute_query(query, {"address_id": address_id})
+        return result[0][0] if result else None
+
 
     def format_address_from_db_row(self, db_row):
         """
@@ -912,6 +905,7 @@ class DatabaseHandler():
         updated_rows = []
         for i, row in df.iterrows():
             event_dict = row.to_dict()
+            event_dict = self.normalize_nulls(event_dict)
             updated_event = self.process_event_address(event_dict)
             for key in ["address_id", "location"]:
                 if key in updated_event:
@@ -1066,6 +1060,7 @@ class DatabaseHandler():
         """
         Inserts a new address record into the address table and returns the address_id.
         """
+        address_dict = self.normalize_nulls(address_dict)
         address_dict["time_stamp"] = datetime.now().isoformat()
 
         if "full_address" not in address_dict or not address_dict["full_address"]:
@@ -1135,7 +1130,7 @@ class DatabaseHandler():
     def process_event_address(self, event: dict) -> dict:
         """
         Uses the LLM to parse a structured address from the location, inserts or reuses the address in the DB,
-        and updates the event with address_id and full_address.
+        and updates the event with address_id and location = full_address from address table.
         """
         location = event.get("location", "").strip()
         if not location or len(location) < 15:
@@ -1155,18 +1150,38 @@ class DatabaseHandler():
             event["address_id"] = 0
             return event
 
-        parsed_address = parsed_results[0]
+        # ✅ Normalize null-like strings in one place
+        parsed_address = self.normalize_nulls(parsed_results[0])
 
         # Step 4: Get or insert address_id
-        address_id = self.resolve_or_insert_address(parsed_address)
-        if not address_id:
-            address_id = self.insert_address_and_return_id(parsed_address)
+        cleaned_address = self.normalize_nulls(parsed_address)
+        address_id = self.resolve_or_insert_address(cleaned_address)
 
-        # Step 5: Update the event
+        if not address_id:
+            address_id = self.resolve_or_insert_address(cleaned_address)
+
+        # Step 5: Force consistency: always use address.full_address
+        full_address = self.get_full_address_from_id(address_id)
         event["address_id"] = address_id
-        event["location"] = parsed_address.get("full_address", location)
+        if full_address:
+            event["location"] = full_address
 
         return event
+    
+
+    def sync_event_locations_with_address_table(self):
+        """
+        Updates all events so that location = full_address from the address table for consistency.
+        """
+        query = """
+            UPDATE events e
+            SET location = a.full_address
+            FROM address a
+            WHERE e.address_id = a.address_id
+            AND (e.location IS DISTINCT FROM a.full_address);
+        """
+        affected_rows = self.execute_query(query)
+        logging.info(f"sync_event_locations_with_address_table(): Updated {affected_rows} events to use canonical full_address.")
 
 
     def dedup(self):
@@ -2110,6 +2125,38 @@ class DatabaseHandler():
 
         logging.info("sql_input(): All queries processed.")
 
+    
+    def normalize_nulls(self, record: dict) -> dict:
+        """
+        Replaces string values like 'null', 'none', 'nan', or empty strings with Python None (i.e., SQL NULL).
+        Applies to all keys in the given dictionary.
+        """
+        cleaned = {}
+        for key, value in record.items():
+            if isinstance(value, str) and value.strip().lower() in {"null", "none", "nan", ""}:
+                cleaned[key] = None
+            else:
+                cleaned[key] = value
+        return cleaned
+    
+
+    def clean_null_strings_in_address(self):
+        """
+        Replaces string 'null', 'none', 'nan', and '' with actual SQL NULLs in address table.
+        """
+        fields = [
+            "full_address", "building_name", "street_number", "street_name", "direction"
+            "city", "met_area", "province_or_state", "country", "postal_code", "country_id"
+        ]
+        for field in fields:
+            query = f"""
+                UPDATE address
+                SET {field} = NULL
+                WHERE TRIM(LOWER({field})) IN ('null', 'none', 'nan', '');
+            """
+            self.execute_query(query)
+        logging.info("Cleaned up string 'null's in address table.")
+
 
     def driver(self):
         """
@@ -2136,6 +2183,8 @@ class DatabaseHandler():
             self.fuzzy_duplicates()
             self.is_foreign()
             self.sql_input(self.config['input']['sql_input'])
+            self.sync_event_locations_with_address_table()
+            self.clean_null_strings_in_address()
             self.dedup()
 
         # Close the database connection
