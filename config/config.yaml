@@ -14,9 +14,9 @@ constants:
   uvic_rueda_dict:
     dance_style: cuban salsa, rueda, salsa
     day_of_week: Wednesday
-    description: 'Weekly UVic cuban rueda salsa lesson, followed by a social dance.
+    description: Weekly UVic cuban rueda salsa lesson, followed by a social dance.
       This happens most Wednesdays. Usually outside of the Students Union Building
-      and sometimes inside at Vertigo. Please check and see if it is on this week.'
+      and sometimes inside at Vertigo. Please check and see if it is on this week.
     end_time: '21:00'
     event_name: UVic Salsa Rueda
     event_type: class, social dance
@@ -28,7 +28,7 @@ constants:
     url: https://www.facebook.com/groups/cubansalsaclub/
 crawling:
   depth_limit: 2
-  headless: false
+  headless: true
   max_attempts: 3
   max_crawl_trys: 3
   max_website_urls: 10
@@ -71,7 +71,7 @@ location:
   epicentre: Victoria, British Columbia, Canada
 logging:
   extracted_text: output/extracted_text.csv
-  log_file: logs/pipeline_37882_20250717_223607338094.log
+  log_file: logs/pipeline_41490_20250727_115110616388.log
   log_file_p2: logs/log_file_p2.txt
   scraper_log_file: logs/scraper_log.txt
 output:

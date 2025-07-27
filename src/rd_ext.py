@@ -533,18 +533,18 @@ if __name__ == "__main__":
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
-    # Initialize DatabaseHandler
-    db_handler = DatabaseHandler(config)
+    # Instantiate the classes
+    read_extract = ReadExtract("config/config.yaml")
+    llm_handler = LLMHandler("config/config.yaml")
+    
+    # Use the DatabaseHandler from the LLMHandler (instead of creating a separate one)
+    db_handler = llm_handler.db_handler
     
     # Get the file name of the code that is running
     file_name = os.path.basename(__file__)
 
     # Count events and urls before rd_ext.py
     start_df = db_handler.count_events_urls_start(file_name)
-
-    # Instantiate the classes
-    read_extract = ReadExtract("config/config.yaml")
-    llm_handler = LLMHandler("config/config.yaml")
 
     # Read .csv file to deal with oddities
     df = pd.read_csv(config['input']['edge_cases'])
