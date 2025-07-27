@@ -391,11 +391,18 @@ class DatabaseHandler():
                     return affected
 
         except SQLAlchemyError as e:
-            logging.error(
-                "execute_query(): Query execution failed (%s)\nQuery was: %s", 
-                e, query
-            )
-            return None
+            # Handle unique constraint violations for address table gracefully
+            if "UniqueViolation" in str(e) and "unique_full_address" in str(e):
+                logging.info(
+                    "execute_query(): Address already exists (unique constraint), skipping insert"
+                )
+                return None
+            else:
+                logging.error(
+                    "execute_query(): Query execution failed (%s)\nQuery was: %s", 
+                    e, query
+                )
+                return None
 
     
     def close_connection(self):
@@ -733,6 +740,8 @@ class DatabaseHandler():
         street_number = (parsed_address.get("street_number") or "").strip()
         street_name = (parsed_address.get("street_name") or "").strip()
 
+        country_id = (parsed_address.get("country_id") or "").strip()
+
         # Step 1: Only try street_number + street_name match if both are present
         if street_number and street_name:
             select_query = """
@@ -748,7 +757,6 @@ class DatabaseHandler():
             street_matches = self.execute_query(select_query, params)
 
             for addr_id, b_name, s_num, s_name in street_matches or []:
-                # Confirm fields actually match (avoid nulls acting as wildcard)
                 if s_num.lower() == street_number.lower() and s_name.lower() == street_name.lower():
                     if building_name:
                         sim_score = ratio(building_name, b_name or "")
@@ -773,14 +781,22 @@ class DatabaseHandler():
                     logging.info(f"Fuzzy match on building_name → '{existing_name}' (score ≥ 85) → address_id={addr_id}")
                     return addr_id
 
-        # Step 3: Insert the new address
+        # Step 3: Prepare required fields and insert the new address
+        parsed_address["building_name"] = building_name or None
+        parsed_address["street_number"] = street_number or None
+        parsed_address["street_name"] = street_name or None
+        parsed_address["country_id"] = country_id or None
+
+        for key in ["city", "province_or_state", "postal_code", "full_address"]:
+            parsed_address[key] = parsed_address.get(key) or None
+
         insert_query = """
             INSERT INTO address (
                 building_name, street_number, street_name, city,
-                province_or_state, postal_code, country, full_address
+                province_or_state, postal_code, country_id, full_address
             ) VALUES (
                 :building_name, :street_number, :street_name, :city,
-                :province_or_state, :postal_code, :country, :full_address
+                :province_or_state, :postal_code, :country_id, :full_address
             )
             RETURNING address_id;
         """
@@ -791,7 +807,17 @@ class DatabaseHandler():
             logging.info(f"Inserted new address with address_id: {address_id}")
             return address_id
         else:
-            logging.error("resolve_or_insert_address: Failed to insert new address")
+            # If insert failed (likely due to unique constraint), try to find existing address
+            full_address = parsed_address.get("full_address")
+            if full_address:
+                lookup_query = "SELECT address_id FROM address WHERE full_address = :full_address"
+                lookup_result = self.execute_query(lookup_query, {"full_address": full_address})
+                if lookup_result:
+                    address_id = lookup_result[0][0]
+                    logging.info(f"Found existing address with address_id: {address_id}")
+                    return address_id
+            
+            logging.error("resolve_or_insert_address: Failed to insert or find existing address")
             return None
     
 
@@ -1076,12 +1102,12 @@ class DatabaseHandler():
                 address_dict.get("city"),
                 address_dict.get("province_or_state"),
                 address_dict.get("postal_code"),
-                "Canada"
+                "CA"
             ]
             address_dict["full_address"] = " ".join([str(part) for part in full_address_parts if part])
 
         if "country_id" not in address_dict:
-            address_dict["country_id"] = 1  # Default: Canada
+            address_dict["country_id"] = 'CA'  # Default: Canada
 
         query = """
             INSERT INTO address (
@@ -1135,6 +1161,8 @@ class DatabaseHandler():
         Uses the LLM to parse a structured address from the location, inserts or reuses the address in the DB,
         and updates the event with address_id and location = full_address from address table.
         """
+        location = event.get("location", None)
+
         if location is None:
             pass  # Keep it as None
         elif isinstance(location, str):
@@ -2149,7 +2177,7 @@ class DatabaseHandler():
         """
         fields = [
             "full_address", "building_name", "street_number", "street_name", "direction"
-            "city", "met_area", "province_or_state", "country", "postal_code", "country_id"
+            "city", "met_area", "province_or_state", "postal_code", "country_id"
         ]
         for field in fields:
             query = f"""
