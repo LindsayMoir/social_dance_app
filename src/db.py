@@ -1168,7 +1168,8 @@ class DatabaseHandler():
         elif isinstance(location, str):
             location = location.strip()
 
-        if not location or len(location) < 15:
+        # Handle case where location might be NaN (float) or empty string
+        if location is None or pd.isna(location) or not isinstance(location, str) or len(location) < 15:
             event["address_id"] = 0
             return event
 

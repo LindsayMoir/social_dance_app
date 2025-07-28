@@ -34,9 +34,9 @@ Usage Example:
         )
 
         # Initialize dependencies
-        db_handler = DatabaseHandler(config)
-        fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
         llm_handler = LLMHandler(config_path='config/config.yaml')
+        db_handler = llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
+        fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
 
         # Run scraping drivers
         fb_scraper.driver_fb_urls()
@@ -105,8 +105,8 @@ logging.basicConfig(
 logging.info("\n\nfb.py starting...")
 
 # Instantiate the class libraries
-db_handler = DatabaseHandler(config)
 llm_handler = LLMHandler(config_path='config/config.yaml')
+db_handler = llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
 
 
 class FacebookEventScraper():
@@ -954,8 +954,9 @@ if __name__ == "__main__":
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-    # Initialize DatabaseHandler
-    db_handler = DatabaseHandler(config)
+    # Initialize handlers
+    llm_handler = LLMHandler(config_path='config/config.yaml')
+    db_handler = llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
 
     # Configure logging
     logging.basicConfig(

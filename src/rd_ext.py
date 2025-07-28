@@ -33,9 +33,19 @@ import random
 from urllib.parse import urljoin, urlparse
 import yaml
 
-from db import DatabaseHandler
 from llm import LLMHandler
 from credentials import get_credentials  # Import the utility function
+
+# Module-level handler that will be initialized when needed
+db_handler = None
+
+def get_db_handler():
+    """Get or create the global db_handler instance."""
+    global db_handler
+    if db_handler is None:
+        llm_handler = LLMHandler("config/config.yaml")
+        db_handler = llm_handler.db_handler
+    return db_handler
 
 
 class ReadExtract:
@@ -398,7 +408,7 @@ class ReadExtract:
 
         # Single-URL mode
         # Check urls to see if they should be scraped
-        if not db_handler.should_process_url(url):
+        if not get_db_handler().should_process_url(url):
             logging.info(f"def eventbrite_search(): Skipping URL {url} based on historical relevancy.")
             return None
         
@@ -420,7 +430,7 @@ class ReadExtract:
                 continue
 
             # Check urls to see if they should be scraped
-            if not db_handler.should_process_url(link):
+            if not get_db_handler().should_process_url(link):
                 logging.info(f"def eventbrite_search(): Skipping URL {link} based on historical relevancy.")
                 continue
             
@@ -495,7 +505,7 @@ class ReadExtract:
         df = pd.DataFrame([event_dict])
 
         # 3. write to Postgres via db_handler
-        db_handler.write_events_to_db(df, 
+        get_db_handler().write_events_to_db(df, 
                                       url=event_dict['url'], 
                                       parent_url = '',
                                       source=event_dict['source'], 
@@ -537,7 +547,7 @@ if __name__ == "__main__":
     read_extract = ReadExtract("config/config.yaml")
     llm_handler = LLMHandler("config/config.yaml")
     
-    # Use the DatabaseHandler from the LLMHandler (instead of creating a separate one)
+    # Set the module-level db_handler
     db_handler = llm_handler.db_handler
     
     # Get the file name of the code that is running

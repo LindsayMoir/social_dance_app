@@ -38,10 +38,23 @@ from rd_ext import ReadExtract
 with open('config/config.yaml', 'r') as file:
     config = yaml.safe_load(file)
 
-# Instantiate required handlers.
-db_handler = DatabaseHandler(config)
-llm_handler = LLMHandler(config_path="config/config.yaml")
-read_extract = ReadExtract("config/config.yaml")
+# Handlers will be instantiated when needed to avoid blocking module import
+_handlers_cache = None
+
+def get_handlers():
+    """Initialize and return handlers only when needed."""
+    global _handlers_cache
+    if _handlers_cache is None:
+        db_handler = DatabaseHandler(config)
+        llm_handler = LLMHandler(config_path="config/config.yaml")
+        db_handler.set_llm_handler(llm_handler)  # Connect the LLM to the DB handler
+        read_extract = ReadExtract("config/config.yaml")
+        _handlers_cache = {
+            'db_handler': db_handler,
+            'llm_handler': llm_handler,
+            'read_extract': read_extract
+        }
+    return _handlers_cache
 
 # --------------------------------------------------
 # EventSpider: Handles the crawling process
@@ -53,6 +66,12 @@ class EventSpider(scrapy.Spider):
         super().__init__(*args, **kwargs)
         self.config = config
         self.visited_link = set()  # Track visited URLs
+        # Initialize handlers when spider starts, not at module import
+        handlers = get_handlers()
+        global db_handler, llm_handler, read_extract
+        db_handler = handlers['db_handler']
+        llm_handler = handlers['llm_handler']
+        read_extract = handlers['read_extract']
         self.keywords_list = llm_handler.get_keywords()
         logging.info("\n\nscraper.py starting...")
 
@@ -419,10 +438,11 @@ if __name__ == "__main__":
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-    # Instantiate required handlers.
-    db_handler = DatabaseHandler(config)
-    llm_handler = LLMHandler(config_path="config/config.yaml")
-    read_extract = ReadExtract("config/config.yaml")
+    # Get handlers using lazy initialization to avoid blocking imports
+    handlers = get_handlers()
+    db_handler = handlers['db_handler']
+    llm_handler = handlers['llm_handler']
+    read_extract = handlers['read_extract']
     scraper = EventSpider(config)
     file_name = os.path.basename(__file__)
     start_df = db_handler.count_events_urls_start(file_name)
