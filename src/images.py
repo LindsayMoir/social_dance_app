@@ -66,8 +66,8 @@ class ImageScraper:
         self.urls_visited = set()
 
         # Handlers
-        self.db_handler = DatabaseHandler(config)
         self.llm_handler = LLMHandler(config)
+        self.db_handler = self.llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
         self.keywords_list = self.llm_handler.get_keywords()
 
         # Directories

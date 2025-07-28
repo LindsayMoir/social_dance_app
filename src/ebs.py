@@ -427,8 +427,8 @@ async def main():
 
     # Initialize the scraper components
     read_extract = ReadExtract(config_path='config/config.yaml')
-    db_handler = DatabaseHandler(config)
     llm_handler = LLMHandler(config_path='config/config.yaml')
+    db_handler = llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
     ebs_instance = EventbriteScraper(
         config=config,
         read_extract=read_extract,

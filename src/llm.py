@@ -114,7 +114,7 @@ class LLMHandler:
         self.ADDRESS_KEYS = {
             "address_id", "full_address", "building_name", "street_number",
             "street_name", "street_type", "direction", "city", "met_area",
-            "province_or_state", "postal_code", "country_id", "time_stamp"
+            "province_or_state", "postal_code", "country_id"
         }
         self.FIELD_RE = re.compile(r'^\s*"(?P<key>[^"]+)"\s*:\s*(?P<raw>.*)$')
 
@@ -692,7 +692,7 @@ class LLMHandler:
                 logging.info("parse_location_with_llm: Filled missing postal_code from external DB: %s", postal)
 
         # Insert into address table (or get existing ID)
-        address_id = self.get_address_id(parsed_address)
+        address_id = self.db_handler.resolve_or_insert_address(parsed_address)
         parsed_address["address_id"] = address_id
 
         return parsed_address

@@ -35,7 +35,7 @@ from llm import LLMHandler
 from db import DatabaseHandler
 
 llm_handler = LLMHandler(config_path='config/config.yaml')
-db_handler  = DatabaseHandler(config)
+db_handler = llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
 
 # ── 4) Parser registry decorator ───────────────────────────────────────────────
 PARSER_REGISTRY = {}
@@ -80,8 +80,8 @@ class ReadPDFs:
         else:
             logging.info("No black_list_domains configured.")
 
-        # Database handler for this class
-        self.db = DatabaseHandler(config)
+        # Use the global database handler
+        self.db = db_handler
         logging.info("DatabaseHandler initialized.")
 
 

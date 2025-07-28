@@ -26,24 +26,13 @@ log_cfg = cfg.get("logging", {})
 log_dir = log_cfg.get("dir") or os.path.dirname(log_cfg.get("log_file", "")) or "logs"
 os.makedirs(log_dir, exist_ok=True)
 
-# ─── 2) Build a unique log filename ───────────────────────────────────────────
-run_id = os.getenv("PREFECT__FLOW_RUN_ID") or str(os.getpid())
-ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S%f")
-new_log_file = os.path.join(log_dir, f"pipeline_{run_id}_{ts}.log")
+# ─── 2) Pipeline uses console logging only (no log files) ────────────────────
 
-# ─── 3) Update config and persist ─────────────────────────────────────────────
-cfg.setdefault("logging", {})["log_file"] = new_log_file
-with open(CONFIG_PATH, "w") as f:
-    yaml.safe_dump(cfg, f)
-
-print(f"Logging this run to → {new_log_file}")
-
-# ─── 4) Configure Python logging ─────────────────────────────────────────────
+# ─── 4) Configure Python logging (console only, no file) ─────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(new_log_file),
         logging.StreamHandler(sys.stdout)
     ]
 )

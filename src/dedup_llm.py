@@ -580,7 +580,7 @@ class DeduplicationHandler:
             logging.warning("handle_long_event_name: Parsed result is empty or None")
             return
         
-        address_id = int(self.db_handler.get_address_id(parsed))
+        address_id = int(self.db_handler.resolve_or_insert_address(parsed))
         logging.info(f"handle_long_event_name: Generated address_id = {address_id}")
         
         for _, row in group.iterrows():
@@ -661,7 +661,7 @@ class DeduplicationHandler:
             logging.warning("handle_llm_address_fix: Parsed result is empty or None")
             return
         
-        address_id = int(self.db_handler.get_address_id(parsed))
+        address_id = int(self.db_handler.resolve_or_insert_address(parsed))
         logging.info(f"handle_llm_address_fix: Generated address_id = {address_id}")
         
         for _, row in group.iterrows():
@@ -710,7 +710,7 @@ class DeduplicationHandler:
             logging.warning("handle_fallback_llm: Parsed result is empty or None")
             return
         
-        address_id = int(self.db_handler.get_address_id(parsed))
+        address_id = int(self.db_handler.resolve_or_insert_address(parsed))
         logging.info(f"handle_fallback_llm: Generated address_id = {address_id}")
         
         for _, row in group.iterrows():

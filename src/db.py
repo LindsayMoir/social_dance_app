@@ -1085,47 +1085,6 @@ class DatabaseHandler():
         return score >= threshold
 
 
-    def insert_address_and_return_id(self, address_dict: dict) -> int:
-        """
-        Inserts a new address record into the address table and returns the address_id.
-        """
-        address_dict = self.normalize_nulls(address_dict)
-        address_dict["time_stamp"] = datetime.now().isoformat()
-
-        if "full_address" not in address_dict or not address_dict["full_address"]:
-            full_address_parts = [
-                address_dict.get("building_name"),
-                address_dict.get("street_number"),
-                address_dict.get("street_name"),
-                address_dict.get("street_type"),
-                address_dict.get("direction"),
-                address_dict.get("city"),
-                address_dict.get("province_or_state"),
-                address_dict.get("postal_code"),
-                "CA"
-            ]
-            address_dict["full_address"] = " ".join([str(part) for part in full_address_parts if part])
-
-        if "country_id" not in address_dict:
-            address_dict["country_id"] = 'CA'  # Default: Canada
-
-        query = """
-            INSERT INTO address (
-                full_address, building_name, street_number, street_name, street_type,
-                direction, city, met_area, province_or_state, postal_code, country_id, time_stamp
-            ) VALUES (
-                :full_address, :building_name, :street_number, :street_name,
-                :street_type, :direction, :city, :met_area, :province_or_state,
-                :postal_code, :country_id, :time_stamp
-            ) RETURNING address_id;
-        """
-
-        result = self.execute_query(query, address_dict)
-        if result and isinstance(result, list) and len(result) > 0:
-            return result[0][0]
-        else:
-            logging.error("insert_address_and_return_id(): Failed to insert address.")
-            return 0
         
 
     def match_civic_number(self, df, numbers):
