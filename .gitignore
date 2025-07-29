@@ -2,8 +2,14 @@
 facebook_auth.json
 eventbrite_auth.json
 
+# ignore all checkpoint files
+checkpoint/
+
 # ignore all logs
 logs/
+
+# ignore all output files
+output/
 
 # ignore all json files
 *.json

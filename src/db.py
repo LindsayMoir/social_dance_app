@@ -790,13 +790,16 @@ class DatabaseHandler():
         for key in ["city", "province_or_state", "postal_code", "full_address"]:
             parsed_address[key] = parsed_address.get(key) or None
 
+        # Set time_stamp for the new address
+        parsed_address["time_stamp"] = datetime.now().isoformat()
+
         insert_query = """
             INSERT INTO address (
                 building_name, street_number, street_name, city,
-                province_or_state, postal_code, country_id, full_address
+                province_or_state, postal_code, country_id, full_address, time_stamp
             ) VALUES (
                 :building_name, :street_number, :street_name, :city,
-                :province_or_state, :postal_code, :country_id, :full_address
+                :province_or_state, :postal_code, :country_id, :full_address, :time_stamp
             )
             RETURNING address_id;
         """
