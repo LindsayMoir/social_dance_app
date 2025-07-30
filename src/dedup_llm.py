@@ -48,8 +48,8 @@ class DeduplicationHandler:
         """
         self._load_config(config_path)
         self._setup_logging()
-        self.db_handler = DatabaseHandler(self.config)
         self.llm_handler = LLMHandler(config_path)
+        self.db_handler = self.llm_handler.db_handler  # Use connected handler
         self._setup_database()
     
     def _load_config(self, config_path):
@@ -897,6 +897,22 @@ class DeduplicationHandler:
             output_df = pd.concat(results, ignore_index=True)
             output_df.to_csv("output/dups_trans_db_scan.csv", index=False)
             logging.info("Saved deduplication results to output/dups_trans_db_scan.csv")
+            
+            # Create a clean summary of ALL cluster members for review (canonical + duplicates)
+            cluster_review = output_df[
+                ['event_id', 'event_name', 'start_date', 'start_time', 'location', 'source', 'cluster_id', 'is_canonical']
+            ].copy()
+            cluster_review['status'] = cluster_review['is_canonical'].map({True: 'CANONICAL', False: 'PROPOSED_DUPLICATE'})
+            cluster_review = cluster_review.drop('is_canonical', axis=1)
+            cluster_review['reason'] = 'semantic_similarity'
+            
+            # Sort by cluster_id so canonical and duplicates are grouped together
+            cluster_review = cluster_review.sort_values(['cluster_id', 'status'])
+            cluster_review.to_csv("output/duplicates.csv", index=False)
+            
+            num_duplicates = len(cluster_review[cluster_review['status'] == 'PROPOSED_DUPLICATE'])
+            num_clusters = cluster_review['cluster_id'].nunique()
+            logging.info(f"Saved {num_clusters} clusters with {num_duplicates} proposed duplicates to output/duplicates.csv for review")
 
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             total_rows = len(df)
@@ -1056,12 +1072,12 @@ class DeduplicationHandler:
         """
         Main driver function for the deduplication process.
         """
-        # while True:   ***TEMP***
-        #     total_deleted = self.process_duplicates()
-        #     logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
-        #     if total_deleted == 0:
-        #         logging.info("No duplicates found. Exiting deduplication loop.")
-        #         break
+        while True:
+            total_deleted = self.process_duplicates()
+            logging.info(f"Main loop: Number of events deleted in this pass: {total_deleted}")
+            if total_deleted == 0:
+                logging.info("No duplicates found. Exiting deduplication loop.")
+                break
 
         # Fix null locations and addresses
         logging.info("Starting fix_problem_events()...")
@@ -1073,7 +1089,7 @@ class DeduplicationHandler:
         # self.parse_address()
 
         # This uses transformers and DBSCAN to find duplicates based on embeddings.
-        # self.deduplicate_with_embeddings() ***TEMP***
+        self.deduplicate_with_embeddings()
 
         # In order to improve deduplication we really need to evaluate the clusters that were scored.
         if self.config.get('score', {}).get('dup_trans_db_scan', False):
@@ -1091,7 +1107,7 @@ if __name__ == "__main__":
 
     # Initialize the class libraries
     deduper = DeduplicationHandler()
-    db_handler = DatabaseHandler(config)
+    db_handler = deduper.db_handler  # Use the connected handler
 
     # Get the file name of the code that is running
     file_name = os.path.basename(__file__)

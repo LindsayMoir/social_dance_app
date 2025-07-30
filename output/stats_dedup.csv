@@ -8,3 +8,4 @@ timestamp,total_rows,clustered_rows,num_clusters,canonical_rows,duplicate_rows,e
 2025-07-02 22:35:18,1435,116,57,57,59,0.3,2,all-MiniLM-L6-v2,DBSCAN,a2fc69e5bddd7e9ddd649d851a0c215ffc7a1487
 2025-07-08 20:46:07,1215,98,49,49,49,0.3,2,all-MiniLM-L6-v2,DBSCAN,1a64490416c29f06c6b7d513d2751c46fb7fcfc5
 2025-07-09 15:38:13,1278,86,43,43,43,0.3,2,all-MiniLM-L6-v2,DBSCAN,2b51e283eab18e826e341e6d8a16394a6306d41b
+2025-07-29 21:00:04,1426,83,41,41,42,0.3,2,all-MiniLM-L6-v2,DBSCAN,c3dd660c83e47e3baae3e32a69870a0d8b24e281
