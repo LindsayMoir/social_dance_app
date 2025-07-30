@@ -781,14 +781,14 @@ class DatabaseHandler():
                     logging.info(f"Fuzzy match on building_name → '{existing_name}' (score ≥ 85) → address_id={addr_id}")
                     return addr_id
 
-        # Step 3: Prepare required fields and insert the new address
+        # Step 3: Normalize null values and prepare required fields for insert
+        parsed_address = self.normalize_nulls(parsed_address)
+        
+        # Ensure key fields are properly set after normalization
         parsed_address["building_name"] = building_name or None
         parsed_address["street_number"] = street_number or None
         parsed_address["street_name"] = street_name or None
         parsed_address["country_id"] = country_id or None
-
-        for key in ["city", "province_or_state", "postal_code", "full_address"]:
-            parsed_address[key] = parsed_address.get(key) or None
 
         # Set time_stamp for the new address
         parsed_address["time_stamp"] = datetime.now().isoformat()
@@ -2123,11 +2123,27 @@ class DatabaseHandler():
     def normalize_nulls(self, record: dict) -> dict:
         """
         Replaces string values like 'null', 'none', 'nan', or empty strings with Python None (i.e., SQL NULL).
+        Also handles pandas NaN values and various null representations.
         Applies to all keys in the given dictionary.
         """
+        import pandas as pd
+        import numpy as np
+        
         cleaned = {}
+        null_strings = {"null", "none", "nan", "", "n/a", "na", "nil", "undefined"}
+        
         for key, value in record.items():
-            if isinstance(value, str) and value.strip().lower() in {"null", "none", "nan", ""}:
+            # Handle pandas/numpy NaN
+            if pd.isna(value) or (isinstance(value, float) and np.isnan(value)):
+                cleaned[key] = None
+            # Handle string nulls (case insensitive, strip whitespace)
+            elif isinstance(value, str) and value.strip().lower() in null_strings:
+                cleaned[key] = None
+            # Handle numeric 0 that shouldn't be null (keep as is)
+            elif value == 0:
+                cleaned[key] = value
+            # Handle other falsy values that should be None
+            elif not value and value != 0:
                 cleaned[key] = None
             else:
                 cleaned[key] = value
@@ -2139,7 +2155,7 @@ class DatabaseHandler():
         Replaces string 'null', 'none', 'nan', and '' with actual SQL NULLs in address table.
         """
         fields = [
-            "full_address", "building_name", "street_number", "street_name", "direction"
+            "full_address", "building_name", "street_number", "street_name", "direction",
             "city", "met_area", "province_or_state", "postal_code", "country_id"
         ]
         for field in fields:

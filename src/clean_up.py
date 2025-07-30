@@ -1085,12 +1085,17 @@ class CleanUp:
                 # Save to CSV for review instead of deleting
                 preview_data = []
                 
+                # Get column names using pandas
+                import pandas as pd
+                addr_columns_df = pd.read_sql("SELECT * FROM address LIMIT 1", self.conn)
+                column_names = addr_columns_df.columns.tolist()
+                
                 # Add canonical address
                 canonical_addr = self.db_handler.execute_query(
                     "SELECT * FROM address WHERE address_id = :id", {"id": canonical_id}
                 )
                 if canonical_addr:
-                    addr_data = dict(zip([desc[0] for desc in self.db_handler.get_db_connection().description or []], canonical_addr[0]))
+                    addr_data = dict(zip(column_names, canonical_addr[0]))
                     addr_data['status'] = 'CANONICAL'
                     addr_data['group_id'] = f"semantic_{canonical_id}"
                     addr_data['reason'] = 'semantic_clustering'
@@ -1102,7 +1107,7 @@ class CleanUp:
                         "SELECT * FROM address WHERE address_id = :id", {"id": dup_id}
                     )
                     if dup_addr:
-                        addr_data = dict(zip([desc[0] for desc in self.db_handler.get_db_connection().description or []], dup_addr[0]))
+                        addr_data = dict(zip(column_names, dup_addr[0]))
                         addr_data['status'] = 'PROPOSED_DUPLICATE'
                         addr_data['group_id'] = f"semantic_{canonical_id}"
                         addr_data['reason'] = 'semantic_clustering'
@@ -1348,7 +1353,10 @@ class CleanUp:
         def norm(val):
             return str(val).strip().lower() if val else ""
 
-        street_numbers = set(norm(r.get("street_number")) for r in records if r.get("street_number") and norm(r.get("street_number")) != "null")
+        # Filter out null values (both None and null strings)
+        null_strings = {"null", "none", "nan", "", "n/a", "na", "nil", "undefined"}
+        street_numbers = set(norm(r.get("street_number")) for r in records 
+                           if r.get("street_number") is not None and norm(r.get("street_number")) not in null_strings)
         building_names = [norm(r.get("building_name")) for r in records if norm(r.get("building_name"))]
 
         if len(street_numbers) <= 1:
@@ -1424,25 +1432,30 @@ class CleanUp:
         Returns:
             pd.DataFrame: A DataFrame containing possible duplicate addresses with group_id.
         """
+        # Simple approach without SIMILARITY function (requires pg_trgm extension)
         sql = """
-        WITH AddressSimilarity AS (
+        WITH PotentialDuplicates AS (
             SELECT a1.address_id as id1, a2.address_id as id2,
-                   a1.full_address, a1.building_name, a1.street_name, a1.city, a1.postal_code,
-                   SIMILARITY(LOWER(a1.full_address), LOWER(a2.full_address)) as addr_sim,
-                   SIMILARITY(LOWER(COALESCE(a1.building_name, '')), LOWER(COALESCE(a2.building_name, ''))) as building_sim
+                   a1.full_address, a1.building_name, a1.street_name, a1.city, a1.postal_code
             FROM address a1
             JOIN address a2 ON a1.address_id < a2.address_id
             WHERE (
-                SIMILARITY(LOWER(a1.full_address), LOWER(a2.full_address)) > 0.7
+                -- Same street name and postal code
+                (LOWER(a1.street_name) = LOWER(a2.street_name) AND a1.postal_code = a2.postal_code)
+                -- Same building name (if both not empty)
                 OR (COALESCE(a1.building_name, '') != '' AND COALESCE(a2.building_name, '') != '' 
-                    AND SIMILARITY(LOWER(a1.building_name), LOWER(a2.building_name)) > 0.8)
-                OR (LOWER(a1.street_name) = LOWER(a2.street_name) AND a1.postal_code = a2.postal_code)
+                    AND LOWER(a1.building_name) = LOWER(a2.building_name))
+                -- Same city and similar street numbers (only if both have numeric street numbers)
+                OR (LOWER(a1.city) = LOWER(a2.city) 
+                    AND LOWER(a1.street_name) = LOWER(a2.street_name)
+                    AND a1.street_number ~ '^[0-9]+$' AND a2.street_number ~ '^[0-9]+$'
+                    AND ABS(CAST(a1.street_number AS INTEGER) - CAST(a2.street_number AS INTEGER)) <= 10)
             )
         ),
         AddressGroups AS (
-            SELECT id1 as address_id FROM AddressSimilarity
+            SELECT id1 as address_id FROM PotentialDuplicates
             UNION
-            SELECT id2 as address_id FROM AddressSimilarity
+            SELECT id2 as address_id FROM PotentialDuplicates
         )
         SELECT DENSE_RANK() OVER (ORDER BY a.city, a.street_name, a.postal_code) as group_id,
                a.address_id, a.full_address, a.building_name, a.street_number, 
@@ -1500,21 +1513,11 @@ class CleanUp:
                 for _, row in group.iterrows()
             ])
             
-            prompt = f"""Please analyze these addresses and identify which ones represent the same physical location, even if written differently:
-
-{address_text}
-
-Mark addresses as duplicates (Label: 1) if they refer to the same building/venue/location, even with different formatting, abbreviations, or additional details. Keep the most complete/accurate version as canonical (Label: 0).
-
-Return a JSON array with objects containing:
-- "address_id": the ID of each address
-- "Label": 1 if duplicate (delete), 0 if canonical (keep)
-
-Examples of duplicates:
-- "123 Main St" and "123 Main Street" 
-- "Victoria Community Centre" and "Victoria Community Center, 123 Oak St"
-- "The Phoenix Bar, 1234 Douglas St" and "Phoenix Bar & Grill, 1234 Douglas Street"
-"""
+            # Load prompt from config
+            prompt_path = self.config['prompts']['dedup_llm_address']
+            with open(prompt_path, 'r') as f:
+                prompt_template = f.read()
+            prompt = f"{prompt_template}\n\n{address_text}"
 
             try:
                 response = self.llm_handler.query_llm("address_dedup", prompt)
@@ -1692,6 +1695,10 @@ async def main():
     start_df = db_handler.count_events_urls_start(file_name)
 
     # Fix duplicate rows in the address table
+    
+    # First, clean up any existing 'null' strings in the database
+    logging.info("Cleaning up null strings in address table...")
+    clean_up_instance.db_handler.clean_null_strings_in_address()
     
     # Method 1: Semantic clustering first (free, local compute)
     logging.info("Starting semantic clustering address deduplication (free)...")

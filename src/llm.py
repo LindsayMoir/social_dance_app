@@ -463,7 +463,10 @@ class LLMHandler:
             key, raw = m.group('key'), m.group('raw').rstrip(',')
             if key in required_keys:
                 # remove all stray quotes and trim whitespace
-                current[key] = raw.replace('"', '').strip()
+                value = raw.replace('"', '').strip()
+                # Normalize null strings to None
+                null_strings = {"null", "none", "nan", "", "n/a", "na", "nil", "undefined"}
+                current[key] = None if value.lower() in null_strings else value
 
         logging.info(f"line_based_parse(): Here is what the records look like: \n{records}.")
         return records
@@ -681,7 +684,10 @@ class LLMHandler:
             return {"address_id": 0}
 
         # Fill postal code if missing
-        if not parsed_address.get("postal_code") or parsed_address["postal_code"].lower() == "null":
+        # Check if postal_code is missing or a null string
+        postal_code = parsed_address.get("postal_code")
+        null_strings = {"null", "none", "nan", "", "n/a", "na", "nil", "undefined"}
+        if not postal_code or (isinstance(postal_code, str) and postal_code.lower() in null_strings):
             postal = self.lookup_postal_code_external_db(
                 street_number=parsed_address.get("street_number", ""),
                 street_name=parsed_address.get("street_name", ""),

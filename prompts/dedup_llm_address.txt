@@ -1,0 +1,12 @@
+Please analyze these addresses and identify which ones represent the same physical location, even if written differently:
+
+Mark addresses as duplicates (Label: 1) if they refer to the same building/venue/location, even with different formatting, abbreviations, or additional details. Keep the most complete/accurate version as canonical (Label: 0).
+
+Return a JSON array with objects containing:
+- "address_id": the ID of each address
+- "Label": 1 if duplicate (delete), 0 if canonical (keep)
+
+Examples of duplicates:
+- "123 Main St" and "123 Main Street" 
+- "Victoria Community Centre" and "Victoria Community Center, 123 Oak St"
+- "The Phoenix Bar, 1234 Douglas St" and "Phoenix Bar & Grill, 1234 Douglas Street"
