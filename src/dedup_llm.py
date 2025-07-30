@@ -913,6 +913,17 @@ class DeduplicationHandler:
             num_duplicates = len(cluster_review[cluster_review['status'] == 'PROPOSED_DUPLICATE'])
             num_clusters = cluster_review['cluster_id'].nunique()
             logging.info(f"Saved {num_clusters} clusters with {num_duplicates} proposed duplicates to output/duplicates.csv for review")
+            
+            # Delete the proposed duplicate events from the database
+            duplicate_event_ids = cluster_review[cluster_review['status'] == 'PROPOSED_DUPLICATE']['event_id'].tolist()
+            if duplicate_event_ids:
+                logging.info(f"Deleting {len(duplicate_event_ids)} duplicate events from database...")
+                if self.db_handler.delete_multiple_events(duplicate_event_ids):
+                    logging.info(f"Successfully deleted {len(duplicate_event_ids)} duplicate events from database")
+                else:
+                    logging.error(f"Failed to delete some duplicate events from database")
+            else:
+                logging.info("No duplicate events to delete")
 
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             total_rows = len(df)
