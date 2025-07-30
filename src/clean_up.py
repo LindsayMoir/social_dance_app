@@ -1039,10 +1039,14 @@ class CleanUp:
         logging.info(f"fix_null_addresses_in_events(): Updated {updated_count} event(s). Log saved to {log_path}.")
 
 
-    def apply_deduplication_response(self, response):
+    def apply_deduplication_response(self, response, preview_mode=False):
         """
         Apply deduplication results to the database.
         Delete duplicate addresses and update events table to point to the canonical address.
+        
+        Args:
+            response: LLM response with deduplication decisions
+            preview_mode: If True, save to CSV instead of deleting from database
         """
         # Parse JSON string if needed
         if isinstance(response, str):
@@ -1077,32 +1081,71 @@ class CleanUp:
                 continue
             canonical_address = full_address_result[0][0]
 
-            total_events_updated = 0
-            for dup_id in duplicates:
-                logging.info(f"apply_deduplication_response(): Repointing events from {dup_id} → {canonical_id}")
-
-                num_events_updated = self.db_handler.execute_query(
-                    """
-                    UPDATE events 
-                    SET address_id = :canonical, location = :full_address 
-                    WHERE address_id = :duplicate
-                    """,
-                    {
-                        "canonical": canonical_id,
-                        "duplicate": dup_id,
-                        "full_address": canonical_address
-                    }
+            if preview_mode:
+                # Save to CSV for review instead of deleting
+                preview_data = []
+                
+                # Add canonical address
+                canonical_addr = self.db_handler.execute_query(
+                    "SELECT * FROM address WHERE address_id = :id", {"id": canonical_id}
                 )
-                total_events_updated += num_events_updated or 0
-                logging.info(f"apply_deduplication_response(): Updated {num_events_updated} events from {dup_id} to {canonical_id}")
+                if canonical_addr:
+                    addr_data = dict(zip([desc[0] for desc in self.db_handler.get_db_connection().description or []], canonical_addr[0]))
+                    addr_data['status'] = 'CANONICAL'
+                    addr_data['group_id'] = f"semantic_{canonical_id}"
+                    addr_data['reason'] = 'semantic_clustering'
+                    preview_data.append(addr_data)
+                
+                # Add duplicate addresses
+                for dup_id in duplicates:
+                    dup_addr = self.db_handler.execute_query(
+                        "SELECT * FROM address WHERE address_id = :id", {"id": dup_id}
+                    )
+                    if dup_addr:
+                        addr_data = dict(zip([desc[0] for desc in self.db_handler.get_db_connection().description or []], dup_addr[0]))
+                        addr_data['status'] = 'PROPOSED_DUPLICATE'
+                        addr_data['group_id'] = f"semantic_{canonical_id}"
+                        addr_data['reason'] = 'semantic_clustering'
+                        preview_data.append(addr_data)
+                
+                # Append to CSV file
+                import os
+                preview_df = pd.DataFrame(preview_data)
+                csv_file = "output/address_duplicates.csv"
+                if os.path.exists(csv_file):
+                    preview_df.to_csv(csv_file, mode='a', header=False, index=False)
+                else:
+                    preview_df.to_csv(csv_file, mode='w', header=True, index=False)
+                    
+                logging.info(f"apply_deduplication_response(): Added {len(duplicates)} proposed duplicates to {csv_file} for review")
+            else:
+                # Original deletion logic
+                total_events_updated = 0
+                for dup_id in duplicates:
+                    logging.info(f"apply_deduplication_response(): Repointing events from {dup_id} → {canonical_id}")
 
-                logging.info(f"apply_deduplication_response(): Deleting address_id {dup_id} from address table")
-                self.db_handler.execute_query("DELETE FROM address WHERE address_id = :id", {"id": dup_id})
+                    num_events_updated = self.db_handler.execute_query(
+                        """
+                        UPDATE events 
+                        SET address_id = :canonical, location = :full_address 
+                        WHERE address_id = :duplicate
+                        """,
+                        {
+                            "canonical": canonical_id,
+                            "duplicate": dup_id,
+                            "full_address": canonical_address
+                        }
+                    )
+                    total_events_updated += num_events_updated or 0
+                    logging.info(f"apply_deduplication_response(): Updated {num_events_updated} events from {dup_id} to {canonical_id}")
 
-            logging.info(
-                f"apply_deduplication_response(): Cluster update summary → canonical_id {canonical_id}, "
-                f"total events updated: {total_events_updated}, duplicates removed: {len(duplicates)}"
-            )
+                    logging.info(f"apply_deduplication_response(): Deleting address_id {dup_id} from address table")
+                    self.db_handler.execute_query("DELETE FROM address WHERE address_id = :id", {"id": dup_id})
+
+                logging.info(
+                    f"apply_deduplication_response(): Cluster update summary → canonical_id {canonical_id}, "
+                    f"total events updated: {total_events_updated}, duplicates removed: {len(duplicates)}"
+                )
 
 
     def generate_prompt(self, subcluster: List[Dict]) -> str:
@@ -1371,6 +1414,180 @@ class CleanUp:
             f.write(f"--- STATUS ---\n")
             f.write(f"Canonical: {canonical_id}, Duplicates: {duplicates}. Reason: {reason}\n")
 
+    def fetch_possible_duplicate_addresses(self):
+        """
+        Identify and retrieve potential duplicate addresses from the database based on similar text.
+        
+        Uses similarity on full_address, building_name, and location components to find potential duplicates.
+        Groups by similar street names and postal codes to identify clusters of potential duplicates.
+        
+        Returns:
+            pd.DataFrame: A DataFrame containing possible duplicate addresses with group_id.
+        """
+        sql = """
+        WITH AddressSimilarity AS (
+            SELECT a1.address_id as id1, a2.address_id as id2,
+                   a1.full_address, a1.building_name, a1.street_name, a1.city, a1.postal_code,
+                   SIMILARITY(LOWER(a1.full_address), LOWER(a2.full_address)) as addr_sim,
+                   SIMILARITY(LOWER(COALESCE(a1.building_name, '')), LOWER(COALESCE(a2.building_name, ''))) as building_sim
+            FROM address a1
+            JOIN address a2 ON a1.address_id < a2.address_id
+            WHERE (
+                SIMILARITY(LOWER(a1.full_address), LOWER(a2.full_address)) > 0.7
+                OR (COALESCE(a1.building_name, '') != '' AND COALESCE(a2.building_name, '') != '' 
+                    AND SIMILARITY(LOWER(a1.building_name), LOWER(a2.building_name)) > 0.8)
+                OR (LOWER(a1.street_name) = LOWER(a2.street_name) AND a1.postal_code = a2.postal_code)
+            )
+        ),
+        AddressGroups AS (
+            SELECT id1 as address_id FROM AddressSimilarity
+            UNION
+            SELECT id2 as address_id FROM AddressSimilarity
+        )
+        SELECT DENSE_RANK() OVER (ORDER BY a.city, a.street_name, a.postal_code) as group_id,
+               a.address_id, a.full_address, a.building_name, a.street_number, 
+               a.street_name, a.city, a.postal_code, a.country_id
+        FROM address a
+        JOIN AddressGroups ag ON a.address_id = ag.address_id
+        ORDER BY group_id, a.address_id;
+        """
+        
+        try:
+            df = pd.read_sql(sql, self.conn)
+            logging.info(f"fetch_possible_duplicate_addresses(): Found {len(df)} potential duplicate addresses")
+            return df
+        except Exception as e:
+            logging.warning(f"fetch_possible_duplicate_addresses(): SIMILARITY function not available, using simpler approach: {e}")
+            
+            # Fallback to simpler grouping if SIMILARITY function not available
+            simple_sql = """
+            SELECT ROW_NUMBER() OVER (ORDER BY street_name, city, postal_code) as group_id,
+                   address_id, full_address, building_name, street_number, 
+                   street_name, city, postal_code, country_id
+            FROM address 
+            WHERE (street_name, city, postal_code) IN (
+                SELECT street_name, city, postal_code 
+                FROM address 
+                GROUP BY street_name, city, postal_code 
+                HAVING COUNT(*) > 1
+            )
+            ORDER BY street_name, city, postal_code, address_id;
+            """
+            df = pd.read_sql(simple_sql, self.conn)
+            logging.info(f"fetch_possible_duplicate_addresses(): Found {len(df)} potential duplicate addresses (simple method)")
+            return df
+
+    def process_address_duplicates_with_llm(self):
+        """
+        Process duplicate addresses using LLM similar to event deduplication.
+        Returns the number of addresses deleted.
+        """
+        df = self.fetch_possible_duplicate_addresses()
+        if df.empty:
+            logging.info("process_address_duplicates_with_llm(): No potential duplicates found.")
+            return 0
+            
+        response_dfs = []
+        
+        for group_id in df['group_id'].unique():
+            group = df[df['group_id'] == group_id]
+            if len(group) <= 1:
+                continue
+                
+            # Create prompt for address group
+            address_text = "\n".join([
+                f"Address ID {row['address_id']}: {row['full_address']} | Building: {row['building_name']} | Street: {row['street_number']} {row['street_name']}"
+                for _, row in group.iterrows()
+            ])
+            
+            prompt = f"""Please analyze these addresses and identify which ones represent the same physical location, even if written differently:
+
+{address_text}
+
+Mark addresses as duplicates (Label: 1) if they refer to the same building/venue/location, even with different formatting, abbreviations, or additional details. Keep the most complete/accurate version as canonical (Label: 0).
+
+Return a JSON array with objects containing:
+- "address_id": the ID of each address
+- "Label": 1 if duplicate (delete), 0 if canonical (keep)
+
+Examples of duplicates:
+- "123 Main St" and "123 Main Street" 
+- "Victoria Community Centre" and "Victoria Community Center, 123 Oak St"
+- "The Phoenix Bar, 1234 Douglas St" and "Phoenix Bar & Grill, 1234 Douglas Street"
+"""
+
+            try:
+                response = self.llm_handler.query_llm("address_dedup", prompt)
+                if response:
+                    # Parse LLM response
+                    import json
+                    try:
+                        parsed = json.loads(response)
+                        if isinstance(parsed, list):
+                            response_df = pd.DataFrame(parsed)
+                            response_df['address_id'] = response_df['address_id'].astype(int)
+                            response_dfs.append(response_df)
+                    except json.JSONDecodeError:
+                        logging.warning(f"Failed to parse LLM response for group {group_id}")
+            except Exception as e:
+                logging.error(f"Error processing group {group_id}: {e}")
+                
+        if response_dfs:
+            return self.merge_and_save_address_results(df, response_dfs)
+        else:
+            logging.warning("process_address_duplicates_with_llm(): No valid responses from LLM.")
+            return 0
+            
+    def merge_and_save_address_results(self, df, response_dfs):
+        """
+        Merge address results and save to CSV with review capability.
+        """
+        response_df = pd.concat(response_dfs, ignore_index=True)
+        df_merged = df.merge(response_df, on="address_id", how="left")
+        
+        # Save all results for review
+        df_merged.to_csv("output/address_dedup_results.csv", index=False)
+        
+        # Create review CSV with canonical and duplicate addresses grouped
+        review_df = df_merged[df_merged['Label'].notna()].copy()
+        review_df['status'] = review_df['Label'].map({0: 'CANONICAL', 1: 'PROPOSED_DUPLICATE'})
+        review_df = review_df[['address_id', 'full_address', 'building_name', 'street_number', 'street_name', 
+                              'city', 'postal_code', 'group_id', 'status']].copy()
+        review_df['reason'] = 'llm_analysis'
+        review_df = review_df.sort_values(['group_id', 'status'])
+        # Append to existing file if it exists (from semantic clustering)
+        csv_file = "output/address_duplicates.csv"
+        if os.path.exists(csv_file):
+            review_df.to_csv(csv_file, mode='a', header=False, index=False)
+        else:
+            review_df.to_csv(csv_file, mode='w', header=True, index=False)
+        
+        # Delete the duplicate addresses
+        duplicate_ids = review_df[review_df['status'] == 'PROPOSED_DUPLICATE']['address_id'].tolist()
+        if duplicate_ids:
+            logging.info(f"Deleting {len(duplicate_ids)} duplicate addresses from database...")
+            deleted_count = 0
+            for addr_id in duplicate_ids:
+                # First update events to point to canonical address
+                canonical_group = review_df[review_df['group_id'] == review_df[review_df['address_id'] == addr_id]['group_id'].iloc[0]]
+                canonical_id = canonical_group[canonical_group['status'] == 'CANONICAL']['address_id'].iloc[0]
+                canonical_address = canonical_group[canonical_group['status'] == 'CANONICAL']['full_address'].iloc[0]
+                
+                # Update events
+                self.db_handler.execute_query(
+                    "UPDATE events SET address_id = :canonical, location = :address WHERE address_id = :duplicate",
+                    {"canonical": canonical_id, "address": canonical_address, "duplicate": addr_id}
+                )
+                
+                # Delete duplicate address
+                self.db_handler.execute_query("DELETE FROM address WHERE address_id = :id", {"id": addr_id})
+                deleted_count += 1
+                
+            logging.info(f"Successfully deleted {deleted_count} duplicate addresses")
+            return deleted_count
+        else:
+            logging.info("No duplicate addresses to delete")
+            return 0
 
     def deduplicate_addresses_with_llm_semantic_clustering(self):
         """
@@ -1418,7 +1635,7 @@ class CleanUp:
                     prompt = self.generate_prompt(subcluster)
                     response = self.llm_handler.query_llm("address_dedup", prompt)
                     self.log_llm_response(log_file_path, subcluster, prompt, response)
-                    self.apply_deduplication_response(response)
+                    self.apply_deduplication_response(response, preview_mode=True)
                     continue
 
                 # STEP 2: Only if no building match, consider skipping by street rules
@@ -1435,7 +1652,7 @@ class CleanUp:
                     prompt = self.generate_prompt(subcluster)
                     response = self.llm_handler.query_llm("address_dedup", prompt)
                     self.log_llm_response(log_file_path, subcluster, prompt, response)
-                    self.apply_deduplication_response(response)
+                    self.apply_deduplication_response(response, preview_mode=True)
                     continue
 
         logging.info("Finished LLM-based address deduplication and database updates.")
@@ -1475,7 +1692,14 @@ async def main():
     start_df = db_handler.count_events_urls_start(file_name)
 
     # Fix duplicate rows in the address table
+    
+    # Method 1: Semantic clustering first (free, local compute)
+    logging.info("Starting semantic clustering address deduplication (free)...")
     clean_up_instance.deduplicate_addresses_with_llm_semantic_clustering()
+    
+    # Method 2: LLM-based deduplication for remaining candidates (costs money)
+    logging.info("Starting LLM-based address deduplication for remaining candidates...")
+    clean_up_instance.process_address_duplicates_with_llm()
 
     # Fix no urls in events
     await clean_up_instance.process_events_without_url()

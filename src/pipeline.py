@@ -759,7 +759,7 @@ PIPELINE_STEPS = [
     ("db", db_step),
     ("clean_up", clean_up_step),
     ("dedup_llm", dedup_llm_step),
-    ("irrelevant_rows", irrelevant_rows_step),
+    ("irrelevant_rows", irrelevant_rows_step),2
     ("db_maintenance", db_maintenance_step)
 ]
 
