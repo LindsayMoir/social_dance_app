@@ -757,6 +757,9 @@ class DatabaseHandler():
             street_matches = self.execute_query(select_query, params)
 
             for addr_id, b_name, s_num, s_name in street_matches or []:
+                # Skip comparison if any required field is NULL/None
+                if not s_num or not s_name or not street_number or not street_name:
+                    continue
                 if s_num.lower() == street_number.lower() and s_name.lower() == street_name.lower():
                     if building_name:
                         sim_score = ratio(building_name, b_name or "")
@@ -2162,10 +2165,31 @@ class DatabaseHandler():
             query = f"""
                 UPDATE address
                 SET {field} = NULL
-                WHERE TRIM(LOWER({field})) IN ('null', 'none', 'nan', '');
+                WHERE TRIM(LOWER({field})) IN ('null', 'none', 'nan', '', '[null]', '(null)', 'n/a', 'na');
             """
             self.execute_query(query)
         logging.info("Cleaned up string 'null's in address table.")
+    
+    
+    def standardize_postal_codes(self):
+        """
+        Standardizes Canadian postal codes to format V8N 1S3 (with space).
+        """
+        query = """
+            UPDATE address
+            SET postal_code = UPPER(
+                CASE 
+                    WHEN LENGTH(REPLACE(postal_code, ' ', '')) = 6 
+                    THEN SUBSTRING(REPLACE(postal_code, ' ', ''), 1, 3) || ' ' || SUBSTRING(REPLACE(postal_code, ' ', ''), 4, 3)
+                    ELSE postal_code
+                END
+            )
+            WHERE postal_code IS NOT NULL 
+            AND postal_code ~ '^[A-Za-z][0-9][A-Za-z][ ]?[0-9][A-Za-z][0-9]$'
+        """
+        result = self.execute_query(query)
+        logging.info("Standardized postal code formats to V8N 1S3 pattern.")
+        return result
 
 
     def driver(self):

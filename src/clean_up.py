@@ -1048,17 +1048,18 @@ class CleanUp:
             response: LLM response with deduplication decisions
             preview_mode: If True, save to CSV instead of deleting from database
         """
-        # Parse JSON string if needed
+        # Parse JSON string using robust LLM parsing methods
         if isinstance(response, str):
             response = response.strip()
             if not response or "no duplicates" in response.lower():
                 logging.info("apply_deduplication_response(): LLM response indicates no duplicates.")
                 return
-            try:
-                response = json.loads(response)
-            except json.JSONDecodeError as e:
-                logging.warning(f"apply_deduplication_response(): JSON parsing failed: {e}")
+            # Use the robust parsing methods from LLMHandler
+            parsed_response = self.llm_handler.extract_and_parse_json(response, "address_dedup")
+            if not parsed_response:
+                logging.warning("apply_deduplication_response(): Failed to parse LLM response using robust parsing")
                 return
+            response = parsed_response
 
         if not isinstance(response, list):
             logging.warning("apply_deduplication_response(): Skipping due to malformed LLM response.")
@@ -1440,16 +1441,11 @@ class CleanUp:
             FROM address a1
             JOIN address a2 ON a1.address_id < a2.address_id
             WHERE (
-                -- Same street name and postal code
-                (LOWER(a1.street_name) = LOWER(a2.street_name) AND a1.postal_code = a2.postal_code)
+                -- Same street number and street name (exact match for duplicates)
+                (LOWER(a1.street_number) = LOWER(a2.street_number) AND LOWER(a1.street_name) = LOWER(a2.street_name))
                 -- Same building name (if both not empty)
                 OR (COALESCE(a1.building_name, '') != '' AND COALESCE(a2.building_name, '') != '' 
                     AND LOWER(a1.building_name) = LOWER(a2.building_name))
-                -- Same city and similar street numbers (only if both have numeric street numbers)
-                OR (LOWER(a1.city) = LOWER(a2.city) 
-                    AND LOWER(a1.street_name) = LOWER(a2.street_name)
-                    AND a1.street_number ~ '^[0-9]+$' AND a2.street_number ~ '^[0-9]+$'
-                    AND ABS(CAST(a1.street_number AS INTEGER) - CAST(a2.street_number AS INTEGER)) <= 10)
             )
         ),
         AddressGroups AS (
@@ -1522,15 +1518,13 @@ class CleanUp:
             try:
                 response = self.llm_handler.query_llm("address_dedup", prompt)
                 if response:
-                    # Parse LLM response
-                    import json
-                    try:
-                        parsed = json.loads(response)
-                        if isinstance(parsed, list):
-                            response_df = pd.DataFrame(parsed)
-                            response_df['address_id'] = response_df['address_id'].astype(int)
-                            response_dfs.append(response_df)
-                    except json.JSONDecodeError:
+                    # Parse LLM response using robust parsing methods
+                    parsed = self.llm_handler.extract_and_parse_json(response, "address_dedup")
+                    if parsed and isinstance(parsed, list):
+                        response_df = pd.DataFrame(parsed)
+                        response_df['address_id'] = response_df['address_id'].astype(int)
+                        response_dfs.append(response_df)
+                    else:
                         logging.warning(f"Failed to parse LLM response for group {group_id}")
             except Exception as e:
                 logging.error(f"Error processing group {group_id}: {e}")
@@ -1553,6 +1547,8 @@ class CleanUp:
         
         # Create review CSV with canonical and duplicate addresses grouped
         review_df = df_merged[df_merged['Label'].notna()].copy()
+        # Convert Label to int to handle string parsing from LLM
+        review_df['Label'] = review_df['Label'].astype(int)
         review_df['status'] = review_df['Label'].map({0: 'CANONICAL', 1: 'PROPOSED_DUPLICATE'})
         review_df = review_df[['address_id', 'full_address', 'building_name', 'street_number', 'street_name', 
                               'city', 'postal_code', 'group_id', 'status']].copy()
@@ -1567,13 +1563,14 @@ class CleanUp:
         
         # Delete the duplicate addresses
         duplicate_ids = review_df[review_df['status'] == 'PROPOSED_DUPLICATE']['address_id'].tolist()
+        logging.info(f"Found {len(duplicate_ids)} addresses marked for deletion: {duplicate_ids}")
         if duplicate_ids:
             logging.info(f"Deleting {len(duplicate_ids)} duplicate addresses from database...")
             deleted_count = 0
             for addr_id in duplicate_ids:
                 # First update events to point to canonical address
                 canonical_group = review_df[review_df['group_id'] == review_df[review_df['address_id'] == addr_id]['group_id'].iloc[0]]
-                canonical_id = canonical_group[canonical_group['status'] == 'CANONICAL']['address_id'].iloc[0]
+                canonical_id = int(canonical_group[canonical_group['status'] == 'CANONICAL']['address_id'].iloc[0])
                 canonical_address = canonical_group[canonical_group['status'] == 'CANONICAL']['full_address'].iloc[0]
                 
                 # Update events
@@ -1638,7 +1635,7 @@ class CleanUp:
                     prompt = self.generate_prompt(subcluster)
                     response = self.llm_handler.query_llm("address_dedup", prompt)
                     self.log_llm_response(log_file_path, subcluster, prompt, response)
-                    self.apply_deduplication_response(response, preview_mode=True)
+                    self.apply_deduplication_response(response, preview_mode=False)
                     continue
 
                 # STEP 2: Only if no building match, consider skipping by street rules
@@ -1655,7 +1652,7 @@ class CleanUp:
                     prompt = self.generate_prompt(subcluster)
                     response = self.llm_handler.query_llm("address_dedup", prompt)
                     self.log_llm_response(log_file_path, subcluster, prompt, response)
-                    self.apply_deduplication_response(response, preview_mode=True)
+                    self.apply_deduplication_response(response, preview_mode=False)
                     continue
 
         logging.info("Finished LLM-based address deduplication and database updates.")
@@ -1699,6 +1696,10 @@ async def main():
     # First, clean up any existing 'null' strings in the database
     logging.info("Cleaning up null strings in address table...")
     clean_up_instance.db_handler.clean_null_strings_in_address()
+    
+    # Standardize postal code formats
+    logging.info("Standardizing postal code formats...")
+    clean_up_instance.db_handler.standardize_postal_codes()
     
     # Method 1: Semantic clustering first (free, local compute)
     logging.info("Starting semantic clustering address deduplication (free)...")

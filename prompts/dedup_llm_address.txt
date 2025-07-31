@@ -2,6 +2,8 @@ Please analyze these addresses and identify which ones represent the same physic
 
 Mark addresses as duplicates (Label: 1) if they refer to the same building/venue/location, even with different formatting, abbreviations, or additional details. Keep the most complete/accurate version as canonical (Label: 0).
 
+CRITICAL: Return ONLY valid JSON. Do not include any explanations, comments, or text outside the JSON array.
+
 Return a JSON array with objects containing:
 - "address_id": the ID of each address
 - "Label": 1 if duplicate (delete), 0 if canonical (keep)
@@ -10,3 +12,15 @@ Examples of duplicates:
 - "123 Main St" and "123 Main Street" 
 - "Victoria Community Centre" and "Victoria Community Center, 123 Oak St"
 - "The Phoenix Bar, 1234 Douglas St" and "Phoenix Bar & Grill, 1234 Douglas Street"
+
+REQUIRED FORMAT - Return exactly this multi-line structure with no additional text:
+[
+{
+  "address_id": 123,
+  "Label": 0
+},
+{
+  "address_id": 456,
+  "Label": 1
+}
+]

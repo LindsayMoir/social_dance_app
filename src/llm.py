@@ -116,6 +116,11 @@ class LLMHandler:
             "street_name", "street_type", "direction", "city", "met_area",
             "province_or_state", "postal_code", "country_id"
         }
+
+        # Keys for address deduplication responses
+        self.ADDRESS_DEDUP_KEYS = {
+            "address_id", "Label"
+        }
         self.FIELD_RE = re.compile(r'^\s*"(?P<key>[^"]+)"\s*:\s*(?P<raw>.*)$')
 
 
@@ -418,12 +423,13 @@ class LLMHandler:
         Returns:
             list[dict]: A list of dictionaries, each representing a parsed record.
         """
-        # Decide whether these are addresses or events
-        required_keys = (
-            self.ADDRESS_KEYS
-            if 'building_name' in raw_str
-            else self.EVENT_KEYS
-        )
+        # Decide whether these are addresses, events, or address deduplication
+        if 'Label' in raw_str and 'address_id' in raw_str:
+            required_keys = self.ADDRESS_DEDUP_KEYS
+        elif 'building_name' in raw_str:
+            required_keys = self.ADDRESS_KEYS
+        else:
+            required_keys = self.EVENT_KEYS
 
         records = []
         current = None
@@ -483,8 +489,10 @@ class LLMHandler:
         if "No events found" in result:
             logging.info("extract_and_parse_json(): No events found.")
             return None
-        if len(result) <= 100:
-            logging.info("extract_and_parse_json(): Result too short.")
+        # Allow shorter responses for address deduplication (typically ~50-100 chars)
+        min_length = 30 if "address_id" in result and "Label" in result else 100
+        if len(result) <= min_length:
+            logging.info(f"extract_and_parse_json(): Result too short (< {min_length} chars).")
             return None
 
         # 2) Isolate [ … ] or wrap { … } in […]
@@ -526,8 +534,10 @@ class LLMHandler:
         else:
             blob = result[start:end]
 
-        if len(blob) < 100:
-            logging.info(f"extract_and_parse_json(): Blob too short:\n{blob}")
+        # Allow shorter blobs for address deduplication 
+        min_blob_length = 30 if "address_id" in blob and "Label" in blob else 100
+        if len(blob) < min_blob_length:
+            logging.info(f"extract_and_parse_json(): Blob too short (< {min_blob_length} chars):\n{blob}")
             return None
 
         # 3) Basic cleanup
