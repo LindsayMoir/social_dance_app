@@ -12,7 +12,7 @@ You must identify and return the venue’s address in a structured JSON format.
 
 Extract the following fields:
 - address_id (always 0)
-- full_address (always NULL)
+- full_address (construct complete human-readable address. If building_name exists, format as: "building_name, street_number street_name street_type, city, province_or_state postal_code, country_id". If no building_name, format as: "street_number street_name street_type, city, province_or_state postal_code, country_id")
 - building_name (e.g., "Fisherman's Wharf" or "Puerto Vallarta Amigos")
 - street_number (e.g., "1")
 - street_name (e.g., "Dallas")
@@ -33,18 +33,18 @@ Expected Output:
 ```json
 { 
   "address_id": 0,
-  "full_address: null,
+  "full_address": "Puerto Vallarta Amigos at Fisherman's Wharf, 1 Dallas Road, Victoria, BC, CA",
   "building_name": "Puerto Vallarta Amigos at Fisherman's Wharf",
   "street_number": "1",
   "street_name": "Dallas",
   "street_type": "Road",
   "direction": null,
   "city": "Victoria",
-  "met_area: null,
+  "met_area": null,
   "province_or_state": "BC",
   "postal_code": null,
   "country_id": "CA",
-  "time_stamp: null
+  "time_stamp": null
 }
 
 Instructions:

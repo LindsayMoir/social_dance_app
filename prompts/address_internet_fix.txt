@@ -7,7 +7,7 @@ Do not infer or guess values not present in the returned internet location addre
 Address Table Schema:
 {
   "address_id": "0"
-  "full_address": "Full human-readable address combining known parts",
+  "full_address": "Full human-readable address. If building_name exists, format as: 'building_name, street_number street_name street_type, city, province_or_state postal_code, country_id'. If no building_name, format as: 'street_number street_name street_type, city, province_or_state postal_code, country_id'",
   "building_name": "If available (e.g., Puerto Vallarta Amigos)",
   "street_number": "Numeric portion of the address (e.g., 1)",
   "street_name": "Name of the street (e.g., Dallas)",

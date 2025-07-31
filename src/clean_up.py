@@ -960,7 +960,12 @@ class CleanUp:
             if not full_address:
                 continue
 
-            full_address_with_building = f"{building_name}, {full_address}" if building_name else full_address
+            # Ensure building_name is at the start of full_address if it exists
+            # Since we don't have parsed components here, use simple concatenation with proper formatting
+            if building_name and not full_address.lower().startswith(building_name.lower()):
+                full_address_with_building = f"{building_name}, {full_address}"
+            else:
+                full_address_with_building = full_address
 
             if csv_address_id and csv_address_id.lower() != "nan":
                 logging.info(f"Using provided address_id {csv_address_id} for location match '{building_name}'")

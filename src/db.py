@@ -793,6 +793,19 @@ class DatabaseHandler():
         parsed_address["street_name"] = street_name or None
         parsed_address["country_id"] = country_id or None
 
+        # Build standardized full_address from components
+        standardized_full_address = self.build_full_address(
+            building_name=parsed_address.get("building_name"),
+            street_number=parsed_address.get("street_number"),
+            street_name=parsed_address.get("street_name"),
+            street_type=parsed_address.get("street_type"),
+            city=parsed_address.get("city"),
+            province_or_state=parsed_address.get("province_or_state"),
+            postal_code=parsed_address.get("postal_code"),
+            country_id=parsed_address.get("country_id")
+        )
+        parsed_address["full_address"] = standardized_full_address
+
         # Set time_stamp for the new address
         parsed_address["time_stamp"] = datetime.now().isoformat()
 
@@ -826,6 +839,65 @@ class DatabaseHandler():
             logging.error("resolve_or_insert_address: Failed to insert or find existing address")
             return None
     
+
+    def build_full_address(self, building_name: str = None, street_number: str = None, 
+                          street_name: str = None, street_type: str = None, 
+                          city: str = None, province_or_state: str = None, 
+                          postal_code: str = None, country_id: str = None) -> str:
+        """
+        Builds a standardized full_address string from address components.
+        
+        Format: "building_name, street_number street_name street_type, city, province_or_state postal_code, country_id"
+        
+        Args:
+            building_name: Building or venue name (optional)
+            street_number: Street number
+            street_name: Street name  
+            street_type: Street type (St, Ave, Rd, etc.)
+            city: City name
+            province_or_state: Province or state
+            postal_code: Postal code
+            country_id: Country code
+            
+        Returns:
+            str: Formatted full address
+        """
+        address_parts = []
+        
+        # Add building name first if present
+        if building_name and building_name.strip():
+            address_parts.append(building_name.strip())
+        
+        # Build street address
+        street_parts = []
+        if street_number and street_number.strip():
+            street_parts.append(street_number.strip())
+        if street_name and street_name.strip():
+            street_parts.append(street_name.strip())
+        if street_type and street_type.strip():
+            street_parts.append(street_type.strip())
+        
+        if street_parts:
+            address_parts.append(' '.join(street_parts))
+        
+        # Add city
+        if city and city.strip():
+            address_parts.append(city.strip())
+        
+        # Add province/state and postal code
+        if province_or_state and province_or_state.strip():
+            if postal_code and postal_code.strip():
+                address_parts.append(f"{province_or_state.strip()} {postal_code.strip()}")
+            else:
+                address_parts.append(province_or_state.strip())
+        elif postal_code and postal_code.strip():
+            address_parts.append(postal_code.strip())
+        
+        # Add country
+        if country_id and country_id.strip():
+            address_parts.append(country_id.strip())
+        
+        return ', '.join(address_parts)
 
     def get_full_address_from_id(self, address_id: int) -> Optional[str]:
         """
@@ -2221,6 +2293,7 @@ class DatabaseHandler():
             self.clean_null_strings_in_address()
             self.dedup()
             self.reset_address_id_sequence()
+            self.update_full_address_with_building_names()
 
         # Close the database connection
         self.conn.dispose()  # Using dispose() for SQLAlchemy Engine
@@ -2385,6 +2458,74 @@ class DatabaseHandler():
                 self.execute_query("DROP TABLE IF EXISTS address_temp;")
             except:
                 pass
+            raise
+
+    def update_full_address_with_building_names(self):
+        """
+        Update existing full_address records using the standardized format.
+        
+        Rebuilds full_address for all records using the build_full_address method
+        to ensure consistency across the database.
+        
+        Returns:
+            int: Number of addresses updated
+        """
+        try:
+            logging.info("update_full_address_with_building_names(): Starting full_address standardization...")
+            
+            # Get all addresses to standardize their full_address
+            find_addresses_sql = """
+            SELECT address_id, full_address, building_name, street_number, street_name, 
+                   street_type, direction, city, province_or_state, postal_code, country_id
+            FROM address 
+            ORDER BY address_id;
+            """
+            
+            addresses_df = pd.read_sql(find_addresses_sql, self.conn)
+            
+            if addresses_df.empty:
+                logging.info("update_full_address_with_building_names(): No addresses found.")
+                return 0
+            
+            logging.info(f"update_full_address_with_building_names(): Processing {len(addresses_df)} addresses for standardization")
+            
+            updated_count = 0
+            for _, row in addresses_df.iterrows():
+                # Build standardized full_address using the new method
+                new_full_address = self.build_full_address(
+                    building_name=row['building_name'],
+                    street_number=row['street_number'],
+                    street_name=row['street_name'],
+                    street_type=row['street_type'],
+                    city=row['city'],
+                    province_or_state=row['province_or_state'],
+                    postal_code=row['postal_code'],
+                    country_id=row['country_id']
+                )
+                
+                # Only update if the new address is different from current
+                current_address = row['full_address'] or ""
+                if new_full_address != current_address:
+                    update_sql = """
+                    UPDATE address 
+                    SET full_address = :new_full_address 
+                    WHERE address_id = :address_id;
+                    """
+                    
+                    result = self.execute_query(update_sql, {
+                        'new_full_address': new_full_address,
+                        'address_id': row['address_id']
+                    })
+                    
+                    if result is not None:  # Query executed successfully
+                        updated_count += 1
+                        logging.debug(f"Updated address_id {row['address_id']}: '{current_address}' -> '{new_full_address}'")
+            
+            logging.info(f"update_full_address_with_building_names(): Successfully updated {updated_count} addresses")
+            return updated_count
+            
+        except Exception as e:
+            logging.error(f"update_full_address_with_building_names(): Error updating full_address records: {e}")
             raise
         
 
