@@ -2220,10 +2220,172 @@ class DatabaseHandler():
             self.sync_event_locations_with_address_table()
             self.clean_null_strings_in_address()
             self.dedup()
+            self.reset_address_id_sequence()
 
         # Close the database connection
         self.conn.dispose()  # Using dispose() for SQLAlchemy Engine
         logging.info("driver(): Database operations completed successfully.")
+
+    def reset_address_id_sequence(self):
+        """
+        Reset the address_id sequence to start from 1, updating all references in the events table.
+        
+        This method:
+        1. Creates a mapping of old address_ids to new sequential IDs (1, 2, 3, ...)
+        2. Updates all events table records with the new address_id values
+        3. Updates the address table with new sequential IDs
+        4. Resets the PostgreSQL sequence to continue from the max ID + 1
+        
+        Returns:
+            int: Number of addresses that were renumbered
+        """
+        try:
+            logging.info("reset_address_id_sequence(): Starting address ID sequence reset...")
+            
+            # Step 1: Get current addresses ordered by address_id and create mapping
+            get_addresses_sql = """
+            SELECT address_id, full_address, building_name, street_number, street_name, 
+                   street_type, direction, city, met_area, province_or_state, 
+                   postal_code, country_id, time_stamp
+            FROM address 
+            ORDER BY address_id;
+            """
+            
+            addresses_df = pd.read_sql(get_addresses_sql, self.conn)
+            
+            if addresses_df.empty:
+                logging.info("reset_address_id_sequence(): No addresses found to renumber.")
+                return 0
+            
+            # Create mapping from old address_id to new sequential ID
+            address_mapping = {}
+            for idx, row in addresses_df.iterrows():
+                old_id = row['address_id']
+                new_id = idx + 1  # Start from 1
+                address_mapping[old_id] = new_id
+            
+            logging.info(f"reset_address_id_sequence(): Created mapping for {len(address_mapping)} addresses")
+            
+            # Step 2: Create temporary table with new sequential IDs
+            create_temp_table_sql = """
+            CREATE TEMPORARY TABLE address_temp AS 
+            SELECT * FROM address WHERE 1=0;
+            """
+            self.execute_query(create_temp_table_sql)
+            
+            # Insert addresses with new sequential IDs
+            for idx, row in addresses_df.iterrows():
+                new_id = idx + 1
+                insert_temp_sql = """
+                INSERT INTO address_temp (address_id, full_address, building_name, street_number, 
+                                        street_name, street_type, direction, city, met_area, 
+                                        province_or_state, postal_code, country_id, time_stamp)
+                VALUES (:new_id, :full_address, :building_name, :street_number, :street_name, 
+                        :street_type, :direction, :city, :met_area, :province_or_state, 
+                        :postal_code, :country_id, :time_stamp);
+                """
+                params = {
+                    'new_id': new_id,
+                    'full_address': row['full_address'],
+                    'building_name': row['building_name'],
+                    'street_number': row['street_number'],
+                    'street_name': row['street_name'],
+                    'street_type': row['street_type'],
+                    'direction': row['direction'],
+                    'city': row['city'],
+                    'met_area': row['met_area'],
+                    'province_or_state': row['province_or_state'],
+                    'postal_code': row['postal_code'],
+                    'country_id': row['country_id'],
+                    'time_stamp': row['time_stamp']
+                }
+                self.execute_query(insert_temp_sql, params)
+            
+            # Step 3: Update events table with new address_ids
+            events_updated = 0
+            for old_id, new_id in address_mapping.items():
+                update_events_sql = """
+                UPDATE events 
+                SET address_id = :new_id 
+                WHERE address_id = :old_id;
+                """
+                result = self.execute_query(update_events_sql, {'new_id': new_id, 'old_id': old_id})
+                if result:
+                    events_updated += 1
+            
+            logging.info(f"reset_address_id_sequence(): Updated address_id in events table for {events_updated} different address IDs")
+            
+            # Step 4: Replace original address table with renumbered version
+            # Delete all from original table
+            self.execute_query("DELETE FROM address;")
+            
+            # Insert from temp table
+            copy_back_sql = """
+            INSERT INTO address (address_id, full_address, building_name, street_number, 
+                               street_name, street_type, direction, city, met_area, 
+                               province_or_state, postal_code, country_id, time_stamp)
+            SELECT address_id, full_address, building_name, street_number, street_name, 
+                   street_type, direction, city, met_area, province_or_state, 
+                   postal_code, country_id, time_stamp
+            FROM address_temp;
+            """
+            self.execute_query(copy_back_sql)
+            
+            # Step 5: Reset the PostgreSQL sequence
+            max_id = len(addresses_df)
+            
+            # First, get the actual sequence name for address_id
+            sequence_query = "SELECT pg_get_serial_sequence('address', 'address_id');"
+            sequence_result = self.execute_query(sequence_query)
+            
+            if sequence_result and sequence_result[0][0]:
+                sequence_name = sequence_result[0][0].split('.')[-1]  # Remove schema prefix if present
+                reset_sequence_sql = f"SELECT setval('{sequence_name}', {max_id}, true);"
+                self.execute_query(reset_sequence_sql)
+                logging.info(f"reset_address_id_sequence(): Reset sequence '{sequence_name}' to {max_id}")
+            else:
+                # Create proper sequence if it doesn't exist
+                create_seq_sql = f"""
+                CREATE SEQUENCE IF NOT EXISTS address_address_id_seq
+                START WITH {max_id + 1}
+                INCREMENT BY 1
+                NO MINVALUE
+                NO MAXVALUE
+                CACHE 1;
+                """
+                self.execute_query(create_seq_sql)
+                
+                # Update column default
+                alter_col_sql = """
+                ALTER TABLE address 
+                ALTER COLUMN address_id SET DEFAULT nextval('address_address_id_seq');
+                """
+                self.execute_query(alter_col_sql)
+                
+                # Set sequence ownership
+                alter_seq_sql = """
+                ALTER SEQUENCE address_address_id_seq OWNED BY address.address_id;
+                """
+                self.execute_query(alter_seq_sql)
+                
+                logging.info(f"reset_address_id_sequence(): Created new sequence 'address_address_id_seq' starting from {max_id + 1}")
+            
+            # Clean up temp table
+            self.execute_query("DROP TABLE address_temp;")
+            
+            logging.info(f"reset_address_id_sequence(): Successfully reset address_id sequence. "
+                        f"Renumbered {len(address_mapping)} addresses, sequence reset to start from {max_id + 1}")
+            
+            return len(address_mapping)
+            
+        except Exception as e:
+            logging.error(f"reset_address_id_sequence(): Error during address ID sequence reset: {e}")
+            # Clean up temp table if it exists
+            try:
+                self.execute_query("DROP TABLE IF EXISTS address_temp;")
+            except:
+                pass
+            raise
         
 
 if __name__ == "__main__":

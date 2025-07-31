@@ -1436,8 +1436,7 @@ class CleanUp:
         # Simple approach without SIMILARITY function (requires pg_trgm extension)
         sql = """
         WITH PotentialDuplicates AS (
-            SELECT a1.address_id as id1, a2.address_id as id2,
-                   a1.full_address, a1.building_name, a1.street_name, a1.city, a1.postal_code
+            SELECT a1.address_id as id1, a2.address_id as id2
             FROM address a1
             JOIN address a2 ON a1.address_id < a2.address_id
             WHERE (
@@ -1448,16 +1447,31 @@ class CleanUp:
                     AND LOWER(a1.building_name) = LOWER(a2.building_name))
             )
         ),
-        AddressGroups AS (
-            SELECT id1 as address_id FROM PotentialDuplicates
+        -- Find connected components using recursive CTE
+        Components AS (
+            -- Base case: each address starts as its own component with the minimum address_id as group_id
+            SELECT DISTINCT 
+                   LEAST(id1, id2) as group_id,
+                   GREATEST(id1, id2) as address_id
+            FROM PotentialDuplicates
+            
             UNION
-            SELECT id2 as address_id FROM PotentialDuplicates
+            
+            SELECT DISTINCT
+                   LEAST(id1, id2) as group_id, 
+                   LEAST(id1, id2) as address_id
+            FROM PotentialDuplicates
+        ),
+        FinalGroups AS (
+            SELECT MIN(group_id) as group_id, address_id
+            FROM Components
+            GROUP BY address_id
         )
-        SELECT DENSE_RANK() OVER (ORDER BY a.city, a.street_name, a.postal_code) as group_id,
+        SELECT DENSE_RANK() OVER (ORDER BY fg.group_id) as group_id,
                a.address_id, a.full_address, a.building_name, a.street_number, 
                a.street_name, a.city, a.postal_code, a.country_id
         FROM address a
-        JOIN AddressGroups ag ON a.address_id = ag.address_id
+        JOIN FinalGroups fg ON a.address_id = fg.address_id
         ORDER BY group_id, a.address_id;
         """
         
@@ -1543,7 +1557,9 @@ class CleanUp:
         df_merged = df.merge(response_df, on="address_id", how="left")
         
         # Save all results for review
-        df_merged.to_csv("output/address_dedup_results.csv", index=False)
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        df_merged.to_csv(f"output/address_dedup_results_{timestamp}.csv", index=False)
         
         # Create review CSV with canonical and duplicate addresses grouped
         review_df = df_merged[df_merged['Label'].notna()].copy()
