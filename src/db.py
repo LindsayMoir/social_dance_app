@@ -1231,14 +1231,14 @@ class DatabaseHandler():
             event["address_id"] = 0
             return event
 
-        # Quick check: see if this exact location already exists in the address table
-        existing_address_query = "SELECT address_id, full_address FROM address WHERE LOWER(full_address) = LOWER(:location)"
-        existing_result = self.execute_query(existing_address_query, {"location": location})
-        if existing_result:
-            address_id, full_address = existing_result[0]
-            event["address_id"] = address_id
-            event["location"] = full_address
-            logging.info(f"process_event_address: Found exact match for location '{location}' → address_id={address_id}")
+        # Try intelligent address lookup before calling LLM
+        quick_addr_id = self.quick_address_lookup(location)
+        if quick_addr_id:
+            full_address = self.get_full_address_from_id(quick_addr_id)
+            event["address_id"] = quick_addr_id
+            if full_address:
+                event["location"] = full_address
+            logging.info(f"process_event_address: Quick lookup found address_id={quick_addr_id} for '{location}'")
             return event
 
         # Step 1: Generate the LLM prompt
@@ -1273,6 +1273,86 @@ class DatabaseHandler():
             event["location"] = full_address
 
         return event
+
+    def quick_address_lookup(self, location: str) -> Optional[int]:
+        """
+        Attempts to find an existing address without using LLM by:
+        1. Exact string match on full_address
+        2. Regex parsing to extract street_number + street_name for exact match
+        3. Fuzzy matching on building names for the same street
+        
+        Returns address_id if found, None if LLM is needed
+        """
+        from fuzzywuzzy import fuzz
+        import re
+        
+        # Step 1: Exact string match (already implemented)
+        exact_match = self.execute_query(
+            "SELECT address_id FROM address WHERE LOWER(full_address) = LOWER(:location)",
+            {"location": location}
+        )
+        if exact_match:
+            logging.info(f"quick_address_lookup: Exact match → address_id={exact_match[0][0]}")
+            return exact_match[0][0]
+        
+        # Step 2: Parse basic components with regex
+        street_pattern = r'(\d+)\s+([A-Za-z\s]+?)(?:,|\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Way|Lane|Ln|Boulevard|Blvd))'
+        street_match = re.search(street_pattern, location, re.IGNORECASE)
+        
+        if street_match:
+            street_number = street_match.group(1).strip()
+            street_name_raw = street_match.group(2).strip()
+            
+            # Clean street name (remove common suffixes if they got included)
+            street_name = re.sub(r'\b(Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Way|Lane|Ln|Boulevard|Blvd)\b', 
+                               '', street_name_raw, flags=re.IGNORECASE).strip()
+            
+            # Step 3: Find addresses with same street_number + street_name
+            street_matches = self.execute_query("""
+                SELECT address_id, building_name, full_address 
+                FROM address 
+                WHERE LOWER(street_number) = LOWER(:street_number) 
+                AND LOWER(street_name) = LOWER(:street_name)
+            """, {"street_number": street_number, "street_name": street_name})
+            
+            if street_matches:
+                # Step 4: If only one match and no building name in location, use it
+                if len(street_matches) == 1:
+                    addr_id, building_name, full_addr = street_matches[0]
+                    if not building_name or building_name.strip() == "":
+                        logging.info(f"quick_address_lookup: Street match (no building) → address_id={addr_id}")
+                        return addr_id
+                
+                # Step 5: Try fuzzy matching on building names
+                building_pattern = r'^([^,\d]+?)(?:,|\s+\d+)'  # Text before first comma or number
+                building_match = re.search(building_pattern, location.strip())
+                
+                if building_match:
+                    location_building = building_match.group(1).strip()
+                    
+                    best_score = 0
+                    best_addr_id = None
+                    
+                    for addr_id, existing_building, full_addr in street_matches:
+                        if existing_building and existing_building.strip():
+                            score = fuzz.ratio(location_building.lower(), existing_building.lower())
+                            if score >= 85 and score > best_score:
+                                best_score = score
+                                best_addr_id = addr_id
+                    
+                    if best_addr_id:
+                        logging.info(f"quick_address_lookup: Fuzzy building match (score={best_score}) → address_id={best_addr_id}")
+                        return best_addr_id
+        
+        # Step 6: Last resort - fuzzy match on full addresses for very similar ones
+        all_addresses = self.execute_query("SELECT address_id, full_address FROM address")
+        for addr_id, full_addr in all_addresses or []:
+            if full_addr and fuzz.ratio(location.lower(), full_addr.lower()) >= 90:
+                logging.info(f"quick_address_lookup: Fuzzy full address match → address_id={addr_id}")
+                return addr_id
+        
+        logging.info(f"quick_address_lookup: No match found for '{location}', LLM required")
+        return None
     
 
     def sync_event_locations_with_address_table(self):
