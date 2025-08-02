@@ -110,6 +110,9 @@ class DatabaseHandler():
             .reset_index()
         )
         logging.info(f"__init__(): urls_gb has {len(self.urls_gb)} rows and {len(self.urls_gb.columns)} columns.")
+        
+        # Create raw_locations table for caching location strings
+        self.create_raw_locations_table()
 
 
     def set_llm_handler(self, llm_handler):
@@ -1231,9 +1234,21 @@ class DatabaseHandler():
             event["address_id"] = 0
             return event
 
-        # Try intelligent address lookup before calling LLM
+        # STEP 1: Check raw_locations cache (fastest - exact string match)
+        cached_addr_id = self.lookup_raw_location(location)
+        if cached_addr_id:
+            full_address = self.get_full_address_from_id(cached_addr_id)
+            event["address_id"] = cached_addr_id
+            if full_address:
+                event["location"] = full_address
+            logging.info(f"process_event_address: Cache hit for '{location}' → address_id={cached_addr_id}")
+            return event
+
+        # STEP 2: Try intelligent address parsing (fuzzy matching, regex)
         quick_addr_id = self.quick_address_lookup(location)
         if quick_addr_id:
+            # Cache this mapping for future use
+            self.cache_raw_location(location, quick_addr_id)
             full_address = self.get_full_address_from_id(quick_addr_id)
             event["address_id"] = quick_addr_id
             if full_address:
@@ -1241,13 +1256,14 @@ class DatabaseHandler():
             logging.info(f"process_event_address: Quick lookup found address_id={quick_addr_id} for '{location}'")
             return event
 
-        # Step 1: Generate the LLM prompt
+        # STEP 3: LLM processing (last resort)
+        # Generate the LLM prompt
         prompt = self.llm_handler.generate_prompt("address_fix", location, "address_internet_fix")
 
-        # Step 2: Query the LLM
+        # Query the LLM
         llm_response = self.llm_handler.query_llm(event.get("url", "").strip(), prompt)
 
-        # Step 3: Parse the LLM response into a usable dict
+        # Parse the LLM response into a usable dict
         parsed_results = self.llm_handler.extract_and_parse_json(llm_response, "address_fix")
         if not parsed_results or not isinstance(parsed_results, list) or not isinstance(parsed_results[0], dict):
             logging.warning("process_event_address: Could not parse address from LLM response")
@@ -1265,6 +1281,9 @@ class DatabaseHandler():
             logging.warning("process_event_address: Failed to resolve or insert address")
             event["address_id"] = 0
             return event
+
+        # STEP 3: Cache the raw location → address_id mapping for future use
+        self.cache_raw_location(location, address_id)
 
         # Step 5: Force consistency: always use address.full_address
         full_address = self.get_full_address_from_id(address_id)
@@ -1353,6 +1372,71 @@ class DatabaseHandler():
         
         logging.info(f"quick_address_lookup: No match found for '{location}', LLM required")
         return None
+
+    def cache_raw_location(self, raw_location: str, address_id: int):
+        """
+        Cache a raw location string to address_id mapping for fast future lookups.
+        Uses INSERT OR IGNORE to avoid duplicate key errors.
+        """
+        try:
+            insert_query = """
+                INSERT OR IGNORE INTO raw_locations (raw_location, address_id, created_at)
+                VALUES (:raw_location, :address_id, :created_at)
+            """
+            result = self.execute_query(insert_query, {
+                "raw_location": raw_location,
+                "address_id": address_id,
+                "created_at": datetime.now()
+            })
+            if result is not None:  # INSERT succeeded
+                logging.info(f"cache_raw_location: Cached '{raw_location}' → address_id={address_id}")
+            else:
+                logging.debug(f"cache_raw_location: Mapping already exists for '{raw_location}'")
+        except Exception as e:
+            logging.warning(f"cache_raw_location: Failed to cache '{raw_location}': {e}")
+
+    def lookup_raw_location(self, raw_location: str) -> Optional[int]:
+        """
+        Look up a raw location string in the cache to get its address_id.
+        Returns address_id if found, None if not cached.
+        """
+        try:
+            result = self.execute_query(
+                "SELECT address_id FROM raw_locations WHERE raw_location = :raw_location",
+                {"raw_location": raw_location}
+            )
+            if result:
+                address_id = result[0][0]
+                logging.info(f"lookup_raw_location: Cache hit for '{raw_location}' → address_id={address_id}")
+                return address_id
+            return None
+        except Exception as e:
+            logging.warning(f"lookup_raw_location: Cache lookup failed for '{raw_location}': {e}")
+            return None
+
+    def create_raw_locations_table(self):
+        """
+        Create the raw_locations table for caching location string to address_id mappings.
+        """
+        create_table_query = """
+            CREATE TABLE IF NOT EXISTS raw_locations (
+                raw_location_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                raw_location TEXT NOT NULL UNIQUE,
+                address_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (address_id) REFERENCES address(address_id)
+            )
+        """
+        try:
+            self.execute_query(create_table_query)
+            logging.info("create_raw_locations_table: Table created successfully")
+            
+            # Create index for faster lookups
+            index_query = "CREATE INDEX IF NOT EXISTS idx_raw_location ON raw_locations(raw_location)"
+            self.execute_query(index_query)
+            logging.info("create_raw_locations_table: Index created successfully")
+        except Exception as e:
+            logging.error(f"create_raw_locations_table: Failed to create table: {e}")
     
 
     def sync_event_locations_with_address_table(self):
