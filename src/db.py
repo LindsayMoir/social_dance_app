@@ -1096,13 +1096,34 @@ class DatabaseHandler():
         Returns:
             pd.DataFrame: Filtered DataFrame with only relevant and recent events.
         """
+        logging.info(f"_filter_events: Input DataFrame has {len(df)} events")
+        
         important_cols = ['start_date', 'end_date', 'start_time', 'end_time', 'location', 'description']
+        
+        # Log missing columns
+        missing_cols = [col for col in important_cols if col not in df.columns]
+        if missing_cols:
+            logging.warning(f"_filter_events: Missing important columns: {missing_cols}")
+        
         df[important_cols] = df[important_cols].replace(r'^\s*$', pd.NA, regex=True)
+        rows_before_dropna = len(df)
         df = df.dropna(subset=important_cols, how='all')
+        rows_after_dropna = len(df)
+        
+        if rows_before_dropna != rows_after_dropna:
+            logging.info(f"_filter_events: Dropped {rows_before_dropna - rows_after_dropna} rows with all important columns empty")
 
         df['end_date'] = pd.to_datetime(df['end_date'], errors='coerce')
         cutoff = pd.Timestamp.now() - pd.Timedelta(days=self.config['clean_up']['old_events'])
-        return df[df['end_date'] >= cutoff].reset_index(drop=True)
+        rows_before_date_filter = len(df)
+        filtered_df = df[df['end_date'] >= cutoff].reset_index(drop=True)
+        rows_after_date_filter = len(filtered_df)
+        
+        if rows_before_date_filter != rows_after_date_filter:
+            logging.info(f"_filter_events: Dropped {rows_before_date_filter - rows_after_date_filter} events older than {cutoff.date()}")
+        
+        logging.info(f"_filter_events: Output DataFrame has {len(filtered_df)} events")
+        return filtered_df
     
     
     def update_event(self, event_identifier, new_data, best_url):
@@ -1210,6 +1231,16 @@ class DatabaseHandler():
             event["address_id"] = 0
             return event
 
+        # Quick check: see if this exact location already exists in the address table
+        existing_address_query = "SELECT address_id, full_address FROM address WHERE LOWER(full_address) = LOWER(:location)"
+        existing_result = self.execute_query(existing_address_query, {"location": location})
+        if existing_result:
+            address_id, full_address = existing_result[0]
+            event["address_id"] = address_id
+            event["location"] = full_address
+            logging.info(f"process_event_address: Found exact match for location '{location}' → address_id={address_id}")
+            return event
+
         # Step 1: Generate the LLM prompt
         prompt = self.llm_handler.generate_prompt("address_fix", location, "address_internet_fix")
 
@@ -1228,6 +1259,12 @@ class DatabaseHandler():
 
         # Step 4: Get or insert address_id
         address_id = self.resolve_or_insert_address(parsed_address)
+        
+        # Ensure we got a valid address_id
+        if not address_id:
+            logging.warning("process_event_address: Failed to resolve or insert address")
+            event["address_id"] = 0
+            return event
 
         # Step 5: Force consistency: always use address.full_address
         full_address = self.get_full_address_from_id(address_id)

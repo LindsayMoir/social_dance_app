@@ -437,6 +437,32 @@ class LLMHandler:
         if raw_str.startswith("[") and raw_str.endswith("]"):
             raw_str = raw_str[1:-1].strip()
 
+        # Check if this is compact JSON (single line with multiple key-value pairs)
+        # Look for pattern: {"key":"value","key2":"value2",...}
+        if (raw_str.startswith("{") and raw_str.endswith("}") and 
+            raw_str.count('\n') == 0 and raw_str.count('":') > 1):
+            logging.info("line_based_parse(): Detected compact JSON, reformatting with line breaks")
+            
+            # Reformat compact JSON to have line breaks
+            formatted = "{\n"
+            # Split on '","' to separate key-value pairs
+            pairs = raw_str[1:-1].split('","')
+            for i, pair in enumerate(pairs):
+                if i == 0:
+                    # First pair: remove leading quote
+                    pair = pair.lstrip('"')
+                if i == len(pairs) - 1:
+                    # Last pair: remove trailing quote and don't add comma
+                    pair = pair.rstrip('"')
+                    formatted += f'  "{pair}"\n'
+                else:
+                    # Middle pairs: add quotes back and comma
+                    formatted += f'  "{pair}",\n'
+            formatted += "}"
+            
+            logging.debug(f"line_based_parse(): Reformatted JSON:\n{formatted}")
+            raw_str = formatted
+
         for line in raw_str.splitlines():
             line = line.strip()
 

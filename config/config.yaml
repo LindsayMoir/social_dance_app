@@ -34,7 +34,7 @@ crawling:
   max_website_urls: 10
   prompt_max_length: 50000
   scroll_depth: 2
-  urls_run_limit: 500
+  urls_run_limit: 1500
 date_range:
   days_ahead: 365
   months: 3
@@ -88,9 +88,9 @@ prompts:
   address_0_null_loc_fix: prompts/address_0_null_location_fix_prompt.txt
   address_fix: prompts/address_fix_prompt.txt
   address_internet_fix: prompts/address_internet_fix.txt
-  dedup_llm_address: prompts/dedup_llm_address.txt
   chatbot_instructions: prompts/chatbot_instructions.txt
   dedup: prompts/dedup_prompt.txt
+  dedup_llm_address: prompts/dedup_llm_address.txt
   default: prompts/default.txt
   djdancingdean: prompts/djdancingdean_prompt.txt
   event_name_location_fix: prompts/event_name_location_fix_prompt.txt

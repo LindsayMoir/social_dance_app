@@ -308,7 +308,11 @@ class EventSpider(scrapy.Spider):
         events_df = self.get_calendar_events(calendar_id)
         if not events_df.empty:
             logging.info(f"def process_calendar_id(): Found {len(events_df)} events for calendar_id: {calendar_id}")
+            logging.info(f"def process_calendar_id(): Event columns: {list(events_df.columns)}")
+            logging.info(f"def process_calendar_id(): Sample event data:\n{events_df.head(1).to_dict('records')}")
             db_handler.write_events_to_db(events_df, calendar_id, calendar_url, source, keywords)
+        else:
+            logging.warning(f"def process_calendar_id(): No events found for calendar_id: {calendar_id}")
 
 
     def get_calendar_events(self, calendar_id):
