@@ -379,18 +379,48 @@ class DatabaseHandler():
 
                 if result.returns_rows:
                     rows = result.fetchall()
-                    logging.info(
-                        "execute_query(): query returned %d rows", 
-                        len(rows)
-                    )
+                    # Extract query type and key info for logging
+                    query_type = query.strip().split()[0].upper()
+                    if query_type == "SELECT":
+                        # Extract table name from SELECT query
+                        table_match = re.search(r'FROM\s+(\w+)', query, re.IGNORECASE)
+                        table_name = table_match.group(1) if table_match else "unknown"
+                        logging.info(
+                            "execute_query(): SELECT from %s returned %d rows", 
+                            table_name, len(rows)
+                        )
+                    else:
+                        logging.info(
+                            "execute_query(): %s query returned %d rows", 
+                            query_type, len(rows)
+                        )
                     return rows
                 else:
                     affected = result.rowcount
                     connection.commit()
-                    logging.info(
-                        "execute_query(): non-select query affected %d rows", 
-                        affected
-                    )
+                    # Extract query type for non-select queries
+                    query_type = query.strip().split()[0].upper()
+                    if query_type == "INSERT":
+                        # Extract table name from INSERT query
+                        table_match = re.search(r'INSERT\s+(?:INTO\s+)?(\w+)', query, re.IGNORECASE)
+                        table_name = table_match.group(1) if table_match else "unknown"
+                        logging.info(
+                            "execute_query(): INSERT into %s affected %d rows", 
+                            table_name, affected
+                        )
+                    elif query_type == "UPDATE":
+                        # Extract table name from UPDATE query
+                        table_match = re.search(r'UPDATE\s+(\w+)', query, re.IGNORECASE)
+                        table_name = table_match.group(1) if table_match else "unknown"
+                        logging.info(
+                            "execute_query(): UPDATE %s affected %d rows", 
+                            table_name, affected
+                        )
+                    else:
+                        logging.info(
+                            "execute_query(): %s query affected %d rows", 
+                            query_type, affected
+                        )
                     return affected
 
         except SQLAlchemyError as e:
@@ -1376,22 +1406,21 @@ class DatabaseHandler():
     def cache_raw_location(self, raw_location: str, address_id: int):
         """
         Cache a raw location string to address_id mapping for fast future lookups.
-        Uses INSERT OR IGNORE to avoid duplicate key errors.
+        Uses PostgreSQL ON CONFLICT to avoid duplicate key errors.
         """
         try:
+            # PostgreSQL syntax: INSERT ... ON CONFLICT DO NOTHING
             insert_query = """
-                INSERT OR IGNORE INTO raw_locations (raw_location, address_id, created_at)
+                INSERT INTO raw_locations (raw_location, address_id, created_at)
                 VALUES (:raw_location, :address_id, :created_at)
+                ON CONFLICT (raw_location) DO NOTHING
             """
             result = self.execute_query(insert_query, {
                 "raw_location": raw_location,
                 "address_id": address_id,
                 "created_at": datetime.now()
             })
-            if result is not None:  # INSERT succeeded
-                logging.info(f"cache_raw_location: Cached '{raw_location}' → address_id={address_id}")
-            else:
-                logging.debug(f"cache_raw_location: Mapping already exists for '{raw_location}'")
+            logging.info(f"cache_raw_location: Cached '{raw_location}' → address_id={address_id}")
         except Exception as e:
             logging.warning(f"cache_raw_location: Failed to cache '{raw_location}': {e}")
 
@@ -1418,9 +1447,10 @@ class DatabaseHandler():
         """
         Create the raw_locations table for caching location string to address_id mappings.
         """
+        # PostgreSQL syntax (not SQLite)
         create_table_query = """
             CREATE TABLE IF NOT EXISTS raw_locations (
-                raw_location_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                raw_location_id SERIAL PRIMARY KEY,
                 raw_location TEXT NOT NULL UNIQUE,
                 address_id INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1437,6 +1467,7 @@ class DatabaseHandler():
             logging.info("create_raw_locations_table: Index created successfully")
         except Exception as e:
             logging.error(f"create_raw_locations_table: Failed to create table: {e}")
+            logging.error(f"create_raw_locations_table: SQL was: {create_table_query}")
     
 
     def sync_event_locations_with_address_table(self):
@@ -2495,6 +2526,19 @@ class DatabaseHandler():
             self.dedup()
             self.reset_address_id_sequence()
             self.update_full_address_with_building_names()
+            
+            # Fix events with address_id = 0 using existing deduplication logic
+            if hasattr(self, 'llm_handler') and self.llm_handler:
+                logging.info("driver(): Starting fix_problem_events for address_id = 0 events via LLMHandler")
+                self.llm_handler.fix_problem_events(dry_run=False)
+                logging.info("driver(): Completed fix_problem_events via LLMHandler")
+            else:
+                # Fallback: Create our own LLMHandler and deduplicator
+                logging.info("driver(): No LLMHandler available, creating temporary instance for fix_problem_events")
+                from llm import LLMHandler
+                temp_llm_handler = LLMHandler(config_path='config/config.yaml')
+                temp_llm_handler.fix_problem_events(dry_run=False)
+                logging.info("driver(): Completed fix_problem_events via temporary LLMHandler")
 
         # Close the database connection
         self.conn.dispose()  # Using dispose() for SQLAlchemy Engine

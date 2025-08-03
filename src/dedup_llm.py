@@ -580,7 +580,12 @@ class DeduplicationHandler:
             logging.warning("handle_long_event_name: Parsed result is empty or None")
             return
         
-        address_id = int(self.db_handler.resolve_or_insert_address(parsed))
+        address_id = self.db_handler.resolve_or_insert_address(parsed)
+        if address_id is None:
+            logging.warning("handle_long_event_name: Failed to resolve or insert address, setting address_id = 0")
+            address_id = 0
+        else:
+            address_id = int(address_id)
         logging.info(f"handle_long_event_name: Generated address_id = {address_id}")
         
         for _, row in group.iterrows():
@@ -661,7 +666,12 @@ class DeduplicationHandler:
             logging.warning("handle_llm_address_fix: Parsed result is empty or None")
             return
         
-        address_id = int(self.db_handler.resolve_or_insert_address(parsed))
+        address_id = self.db_handler.resolve_or_insert_address(parsed)
+        if address_id is None:
+            logging.warning("handle_llm_address_fix: Failed to resolve or insert address, setting address_id = 0")
+            address_id = 0
+        else:
+            address_id = int(address_id)
         logging.info(f"handle_llm_address_fix: Generated address_id = {address_id}")
         
         for _, row in group.iterrows():
@@ -710,7 +720,12 @@ class DeduplicationHandler:
             logging.warning("handle_fallback_llm: Parsed result is empty or None")
             return
         
-        address_id = int(self.db_handler.resolve_or_insert_address(parsed))
+        address_id = self.db_handler.resolve_or_insert_address(parsed)
+        if address_id is None:
+            logging.warning("handle_fallback_llm: Failed to resolve or insert address, setting address_id = 0")
+            address_id = 0
+        else:
+            address_id = int(address_id)
         logging.info(f"handle_fallback_llm: Generated address_id = {address_id}")
         
         for _, row in group.iterrows():
