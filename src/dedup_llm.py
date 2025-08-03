@@ -423,7 +423,7 @@ class DeduplicationHandler:
                 OR address_id = 0
                 OR location IS NULL 
                 OR LENGTH(TRIM(location)) < 20
-                OR LENGTH(event_name) > 100
+                OR LENGTH(COALESCE(event_name, '')) > 100
         """
         df = pd.read_sql(text(sql), self.engine)
 
@@ -456,9 +456,9 @@ class DeduplicationHandler:
             event_ids = [int(eid) for eid in group['event_id'].tolist()]
             processed_event_ids.update(event_ids)
 
-            if len(event_name) > 100:
+            if event_name is not None and pd.notna(event_name) and len(str(event_name)) > 100:
                 logging.info(f"Group {i+1}: Event name exceeds 100 characters. Calling handle_long_event_name")
-                short_name = " ".join(event_name.split()[:5])
+                short_name = " ".join(str(event_name).split()[:5])
                 self.handle_long_event_name(short_name, event_name, description, group, dry_run, fix_events, fix_addresses)
                 continue
 
