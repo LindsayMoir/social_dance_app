@@ -5,6 +5,17 @@ import logging
 # Load environment variables from .env file
 load_dotenv()
 
+# Set up logging
+script_name = os.path.splitext(os.path.basename(__file__))[0]
+logging_file = f"logs/{script_name}_log.txt"
+os.makedirs("logs", exist_ok=True)
+logging.basicConfig(
+    filename=logging_file,
+    filemode='a',
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
 def get_credentials(organization):
     """
     Retrieves credentials for a given organization from environment variables.
