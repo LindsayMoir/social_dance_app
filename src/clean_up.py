@@ -1150,6 +1150,14 @@ class CleanUp:
                     total_events_updated += num_events_updated or 0
                     logging.info(f"apply_deduplication_response(): Updated {num_events_updated} events from {dup_id} to {canonical_id}")
 
+                    # Update raw_locations to point to canonical address before deleting
+                    logging.info(f"apply_deduplication_response(): Updating raw_locations references from {dup_id} to {canonical_id}")
+                    num_raw_locations_updated = self.db_handler.execute_query(
+                        "UPDATE raw_locations SET address_id = :canonical WHERE address_id = :duplicate",
+                        {"canonical": canonical_id, "duplicate": dup_id}
+                    )
+                    logging.info(f"apply_deduplication_response(): Updated {num_raw_locations_updated} raw_locations from {dup_id} to {canonical_id}")
+
                     logging.info(f"apply_deduplication_response(): Deleting address_id {dup_id} from address table")
                     self.db_handler.execute_query("DELETE FROM address WHERE address_id = :id", {"id": dup_id})
 
@@ -1599,6 +1607,14 @@ class CleanUp:
                     "UPDATE events SET address_id = :canonical, location = :address WHERE address_id = :duplicate",
                     {"canonical": canonical_id, "address": canonical_address, "duplicate": addr_id}
                 )
+                
+                # Update raw_locations to point to canonical address before deleting
+                logging.info(f"Updating raw_locations references from {addr_id} to {canonical_id}")
+                num_raw_locations_updated = self.db_handler.execute_query(
+                    "UPDATE raw_locations SET address_id = :canonical WHERE address_id = :duplicate",
+                    {"canonical": canonical_id, "duplicate": addr_id}
+                )
+                logging.info(f"Updated {num_raw_locations_updated} raw_locations from {addr_id} to {canonical_id}")
                 
                 # Delete duplicate address
                 self.db_handler.execute_query("DELETE FROM address WHERE address_id = :id", {"id": addr_id})
