@@ -105,6 +105,43 @@ def dummy_post_process(step: str) -> bool:
     return True
 
 # ------------------------
+# TASK: COPY LOG FILES
+# ------------------------
+@task
+def copy_log_files():
+    """Move all log files to a timestamped folder in logs directory."""
+    # Create timestamp for folder name
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_folder = f"logs/logs_{timestamp}"
+    
+    # Create the archive folder
+    os.makedirs(archive_folder, exist_ok=True)
+    logger.info(f"def copy_log_files(): Created archive folder: {archive_folder}")
+    
+    # Get all log files from logs directory
+    logs_dir = "logs"
+    if not os.path.exists(logs_dir):
+        logger.warning(f"def copy_log_files(): Logs directory {logs_dir} does not exist.")
+        return True
+    
+    log_files_moved = 0
+    for filename in os.listdir(logs_dir):
+        if filename.endswith('.log') or filename.endswith('.txt'):
+            # Only move files, not subdirectories
+            source_path = os.path.join(logs_dir, filename)
+            if os.path.isfile(source_path):
+                dest_path = os.path.join(archive_folder, filename)
+                try:
+                    shutil.move(source_path, dest_path)
+                    logger.info(f"def copy_log_files(): Moved {filename} to {archive_folder}")
+                    log_files_moved += 1
+                except Exception as e:
+                    logger.error(f"def copy_log_files(): Failed to move {filename}: {e}")
+    
+    logger.info(f"def copy_log_files(): Successfully moved {log_files_moved} log files to {archive_folder}")
+    return True
+
+# ------------------------
 # TASK: COPY, DROP, AND CREATE EVENTS TABLE
 # ------------------------
 @task
@@ -746,6 +783,7 @@ def send_text_message(message: str):
 # PIPELINE EXECUTION
 # ------------------------
 PIPELINE_STEPS = [
+    ("copy_log_files", copy_log_files),
     ("copy_drop_create_events", copy_drop_create_events),
     ("emails", emails_step),
     ("gs", gs_step),
