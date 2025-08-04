@@ -203,11 +203,11 @@ def pre_process_gs():
 @task
 def run_gs_script():
     try:
-        result = subprocess.run([sys.executable, "src/gs.py"], check=True, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "src/gs.py"], check=True)
         logger.info("def run_gs_script(): gs.py executed successfully.")
-        return result.stdout
+        return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"gs.py failed with error: {e.stderr}"
+        error_message = f"gs.py failed with return code: {e.returncode}"
         logger.error(f"def run_gs_script(): {error_message}")
         raise Exception(error_message)
 
@@ -264,11 +264,11 @@ def pre_process_ebs():
 @task
 def run_ebs_script():
     try:
-        result = subprocess.run([sys.executable, "src/ebs.py"], check=True, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "src/ebs.py"], check=True)
         logger.info("def run_ebs_script(): ebs.py executed successfully.")
-        return result.stdout
+        return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"ebs.py failed with error: {e.stderr}"
+        error_message = f"ebs.py failed with return code: {e.returncode}"
         logger.error(f"def run_ebs_script(): {error_message}")
         raise Exception(error_message)
 

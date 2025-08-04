@@ -1365,12 +1365,11 @@ class DatabaseHandler():
             """, {"street_number": street_number, "street_name": street_name})
             
             if street_matches:
-                # Step 4: If only one match and no building name in location, use it
+                # Step 4: If only one match, use it regardless of building name
                 if len(street_matches) == 1:
                     addr_id, building_name, full_addr = street_matches[0]
-                    if not building_name or building_name.strip() == "":
-                        logging.info(f"quick_address_lookup: Street match (no building) → address_id={addr_id}")
-                        return addr_id
+                    logging.info(f"quick_address_lookup: Single street match → address_id={addr_id}")
+                    return addr_id
                 
                 # Step 5: Try fuzzy matching on building names
                 building_pattern = r'^([^,\d]+?)(?:,|\s+\d+)'  # Text before first comma or number
