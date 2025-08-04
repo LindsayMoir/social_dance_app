@@ -2785,7 +2785,8 @@ if __name__ == "__main__":
         filename=logging_file,
         filemode='a',  # Changed to append mode to preserve logs
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        force=True
     )
     logging.info("\n\ndb.py starting...")
 

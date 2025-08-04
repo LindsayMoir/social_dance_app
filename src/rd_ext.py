@@ -535,7 +535,8 @@ if __name__ == "__main__":
         filemode='a',
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt='%Y-%m-%d %H:%M:%S'
+        datefmt='%Y-%m-%d %H:%M:%S',
+        force=True
     )
     logging.info("\n\nrd_ext.py starting...")
 

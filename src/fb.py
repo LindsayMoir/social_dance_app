@@ -30,7 +30,8 @@ Usage Example:
             filemode='a',
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
-            datefmt='%Y-%m-%d %H:%M:%S'
+            datefmt='%Y-%m-%d %H:%M:%S',
+            force=True
         )
 
         # Initialize dependencies
@@ -100,7 +101,8 @@ logging.basicConfig(
     filemode='a',
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    force=True
     )
 logging.info("\n\nfb.py starting...")
 
@@ -964,7 +966,8 @@ if __name__ == "__main__":
         filemode='a',
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt='%Y-%m-%d %H:%M:%S'
+        datefmt='%Y-%m-%d %H:%M:%S',
+        force=True
     )
 
     # Start time

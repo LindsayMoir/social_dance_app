@@ -196,14 +196,15 @@ if __name__ == "__main__":
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-     # Build log_file name
+    # Build log_file name
     script_name = os.path.splitext(os.path.basename(__file__))[0]
     logging_file = f"logs/{script_name}_log.txt"
     logging.basicConfig(
         filename=logging_file,
         filemode='a',
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        force=True
     )
 
     start_time = datetime.now()

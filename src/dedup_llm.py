@@ -71,7 +71,8 @@ class DeduplicationHandler:
             filemode='a',
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-            datefmt='%Y-%m-%d %H:%M:%S'
+            datefmt='%Y-%m-%d %H:%M:%S',
+            force=True
         )
         logging.info("\n\ndedup_llm.py starting...")
         logging.info(f"def _setup_logging(): Logging configured and run started at time: {datetime.now()}")

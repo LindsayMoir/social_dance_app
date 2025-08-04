@@ -54,7 +54,8 @@ logging.basicConfig(
     filemode='a', 
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    force=True
 )
 logger = logging.getLogger(__name__)
 logger.info("\n\nStarting images.py ...")
