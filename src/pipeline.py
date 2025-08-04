@@ -307,11 +307,11 @@ def pre_process_emails():
 @task
 def run_emails_script():
     try:
-        result = subprocess.run([sys.executable, "src/emails.py"], check=True, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "src/emails.py"], check=True)
         logger.info("def run_emails_script(): emails.py executed successfully.")
-        return result.stdout
+        return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"emails.py failed with error: {e.stderr}"
+        error_message = f"emails.py failed with return code: {e.returncode}"
         logger.error(f"def run_emails_script(): {error_message}")
         raise Exception(error_message)
 
@@ -350,11 +350,11 @@ def pre_process_rd_ext():
 @task
 def run_rd_ext_script():
     try:
-        result = subprocess.run([sys.executable, "src/rd_ext.py"], check=True, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "src/rd_ext.py"], check=True)
         logger.info("def run_rd_ext_script(): rd_ext.py executed successfully.")
-        return result.stdout
+        return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"rd_ext.py failed with error: {e.stderr}"
+        error_message = f"rd_ext.py failed with return code: {e.returncode}"
         logger.error(f"def run_rd_ext_script(): {error_message}")
         raise Exception(error_message)
 
@@ -386,11 +386,11 @@ def pre_process_scraper():
 @task
 def run_scraper_script():
     try:
-        result = subprocess.run([sys.executable, "src/scraper.py"], check=True, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "src/scraper.py"], check=True)
         logger.info("def run_scraper_script(): scraper.py executed successfully.")
-        return result.stdout
+        return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"scraper.py failed with error: {e.stderr}"
+        error_message = f"scraper.py failed with return code: {e.returncode}"
         logger.error(f"def run_scraper_script(): {error_message}")
         raise Exception(error_message)
 
@@ -419,11 +419,11 @@ def scraper_step():
 @task
 def run_fb_script():
     try:
-        result = subprocess.run([sys.executable, "src/fb.py"], check=True, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "src/fb.py"], check=True)
         logger.info("def run_fb_script(): fb.py executed successfully.")
-        return result.stdout
+        return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"fb.py failed with error: {e.stderr}"
+        error_message = f"fb.py failed with return code: {e.returncode}"
         logger.error(f"def run_fb_script(): {error_message}")
         raise Exception(error_message)
 
@@ -453,14 +453,12 @@ def run_images_script():
     try:
         result = subprocess.run(
             [sys.executable, "src/images.py"],
-            check=True,
-            capture_output=True,
-            text=True
+            check=True
         )
         logger.info("def run_images_script(): images.py executed successfully.")
-        return result.stdout
+        return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"images.py failed with error: {e.stderr}"
+        error_message = f"images.py failed with return code: {e.returncode}"
         logger.error(f"def run_images_script(): {error_message}")
         raise Exception(error_message)
 
@@ -485,14 +483,12 @@ def run_read_pdfs_script():
     try:
         result = subprocess.run(
             [sys.executable, "src/read_pdfs.py"],
-            check=True,
-            capture_output=True,
-            text=True
+            check=True
         )
         logger.info("def run_read_pdfs_script(): read_pdfs.py executed successfully.")
-        return result.stdout
+        return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"read_pdfs.py failed with error: {e.stderr}"
+        error_message = f"read_pdfs.py failed with return code: {e.returncode}"
         logger.error(f"def run_read_pdfs_script(): {error_message}")
         raise Exception(error_message)
 
@@ -515,11 +511,11 @@ def read_pdfs_step():
 @task
 def run_db_script():
     try:
-        result = subprocess.run([sys.executable, "src/db.py"], check=True, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "src/db.py"], check=True)
         logger.info("def run_db_script(): db.py executed successfully.")
-        return result.stdout
+        return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"db.py failed with error: {e.stderr}"
+        error_message = f"db.py failed with return code: {e.returncode}"
         logger.error(f"def run_db_script(): {error_message}")
         raise Exception(error_message)
 
@@ -571,11 +567,11 @@ def backup_db_step():
 @task
 def run_clean_up_script():
     try:
-        result = subprocess.run([sys.executable, "src/clean_up.py"], check=True, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "src/clean_up.py"], check=True)
         logger.info("def run_clean_up_script(): clean_up.py executed successfully.")
-        return result.stdout
+        return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"clean_up.py failed with error: {e.stderr}"
+        error_message = f"clean_up.py failed with return code: {e.returncode}"
         logger.error(f"def run_clean_up_script(): {error_message}")
         raise Exception(error_message)
 
@@ -598,11 +594,11 @@ def clean_up_step():
 @task
 def run_dedup_llm_script():
     try:
-        result = subprocess.run([sys.executable, "src/dedup_llm.py"], check=True, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "src/dedup_llm.py"], check=True)
         logger.info("def run_dedup_llm_script(): dedup_llm.py executed successfully.")
-        return result.stdout
+        return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"dedup_llm.py failed with error: {e.stderr}"
+        error_message = f"dedup_llm.py failed with return code: {e.returncode}"
         logger.error(f"def run_dedup_llm_script(): {error_message}")
         raise Exception(error_message)
 
@@ -650,11 +646,11 @@ def pre_process_irrelevant_rows():
 @task
 def run_irrelevant_rows_script():
     try:
-        result = subprocess.run([sys.executable, "src/irrelevant_rows.py"], check=True, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "src/irrelevant_rows.py"], check=True)
         logger.info("def run_irrelevant_rows_script(): irrelevant_rows.py executed successfully.")
-        return result.stdout
+        return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"irrelevant_rows.py failed with error: {e.stderr}"
+        error_message = f"irrelevant_rows.py failed with return code: {e.returncode}"
         logger.error(f"def run_irrelevant_rows_script(): {error_message}")
         raise Exception(error_message)
 
