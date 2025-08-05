@@ -615,11 +615,21 @@ def post_process_dedup_llm() -> bool:
     if 'Label' not in df.columns:
         logger.error("def post_process_dedup_llm(): 'Label' column not found in output CSV.")
         return False
-    if (df['Label'] == 0).all():
-        logger.info("def post_process_dedup_llm(): 'Label' column is all zeros.")
+    
+    # Check if the deduplication process completed successfully
+    # The presence of both 0s and 1s in Label column is expected (0=unique, 1=duplicate)
+    total_rows = len(df)
+    duplicates_found = (df['Label'] == 1).sum()
+    unique_events = (df['Label'] == 0).sum()
+    
+    logger.info(f"def post_process_dedup_llm(): Processed {total_rows} events: {unique_events} unique, {duplicates_found} duplicates found")
+    
+    # Success criteria: we have data and Label column contains valid values (0 or 1)
+    if total_rows > 0 and df['Label'].isin([0, 1]).all():
+        logger.info("def post_process_dedup_llm(): Deduplication completed successfully.")
         return True
     else:
-        logger.warning("def post_process_dedup_llm(): 'Label' column is not all zeros.")
+        logger.error("def post_process_dedup_llm(): Invalid Label values found in output.")
         return False
 
 @flow(name="Dedup LLM Step")
