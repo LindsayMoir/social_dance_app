@@ -2527,17 +2527,11 @@ class DatabaseHandler():
             self.update_full_address_with_building_names()
             
             # Fix events with address_id = 0 using existing deduplication logic
-            if hasattr(self, 'llm_handler') and self.llm_handler:
-                logging.info("driver(): Starting fix_problem_events for address_id = 0 events via LLMHandler")
-                self.llm_handler.fix_problem_events(dry_run=False)
-                logging.info("driver(): Completed fix_problem_events via LLMHandler")
-            else:
-                # Fallback: Create our own LLMHandler and deduplicator
-                logging.info("driver(): No LLMHandler available, creating temporary instance for fix_problem_events")
-                from llm import LLMHandler
-                temp_llm_handler = LLMHandler(config_path='config/config.yaml')
-                temp_llm_handler.fix_problem_events(dry_run=False)
-                logging.info("driver(): Completed fix_problem_events via temporary LLMHandler")
+            logging.info("driver(): Creating DeduplicationHandler for fix_problem_events")
+            from dedup_llm import DeduplicationHandler
+            dedup_handler = DeduplicationHandler(config_path='config/config.yaml')
+            dedup_handler.fix_problem_events(dry_run=False)
+            logging.info("driver(): Completed fix_problem_events via DeduplicationHandler")
 
         # Close the database connection
         self.conn.dispose()  # Using dispose() for SQLAlchemy Engine
