@@ -308,9 +308,9 @@ class ImageScraper:
         self.logger.info(f"process_webpage_url(): Keywords {found} found in {page_url}")
 
         # LLM processing
-        prompt = self.llm_handler.generate_prompt(page_url, text, 'default')
+        prompt_text, schema_type = self.llm_handler.generate_prompt(page_url, text, 'default')
         status = self.llm_handler.process_llm_response(
-            page_url, parent_url, text, source, found, prompt
+            page_url, parent_url, text, source, found, 'default'
         )
         if status:
             self.logger.info(f"process_webpage_url(): LLM succeeded for {page_url}")
@@ -421,14 +421,14 @@ class ImageScraper:
         self.logger.info(f"process_image_url(): Found keywords {found} in image {image_url}")
 
         # LLM prompt & response
-        prompt = self.llm_handler.generate_prompt(image_url, text, 'default')
-        if len(prompt) > config['crawling']['prompt_max_length']:
+        prompt_text, schema_type = self.llm_handler.generate_prompt(image_url, text, 'default')
+        if len(prompt_text) > config['crawling']['prompt_max_length']:
             logging.warning(f"def process_image_url(): Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
             return 
         
         self.logger.info(f"process_image_url(): Generated default prompt for image_url: {image_url}")
         status = self.llm_handler.process_llm_response(
-            image_url, parent_url, text, source, found, prompt
+            image_url, parent_url, text, source, found, 'default'
         )
         if status:
             self.logger.info(f"process_image_url(): LLM processing succeeded for {image_url}")

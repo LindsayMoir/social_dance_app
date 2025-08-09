@@ -144,13 +144,13 @@ class GmailProcessor:
         df = pd.read_csv(csv_path)
 
         for idx, row in df.iterrows():
-            email, source, keywords, prompt = row
+            email, source, keywords, prompt_type = row
             extracted_text = self.fetch_latest_email(email)
 
             if extracted_text:
                 # Process extracted text with LLMHandler
                 parent_url = 'email inbox'
-                llm_status = self.llm_handler.process_llm_response(email, parent_url, extracted_text, source, keywords, prompt)
+                llm_status = self.llm_handler.process_llm_response(email, parent_url, extracted_text, source, keywords, prompt_type)
                 if llm_status:
                     logging.info(f"def driver(): process_llm_response success for email: {email}")
                 else:

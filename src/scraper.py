@@ -160,8 +160,8 @@ class EventSpider(scrapy.Spider):
 
         if found_keywords:
             logging.info(f"def parse(): Found keywords for URL {url}: {found_keywords}")
-            prompt     = 'default'
-            llm_status = llm_handler.process_llm_response(url, parent_url, extracted_text, source, keywords, prompt)
+            prompt_type = 'default'
+            llm_status = llm_handler.process_llm_response(url, parent_url, extracted_text, source, keywords, prompt_type)
             if llm_status:
                 # mark as relevant
                 url_row[4] = True

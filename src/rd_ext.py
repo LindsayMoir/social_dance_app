@@ -570,10 +570,10 @@ if __name__ == "__main__":
         if isinstance(extracted, dict):
             for event_url, text in extracted.items():
                 parent_url = url # Use the original URL as parent
-                llm_status = llm_handler.process_llm_response(event_url, parent_url, text, source, keywords, prompt=event_url)
+                llm_status = llm_handler.process_llm_response(event_url, parent_url, text, source, keywords, prompt_type=url)
         else:
             parent_url = ''  # No parent URL for single events
-            llm_status = llm_handler.process_llm_response(url, parent_url, extracted, source, keywords, prompt=url)
+            llm_status = llm_handler.process_llm_response(url, parent_url, extracted, source, keywords, prompt_type=url)
 
     # Add uvic wednesday rueda event. This event sometimes appears and then it dissapears. Lets just put it in.
     read_extract.uvic_rueda()

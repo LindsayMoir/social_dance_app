@@ -712,9 +712,9 @@ class FacebookEventScraper():
                         self.urls_with_found_keywords += 1  # Increment URLs with found keywords
 
                         # Set prompt and process LLM response
-                        prompt = 'fb'
+                        prompt_type = 'fb'
                         parent_url = search_url
-                        llm_response = llm_handler.process_llm_response(url, parent_url, extracted_text, source, found_keywords, prompt)
+                        llm_response = llm_handler.process_llm_response(url, parent_url, extracted_text, source, found_keywords, prompt_type)
 
                         # If events were successfully extracted and written to the DB
                         if llm_response:

@@ -95,15 +95,18 @@ class EventbriteScraper:
         self.events_written_to_db = 0
 
 
-    async def eventbrite_search(self, query, source, keywords_list, prompt):
+    async def eventbrite_search(self, query, source, keywords_list, prompt_type):
         """
         Searches Eventbrite for events matching the given query, filters and processes event URLs using LLM and database checks, and processes relevant events.
 
         Args:
             query (str): The search query to use on Eventbrite.
-            source (str): The source identifier for the search.
-            keywords_list (list): List of keywords to help with event relevance.
-            prompt (str): The initial prompt or context for LLM processing.
+            source (str): The source organization name.
+            keywords_list (list): List of keywords to search for in event text.
+            prompt_type (str): Specifies which prompt to use for LLM processing. Accepts:
+                - Simple keys: 'fb', 'default', 'images', etc.
+                - Full URLs: for site-specific prompts if URL-based mapping configured
+                - Falls back to 'default' if prompt_type not found in config
 
         Workflow:
             1. Navigates to the Eventbrite homepage.
@@ -167,10 +170,10 @@ class EventbriteScraper:
 
            # Check if the words in the url make it likely to be relevant
             prompt_type = 'relevant_dance_url'
-            prompt = self.llm_handler.generate_prompt(event_url, event_url, prompt_type)
+            prompt_text, schema_type = self.llm_handler.generate_prompt(event_url, event_url, prompt_type)
 
             # 1) Get the raw LLM output
-            raw = self.llm_handler.query_llm(event_url, prompt)
+            raw = self.llm_handler.query_llm(event_url, prompt_text, schema_type)
             logging.info(f"def eventbrite_search(): Raw LLM output for {event_url} → {repr(raw)}")
 
             # 2) Convert to a proper boolean
@@ -196,7 +199,7 @@ class EventbriteScraper:
             self.urls_contacted += 1
             counter += 1
             parent_url = query
-            await self.process_event(event_url, parent_url, source, keywords_list, prompt, counter)
+            await self.process_event(event_url, parent_url, source, keywords_list, prompt_type, counter)
 
 
     async def perform_search(self, query):
@@ -303,7 +306,7 @@ class EventbriteScraper:
         return match.group(1) if match else None
         
 
-    async def process_event(self, event_url, parent_url, source, keywords_list, prompt, counter):
+    async def process_event(self, event_url, parent_url, source, keywords_list, prompt_type, counter):
         """Processes an individual event URL: extracts text, processes it with LLM,
         and writes to the database.
         
@@ -311,7 +314,10 @@ class EventbriteScraper:
             event_url (str): Event URL.
             source (str): Organization name.
             keywords_list (list): List of keywords.
-            prompt (str): Prompt for LLM processing.
+            prompt_type (str): Specifies which prompt to use for LLM processing. Accepts:
+                - Simple keys: 'fb', 'default', 'images', etc.
+                - Full URLs: for site-specific prompts if URL-based mapping configured
+                - Falls back to 'default' if prompt_type not found in config
             counter (int): Counter for processed events.
         """
         extracted_text = await self.read_extract.extract_event_text(event_url)
@@ -326,7 +332,7 @@ class EventbriteScraper:
                 logging.info(f"def process_event(): Found keywords in text for URL {event_url}: {found_keywords}")
 
                 # Process the extracted text with the LLM
-                response = self.llm_handler.process_llm_response(event_url, parent_url, extracted_text, source, found_keywords, prompt)
+                response = self.llm_handler.process_llm_response(event_url, parent_url, extracted_text, source, found_keywords, prompt_type)
 
                 if response:
                     self.events_written_to_db += 1  # Count events written to the database

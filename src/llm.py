@@ -7,6 +7,25 @@ with a PostgreSQL database to store and update event information, uses OpenAI
 for language model queries, and leverages configuration settings loaded from 
 a YAML file.
 
+PROMPT MAPPING SYSTEM:
+    This module implements a flexible prompt mapping system that supports both
+    simple key-based prompts and URL-based prompts for site-specific customization:
+    
+    Simple Key Prompts:
+        - 'fb' → prompts/fb_prompt.txt
+        - 'default' → prompts/default.txt  
+        - 'images' → prompts/images_prompt.txt
+        - 'dedup' → prompts/dedup_prompt.txt
+        
+    URL-Based Prompts (for site-specific customization):
+        - 'https://gotothecoda.com/calendar' → prompts/the_coda_prompt.txt
+        - 'https://www.bardandbanker.com/live-music' → prompts/bard_and_banker_prompt.txt
+        - 'https://www.debrhymerband.com/shows' → prompts/deb_rhymer_prompt.txt
+        - 'https://vbds.org/other-dancing-opportunities/' → prompts/default.txt
+        
+    The mapping is configured in config/config.yaml under the 'prompts' section.
+    If a prompt_type is not found, it automatically falls back to the 'default' prompt.
+
 Classes:
     LLMHandler:
         - Initializes with configuration and ensures a DatabaseHandler instance is available.
@@ -135,15 +154,15 @@ class LLMHandler:
         Returns:
         bool: True if the URL is relevant, False otherwise.
         """
-        # Set default value of prompt
-        prompt = 'default'
+        # Set default value of prompt type
+        prompt_type = 'default'
 
         # Check keywords in the extracted text
         if 'facebook' in url:
             logging.info(f"def driver(): URL {url} 'facebook' is in the URL.")
             fb_status = True
             if fb_status:
-                prompt = 'fb'
+                prompt_type = 'fb'
 
         # Check keywords in the extracted text
         found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
@@ -158,7 +177,7 @@ class LLMHandler:
             if fb_status == True:
                 # Call the llm to process the extracted text
                 parent_url = search_term
-                llm_status = self.process_llm_response(url, parent_url, extracted_text, source, found_keywords, prompt)
+                llm_status = self.process_llm_response(url, parent_url, extracted_text, source, found_keywords, prompt_type)
 
                 if llm_status:
                     # Mark the event link as relevant
@@ -202,7 +221,7 @@ class LLMHandler:
         return keywords_list
     
 
-    def process_llm_response(self, url, parent_url, extracted_text, source, keywords_list, prompt):
+    def process_llm_response(self, url, parent_url, extracted_text, source, keywords_list, prompt_type):
         """
         Generate a prompt, query a Language Learning Model (LLM), and process the response.
 
@@ -212,14 +231,20 @@ class LLMHandler:
 
         Args:
             url (str): The URL of the webpage being processed.
+            parent_url (str): The parent URL context for the webpage.
             extracted_text (str): The text extracted from the webpage.
-            keywords (list): A list of keywords relevant to the events.
-
+            source (str): The source organization name.
+            keywords_list (list): A list of keywords relevant to the events.
+            prompt_type (str): Specifies which prompt to use. Accepts:
+                - Simple keys: 'fb', 'default', 'images', etc.
+                - Full URLs: 'https://gotothecoda.com/calendar' for site-specific prompts
+                - Falls back to 'default' if prompt_type not found in config
+                
         Returns:
             bool: True if the LLM response is successfully processed and events are written to the database, False otherwise.
         """
         # Generate prompt, query LLM, and process the response.
-        prompt_text, schema_type = self.generate_prompt(url, extracted_text, prompt)
+        prompt_text, schema_type = self.generate_prompt(url, extracted_text, prompt_type)
         if len(prompt_text) > self.config['crawling']['prompt_max_length']:
             logging.warning(f"def process_llm_response: Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
             return False
@@ -242,14 +267,28 @@ class LLMHandler:
     def generate_prompt(self, url, extracted_text, prompt_type):
         """
         Generate a prompt for a language model using extracted text and configuration details.
+        
+        This method implements a flexible prompt mapping system that supports both simple keys
+        and URL-based prompt selection for site-specific customization.
 
         Args:
             url (str): The URL of the webpage from which the text was extracted.
             extracted_text (str): The text extracted from the webpage.
-            prompt_type (str): Chooses which prompt to use from config
+            prompt_type (str): Specifies which prompt to use from config['prompts']. Accepts:
+                - Simple keys: 'fb', 'default', 'images', 'dedup', 'irrelevant_rows', etc.
+                - Full URLs: 'https://gotothecoda.com/calendar' for site-specific prompts
+                - URL-based prompts allow different websites to use specialized prompts
+                - Falls back to 'default' prompt if prompt_type not found in config
+                
+                Examples:
+                - 'fb' → uses prompts/fb_prompt.txt
+                - 'https://gotothecoda.com/calendar' → uses prompts/the_coda_prompt.txt
+                - 'https://www.bardandbanker.com/live-music' → uses prompts/bard_and_banker_prompt.txt
 
         Returns:
-            tuple: (formatted_prompt_string, schema_type) for the language model.
+            tuple: (formatted_prompt_string, schema_type) where:
+                - formatted_prompt_string (str): Complete prompt text with date and extracted text
+                - schema_type (str): JSON schema type for structured output ('event_extraction', etc.)
         """
         # Generate the LLM prompt using the extracted text and configuration details.
         logging.info(f"def generate_prompt(): Generating prompt for URL: {url}")
@@ -912,6 +951,10 @@ class LLMHandler:
 
         # Query the LLM
         llm_response = self.query_llm('address_fix', prompt)
+
+        if not llm_response:
+            logging.error("parse_location_with_llm: LLM returned no response for location: %s", location_str)
+            return {"address_id": 0}
 
         # Restore original provider
         self.config["llm"]["provider"] = original_provider
