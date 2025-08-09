@@ -632,19 +632,19 @@ class FacebookEventScraper():
         self.urls_with_found_keywords += 1
 
         # 4) Query LLM for structured event data
-        prompt = llm_handler.generate_prompt(url, extracted_text, 'fb')
+        prompt, schema_type = llm_handler.generate_prompt(url, extracted_text, 'fb')
         if len(prompt) > config['crawling']['prompt_max_length']:
             logging.warning(f"def process_fb_url(): Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
             return
         
-        llm_response = llm_handler.query_llm(url, prompt)
+        llm_response = llm_handler.query_llm(url, prompt, schema_type)
         if not llm_response or "No events found" in llm_response:
             logging.info(f"process_fb_url: LLM no events for {url}")
             db_handler.write_url_to_db(url_row)
             return
 
         # 5) Parse JSON and write to DB
-        parsed = llm_handler.extract_and_parse_json(llm_response, url)
+        parsed = llm_handler.extract_and_parse_json(llm_response, url, schema_type)
         if not parsed:
             logging.warning(f"process_fb_url: empty LLM response for {url}")
             db_handler.write_url_to_db(url_row)
@@ -920,15 +920,15 @@ class FacebookEventScraper():
             ]
 
             # 4) Query the LLM
-            prompt = llm_handler.generate_prompt(url, relevant_text, 'fb')
-            llm_response = llm_handler.query_llm(url, prompt)
+            prompt, schema_type = llm_handler.generate_prompt(url, relevant_text, 'fb')
+            llm_response = llm_handler.query_llm(url, prompt, schema_type)
             if not llm_response or "No events found" in llm_response:
                 logging.info(f"checkpoint_events(): LLM returned no events for {url}")
                 db_handler.write_url_to_db(url_row)
                 continue
 
             # 5) Parse JSON, build DataFrame
-            parsed = llm_handler.extract_and_parse_json(llm_response, url)
+            parsed = llm_handler.extract_and_parse_json(llm_response, url, schema_type)
             if not parsed:
                 logging.warning(f"checkpoint_events(): empty LLM response for {url}")
                 db_handler.write_url_to_db(url_row)

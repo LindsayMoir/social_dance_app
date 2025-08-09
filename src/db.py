@@ -1260,7 +1260,7 @@ class DatabaseHandler():
             location = location.strip()
 
         # Handle case where location might be NaN (float) or empty string
-        if location is None or pd.isna(location) or not isinstance(location, str) or len(location) < 15:
+        if location is None or pd.isna(location) or not isinstance(location, str) or len(location) < 5:
             event["address_id"] = 0
             return event
 
@@ -1288,13 +1288,13 @@ class DatabaseHandler():
 
         # STEP 3: LLM processing (last resort)
         # Generate the LLM prompt
-        prompt = self.llm_handler.generate_prompt("address_fix", location, "address_internet_fix")
+        prompt, schema_type = self.llm_handler.generate_prompt(event.get("url", "address_fix"), location, "address_internet_fix")
 
         # Query the LLM
-        llm_response = self.llm_handler.query_llm(event.get("url", "").strip(), prompt)
+        llm_response = self.llm_handler.query_llm(event.get("url", "").strip(), prompt, schema_type)
 
         # Parse the LLM response into a usable dict
-        parsed_results = self.llm_handler.extract_and_parse_json(llm_response, "address_fix")
+        parsed_results = self.llm_handler.extract_and_parse_json(llm_response, "address_fix", schema_type)
         if not parsed_results or not isinstance(parsed_results, list) or not isinstance(parsed_results[0], dict):
             logging.warning("process_event_address: Could not parse address from LLM response")
             event["address_id"] = 0
@@ -1392,7 +1392,34 @@ class DatabaseHandler():
                         logging.info(f"quick_address_lookup: Fuzzy building match (score={best_score}) → address_id={best_addr_id}")
                         return best_addr_id
         
-        # Step 6: Last resort - fuzzy match on full addresses for very similar ones
+        # Step 6: Fuzzy match on building names for locations without street numbers
+        if not street_match:
+            building_matches = self.execute_query(
+                "SELECT address_id, building_name, full_address FROM address WHERE building_name IS NOT NULL"
+            )
+            
+            best_score = 0
+            best_addr_id = None
+            
+            for addr_id, building_name, full_addr in building_matches or []:
+                if building_name and building_name.strip():
+                    # Check if location is contained in building name or vice versa
+                    score = fuzz.ratio(location.lower().strip(), building_name.lower().strip())
+                    partial_score = fuzz.partial_ratio(location.lower().strip(), building_name.lower().strip())
+                    
+                    # Use the higher score
+                    final_score = max(score, partial_score)
+                    
+                    if final_score >= 80 and final_score > best_score:
+                        best_score = final_score
+                        best_addr_id = addr_id
+                        logging.debug(f"Building match candidate: '{location}' vs '{building_name}' = {final_score}")
+            
+            if best_addr_id:
+                logging.info(f"quick_address_lookup: Fuzzy building name match (score={best_score}) → address_id={best_addr_id}")
+                return best_addr_id
+        
+        # Step 7: Last resort - fuzzy match on full addresses for very similar ones
         all_addresses = self.execute_query("SELECT address_id, full_address FROM address")
         for addr_id, full_addr in all_addresses or []:
             if full_addr and fuzz.ratio(location.lower(), full_addr.lower()) >= 90:

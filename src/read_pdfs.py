@@ -240,7 +240,7 @@ def dump_pdf_text(pdf_file) -> str:
 def parse_butchart_gardens_concerts(pdf_file) -> pd.DataFrame:
     logging.info("Parsing Butchart Gardens concerts PDF…")
     text = dump_pdf_text(pdf_file)
-    prompt = llm_handler.generate_prompt(pdf_file, text, 'images')
+    prompt, schema_type = llm_handler.generate_prompt(pdf_file, text, 'images')
     if len(prompt) > config['crawling']['prompt_max_length']:
             logging.warning(f"def process_llm_response: Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
             return None
@@ -248,7 +248,8 @@ def parse_butchart_gardens_concerts(pdf_file) -> pd.DataFrame:
     llm_response = llm_handler.query_openai(
         prompt=prompt,
         model=config['llm']['openai_model'],
-        image_url=config['input']['butchart_image_url']
+        image_url=config['input']['butchart_image_url'],
+        schema_type=schema_type
     )
 
     if not llm_response:
@@ -256,7 +257,7 @@ def parse_butchart_gardens_concerts(pdf_file) -> pd.DataFrame:
         return None
 
     parsed = llm_handler.extract_and_parse_json(llm_response,
-                                                config['input']['butchart_pdf_url'])
+                                                config['input']['butchart_pdf_url'], schema_type)
     if not parsed:
         logging.error("Failed to parse JSON from LLM response.")
         return None

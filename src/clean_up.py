@@ -419,11 +419,11 @@ class CleanUp:
                     # Refine extracted text
                     extracted_text = self.extract_text_from_fb_url(best_url)
 
-                prompt = self.llm_handler.generate_prompt(best_url, extracted_text, prompt_type)
-                llm_response = self.llm_handler.query_llm(best_url, prompt)
+                prompt, schema_type = self.llm_handler.generate_prompt(best_url, extracted_text, prompt_type)
+                llm_response = self.llm_handler.query_llm(best_url, prompt, schema_type)
 
                 if llm_response:
-                    parsed_result = self.llm_handler.extract_and_parse_json(llm_response, best_url)
+                    parsed_result = self.llm_handler.extract_and_parse_json(llm_response, best_url, schema_type)
                     if parsed_result:
                         events_df = pd.DataFrame(parsed_result)
                         events_df["url"] = best_url
@@ -1060,7 +1060,7 @@ class CleanUp:
                 logging.info("apply_deduplication_response(): LLM response indicates no duplicates.")
                 return
             # Use the robust parsing methods from LLMHandler
-            parsed_response = self.llm_handler.extract_and_parse_json(response, "address_dedup")
+            parsed_response = self.llm_handler.extract_and_parse_json(response, "address_dedup", "address_deduplication")
             if not parsed_response:
                 logging.warning("apply_deduplication_response(): Failed to parse LLM response using robust parsing")
                 return
@@ -1546,7 +1546,7 @@ class CleanUp:
                 response = self.llm_handler.query_llm("address_dedup", prompt)
                 if response:
                     # Parse LLM response using robust parsing methods
-                    parsed = self.llm_handler.extract_and_parse_json(response, "address_dedup")
+                    parsed = self.llm_handler.extract_and_parse_json(response, "address_dedup", "address_deduplication")
                     if parsed and isinstance(parsed, list):
                         response_df = pd.DataFrame(parsed)
                         response_df['address_id'] = response_df['address_id'].astype(int)

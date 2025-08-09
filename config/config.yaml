@@ -63,7 +63,7 @@ input:
   urls: data/urls
 llm:
   anthropic_model: claude-opus-4-20250514
-  mistral_model: mistral-large-latest
+  mistral_model: mistral-large-2411
   openai_model: gpt-5-mini
   provider: mistral
   spend_money: true
@@ -84,27 +84,69 @@ output:
   irrelevant_rows: output/irrelevant_rows.csv
   is_foreign: output/is_foreign.csv
 prompts:
-  address: prompts/address_from_raw_page.txt
-  address_0_null_loc_fix: prompts/address_0_null_location_fix_prompt.txt
-  address_fix: prompts/address_fix_prompt.txt
-  address_internet_fix: prompts/address_internet_fix.txt
-  chatbot_instructions: prompts/chatbot_instructions.txt
-  dedup: prompts/dedup_prompt.txt
-  dedup_llm_address: prompts/dedup_llm_address.txt
-  default: prompts/default.txt
-  djdancingdean: prompts/djdancingdean_prompt.txt
-  event_name_location_fix: prompts/event_name_location_fix_prompt.txt
-  fb: prompts/fb_prompt.txt
-  fix_dup_addresses_semantic_clustering: prompts/fix_dup_addresses.txt
-  https://gotothecoda.com/calendar: prompts/the_coda_prompt.txt
-  https://vbds.org/other-dancing-opportunities/: prompts/default.txt
-  https://www.bardandbanker.com/live-music: prompts/bard_and_banker_prompt.txt
-  https://www.debrhymerband.com/shows: prompts/deb_rhymer_prompt.txt
-  images: prompts/images_prompt.txt
-  irrelevant_rows: prompts/irrelevant_rows_prompt.txt
-  relevant_dance_url: prompts/relevant_dance_url.txt
-  single_event: prompts/single_event.txt
-  sql: prompts/sql_prompt.txt
+  address:
+    file: prompts/address_from_raw_page.txt
+    schema: address_extraction
+  address_0_null_loc_fix:
+    file: prompts/address_0_null_location_fix_prompt.txt
+    schema: address_extraction
+  address_fix:
+    file: prompts/address_fix_prompt.txt
+    schema: address_extraction
+  address_internet_fix:
+    file: prompts/address_internet_fix.txt
+    schema: address_extraction
+  chatbot_instructions:
+    file: prompts/chatbot_instructions.txt
+    schema: null
+  dedup:
+    file: prompts/dedup_prompt.txt
+    schema: deduplication_response
+  dedup_llm_address:
+    file: prompts/dedup_llm_address.txt
+    schema: address_deduplication
+  default:
+    file: prompts/default.txt
+    schema: event_extraction
+  djdancingdean:
+    file: prompts/djdancingdean_prompt.txt
+    schema: event_extraction
+  event_name_location_fix:
+    file: prompts/event_name_location_fix.txt
+    schema: address_extraction
+  fb:
+    file: prompts/fb_prompt.txt
+    schema: event_extraction
+  fix_dup_addresses_semantic_clustering:
+    file: prompts/fix_dup_addresses.txt
+    schema: null  # Can return "No Duplicates" string
+  https://gotothecoda.com/calendar:
+    file: prompts/the_coda_prompt.txt
+    schema: event_extraction
+  https://vbds.org/other-dancing-opportunities/:
+    file: prompts/default.txt
+    schema: event_extraction
+  https://www.bardandbanker.com/live-music:
+    file: prompts/bard_and_banker_prompt.txt
+    schema: event_extraction
+  https://www.debrhymerband.com/shows:
+    file: prompts/deb_rhymer_prompt.txt
+    schema: event_extraction
+  images:
+    file: prompts/images_prompt.txt
+    schema: event_extraction
+  irrelevant_rows:
+    file: prompts/irrelevant_rows_prompt.txt
+    schema: relevance_classification
+  relevant_dance_url:
+    file: prompts/relevant_dance_url.txt
+    schema: null
+  single_event:
+    file: prompts/single_event.txt
+    schema: event_extraction
+  sql:
+    file: prompts/sql_prompt.txt
+    schema: null
 score:
   dup_trans_db_scan: false
 search:

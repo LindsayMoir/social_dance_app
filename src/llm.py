@@ -219,14 +219,14 @@ class LLMHandler:
             bool: True if the LLM response is successfully processed and events are written to the database, False otherwise.
         """
         # Generate prompt, query LLM, and process the response.
-        prompt = self.generate_prompt(url, extracted_text, prompt)
-        if len(prompt) > self.config['crawling']['prompt_max_length']:
+        prompt_text, schema_type = self.generate_prompt(url, extracted_text, prompt)
+        if len(prompt_text) > self.config['crawling']['prompt_max_length']:
             logging.warning(f"def process_llm_response: Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
             return False
-        llm_response = self.query_llm(url, prompt)
+        llm_response = self.query_llm(url, prompt_text, schema_type)
 
         if llm_response:
-            parsed_result = self.extract_and_parse_json(llm_response, url)
+            parsed_result = self.extract_and_parse_json(llm_response, url, schema_type)
 
             if parsed_result:
                 events_df = pd.DataFrame(parsed_result)
@@ -249,17 +249,30 @@ class LLMHandler:
             prompt_type (str): Chooses which prompt to use from config
 
         Returns:
-            str: A formatted prompt string for the language model.
+            tuple: (formatted_prompt_string, schema_type) for the language model.
         """
         # Generate the LLM prompt using the extracted text and configuration details.
         logging.info(f"def generate_prompt(): Generating prompt for URL: {url}")
 
-        # If this errors, then prompt_type is 'default'
+        # Get prompt configuration, fallback to default if needed
         try:
-            txt_file_path = self.config['prompts'][prompt_type]
+            prompt_config = self.config['prompts'][prompt_type]
         except KeyError:
-            txt_file_path = self.config['prompts']['default']
-        logging.info(f"def generate_prompt(): prompt type: text file path: {txt_file_path}")
+            prompt_config = self.config['prompts']['default']
+            logging.warning(f"def generate_prompt(): Prompt type '{prompt_type}' not found, using default")
+        
+        # Handle both old string format and new dict format for backward compatibility
+        if isinstance(prompt_config, str):
+            # Old format: direct file path
+            txt_file_path = prompt_config
+            schema_type = None
+            logging.info(f"def generate_prompt(): Using legacy config format for {prompt_type}")
+        else:
+            # New format: dict with file and schema
+            txt_file_path = prompt_config['file']
+            schema_type = prompt_config.get('schema')
+        
+        logging.info(f"def generate_prompt(): prompt type: {prompt_type}, file: {txt_file_path}, schema: {schema_type}")
         
         # Get the prompt file
         with open(txt_file_path, 'r') as file:
@@ -273,18 +286,18 @@ class LLMHandler:
             f"{extracted_text}\n"
         )
 
-        logging.info(f"def generate_prompt(): {txt_file_path}")
-
-        return prompt
+        return prompt, schema_type
 
 
-    def query_llm(self, url, prompt):
+    def query_llm(self, url, prompt, schema_type=None):
         """
         Query the configured LLM with a given prompt and return the response.
         Fallback occurs between Mistral and OpenAI if one fails.
 
         Args:
+            url (str): The URL being processed (for logging).
             prompt (str): The prompt to send to the LLM.
+            schema_type (str): The schema type for structured output (optional).
 
         Returns:
             str: The response from the LLM if available, otherwise None.
@@ -308,7 +321,7 @@ class LLMHandler:
             try:
                 model = self.config['llm']['openai_model']
                 logging.info("query_llm(): Querying OpenAI")
-                response = self.query_openai(prompt, model)
+                response = self.query_openai(prompt, model, schema_type=schema_type)
                 if response:
                     logging.info(f"query_llm(): OpenAI response received: {response}")
                     return response
@@ -320,7 +333,7 @@ class LLMHandler:
             try:
                 model = self.config['llm']['mistral_model']
                 logging.info("query_llm(): Falling back to Mistral")
-                response = self.query_mistral(prompt, model)
+                response = self.query_mistral(prompt, model, schema_type=schema_type)
                 if response:
                     logging.info(f"query_llm(): Mistral response received: {response}")
                 else:
@@ -334,7 +347,7 @@ class LLMHandler:
             try:
                 model = self.config['llm']['mistral_model']
                 logging.info("query_llm(): Querying Mistral")
-                response = self.query_mistral(prompt, model)
+                response = self.query_mistral(prompt, model, schema_type=schema_type)
                 if response:
                     logging.info(f"query_llm(): Mistral response received: {response}")
                     return response
@@ -346,7 +359,7 @@ class LLMHandler:
             try:
                 openai_model = self.config['llm']['openai_model']
                 logging.info("query_llm(): Falling back to OpenAI")
-                response = self.query_openai(prompt, openai_model)
+                response = self.query_openai(prompt, openai_model, schema_type=schema_type)
                 if response:
                     logging.info(f"query_llm(): OpenAI response received: {response}")
                 else:
@@ -364,12 +377,13 @@ class LLMHandler:
         return response
 
 
-    def query_openai(self, prompt, model, image_url=None):
+    def query_openai(self, prompt, model, image_url=None, schema_type=None):
         """
         Handles querying OpenAI LLM, optionally attaching an image.
         - prompt: str of the user text
         - model: e.g. "o4-mini-high" or "gpt-4.1-mini"
         - image_url: optional URL string of an image to include
+        - schema_type: explicit schema type (e.g. 'event_extraction', 'address_extraction', None)
         """
         # build the message content as a list of text + optional image_url blocks
         content_blocks = [
@@ -381,11 +395,25 @@ class LLMHandler:
                 "image_url": {"url": image_url}
             })
 
+        # Get JSON schema if specified
+        json_schema = self._get_json_schema_by_type(schema_type) if schema_type else None
+        
+        # Prepare the API call parameters
+        api_params = {
+            "model": model,
+            "messages": [{"role": "user", "content": content_blocks}],
+            "temperature": 0
+        }
+        
+        # Add JSON schema if specified
+        if json_schema:
+            api_params["response_format"] = {
+                "type": "json_schema",
+                "json_schema": json_schema
+            }
+
         # send the chat completion
-        response = self.openai_client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": content_blocks}]
-        )
+        response = self.openai_client.chat.completions.create(**api_params)
 
         # extract and return the assistant's reply
         if response and response.choices:
@@ -393,43 +421,192 @@ class LLMHandler:
         return None
 
 
-    def query_mistral(self, prompt, model):
-        """Handles querying Mistral LLM."""
-
-        chat_response = self.mistral_client.chat.complete(
-            model= model,
-            messages = [
+    def query_mistral(self, prompt, model, schema_type=None):
+        """
+        Handles querying Mistral LLM.
+        - schema_type: explicit schema type (e.g. 'event_extraction', 'address_extraction', None)
+        """
+        
+        # Get JSON schema if specified
+        json_schema = self._get_json_schema_by_type(schema_type) if schema_type else None
+        
+        # Prepare the API call parameters
+        api_params = {
+            "model": model,
+            "messages": [
                 {
                     "role": "user",
                     "content": prompt,
-                },
+                }
             ]
-        )
+        }
+        
+        # Add JSON schema if specified
+        if json_schema:
+            api_params["response_format"] = {
+                "type": "json_schema", 
+                "json_schema": json_schema
+            }
+
+        chat_response = self.mistral_client.chat.complete(**api_params)
         return chat_response.choices[0].message.content
 
 
-    def line_based_parse(self, raw_str: str) -> list[dict]:
+    def _get_json_schema_by_type(self, schema_type):
+        """
+        Returns the appropriate JSON schema based on explicit schema type.
+        This replaces the brittle keyword detection approach.
+        """
+        if not schema_type:
+            return None
+            
+        schemas = {
+            "event_extraction": {
+                "name": "event_extraction",
+                "strict": True,
+                "schema": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source": {"type": "string"},
+                            "dance_style": {"type": "string"},
+                            "url": {"type": "string"},
+                            "event_type": {"type": "string"},
+                            "event_name": {"type": "string"},
+                            "day_of_week": {"type": "string"},
+                            "start_date": {"type": "string"},
+                            "end_date": {"type": "string"},
+                            "start_time": {"type": "string"},
+                            "end_time": {"type": "string"},
+                            "price": {"type": "string"},
+                            "location": {"type": "string"},
+                            "description": {"type": "string"}
+                        },
+                        "required": ["source", "dance_style", "url", "event_type", "event_name", 
+                                   "day_of_week", "start_date", "end_date", "start_time", "end_time", 
+                                   "price", "location", "description"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            
+            "address_extraction": {
+                "name": "address_extraction",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "address_id": {"type": "integer"},
+                        "full_address": {"type": "string"},
+                        "building_name": {"type": ["string", "null"]},
+                        "street_number": {"type": "string"},
+                        "street_name": {"type": "string"},
+                        "street_type": {"type": "string"},
+                        "direction": {"type": ["string", "null"]},
+                        "city": {"type": "string"},
+                        "met_area": {"type": ["string", "null"]},
+                        "province_or_state": {"type": "string"},
+                        "postal_code": {"type": ["string", "null"]},
+                        "country_id": {"type": "string"},
+                        "time_stamp": {"type": ["string", "null"]}
+                    },
+                    "required": ["address_id", "full_address", "street_number", "street_name", 
+                               "street_type", "city", "province_or_state", "country_id"],
+                    "additionalProperties": False
+                }
+            },
+            
+            "deduplication_response": {
+                "name": "deduplication_response", 
+                "strict": True,
+                "schema": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "group_id": {"type": "integer"},
+                            "event_id": {"type": "integer"},
+                            "Label": {"type": "integer"}
+                        },
+                        "required": ["group_id", "event_id", "Label"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            
+            "relevance_classification": {
+                "name": "relevance_classification",
+                "strict": True,
+                "schema": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "event_id": {"type": "integer"},
+                            "Label": {"type": "integer"},
+                            "event_type_new": {"type": "string"}
+                        },
+                        "required": ["event_id", "Label", "event_type_new"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            
+            "address_deduplication": {
+                "name": "address_deduplication",
+                "strict": True,
+                "schema": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "address_id": {"type": "integer"},
+                            "Label": {"type": "integer"}
+                        },
+                        "required": ["address_id", "Label"],
+                        "additionalProperties": False
+                    }
+                }
+            }
+        }
+        
+        return schemas.get(schema_type)
+
+
+    def line_based_parse(self, raw_str: str, schema_type: str = None) -> list[dict]:
         """
         Parses a JSON-like string into a list of dictionaries, one per record.
 
-        - Determines whether to use ADDRESS_KEYS or EVENT_KEYS based on the presence of 'address_id' in the input.
+        - Uses explicit schema_type to determine required keys, falling back to content detection if not provided.
         - Splits the input into lines and looks for lines of the form: "key": value,
         - Strips all quotes from values and collects key-value pairs into a record.
         - Only records containing all required keys are included in the output list.
 
         Args:
             raw_str (str): The raw string containing JSON-like records.
+            schema_type (str, optional): The explicit schema type to use for key validation.
 
         Returns:
             list[dict]: A list of dictionaries, each representing a parsed record.
         """
-        # Decide whether these are addresses, events, or address deduplication
-        if 'Label' in raw_str and 'address_id' in raw_str:
-            required_keys = self.ADDRESS_DEDUP_KEYS
-        elif 'building_name' in raw_str:
-            required_keys = self.ADDRESS_KEYS
-        else:
+        # Use explicit schema type to determine required keys
+        if schema_type == "event_extraction":
             required_keys = self.EVENT_KEYS
+        elif schema_type == "address_extraction":
+            required_keys = self.ADDRESS_KEYS
+        elif schema_type in ["deduplication_response", "relevance_classification"]:
+            required_keys = self.EVENT_KEYS  # These operate on events
+        elif schema_type == "address_deduplication":
+            required_keys = self.ADDRESS_DEDUP_KEYS
+        else:
+            # Fallback to old brittle content detection for backward compatibility
+            if 'Label' in raw_str and 'address_id' in raw_str:
+                required_keys = self.ADDRESS_DEDUP_KEYS
+            elif 'building_name' in raw_str:
+                required_keys = self.ADDRESS_KEYS
+            else:
+                required_keys = self.EVENT_KEYS
 
         records = []
         current = None
@@ -504,12 +681,17 @@ class LLMHandler:
         return records
     
 
-    def extract_and_parse_json(self, result: str, url: str):
+    def extract_and_parse_json(self, result: str, url: str, schema_type: str = None):
         """
         1) Early-exit on no data.
         2) Bracket-match to isolate the JSON-like blob.
         3) Basic cleanup (comments, backticks, ellipses, stray commas).
-        4) Line-based parse into either events or addresses.
+        4) Line-based parse using explicit schema_type or fallback to content detection.
+        
+        Args:
+            result (str): The LLM response string to parse
+            url (str): The URL context for logging
+            schema_type (str, optional): The explicit schema type for key validation
         """
         # 1) Early exits
         if "No events found" in result:
@@ -572,8 +754,8 @@ class LLMHandler:
         cleaned = re.sub(r',\s*\]', ']', cleaned)
         cleaned = cleaned.replace("```json", "").replace("```", "")
 
-        # 4) Line-based parse for events or addresses
-        records = self.line_based_parse(cleaned)
+        # 4) Line-based parse using explicit schema type
+        records = self.line_based_parse(cleaned, schema_type)
         if not records:
             logging.info("extract_and_parse_json(): No complete records parsed.")
             return None
@@ -744,8 +926,8 @@ class LLMHandler:
         """
         Uses the LLM to parse a free-form location string into a structured address dict.
         """
-        prompt = self.generate_prompt("synthetic_url_for_address", location_str, prompt_type=prompt_type)
-        response = self.query_llm("address_fix", prompt)
+        prompt, schema_type = self.generate_prompt("synthetic_url_for_address", location_str, prompt_type=prompt_type)
+        response = self.query_llm("address_fix", prompt, schema_type)
 
         if response:
             results = self.extract_and_parse_json(response, "synthetic_url_for_address")

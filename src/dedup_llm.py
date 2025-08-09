@@ -567,13 +567,13 @@ class DeduplicationHandler:
         """
         logging.info(f"handle_long_event_name: Using short_name: {short_name}")
         
-        prompt = self.llm_handler.generate_prompt(
+        prompt, schema_type = self.llm_handler.generate_prompt(
             url="address",
             extracted_text=description,
             prompt_type="address_fix"
         )
-        response = self.llm_handler.query_llm("address", prompt)
-        parsed = self.llm_handler.extract_and_parse_json(response, "address")
+        response = self.llm_handler.query_llm("address", prompt, schema_type)
+        parsed = self.llm_handler.extract_and_parse_json(response, "address", schema_type)
         
         if isinstance(parsed, list):
             parsed = parsed[0] if parsed else {}
@@ -653,13 +653,13 @@ class DeduplicationHandler:
             - Info about generated address IDs and prepared updates.
         """
 
-        prompt = self.llm_handler.generate_prompt(
+        prompt, schema_type = self.llm_handler.generate_prompt(
             url="address",
             extracted_text=location,
             prompt_type="address_fix"
         )
-        response = self.llm_handler.query_llm("address", prompt)
-        parsed = self.llm_handler.extract_and_parse_json(response, "address")
+        response = self.llm_handler.query_llm("address", prompt, schema_type)
+        parsed = self.llm_handler.extract_and_parse_json(response, "address", schema_type)
         
         if isinstance(parsed, list):
             parsed = parsed[0] if parsed else {}
@@ -707,13 +707,13 @@ class DeduplicationHandler:
             - Warnings if the LLM response cannot be parsed or is empty.
             - Information about generated address IDs and prepared updates.
         """
-        prompt = self.llm_handler.generate_prompt(
+        prompt, schema_type = self.llm_handler.generate_prompt(
             url="address",
             extracted_text=description,
             prompt_type="address_fix"
         )
-        response = self.llm_handler.query_llm("address", prompt)
-        parsed = self.llm_handler.extract_and_parse_json(response, "address")
+        response = self.llm_handler.query_llm("address", prompt, schema_type)
+        parsed = self.llm_handler.extract_and_parse_json(response, "address", schema_type)
         
         if isinstance(parsed, list):
             parsed = parsed[0] if parsed else {}
