@@ -36,7 +36,12 @@ if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
 # Load chatbot instructions from a file specified in the YAML config
-instructions_path = os.path.join(base_dir, config['prompts']['chatbot_instructions'])
+prompt_config = config['prompts']['chatbot_instructions']
+if isinstance(prompt_config, dict):
+    instructions_path = os.path.join(base_dir, prompt_config['file'])
+else:
+    # Backward compatibility with old string format
+    instructions_path = os.path.join(base_dir, prompt_config)
 with open(instructions_path, "r") as file:
     chatbot_instructions = file.read()
 

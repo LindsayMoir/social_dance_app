@@ -111,7 +111,14 @@ class IrrelevantRowsHandler:
             FileNotFoundError: If the file specified in the configuration does not exist.
             KeyError: If the configuration does not contain the required keys.
         """
-        with open(self.config['prompts']['irrelevant_rows'], "r") as file:
+        prompt_config = self.config['prompts']['irrelevant_rows']
+        if isinstance(prompt_config, dict):
+            prompt_file = prompt_config['file']
+        else:
+            # Backward compatibility with old string format
+            prompt_file = prompt_config
+        
+        with open(prompt_file, "r") as file:
             prompt_template = file.read()
 
         prompt = f"{prompt_template}\n{chunk}"

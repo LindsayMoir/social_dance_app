@@ -87,7 +87,12 @@ def process_query(request: QueryRequest):
         raise HTTPException(status_code=400, detail="User input is empty.")
     
     # Load the SQL prompt template from the YAML config
-    prompt_file_path = os.path.join(base_dir, config['prompts']['sql'])
+    prompt_config = config['prompts']['sql']
+    if isinstance(prompt_config, dict):
+        prompt_file_path = os.path.join(base_dir, prompt_config['file'])
+    else:
+        # Backward compatibility with old string format
+        prompt_file_path = os.path.join(base_dir, prompt_config)
     try:
         with open(prompt_file_path, "r") as file:
             base_prompt = file.read()

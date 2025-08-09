@@ -89,7 +89,14 @@ class DeduplicationHandler:
         """
         Loads the prompt template from a file specified in the configuration.
         """
-        with open(self.config['prompts']['dedup'], "r") as file:
+        prompt_config = self.config['prompts']['dedup']
+        if isinstance(prompt_config, dict):
+            prompt_file = prompt_config['file']
+        else:
+            # Backward compatibility with old string format
+            prompt_file = prompt_config
+        
+        with open(prompt_file, "r") as file:
             prompt_template = file.read()
 
         prompt = f"{prompt_template}\n{chunk}"
@@ -365,7 +372,14 @@ class DeduplicationHandler:
         num_rows = len(df)
 
         # Read in prompt template from file.
-        with open(self.config['prompts']['address_fix'], "r") as file:
+        prompt_config = self.config['prompts']['address_fix']
+        if isinstance(prompt_config, dict):
+            prompt_file = prompt_config['file']
+        else:
+            # Backward compatibility with old string format
+            prompt_file = prompt_config
+        
+        with open(prompt_file, "r") as file:
             prompt_template = file.read()
 
         for i in range(0, num_rows, batch_size):

@@ -380,76 +380,99 @@ class LLMHandler:
     def query_openai(self, prompt, model, image_url=None, schema_type=None):
         """
         Handles querying OpenAI LLM, optionally attaching an image.
-        - prompt: str of the user text
+        - prompt: str or list/tuple (will be normalized to str)
         - model: e.g. "o4-mini-high" or "gpt-4.1-mini"
         - image_url: optional URL string of an image to include
         - schema_type: explicit schema type (e.g. 'event_extraction', 'address_extraction', None)
         """
-        # build the message content as a list of text + optional image_url blocks
-        content_blocks = [
-            {"type": "text", "text": prompt}
-        ]
+        # --- 1) Normalize prompt to a string ---
+        if isinstance(prompt, (list, tuple)):
+            prompt = "\n".join(map(str, prompt))
+        elif not isinstance(prompt, str):
+            prompt = str(prompt)
+
+        # --- 2) Build content blocks (array-of-parts is fine) ---
+        content_blocks = [{"type": "text", "text": prompt}]
         if image_url:
+            # OpenAI expects "input_image"
             content_blocks.append({
-                "type": "image_url",
+                "type": "input_image",
                 "image_url": {"url": image_url}
             })
 
-        # Get JSON schema if specified
+        # --- 3) Optional JSON schema handling ---
         json_schema = self._get_json_schema_by_type(schema_type) if schema_type else None
-        
-        # Prepare the API call parameters
+        response_format = None
+        if json_schema:
+            # Ensure it's the full JSON Schema object OpenAI expects:
+            # {"type":"json_schema","json_schema":{"name":..., "schema":{...}, "strict": True}}
+            if "name" in json_schema and "schema" in json_schema:
+                payload_schema = json_schema
+            else:
+                # If your helper returns only the raw schema, wrap it
+                payload_schema = {
+                    "name": schema_type or "StructuredOutput",
+                    "schema": json_schema,
+                    "strict": True
+                }
+            response_format = {"type": "json_schema", "json_schema": payload_schema}
+
+        # --- 4) Prepare and send request ---
         api_params = {
             "model": model,
             "messages": [{"role": "user", "content": content_blocks}],
-            "temperature": 0
         }
-        
-        # Add JSON schema if specified
-        if json_schema:
-            api_params["response_format"] = {
-                "type": "json_schema",
-                "json_schema": json_schema
-            }
+        if response_format:
+            api_params["response_format"] = response_format
 
-        # send the chat completion
-        response = self.openai_client.chat.completions.create(**api_params)
+        resp = self.openai_client.chat.completions.create(**api_params)
 
-        # extract and return the assistant's reply
-        if response and response.choices:
-            return response.choices[0].message.content.strip()
+        # --- 5) Extract content safely ---
+        if resp and getattr(resp, "choices", None):
+            msg = resp.choices[0].message
+            # msg.content may be a string or list of parts; normalize to string
+            if isinstance(msg.content, list):
+                parts = []
+                for part in msg.content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        parts.append(part.get("text", ""))
+                    elif isinstance(part, str):
+                        parts.append(part)
+                return "\n".join(parts).strip()
+            return (msg.content or "").strip()
         return None
 
 
     def query_mistral(self, prompt, model, schema_type=None):
-        """
-        Handles querying Mistral LLM.
-        - schema_type: explicit schema type (e.g. 'event_extraction', 'address_extraction', None)
-        """
-        
-        # Get JSON schema if specified
+        # 1) Normalize prompt
+        if isinstance(prompt, (list, tuple)):
+            prompt = "\n".join(map(str, prompt))
+        elif not isinstance(prompt, str):
+            prompt = str(prompt)
+
+        # 2) Schema wrapper
         json_schema = self._get_json_schema_by_type(schema_type) if schema_type else None
-        
-        # Prepare the API call parameters
+        response_format = None
+        if json_schema:
+            # If helper returns the raw JSON Schema, wrap it; if it already has name/schema/strict, keep as is
+            if not all(k in json_schema for k in ("name", "schema")):
+                json_schema = {
+                    "name": schema_type or "StructuredOutput",
+                    "schema": json_schema,
+                    "strict": True,
+                }
+            response_format = {"type": "json_schema", "json_schema": json_schema}
+
+        # 3) Call Mistral
         api_params = {
             "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ]
+            "messages": [{"role": "user", "content": prompt}],
         }
-        
-        # Add JSON schema if specified
-        if json_schema:
-            api_params["response_format"] = {
-                "type": "json_schema", 
-                "json_schema": json_schema
-            }
+        if response_format:
+            api_params["response_format"] = response_format
 
-        chat_response = self.mistral_client.chat.complete(**api_params)
-        return chat_response.choices[0].message.content
+        resp = self.mistral_client.chat.complete(**api_params)
+        return resp.choices[0].message.content if resp and resp.choices else None
 
 
     def _get_json_schema_by_type(self, schema_type):

@@ -83,12 +83,9 @@ class GoogleSearch():
         Returns:
             source (str): A likely organization name extracted from the title.
         """
-        prompt_file_path = self.config['prompts']['relevant_dance_url']
-        with open(prompt_file_path, 'r') as file:
-            prompt = file.read()
-        prompt = f"{prompt}\nTitle: {title}\nURL: {url}\nSnippet: {snippet}"
+        prompt, schema_type = self.llm_handler.generate_prompt(url, f"Title: {title}\nURL: {url}\nSnippet: {snippet}", 'relevant_dance_url')
         
-        relevant = self.llm_handler.query_llm(url, prompt)
+        relevant = self.llm_handler.query_llm(url, prompt, schema_type)
         if relevant and relevant.lower() == 'True'.lower():
             logging.info(f"def relevant_dance_url(): LLM's opinion on the relevance of this URL: {url} is: {relevant}")
             return True

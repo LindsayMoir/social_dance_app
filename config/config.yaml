@@ -119,7 +119,7 @@ prompts:
     schema: event_extraction
   fix_dup_addresses_semantic_clustering:
     file: prompts/fix_dup_addresses.txt
-    schema: null  # Can return "No Duplicates" string
+    schema: null
   https://gotothecoda.com/calendar:
     file: prompts/the_coda_prompt.txt
     schema: event_extraction

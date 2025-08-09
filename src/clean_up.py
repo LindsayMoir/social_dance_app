@@ -1537,7 +1537,13 @@ class CleanUp:
             ])
             
             # Load prompt from config
-            prompt_path = self.config['prompts']['dedup_llm_address']
+            prompt_config = self.config['prompts']['dedup_llm_address']
+            if isinstance(prompt_config, dict):
+                prompt_path = prompt_config['file']
+            else:
+                # Backward compatibility with old string format
+                prompt_path = prompt_config
+            
             with open(prompt_path, 'r') as f:
                 prompt_template = f.read()
             prompt = f"{prompt_template}\n\n{address_text}"
