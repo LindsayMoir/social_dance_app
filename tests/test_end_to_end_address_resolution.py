@@ -32,7 +32,7 @@ def test_duplicate_prevention():
                 "street_name": "Niagra",  # Original spelling
                 "city": "Victoria",
                 "postal_code": "V8V 1E9",
-                "country_id": "Canada"
+                "country_id": "CA"
             }
         },
         {
@@ -43,7 +43,7 @@ def test_duplicate_prevention():
                 "street_name": "Niagara",  # Corrected spelling
                 "city": "Victoria",
                 "postal_code": "V8V 1E9",
-                "country_id": "Canada"
+                "country_id": "CA"
             }
         },
         {
@@ -54,7 +54,7 @@ def test_duplicate_prevention():
                 "street_name": "Niagara",
                 "city": "Victoria", 
                 "postal_code": "V8V 1E9",
-                "country_id": "Canada"
+                "country_id": "CA"
             }
         },
         {
@@ -112,7 +112,7 @@ def test_different_locations():
                 "street_name": "Niagara",
                 "city": "Victoria",
                 "postal_code": "V8V 2A2",  # Different postal code
-                "country_id": "Canada"
+                "country_id": "CA"
             }
         },
         {
@@ -123,7 +123,7 @@ def test_different_locations():
                 "street_name": "Niagara",
                 "city": "Victoria",
                 "postal_code": "V8V 1E9",
-                "country_id": "Canada"
+                "country_id": "CA"
             }
         }
     ]

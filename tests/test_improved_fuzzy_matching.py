@@ -31,7 +31,7 @@ def test_edelweiss_club_matching():
         "city": "Victoria",
         "province_or_state": "BC",
         "postal_code": "V8V 1E9",
-        "country_id": "Canada"
+        "country_id": "CA"
     }
     
     print("Testing address that should match existing Edelweiss Club:")

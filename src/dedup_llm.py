@@ -603,7 +603,7 @@ class DeduplicationHandler:
                 "building_name": f"Event Location",
                 "city": "Unknown", 
                 "province_or_state": "BC",
-                "country_id": "Canada"
+                "country_id": "CA"
             }
             address_id = self.db_handler.resolve_or_insert_address(minimal_address)
             if address_id is None:
@@ -699,7 +699,7 @@ class DeduplicationHandler:
                 "building_name": f"Event Location",
                 "city": "Unknown",
                 "province_or_state": "BC", 
-                "country_id": "Canada"
+                "country_id": "CA"
             }
             address_id = self.db_handler.resolve_or_insert_address(minimal_address)
             if address_id is None:
@@ -763,7 +763,7 @@ class DeduplicationHandler:
                 "building_name": f"Event Location",
                 "city": "Unknown",
                 "province_or_state": "BC",
-                "country_id": "Canada"
+                "country_id": "CA"
             }
             address_id = self.db_handler.resolve_or_insert_address(minimal_address)
             if address_id is None:

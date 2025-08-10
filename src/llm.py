@@ -950,7 +950,7 @@ class LLMHandler:
                 "building_name": location_str.strip()[:50] if location_str else "Unknown",
                 "city": "Unknown",
                 "province_or_state": "BC",
-                "country_id": "Canada"
+                "country_id": "CA"
             }
             address_id = self.db_handler.resolve_or_insert_address(minimal_address)
             return {"address_id": address_id} if address_id else None

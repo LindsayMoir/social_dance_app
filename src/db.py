@@ -1341,7 +1341,7 @@ class DatabaseHandler():
                 "building_name": event.get("event_name", "Unknown Event")[:50],  # Use event name as building
                 "city": "Unknown",
                 "province_or_state": "BC", 
-                "country_id": "Canada"
+                "country_id": "CA"
             }
             address_id = self.resolve_or_insert_address(minimal_address)
             if address_id:
