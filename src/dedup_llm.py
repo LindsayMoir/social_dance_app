@@ -597,8 +597,18 @@ class DeduplicationHandler:
         
         address_id = self.db_handler.resolve_or_insert_address(parsed)
         if address_id is None:
-            logging.warning("handle_long_event_name: Failed to resolve or insert address, setting address_id = 0")
-            address_id = 0
+            logging.warning("handle_long_event_name: Failed to resolve or insert address, trying minimal address")
+            # Create minimal address as fallback
+            minimal_address = {
+                "building_name": f"Event Location",
+                "city": "Unknown", 
+                "province_or_state": "BC",
+                "country_id": "Canada"
+            }
+            address_id = self.db_handler.resolve_or_insert_address(minimal_address)
+            if address_id is None:
+                logging.error("handle_long_event_name: All address resolution attempts failed")
+                return
         else:
             address_id = int(address_id)
         logging.info(f"handle_long_event_name: Generated address_id = {address_id}")
@@ -683,8 +693,18 @@ class DeduplicationHandler:
         
         address_id = self.db_handler.resolve_or_insert_address(parsed)
         if address_id is None:
-            logging.warning("handle_llm_address_fix: Failed to resolve or insert address, setting address_id = 0")
-            address_id = 0
+            logging.warning("handle_llm_address_fix: Failed to resolve or insert address, trying minimal address")
+            # Create minimal address as fallback  
+            minimal_address = {
+                "building_name": f"Event Location",
+                "city": "Unknown",
+                "province_or_state": "BC", 
+                "country_id": "Canada"
+            }
+            address_id = self.db_handler.resolve_or_insert_address(minimal_address)
+            if address_id is None:
+                logging.error("handle_llm_address_fix: All address resolution attempts failed")
+                return
         else:
             address_id = int(address_id)
         logging.info(f"handle_llm_address_fix: Generated address_id = {address_id}")
@@ -737,8 +757,18 @@ class DeduplicationHandler:
         
         address_id = self.db_handler.resolve_or_insert_address(parsed)
         if address_id is None:
-            logging.warning("handle_fallback_llm: Failed to resolve or insert address, setting address_id = 0")
-            address_id = 0
+            logging.warning("handle_fallback_llm: Failed to resolve or insert address, trying minimal address")
+            # Create minimal address as fallback
+            minimal_address = {
+                "building_name": f"Event Location",
+                "city": "Unknown",
+                "province_or_state": "BC",
+                "country_id": "Canada"
+            }
+            address_id = self.db_handler.resolve_or_insert_address(minimal_address)
+            if address_id is None:
+                logging.error("handle_fallback_llm: All address resolution attempts failed")
+                return
         else:
             address_id = int(address_id)
         logging.info(f"handle_fallback_llm: Generated address_id = {address_id}")

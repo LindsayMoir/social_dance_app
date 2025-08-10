@@ -789,8 +789,9 @@ class CleanUp:
             logging.info("fix_incorrect_dance_styles(): No updates required.")
             return
 
-        # Ensure that address_id are integers
-        updated_df['address_id'] = updated_df['address_id'].fillna(0).astype(int)
+        # Ensure that address_id are integers - but don't allow 0 values
+        # Instead of setting to 0, we'll let NaN values cause the process to create proper addresses
+        updated_df['address_id'] = updated_df['address_id'].astype('Int64')  # Nullable integer type
 
         # Convert DataFrame to list of dictionaries for multiple inserts
         values = updated_df.to_dict(orient="records")

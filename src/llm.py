@@ -223,11 +223,13 @@ class LLMHandler:
 
     def process_llm_response(self, url, parent_url, extracted_text, source, keywords_list, prompt_type):
         """
-        Generate a prompt, query a Language Learning Model (LLM), and process the response.
+        Generate a prompt, query a Language Learning Model (LLM), and process the response for EVENT EXTRACTION.
 
-        This method generates a prompt based on the provided URL and extracted text, queries the LLM with the prompt,
-        and processes the LLM's response. If the response is successfully parsed, it converts the parsed result into
-        a DataFrame, writes the events to the database, and logs the relevant information.
+        This method is designed specifically for extracting structured event data from text. It generates a prompt,
+        queries the LLM, parses the JSON response, and writes events to the database.
+        
+        IMPORTANT: This method should NOT be used for simple relevance checking (True/False responses).
+        For relevance checking, use query_llm() directly.
 
         Args:
             url (str): The URL of the webpage being processed.
@@ -235,10 +237,11 @@ class LLMHandler:
             extracted_text (str): The text extracted from the webpage.
             source (str): The source organization name.
             keywords_list (list): A list of keywords relevant to the events.
-            prompt_type (str): Specifies which prompt to use. Accepts:
+            prompt_type (str): Specifies which prompt to use for EVENT EXTRACTION. Accepts:
                 - Simple keys: 'fb', 'default', 'images', etc.
                 - Full URLs: 'https://gotothecoda.com/calendar' for site-specific prompts
                 - Falls back to 'default' if prompt_type not found in config
+                - Must have a non-null schema_type for JSON parsing
                 
         Returns:
             bool: True if the LLM response is successfully processed and events are written to the database, False otherwise.
@@ -251,6 +254,12 @@ class LLMHandler:
         llm_response = self.query_llm(url, prompt_text, schema_type)
 
         if llm_response:
+            # Check if this is a schema type that expects JSON parsing
+            if schema_type is None:
+                # For prompts with no schema (like relevance checks), don't try to parse JSON
+                logging.warning(f"def process_llm_response: Called with schema_type=None for URL {url}. This method is for event extraction, not relevance checking.")
+                return False
+            
             parsed_result = self.extract_and_parse_json(llm_response, url, schema_type)
 
             if parsed_result:
@@ -573,8 +582,9 @@ class LLMHandler:
                         "country_id": {"type": "string"},
                         "time_stamp": {"type": ["string", "null"]}
                     },
-                    "required": ["address_id", "full_address", "street_number", "street_name", 
-                               "street_type", "city", "province_or_state", "country_id"],
+                    "required": ["address_id", "full_address", "building_name", "street_number", "street_name", 
+                               "street_type", "direction", "city", "met_area", "province_or_state", 
+                               "postal_code", "country_id", "time_stamp"],
                     "additionalProperties": False
                 }
             },
@@ -756,6 +766,9 @@ class LLMHandler:
             schema_type (str, optional): The explicit schema type for key validation
         """
         # 1) Early exits
+        if result is None:
+            logging.info("extract_and_parse_json(): Result is None.")
+            return None
         if "No events found" in result:
             logging.info("extract_and_parse_json(): No events found.")
             return None
@@ -873,7 +886,7 @@ class LLMHandler:
                 # 4. Fix address using LLM (OpenAI forced)
                 parsed_address = self.parse_location_with_llm(location_str, prompt_type="address_internet_fix")
 
-                if parsed_address.get("address_id", 0) == 0:
+                if not parsed_address or parsed_address.get("address_id", 0) == 0:
                     logging.warning("LLM returned invalid result for address_id=%d", address_id)
                     failed_ids.append(address_id)
                     continue
@@ -931,15 +944,23 @@ class LLMHandler:
         Forces OpenAI use for address_internet_fix only, without changing global config.
         """
         if not location_str or len(location_str.strip()) < 15:
-            logging.info("parse_location_with_llm: Skipping short/empty location string: %s", location_str)
-            return {"address_id": 0}
+            logging.info("parse_location_with_llm: Location string too short, creating minimal address: %s", location_str)
+            # Create minimal address for short location strings
+            minimal_address = {
+                "building_name": location_str.strip()[:50] if location_str else "Unknown",
+                "city": "Unknown",
+                "province_or_state": "BC",
+                "country_id": "Canada"
+            }
+            address_id = self.db_handler.resolve_or_insert_address(minimal_address)
+            return {"address_id": address_id} if address_id else None
 
         # Load the prompt text from config
         try:
             prompt_text = self.config["prompts"][prompt_type]
         except KeyError:
             logging.error("parse_location_with_llm: No prompt found in config for prompt_type: %s", prompt_type)
-            return {"address_id": 0}
+            return None
 
         prompt = f"{prompt_text}\n\n{location_str.strip()}"
         logging.info("parse_location_with_llm: Prompting LLM with: %s", prompt_type)
@@ -954,7 +975,7 @@ class LLMHandler:
 
         if not llm_response:
             logging.error("parse_location_with_llm: LLM returned no response for location: %s", location_str)
-            return {"address_id": 0}
+            return None
 
         # Restore original provider
         self.config["llm"]["provider"] = original_provider
@@ -964,8 +985,8 @@ class LLMHandler:
         logging.info("parse_location_with_llm: Parsed address from LLM:\n%s", json.dumps(parsed_address, indent=2))
 
         if not parsed_address:
-            logging.warning("parse_location_with_llm: No valid address returned by LLM. Returning address_id=0")
-            return {"address_id": 0}
+            logging.warning("parse_location_with_llm: No valid address returned by LLM")
+            return None
 
         # Fill postal code if missing
         # Check if postal_code is missing or a null string

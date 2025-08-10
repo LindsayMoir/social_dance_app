@@ -820,11 +820,21 @@ class DatabaseHandler():
         # Step 3: Normalize null values and prepare required fields for insert
         parsed_address = self.normalize_nulls(parsed_address)
         
-        # Ensure key fields are properly set after normalization
-        parsed_address["building_name"] = building_name or None
-        parsed_address["street_number"] = street_number or None
-        parsed_address["street_name"] = street_name or None
-        parsed_address["country_id"] = country_id or None
+        # Ensure ALL fields expected by INSERT query are present (set to None if missing)
+        required_fields = [
+            "building_name", "street_number", "street_name", "city",
+            "province_or_state", "postal_code", "country_id"
+        ]
+        
+        for field in required_fields:
+            if field not in parsed_address:
+                parsed_address[field] = None
+        
+        # Set specific fields from extracted values
+        parsed_address["building_name"] = building_name or parsed_address.get("building_name")
+        parsed_address["street_number"] = street_number or parsed_address.get("street_number")
+        parsed_address["street_name"] = street_name or parsed_address.get("street_name")
+        parsed_address["country_id"] = country_id or parsed_address.get("country_id")
 
         # Build standardized full_address from components
         standardized_full_address = self.build_full_address(
@@ -1261,8 +1271,24 @@ class DatabaseHandler():
 
         # Handle case where location might be NaN (float) or empty string
         if location is None or pd.isna(location) or not isinstance(location, str) or len(location) < 5:
-            event["address_id"] = 0
-            return event
+            logging.warning("process_event_address: Location too short or invalid, creating minimal address entry: %s", location)
+            # Create a minimal address entry for short/invalid locations
+            minimal_address = {
+                "building_name": event.get("event_name", "Unknown Event")[:50],  # Use event name as building
+                "city": "Unknown",
+                "province_or_state": "BC", 
+                "country_id": "Canada"
+            }
+            address_id = self.resolve_or_insert_address(minimal_address)
+            if address_id:
+                event["address_id"] = address_id
+                full_address = self.get_full_address_from_id(address_id)
+                if full_address:
+                    event["location"] = full_address
+                return event
+            else:
+                logging.error("process_event_address: Failed to create minimal address entry")
+                return event
 
         # STEP 1: Check raw_locations cache (fastest - exact string match)
         cached_addr_id = self.lookup_raw_location(location)
@@ -1296,9 +1322,22 @@ class DatabaseHandler():
         # Parse the LLM response into a usable dict
         parsed_results = self.llm_handler.extract_and_parse_json(llm_response, "address_fix", schema_type)
         if not parsed_results or not isinstance(parsed_results, list) or not isinstance(parsed_results[0], dict):
-            logging.warning("process_event_address: Could not parse address from LLM response")
-            event["address_id"] = 0
-            return event
+            logging.warning("process_event_address: Could not parse address from LLM response, creating minimal address")
+            # Create minimal address using event name and location
+            minimal_address = {
+                "building_name": event.get("event_name", "Unknown Event")[:50],
+                "street_name": location[:50] if location else "Unknown Location",
+                "city": "Unknown",
+                "province_or_state": "BC",
+                "country_id": "Canada"
+            }
+            address_id = self.resolve_or_insert_address(minimal_address)
+            if address_id:
+                event["address_id"] = address_id
+                return event
+            else:
+                logging.error("process_event_address: Failed to create minimal address")
+                return event
 
         # ✅ Normalize null-like strings in one place
         parsed_address = self.normalize_nulls(parsed_results[0])
@@ -1306,11 +1345,20 @@ class DatabaseHandler():
         # Step 4: Get or insert address_id
         address_id = self.resolve_or_insert_address(parsed_address)
         
-        # Ensure we got a valid address_id
+        # Ensure we got a valid address_id  
         if not address_id:
-            logging.warning("process_event_address: Failed to resolve or insert address")
-            event["address_id"] = 0
-            return event
+            logging.warning("process_event_address: resolve_or_insert_address failed, creating minimal address as last resort")
+            # Last resort: create very minimal address entry
+            minimal_address = {
+                "building_name": event.get("event_name", "Event")[:50],
+                "city": "Location Unknown", 
+                "province_or_state": "BC",
+                "country_id": "Canada"
+            }
+            address_id = self.resolve_or_insert_address(minimal_address)
+            if not address_id:
+                logging.error("process_event_address: All address resolution attempts failed")
+                return event
 
         # STEP 3: Cache the raw location → address_id mapping for future use
         self.cache_raw_location(location, address_id)
@@ -1322,6 +1370,7 @@ class DatabaseHandler():
             event["location"] = full_address
 
         return event
+
 
     def quick_address_lookup(self, location: str) -> Optional[int]:
         """

@@ -310,14 +310,15 @@ class EventbriteScraper:
         """Processes an individual event URL: extracts text, processes it with LLM,
         and writes to the database.
         
+        Note: This method uses 'default' prompt for event extraction. The prompt_type 
+        parameter is kept for interface consistency but not used for event processing.
+        
         Args:
             event_url (str): Event URL.
+            parent_url (str): Parent URL context.
             source (str): Organization name.
             keywords_list (list): List of keywords.
-            prompt_type (str): Specifies which prompt to use for LLM processing. Accepts:
-                - Simple keys: 'fb', 'default', 'images', etc.
-                - Full URLs: for site-specific prompts if URL-based mapping configured
-                - Falls back to 'default' if prompt_type not found in config
+            prompt_type (str): [Not used for event extraction] - kept for interface consistency
             counter (int): Counter for processed events.
         """
         extracted_text = await self.read_extract.extract_event_text(event_url)
@@ -331,8 +332,10 @@ class EventbriteScraper:
                 self.urls_with_found_keywords += 1  # Count URLs with found keywords
                 logging.info(f"def process_event(): Found keywords in text for URL {event_url}: {found_keywords}")
 
-                # Process the extracted text with the LLM
-                response = self.llm_handler.process_llm_response(event_url, parent_url, extracted_text, source, found_keywords, prompt_type)
+                # Process the extracted text with the LLM for event extraction (not relevance checking)
+                # Use 'default' prompt for event extraction, regardless of what prompt_type was used for relevance
+                event_extraction_prompt_type = 'default'
+                response = self.llm_handler.process_llm_response(event_url, parent_url, extracted_text, source, found_keywords, event_extraction_prompt_type)
 
                 if response:
                     self.events_written_to_db += 1  # Count events written to the database
