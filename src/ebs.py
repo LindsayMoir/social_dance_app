@@ -231,7 +231,7 @@ class EventbriteScraper:
             except asyncio.TimeoutError:
                 logging.warning(f"def perform_search(): Timeout on '{query}' (attempt {attempt}).")
             except Exception as e:
-                logging.warning(f"def perform_search(): Error on '{query}' (attempt {attempt}): {e}")
+                logging.warning(f"def perform_search(): Warning on '{query}' (attempt {attempt}): {e}")
 
             if attempt < max_retries:
                 backoff = attempt * 2

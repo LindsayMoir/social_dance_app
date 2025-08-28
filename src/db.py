@@ -1337,8 +1337,9 @@ class DatabaseHandler():
         if location is None or pd.isna(location) or not isinstance(location, str) or len(location) < 5:
             logging.warning("process_event_address: Location too short or invalid, creating minimal address entry: %s", location)
             # Create a minimal address entry for short/invalid locations
+            event_name = event.get("event_name") or "Unknown Event"
             minimal_address = {
-                "building_name": event.get("event_name", "Unknown Event")[:50],  # Use event name as building
+                "building_name": str(event_name)[:50],  # Use event name as building
                 "city": "Unknown",
                 "province_or_state": "BC", 
                 "country_id": "CA"
@@ -1388,8 +1389,9 @@ class DatabaseHandler():
         if not parsed_results or not isinstance(parsed_results, list) or not isinstance(parsed_results[0], dict):
             logging.warning("process_event_address: Could not parse address from LLM response, creating minimal address")
             # Create minimal address using event name and location
+            event_name = event.get("event_name") or "Unknown Event"
             minimal_address = {
-                "building_name": event.get("event_name", "Unknown Event")[:50],
+                "building_name": str(event_name)[:50],
                 "street_name": location[:50] if location else "Unknown Location",
                 "city": "Unknown",
                 "province_or_state": "BC",
@@ -1413,8 +1415,9 @@ class DatabaseHandler():
         if not address_id:
             logging.warning("process_event_address: resolve_or_insert_address failed, creating minimal address as last resort")
             # Last resort: create very minimal address entry
+            event_name = event.get("event_name") or "Event"
             minimal_address = {
-                "building_name": event.get("event_name", "Event")[:50],
+                "building_name": str(event_name)[:50],
                 "city": "Location Unknown", 
                 "province_or_state": "BC",
                 "country_id": "Canada"

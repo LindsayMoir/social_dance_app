@@ -449,7 +449,7 @@ class LLMHandler:
             })
 
         # --- 3) Optional JSON schema handling ---
-        json_schema = self._get_json_schema_by_type(schema_type) if schema_type else None
+        json_schema = self._get_json_schema_by_type(schema_type, "openai") if schema_type else None
         response_format = None
         if json_schema:
             # Ensure it's the full JSON Schema object OpenAI expects:
@@ -499,7 +499,7 @@ class LLMHandler:
             prompt = str(prompt)
 
         # 2) Schema wrapper
-        json_schema = self._get_json_schema_by_type(schema_type) if schema_type else None
+        json_schema = self._get_json_schema_by_type(schema_type, "mistral") if schema_type else None
         response_format = None
         if json_schema:
             # If helper returns the raw JSON Schema, wrap it; if it already has name/schema/strict, keep as is
@@ -523,125 +523,255 @@ class LLMHandler:
         return resp.choices[0].message.content if resp and resp.choices else None
 
 
-    def _get_json_schema_by_type(self, schema_type):
+    def _get_json_schema_by_type(self, schema_type, provider="mistral"):
         """
-        Returns the appropriate JSON schema based on explicit schema type.
-        This replaces the brittle keyword detection approach.
+        Returns the appropriate JSON schema based on explicit schema type and provider.
+        Different providers have different schema requirements.
         """
         if not schema_type:
             return None
+        
+        # Define event properties once to avoid duplication
+        event_properties = {
+            "source": {"type": "string"},
+            "dance_style": {"type": "string"},
+            "url": {"type": "string"},
+            "event_type": {"type": "string"},
+            "event_name": {"type": "string"},
+            "day_of_week": {"type": "string"},
+            "start_date": {"type": "string"},
+            "end_date": {"type": "string"},
+            "start_time": {"type": "string"},
+            "end_time": {"type": "string"},
+            "price": {"type": "string"},
+            "location": {"type": "string"},
+            "description": {"type": "string"}
+        }
+        event_required = ["source", "dance_style", "url", "event_type", "event_name", 
+                         "day_of_week", "start_date", "end_date", "start_time", "end_time", 
+                         "price", "location", "description"]
             
-        schemas = {
-            "event_extraction": {
-                "name": "event_extraction",
-                "strict": True,
-                "schema": {
-                    "type": "array",
-                    "items": {
+        # Provider-specific schemas
+        if provider.lower() == "openai":
+            schemas = {
+                "event_extraction": {
+                    "name": "event_extraction",
+                    "strict": True,
+                    "schema": {
                         "type": "object",
                         "properties": {
-                            "source": {"type": "string"},
-                            "dance_style": {"type": "string"},
-                            "url": {"type": "string"},
-                            "event_type": {"type": "string"},
-                            "event_name": {"type": "string"},
-                            "day_of_week": {"type": "string"},
-                            "start_date": {"type": "string"},
-                            "end_date": {"type": "string"},
-                            "start_time": {"type": "string"},
-                            "end_time": {"type": "string"},
-                            "price": {"type": "string"},
-                            "location": {"type": "string"},
-                            "description": {"type": "string"}
+                            "events": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": event_properties,
+                                    "required": event_required,
+                                    "additionalProperties": False
+                                }
+                            }
                         },
-                        "required": ["source", "dance_style", "url", "event_type", "event_name", 
-                                   "day_of_week", "start_date", "end_date", "start_time", "end_time", 
-                                   "price", "location", "description"],
+                        "required": ["events"],
                         "additionalProperties": False
                     }
-                }
-            },
-            
-            "address_extraction": {
-                "name": "address_extraction",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "address_id": {"type": "integer"},
-                        "full_address": {"type": "string"},
-                        "building_name": {"type": ["string", "null"]},
-                        "street_number": {"type": "string"},
-                        "street_name": {"type": "string"},
-                        "street_type": {"type": "string"},
-                        "direction": {"type": ["string", "null"]},
-                        "city": {"type": "string"},
-                        "met_area": {"type": ["string", "null"]},
-                        "province_or_state": {"type": "string"},
-                        "postal_code": {"type": ["string", "null"]},
-                        "country_id": {"type": "string"},
-                        "time_stamp": {"type": ["string", "null"]}
-                    },
-                    "required": ["address_id", "full_address", "building_name", "street_number", "street_name", 
-                               "street_type", "direction", "city", "met_area", "province_or_state", 
-                               "postal_code", "country_id", "time_stamp"],
-                    "additionalProperties": False
-                }
-            },
-            
-            "deduplication_response": {
-                "name": "deduplication_response", 
-                "strict": True,
-                "schema": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "group_id": {"type": "integer"},
-                            "event_id": {"type": "integer"},
-                            "Label": {"type": "integer"}
-                        },
-                        "required": ["group_id", "event_id", "Label"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            
-            "relevance_classification": {
-                "name": "relevance_classification",
-                "strict": True,
-                "schema": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "event_id": {"type": "integer"},
-                            "Label": {"type": "integer"},
-                            "event_type_new": {"type": "string"}
-                        },
-                        "required": ["event_id", "Label", "event_type_new"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            
-            "address_deduplication": {
-                "name": "address_deduplication",
-                "strict": True,
-                "schema": {
-                    "type": "array",
-                    "items": {
+                },
+                
+                "address_extraction": {
+                    "name": "address_extraction",
+                    "strict": True,
+                    "schema": {
                         "type": "object",
                         "properties": {
                             "address_id": {"type": "integer"},
-                            "Label": {"type": "integer"}
+                            "full_address": {"type": "string"},
+                            "building_name": {"type": ["string", "null"]},
+                            "street_number": {"type": "string"},
+                            "street_name": {"type": "string"},
+                            "street_type": {"type": "string"},
+                            "direction": {"type": ["string", "null"]},
+                            "city": {"type": "string"},
+                            "met_area": {"type": ["string", "null"]},
+                            "province_or_state": {"type": "string"},
+                            "postal_code": {"type": ["string", "null"]},
+                            "country_id": {"type": "string"},
+                            "time_stamp": {"type": ["string", "null"]}
                         },
-                        "required": ["address_id", "Label"],
+                        "required": ["address_id", "full_address", "building_name", "street_number", "street_name", 
+                                   "street_type", "direction", "city", "met_area", "province_or_state", 
+                                   "postal_code", "country_id", "time_stamp"],
+                        "additionalProperties": False
+                    }
+                },
+                
+                "deduplication_response": {
+                    "name": "deduplication_response", 
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "events": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "group_id": {"type": "integer"},
+                                        "event_id": {"type": "integer"},
+                                        "Label": {"type": "integer"}
+                                    },
+                                    "required": ["group_id", "event_id", "Label"],
+                                    "additionalProperties": False
+                                }
+                            }
+                        },
+                        "required": ["events"],
+                        "additionalProperties": False
+                    }
+                },
+                
+                "relevance_classification": {
+                    "name": "relevance_classification",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "events": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "event_id": {"type": "integer"},
+                                        "Label": {"type": "integer"},
+                                        "event_type_new": {"type": "string"}
+                                    },
+                                    "required": ["event_id", "Label", "event_type_new"],
+                                    "additionalProperties": False
+                                }
+                            }
+                        },
+                        "required": ["events"],
+                        "additionalProperties": False
+                    }
+                },
+                
+                "address_deduplication": {
+                    "name": "address_deduplication",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "addresses": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "address_id": {"type": "integer"},
+                                        "Label": {"type": "integer"}
+                                    },
+                                    "required": ["address_id", "Label"],
+                                    "additionalProperties": False
+                                }
+                            }
+                        },
+                        "required": ["addresses"],
                         "additionalProperties": False
                     }
                 }
             }
-        }
+        else:  # Mistral and others
+            schemas = {
+                "event_extraction": {
+                    "name": "event_extraction",
+                    "strict": True,
+                    "schema": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": event_properties,
+                            "required": event_required,
+                            "additionalProperties": False
+                        }
+                    }
+                },
+                
+                "address_extraction": {
+                    "name": "address_extraction",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "address_id": {"type": "integer"},
+                            "full_address": {"type": "string"},
+                            "building_name": {"type": ["string", "null"]},
+                            "street_number": {"type": "string"},
+                            "street_name": {"type": "string"},
+                            "street_type": {"type": "string"},
+                            "direction": {"type": ["string", "null"]},
+                            "city": {"type": "string"},
+                            "met_area": {"type": ["string", "null"]},
+                            "province_or_state": {"type": "string"},
+                            "postal_code": {"type": ["string", "null"]},
+                            "country_id": {"type": "string"},
+                            "time_stamp": {"type": ["string", "null"]}
+                        },
+                        "required": ["address_id", "full_address", "building_name", "street_number", "street_name", 
+                                   "street_type", "direction", "city", "met_area", "province_or_state", 
+                                   "postal_code", "country_id", "time_stamp"],
+                        "additionalProperties": False
+                    }
+                },
+                
+                "deduplication_response": {
+                    "name": "deduplication_response", 
+                    "strict": True,
+                    "schema": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "group_id": {"type": "integer"},
+                                "event_id": {"type": "integer"},
+                                "Label": {"type": "integer"}
+                            },
+                            "required": ["group_id", "event_id", "Label"],
+                            "additionalProperties": False
+                        }
+                    }
+                },
+                
+                "relevance_classification": {
+                    "name": "relevance_classification",
+                    "strict": True,
+                    "schema": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "event_id": {"type": "integer"},
+                                "Label": {"type": "integer"},
+                                "event_type_new": {"type": "string"}
+                            },
+                            "required": ["event_id", "Label", "event_type_new"],
+                            "additionalProperties": False
+                        }
+                    }
+                },
+                
+                "address_deduplication": {
+                    "name": "address_deduplication",
+                    "strict": True,
+                    "schema": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "address_id": {"type": "integer"},
+                                "Label": {"type": "integer"}
+                            },
+                            "required": ["address_id", "Label"],
+                            "additionalProperties": False
+                        }
+                    }
+                }
+            }
         
         return schemas.get(schema_type)
 
@@ -838,7 +968,33 @@ class LLMHandler:
         cleaned = re.sub(r',\s*\]', ']', cleaned)
         cleaned = cleaned.replace("```json", "").replace("```", "")
 
-        # 4) Line-based parse using explicit schema type
+        # 4) Try JSON parsing first (for structured output), then fall back to line-based parsing
+        try:
+            import json
+            json_data = json.loads(cleaned)
+            
+            # Handle different response formats
+            if isinstance(json_data, dict):
+                # Check for OpenAI wrapped formats first
+                if "events" in json_data and isinstance(json_data["events"], list):
+                    return json_data["events"]
+                elif "addresses" in json_data and isinstance(json_data["addresses"], list):
+                    return json_data["addresses"]
+                # Single object - check if it looks like an address or event
+                elif "address_id" in json_data or "full_address" in json_data:
+                    return [json_data]  # Address object
+                elif "event_id" in json_data or "event_name" in json_data:
+                    return [json_data]  # Event object
+                else:
+                    # Unknown single object, wrap in list
+                    return [json_data]
+            # Handle direct array format (Mistral or legacy)
+            elif isinstance(json_data, list):
+                return json_data
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logging.info(f"extract_and_parse_json(): JSON parsing failed, falling back to line-based parsing: {e}")
+        
+        # 5) Fallback to line-based parse using explicit schema type
         records = self.line_based_parse(cleaned, schema_type)
         if not records:
             logging.info("extract_and_parse_json(): No complete records parsed.")
@@ -990,7 +1146,7 @@ class LLMHandler:
         self.config["llm"]["provider"] = original_provider
 
         # Parse the response
-        parsed_address = self.extract_and_parse_json(llm_response, "address_fix")
+        parsed_address = self.extract_and_parse_json(llm_response, "address_fix", "address_extraction")
         logging.info("parse_location_with_llm: Parsed address from LLM:\n%s", json.dumps(parsed_address, indent=2))
 
         if not parsed_address:
@@ -1026,7 +1182,7 @@ class LLMHandler:
         response = self.query_llm("address_fix", prompt, schema_type)
 
         if response:
-            results = self.extract_and_parse_json(response, "synthetic_url_for_address")
+            results = self.extract_and_parse_json(response, "synthetic_url_for_address", "address_extraction")
             if results and isinstance(results, list):
                 return results[0]  # Use the first valid address
 
