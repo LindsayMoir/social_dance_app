@@ -1598,12 +1598,12 @@ class DatabaseHandler():
         """
         try:
             self.execute_query(create_table_query)
-            logging.info("create_raw_locations_table: Table created successfully")
+            logging.info("create_raw_locations_table: Table creation/verification completed")
             
             # Create index for faster lookups
             index_query = "CREATE INDEX IF NOT EXISTS idx_raw_location ON raw_locations(raw_location)"
             self.execute_query(index_query)
-            logging.info("create_raw_locations_table: Index created successfully")
+            logging.info("create_raw_locations_table: Index creation/verification completed")
         except Exception as e:
             logging.error(f"create_raw_locations_table: Failed to create table: {e}")
             logging.error(f"create_raw_locations_table: SQL was: {create_table_query}")
@@ -2236,7 +2236,7 @@ class DatabaseHandler():
         else:
             results_df.to_csv(output_file, mode='a', header=False, index=False)
 
-        logging.info(f"def count_events_urls_end(): Wrote events and urls statistics to: {file_name}")
+        logging.info(f"def count_events_urls_end(): Wrote events and urls statistics to: {output_file}")
 
 
     def stale_date(self, url):

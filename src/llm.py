@@ -692,25 +692,34 @@ class LLMHandler:
             raw_str.count('\n') == 0 and raw_str.count('":') > 1):
             logging.info("line_based_parse(): Detected compact JSON, reformatting with line breaks")
             
-            # Reformat compact JSON to have line breaks
-            formatted = "{\n"
-            # Split on '","' to separate key-value pairs
-            pairs = raw_str[1:-1].split('","')
-            for i, pair in enumerate(pairs):
-                if i == 0:
-                    # First pair: remove leading quote
-                    pair = pair.lstrip('"')
-                if i == len(pairs) - 1:
-                    # Last pair: remove trailing quote and don't add comma
-                    pair = pair.rstrip('"')
-                    formatted += f'  "{pair}"\n'
-                else:
-                    # Middle pairs: add quotes back and comma
-                    formatted += f'  "{pair}",\n'
-            formatted += "}"
-            
-            logging.debug(f"line_based_parse(): Reformatted JSON:\n{formatted}")
-            raw_str = formatted
+            # ONLY for compact JSON: Use json.loads() to reformat safely
+            try:
+                import json
+                parsed_json = json.loads(raw_str)
+                
+                # Reformat as multi-line JSON for downstream processing
+                formatted = "{\n"
+                for i, (key, value) in enumerate(parsed_json.items()):
+                    # Format value properly based on type
+                    if value is None:
+                        formatted_value = "null"
+                    elif isinstance(value, str):
+                        formatted_value = f'"{value}"'
+                    else:
+                        formatted_value = str(value)
+                    
+                    # Add comma for all but last item
+                    comma = "," if i < len(parsed_json) - 1 else ""
+                    formatted += f'  "{key}": {formatted_value}{comma}\n'
+                
+                formatted += "}"
+                
+                logging.debug(f"line_based_parse(): Reformatted JSON:\n{formatted}")
+                raw_str = formatted
+                
+            except json.JSONDecodeError as e:
+                logging.error(f"line_based_parse(): Failed to parse compact JSON: {e}")
+                # Fall through to line-based parsing with original string
 
         for line in raw_str.splitlines():
             line = line.strip()

@@ -93,22 +93,9 @@ from llm import LLMHandler
 with open('config/config.yaml', 'r') as file:
     config = yaml.safe_load(file)
 
- # Build log_file name
-script_name = os.path.splitext(os.path.basename(__file__))[0]
-logging_file = f"logs/{script_name}_log.txt"
-logging.basicConfig(
-    filename=logging_file,
-    filemode='a',
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt='%Y-%m-%d %H:%M:%S',
-    force=True
-    )
-logging.info("\n\nfb.py starting...")
-
-# Instantiate the class libraries
-llm_handler = LLMHandler(config_path='config/config.yaml')
-db_handler = llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
+# Global handlers for class methods (declared at module level, initialized in main())
+llm_handler = None
+db_handler = None
 
 
 class FacebookEventScraper():
@@ -159,8 +146,8 @@ class FacebookEventScraper():
         # URL tracking
         self.urls_visited = set()
 
-        # Get keywords
-        self.keywords_list = llm_handler.get_keywords()
+        # Get keywords (deferred if handlers not initialized)
+        self.keywords_list = llm_handler.get_keywords() if llm_handler else []
     
 
     def login_to_facebook(self) -> bool:
@@ -951,27 +938,31 @@ class FacebookEventScraper():
         logging.info(f"checkpoint_events(): Completed. Wrote {self.events_written_to_db} events.")
 
 
-if __name__ == "__main__":
-    # Load configuration
+def main():
+    """ Main function to initialize and run the Facebook scraper. """
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-    # Initialize handlers
-    llm_handler = LLMHandler(config_path='config/config.yaml')
-    db_handler = llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
-
-    # Configure logging
+    # Build log_file name
+    script_name = os.path.splitext(os.path.basename(__file__))[0]
+    logging_file = f"logs/{script_name}_log.txt" 
     logging.basicConfig(
-        filename=config['logging']['log_file_p2'],
+        filename=logging_file,
         filemode='a',
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt='%Y-%m-%d %H:%M:%S',
         force=True
     )
+    logging.info("\n\nfb.py starting...")
 
-    # Start time
     start_time = datetime.now()
+    logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
+
+    # Initialize handlers - make them global for class methods
+    global llm_handler, db_handler
+    llm_handler = LLMHandler(config_path='config/config.yaml')
+    db_handler = llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
 
     # Get the file name of the running script
     file_name = os.path.basename(__file__)
@@ -1002,5 +993,8 @@ if __name__ == "__main__":
     # End time and elapsed time logging
     end_time = datetime.now()
     logging.info(f"__main__: Finished the crawler process at {end_time}")
-    elapsed_time = end_time - start_time
-    logging.info(f"__main__: Elapsed time: {elapsed_time}")
+    logging.info(f"__main__: Total time taken: {end_time - start_time}")
+
+
+if __name__ == "__main__":
+    main()
