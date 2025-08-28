@@ -186,6 +186,31 @@ def copy_drop_create_events():
     return True
 
 # ------------------------
+# TASK: SYNC ADDRESS SEQUENCE
+# ------------------------
+@task
+def sync_address_sequence():
+    """Synchronizes the address sequence with the current maximum address_id to prevent unique constraint violations."""
+    db_conn_str = os.getenv("DATABASE_CONNECTION_STRING")
+    if not db_conn_str:
+        logger.error("def sync_address_sequence(): DATABASE_CONNECTION_STRING environment variable not set.")
+        raise Exception("Missing DATABASE_CONNECTION_STRING in environment.")
+    
+    # SQL to sync the sequence with current maximum address_id
+    sql = (
+        "SELECT setval('temp_address_id_seq1', COALESCE((SELECT MAX(address_id) FROM address), 0) + 1, false);"
+    )
+    command = f'psql -d "{db_conn_str}" -c "{sql}"'
+    logger.info(f"def sync_address_sequence(): Syncing address sequence with command: {command}")
+    try:
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        logger.info(f"def sync_address_sequence(): Address sequence synced successfully: {result.stdout}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"def sync_address_sequence(): Address sequence sync failed: {e.stderr}")
+        raise e
+    return True
+
+# ------------------------
 # TASKS FOR GS.PY STEP
 # ------------------------
 @task
@@ -791,6 +816,7 @@ def send_text_message(message: str):
 PIPELINE_STEPS = [
     ("copy_log_files", copy_log_files),
     ("copy_drop_create_events", copy_drop_create_events),
+    ("sync_address_sequence", sync_address_sequence),
     ("emails", emails_step),
     ("gs", gs_step),
     ("ebs", ebs_step),
