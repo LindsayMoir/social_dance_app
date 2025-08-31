@@ -1049,6 +1049,162 @@ class CleanUp:
         logging.info(f"fix_null_addresses_in_events(): Updated {updated_count} event(s). Log saved to {log_path}.")
 
 
+    async def fix_specific_location_mappings(self):
+        """
+        Fixes specific known location mappings in the events table.
+        Currently handles:
+        1. Victoria West Coast Swing Collective Saturday events with 'Unknown' location -> address_id=39
+        2. Events with 'Unknown' location and loftpubvictoria.com URL -> address_id=397
+        3. Salsa Caliente events with 'Unknown' location -> address_id=399
+        4. Events with "Fisherman's Wharf" in event name and 'Unknown' location -> address_id=542
+        5. Events with "Ukrainian Cultural Centre" in event name and 'Unknown' location -> address_id=550
+        """
+        logging.info("Starting fix_specific_location_mappings process...")
+        
+        # Case 1: Victoria West Coast Swing Collective Saturday events
+        address_result_vwcs = self.db_handler.execute_query(
+            "SELECT address_id, full_address FROM address WHERE building_name ILIKE '%Dance Victoria%'"
+        )
+        
+        if address_result_vwcs:
+            address_id_vwcs = address_result_vwcs[0][0]
+            full_address_vwcs = address_result_vwcs[0][1]
+            logging.info(f"fix_specific_location_mappings(): Found Dance Victoria address ID {address_id_vwcs}: {full_address_vwcs}")
+            
+            updated_count_vwcs = self.db_handler.execute_query(
+                """UPDATE events 
+                   SET address_id = :address_id, location = :location
+                   WHERE location LIKE '%Unknown%' 
+                   AND source = 'Victoria West Coast Swing Collective' 
+                   AND day_of_week = 'Saturday'""",
+                {"address_id": address_id_vwcs, "location": full_address_vwcs}
+            )
+            
+            if updated_count_vwcs is not None and updated_count_vwcs > 0:
+                logging.info(f"fix_specific_location_mappings(): Updated {updated_count_vwcs} Victoria West Coast Swing event(s) with address_id={address_id_vwcs}")
+            else:
+                logging.info("fix_specific_location_mappings(): No Victoria West Coast Swing events found matching the criteria.")
+        else:
+            logging.warning("fix_specific_location_mappings(): No Dance Victoria address found. Skipping Victoria West Coast Swing updates.")
+        
+        # Case 2: Events with loftpubvictoria.com URL and Unknown location
+        address_result_loft = self.db_handler.execute_query(
+            "SELECT address_id, full_address FROM address WHERE building_name ILIKE '%The Loft Pub%'"
+        )
+        
+        if address_result_loft:
+            address_id_loft = address_result_loft[0][0]
+            full_address_loft = address_result_loft[0][1]
+            logging.info(f"fix_specific_location_mappings(): Found The Loft Pub address ID {address_id_loft}: {full_address_loft}")
+            
+            updated_count_loft = self.db_handler.execute_query(
+                """UPDATE events 
+                   SET address_id = :address_id, location = :location
+                   WHERE location LIKE '%Unknown%' 
+                   AND url LIKE '%loftpubvictoria.com%'""",
+                {"address_id": address_id_loft, "location": full_address_loft}
+            )
+            
+            if updated_count_loft is not None and updated_count_loft > 0:
+                logging.info(f"fix_specific_location_mappings(): Updated {updated_count_loft} loftpubvictoria.com event(s) with address_id={address_id_loft}")
+            else:
+                logging.info("fix_specific_location_mappings(): No loftpubvictoria.com events found matching the criteria.")
+        else:
+            logging.warning("fix_specific_location_mappings(): No The Loft Pub address found. Skipping loftpubvictoria.com updates.")
+        
+        # Case 3: Salsa Caliente events with Unknown location
+        address_result_salsa = self.db_handler.execute_query(
+            "SELECT address_id, full_address FROM address WHERE building_name ILIKE '%Studio 4 Athletics%'"
+        )
+        
+        if address_result_salsa:
+            address_id_salsa = address_result_salsa[0][0]
+            full_address_salsa = address_result_salsa[0][1]
+            logging.info(f"fix_specific_location_mappings(): Found Studio 4 Athletics address ID {address_id_salsa}: {full_address_salsa}")
+            
+            updated_count_salsa = self.db_handler.execute_query(
+                """UPDATE events 
+                   SET address_id = :address_id, location = :location
+                   WHERE location LIKE '%Unknown%' 
+                   AND source = 'Salsa Caliente'""",
+                {"address_id": address_id_salsa, "location": full_address_salsa}
+            )
+            
+            if updated_count_salsa is not None and updated_count_salsa > 0:
+                logging.info(f"fix_specific_location_mappings(): Updated {updated_count_salsa} Salsa Caliente event(s) with address_id={address_id_salsa}")
+            else:
+                logging.info("fix_specific_location_mappings(): No Salsa Caliente events found matching the criteria.")
+        else:
+            logging.warning("fix_specific_location_mappings(): No Studio 4 Athletics address found. Skipping Salsa Caliente updates.")
+        
+        # Case 4: Events with Fisherman's Wharf in event name and Unknown location
+        address_result_wharf = self.db_handler.execute_query(
+            "SELECT address_id, full_address FROM address WHERE building_name ILIKE '%Fisherman''s Wharf%'"
+        )
+        
+        if address_result_wharf:
+            address_id_wharf = address_result_wharf[0][0]
+            full_address_wharf = address_result_wharf[0][1]
+            logging.info(f"fix_specific_location_mappings(): Found Fisherman's Wharf address ID {address_id_wharf}: {full_address_wharf}")
+            
+            updated_count_wharf = self.db_handler.execute_query(
+                """UPDATE events 
+                   SET address_id = :address_id, location = :location
+                   WHERE location LIKE '%Unknown%' 
+                   AND event_name LIKE '%Fisherman''s Wharf%'""",
+                {"address_id": address_id_wharf, "location": full_address_wharf}
+            )
+            
+            if updated_count_wharf is not None and updated_count_wharf > 0:
+                logging.info(f"fix_specific_location_mappings(): Updated {updated_count_wharf} Fisherman's Wharf event(s) with address_id={address_id_wharf}")
+            else:
+                logging.info("fix_specific_location_mappings(): No Fisherman's Wharf events found matching the criteria.")
+        else:
+            logging.warning("fix_specific_location_mappings(): No Fisherman's Wharf address found. Skipping Fisherman's Wharf updates.")
+        
+        # Case 5: Events with Ukrainian Cultural Centre in event name and Unknown location
+        address_result_ukrainian = self.db_handler.execute_query(
+            "SELECT address_id, full_address FROM address WHERE building_name ILIKE '%Ukrainian Cultural Centre%'"
+        )
+        
+        if address_result_ukrainian:
+            address_id_ukrainian = address_result_ukrainian[0][0]
+            full_address_ukrainian = address_result_ukrainian[0][1]
+            logging.info(f"fix_specific_location_mappings(): Found Ukrainian Cultural Centre address ID {address_id_ukrainian}: {full_address_ukrainian}")
+            
+            updated_count_ukrainian = self.db_handler.execute_query(
+                """UPDATE events 
+                   SET address_id = :address_id, location = :location
+                   WHERE location LIKE '%Unknown%' 
+                   AND event_name LIKE '%Ukrainian Cultural Centre%'""",
+                {"address_id": address_id_ukrainian, "location": full_address_ukrainian}
+            )
+            
+            if updated_count_ukrainian is not None and updated_count_ukrainian > 0:
+                logging.info(f"fix_specific_location_mappings(): Updated {updated_count_ukrainian} Ukrainian Cultural Centre event(s) with address_id={address_id_ukrainian}")
+            else:
+                logging.info("fix_specific_location_mappings(): No Ukrainian Cultural Centre events found matching the criteria.")
+        else:
+            logging.warning("fix_specific_location_mappings(): No Ukrainian Cultural Centre address found. Skipping Ukrainian Cultural Centre updates.")
+
+
+    async def delete_closed_venue_events(self):
+        """
+        Deletes events from closed venues that are no longer operating.
+        Currently removes events at Victoria Event Centre which has permanently closed.
+        """
+        logging.info("Starting deletion of events at closed venues...")
+        
+        deleted_count = self.db_handler.execute_query(
+            "DELETE FROM events WHERE location ILIKE '%Victoria Event Centre%'"
+        )
+        
+        if deleted_count is not None and deleted_count > 0:
+            logging.info(f"delete_closed_venue_events(): Deleted {deleted_count} event(s) at Victoria Event Centre")
+        else:
+            logging.info("delete_closed_venue_events(): No events found at Victoria Event Centre")
+
+
     def apply_deduplication_response(self, response, preview_mode=False):
         """
         Apply deduplication results to the database.
@@ -1752,14 +1908,12 @@ async def main():
     # Standardize postal code formats
     logging.info("Standardizing postal code formats...")
     clean_up_instance.db_handler.standardize_postal_codes()
-    
-    # Method 1: Semantic clustering first (free, local compute)
-    logging.info("Starting semantic clustering address deduplication (free)...")
-    clean_up_instance.deduplicate_addresses_with_llm_semantic_clustering()
-    
-    # Method 2: LLM-based deduplication for remaining candidates (costs money)
-    logging.info("Starting LLM-based address deduplication for remaining candidates...")
-    clean_up_instance.process_address_duplicates_with_llm()
+
+    # Fix specific location mappings
+    await clean_up_instance.fix_specific_location_mappings()
+
+    # Delete events at closed venues
+    await clean_up_instance.delete_closed_venue_events()
 
     # Fix no urls in events
     await clean_up_instance.process_events_without_url()
@@ -1780,6 +1934,15 @@ async def main():
     bad_urls = [url.strip() for url in config['constants']['delete_known_bad_urls'].split(',') if url.strip()]
     logging.info(f"known_incorrect(): Deleting events with URLs containing: {bad_urls}")
     clean_up_instance.known_incorrect(bad_urls)
+
+    # Deduplication
+    # Method 1: Semantic clustering first (free, local compute)
+    logging.info("Starting semantic clustering address deduplication (free)...")
+    clean_up_instance.deduplicate_addresses_with_llm_semantic_clustering()
+    
+    # Method 2: LLM-based deduplication for remaining candidates (costs money)
+    logging.info("Starting LLM-based address deduplication for remaining candidates...")
+    clean_up_instance.process_address_duplicates_with_llm()
 
     db_handler.count_events_urls_end(start_df, file_name)
     logging.info(f"Wrote events and urls statistics to: {file_name}")
