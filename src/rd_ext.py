@@ -351,6 +351,19 @@ class ReadExtract:
                 # Small random delay to let any JS render
                 await asyncio.sleep(random.uniform(2, 5))
 
+                # For Eventbrite pages, check for and click "View all event details" button
+                if "eventbrite.com" in link.lower():
+                    try:
+                        # Look for the "View all event details" button
+                        view_details_button = await self.page.query_selector('text="View all event details"')
+                        if view_details_button:
+                            logging.info(f"extract_event_text: Found 'View all event details' button for {link}, clicking...")
+                            await view_details_button.click()
+                            # Wait a moment for content to load after clicking
+                            await asyncio.sleep(random.uniform(2, 4))
+                    except Exception as e:
+                        logging.warning(f"extract_event_text: Error clicking 'View all event details' button for {link}: {e}")
+
                 # Pull the page HTML and parse
                 content = await self.page.content()
                 soup = BeautifulSoup(content, "html.parser")
