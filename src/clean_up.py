@@ -703,18 +703,22 @@ class CleanUp:
         Deletes known incorrect events from the database.
         """
         conditions = " OR ".join(f"url ILIKE '%{kw}%'" for kw in known_incorrect_urls)
+        
+        # Also delete events with specific problematic location
+        location_condition = "location = 'BC Swing Dance Club, Victoria, BC, CA'"
+        
         sql = f"""
             DELETE FROM events
-            WHERE {conditions};
+            WHERE {conditions} OR {location_condition};
         """
         rows_deleted = self.db_handler.execute_query(sql)
         if rows_deleted is not None:
             logging.info(
-                f"known_incorrect(): Deleted {rows_deleted} event(s) matching keywords: {known_incorrect_urls}"
+                f"known_incorrect(): Deleted {rows_deleted} event(s) matching keywords: {known_incorrect_urls} or problematic location"
             )
         else:
             logging.error(
-                f"known_incorrect(): Failed to delete events matching keywords: {known_incorrect_urls}"
+                f"known_incorrect(): Failed to delete events matching keywords: {known_incorrect_urls} or problematic location"
             )
 
 
@@ -1060,8 +1064,8 @@ class CleanUp:
             if not response or "no duplicates" in response.lower():
                 logging.info("apply_deduplication_response(): LLM response indicates no duplicates.")
                 return
-            # Use the robust parsing methods from LLMHandler
-            parsed_response = self.llm_handler.extract_and_parse_json(response, "address_dedup", "address_deduplication")
+            # Use the robust parsing methods from LLMHandler (no schema for semantic clustering method)
+            parsed_response = self.llm_handler.extract_and_parse_json(response, "address_dedup", None)
             if not parsed_response:
                 logging.warning("apply_deduplication_response(): Failed to parse LLM response using robust parsing")
                 return
@@ -1173,7 +1177,7 @@ class CleanUp:
         Generate a complete LLM prompt from the semantic deduplication prompt template
         and the given subcluster of address records.
         """
-        template_path = self.config["prompts"]["fix_dup_addresses_semantic_clustering"]
+        template_path = self.config["prompts"]["fix_dup_addresses_semantic_clustering"]["file"]
         with open(template_path, "r", encoding="utf-8") as f:
             template = f.read().strip()
 

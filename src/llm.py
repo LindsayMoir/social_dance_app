@@ -912,7 +912,7 @@ class LLMHandler:
             logging.info("extract_and_parse_json(): No events found.")
             return None
         # Allow shorter responses for address deduplication (typically ~50-100 chars)
-        min_length = 30 if "address_id" in result and "Label" in result else 100
+        min_length = 30 if ("address_id" in result and "Label" in result) or "canonical_address_id" in result else 100
         if len(result) <= min_length:
             logging.info(f"extract_and_parse_json(): Result too short (< {min_length} chars).")
             return None
@@ -957,7 +957,7 @@ class LLMHandler:
             blob = result[start:end]
 
         # Allow shorter blobs for address deduplication 
-        min_blob_length = 30 if "address_id" in blob and "Label" in blob else 100
+        min_blob_length = 30 if ("address_id" in blob and "Label" in blob) or "canonical_address_id" in blob else 100
         if len(blob) < min_blob_length:
             logging.info(f"extract_and_parse_json(): Blob too short (< {min_blob_length} chars):\n{blob}")
             return None
