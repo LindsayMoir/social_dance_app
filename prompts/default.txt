@@ -54,7 +54,7 @@ ________________________________________
 9. Example  
 Valid output must look like:
 [{
-    "source": "<The original source of information for this event>",
+    "source": "<Name of the organization, venue, or group hosting/organizing this event (e.g., 'Victoria West Coast Swing Collective', 'The Coda', 'Salsa Caliente')>",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "<''>",
     "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
@@ -69,7 +69,7 @@ Valid output must look like:
     "description": "<short summary of event details>"
 },
 {
-    "source": "<The original source of information for this event>",
+    "source": "<Name of the organization, venue, or group hosting/organizing this event (e.g., 'Victoria West Coast Swing Collective', 'The Coda', 'Salsa Caliente')>",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "<''>",
     "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
@@ -84,7 +84,7 @@ Valid output must look like:
     "description": "<short summary of event details>"
 },
 {
-    "source": "<The original source of information for this event>",
+    "source": "<Name of the organization, venue, or group hosting/organizing this event (e.g., 'Victoria West Coast Swing Collective', 'The Coda', 'Salsa Caliente')>",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "<''>",
     "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",

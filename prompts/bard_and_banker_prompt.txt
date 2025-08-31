@@ -7,7 +7,7 @@ ________________________________________
 For each identified event, provide the following details in JSON format.
 You MUST include all of these fields. If you do not have any information for one of the fields, put '' in the field. Always fill the url field as ''.
 [{
-    "source": "<The original source of information for this event>",
+    "source": "Bard and Banker",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "<''>",
     "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
@@ -22,7 +22,7 @@ You MUST include all of these fields. If you do not have any information for one
     "description": "<short summary of event details>"
 },
 {
-    "source": "<The original source of information for this event>",
+    "source": "Bard and Banker",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "<''>",
     "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
@@ -37,7 +37,7 @@ You MUST include all of these fields. If you do not have any information for one
     "description": "<short summary of event details>"
 },
 {
-    "source": "<The original source of information for this event>",
+    "source": "Bard and Banker",
     "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
     "url": "<''>",
     "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",

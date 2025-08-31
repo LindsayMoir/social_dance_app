@@ -7,7 +7,7 @@ ________________________________________
 For each identified event, provide the following details in JSON format.
 You MUST include all of these fields. If you do not have any information for one of the fields, put '' in the field. Always fill the url field as ''.
 [{
-    "source": "<The original source of information for this event>",
+    "source": "Deb Rhymer",
     "dance_style": "<balboa, lindy, swing, west coast swing, wcs>",
     "url": "<''>",
     "event_type": "<live music>",
@@ -22,7 +22,7 @@ You MUST include all of these fields. If you do not have any information for one
     "description": "<short summary of event details>"
 },
 {
-    "source": "<The original source of information for this event>",
+    "source": "Deb Rhymer",
     "dance_style": "<balboa, lindy, swing, west coast swing, wcs>",
     "url": "<''>",
     "event_type": "<live music>",
@@ -37,7 +37,7 @@ You MUST include all of these fields. If you do not have any information for one
     "description": "<short summary of event details>"
 },
 {
-    "source": "<The original source of information for this event>",
+    "source": "Deb Rhymer",
     "dance_style": "<balboa, lindy, swing, west coast swing, wcs>",
     "url": "<''>",
     "event_type": "<live music>",
