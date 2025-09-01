@@ -1383,6 +1383,86 @@ class DatabaseHandler():
 
         return df.index[0]
 
+    def _get_building_name_dictionary(self):
+        """
+        Creates and caches a dictionary mapping building names to address_ids from the address table.
+        
+        Returns:
+            dict: Dictionary with building_name (lowercase) as keys and address_id as values
+        """
+        if not hasattr(self, '_building_name_cache'):
+            logging.info("_get_building_name_dictionary: Building building name lookup cache")
+            query = "SELECT address_id, building_name FROM address WHERE building_name IS NOT NULL AND building_name != ''"
+            results = self.execute_query(query)
+            
+            self._building_name_cache = {}
+            if results:
+                for address_id, building_name in results:
+                    if building_name and building_name.strip():
+                        # Use lowercase for case-insensitive matching
+                        self._building_name_cache[building_name.lower().strip()] = address_id
+                        
+            logging.info(f"_get_building_name_dictionary: Cached {len(self._building_name_cache)} building names")
+        
+        return self._building_name_cache
+
+    def _extract_address_from_event_details(self, event: Dict[str, Any]) -> Optional[int]:
+        """
+        Attempts to extract building names from event_name and description, 
+        then matches them against existing addresses in the database.
+        
+        Args:
+            event: Dictionary containing event data
+            
+        Returns:
+            int or None: address_id if a match is found, None otherwise
+        """
+        building_dict = self._get_building_name_dictionary()
+        if not building_dict:
+            return None
+            
+        # Collect text to search from event details
+        search_texts = []
+        event_name = event.get("event_name", "")
+        description = event.get("description", "")
+        
+        if event_name:
+            search_texts.append(str(event_name))
+        if description:
+            search_texts.append(str(description))
+            
+        if not search_texts:
+            return None
+            
+        # Search for building names in the text
+        combined_text = " ".join(search_texts).lower()
+        
+        # First try exact matches
+        for building_name, address_id in building_dict.items():
+            if building_name in combined_text:
+                logging.info(f"_extract_address_from_event_details: Found exact match '{building_name}' -> address_id={address_id}")
+                return address_id
+                
+        # Then try fuzzy matching for partial matches
+        best_match = None
+        best_score = 0
+        
+        for building_name, address_id in building_dict.items():
+            # Skip very short building names for fuzzy matching to avoid false positives
+            if len(building_name) < 6:
+                continue
+                
+            score = fuzz.partial_ratio(building_name, combined_text)
+            if score > 80 and score > best_score:  # High threshold for fuzzy matching
+                best_score = score
+                best_match = (building_name, address_id)
+                
+        if best_match:
+            building_name, address_id = best_match
+            logging.info(f"_extract_address_from_event_details: Found fuzzy match '{building_name}' (score: {best_score}) -> address_id={address_id}")
+            return address_id
+            
+        return None
 
     def process_event_address(self, event: dict) -> dict:
         """
@@ -1396,10 +1476,22 @@ class DatabaseHandler():
         elif isinstance(location, str):
             location = location.strip()
 
-        # Handle case where location might be NaN (float) or empty string
-        if location is None or pd.isna(location) or not isinstance(location, str) or len(location) < 5:
-            logging.warning("process_event_address: Location too short or invalid, creating minimal address entry: %s", location)
-            # Create a minimal but valid address entry for short/invalid locations
+        # Handle case where location might be NaN (float), empty string, or 'Unknown'
+        if (location is None or pd.isna(location) or not isinstance(location, str) or 
+            len(location) < 5 or 'Unknown' in str(location)):
+            logging.warning("process_event_address: Location too short or invalid, attempting building name extraction: %s", location)
+            
+            # Try to extract building name from event details and match to existing addresses
+            extracted_address_id = self._extract_address_from_event_details(event)
+            if extracted_address_id:
+                event["address_id"] = extracted_address_id
+                full_address = self.get_full_address_from_id(extracted_address_id)
+                if full_address:
+                    event["location"] = full_address
+                    logging.info(f"process_event_address: Found existing address via building name extraction: address_id={extracted_address_id}")
+                    return event
+            
+            # If no match found, create a minimal but valid address entry
             event_name = event.get("event_name") or "Unknown Event"
             source = event.get("source") or "Unknown Source"
             

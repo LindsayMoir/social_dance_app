@@ -2037,8 +2037,7 @@ async def main():
     logging.info("Standardizing postal code formats...")
     clean_up_instance.db_handler.standardize_postal_codes()
 
-    # Fix specific location mappings
-    await clean_up_instance.fix_specific_location_mappings()
+    # Note: Specific location mappings now handled automatically by building name dictionary in write_events_to_db
 
     # Delete events at closed venues
     await clean_up_instance.delete_closed_venue_events()
