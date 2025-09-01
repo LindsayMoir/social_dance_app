@@ -502,12 +502,12 @@ class LLMHandler:
         json_schema = self._get_json_schema_by_type(schema_type, "mistral") if schema_type else None
         response_format = None
         if json_schema:
-            # If helper returns the raw JSON Schema, wrap it; if it already has name/schema/strict, keep as is
+            # If helper returns the raw JSON Schema, wrap it; if it already has name/schema, keep as is
+            # Note: Removed "strict": True for Mistral compatibility - Mistral doesn't support OpenAI's strict mode
             if not all(k in json_schema for k in ("name", "schema")):
                 json_schema = {
                     "name": schema_type or "StructuredOutput",
                     "schema": json_schema,
-                    "strict": True,
                 }
             response_format = {"type": "json_schema", "json_schema": json_schema}
 
@@ -680,7 +680,6 @@ class LLMHandler:
             schemas = {
                 "event_extraction": {
                     "name": "event_extraction",
-                    "strict": True,
                     "schema": {
                         "type": "array",
                         "items": {
@@ -694,7 +693,6 @@ class LLMHandler:
                 
                 "address_extraction": {
                     "name": "address_extraction",
-                    "strict": True,
                     "schema": {
                         "type": "object",
                         "properties": {
@@ -721,7 +719,6 @@ class LLMHandler:
                 
                 "deduplication_response": {
                     "name": "deduplication_response", 
-                    "strict": True,
                     "schema": {
                         "type": "array",
                         "items": {
@@ -739,7 +736,6 @@ class LLMHandler:
                 
                 "relevance_classification": {
                     "name": "relevance_classification",
-                    "strict": True,
                     "schema": {
                         "type": "array",
                         "items": {
@@ -757,7 +753,6 @@ class LLMHandler:
                 
                 "address_deduplication": {
                     "name": "address_deduplication",
-                    "strict": True,
                     "schema": {
                         "type": "array",
                         "items": {
@@ -970,7 +965,6 @@ class LLMHandler:
 
         # 4) Try JSON parsing first (for structured output), then fall back to line-based parsing
         try:
-            import json
             json_data = json.loads(cleaned)
             
             # Handle different response formats

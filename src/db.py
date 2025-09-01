@@ -1112,6 +1112,9 @@ class DatabaseHandler():
 
         df['time_stamp'] = datetime.now()
 
+        # Clean day_of_week field to handle compound/invalid values
+        df = self._clean_day_of_week_field(df)
+
         # Basic location cleanup
         df = self.clean_up_address_basic(df)
 
@@ -1189,6 +1192,66 @@ class DatabaseHandler():
             for col in ['start_time', 'end_time']:
                 df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
             warnings.resetwarnings()
+
+    def _clean_day_of_week_field(self, df):
+        """
+        Cleans and standardizes the day_of_week field to handle compound/invalid values.
+        
+        This method fixes common issues with day_of_week values:
+        - Compound values like "Friday, Saturday" -> takes first day ("Friday")
+        - Special values like "Daily" -> converts to empty string
+        - Normalizes case and whitespace
+        
+        Args:
+            df (pd.DataFrame): DataFrame containing event data with day_of_week column
+            
+        Returns:
+            pd.DataFrame: DataFrame with cleaned day_of_week values
+        """
+        if 'day_of_week' not in df.columns:
+            return df
+            
+        original_count = len(df)
+        logging.info(f"_clean_day_of_week_field: Processing {original_count} events")
+        
+        # Track changes for logging
+        changes_made = 0
+        
+        for i, row in df.iterrows():
+            original_value = row.get('day_of_week', '')
+            if pd.isna(original_value) or not str(original_value).strip():
+                continue
+                
+            day_str = str(original_value).strip()
+            cleaned_value = original_value
+            
+            # Handle compound values like "Friday, Saturday" - take first day
+            if ',' in day_str:
+                cleaned_value = day_str.split(',')[0].strip()
+                changes_made += 1
+                logging.info(f"_clean_day_of_week_field: Changed compound day '{original_value}' to '{cleaned_value}' for event at index {i}")
+                
+            # Handle special values like "Daily"
+            elif day_str.lower() in ['daily', 'every day', 'everyday']:
+                cleaned_value = ''  # Set to empty, will be handled by validation later
+                changes_made += 1
+                logging.info(f"_clean_day_of_week_field: Changed special day '{original_value}' to empty for event at index {i}")
+                
+            # Normalize standard day names (capitalize first letter)
+            else:
+                valid_days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                day_lower = day_str.lower()
+                if day_lower in valid_days:
+                    cleaned_value = day_lower.capitalize()
+                    if cleaned_value != original_value:
+                        changes_made += 1
+                
+            # Update the DataFrame if value changed
+            if cleaned_value != original_value:
+                df.at[i, 'day_of_week'] = cleaned_value
+        
+        logging.info(f"_clean_day_of_week_field: Made {changes_made} changes to day_of_week values")
+        return df
 
     def _filter_events(self, df):
         """
@@ -1336,23 +1399,41 @@ class DatabaseHandler():
         # Handle case where location might be NaN (float) or empty string
         if location is None or pd.isna(location) or not isinstance(location, str) or len(location) < 5:
             logging.warning("process_event_address: Location too short or invalid, creating minimal address entry: %s", location)
-            # Create a minimal address entry for short/invalid locations
+            # Create a minimal but valid address entry for short/invalid locations
             event_name = event.get("event_name") or "Unknown Event"
+            source = event.get("source") or "Unknown Source"
+            
             minimal_address = {
+                "address_id": 0,
+                "full_address": f"Location details unavailable - {source}",
                 "building_name": str(event_name)[:50],  # Use event name as building
+                "street_number": "",
+                "street_name": "",
+                "street_type": "",
+                "direction": None,
                 "city": "Unknown",
+                "met_area": None,
                 "province_or_state": "BC", 
-                "country_id": "CA"
+                "postal_code": None,
+                "country_id": "CA",
+                "time_stamp": None
             }
+            
             address_id = self.resolve_or_insert_address(minimal_address)
             if address_id:
                 event["address_id"] = address_id
                 full_address = self.get_full_address_from_id(address_id)
                 if full_address:
                     event["location"] = full_address
+                else:
+                    event["location"] = minimal_address["full_address"]  # Fallback to our description
+                logging.info(f"process_event_address: Created minimal address entry with address_id={address_id}")
                 return event
             else:
-                logging.error("process_event_address: Failed to create minimal address entry")
+                logging.error("process_event_address: Failed to create minimal address entry, setting default values")
+                # Final fallback - set reasonable defaults instead of None
+                event["address_id"] = 0
+                event["location"] = f"Location unavailable - {source}"
                 return event
 
         # STEP 1: Check raw_locations cache (fastest - exact string match)

@@ -353,7 +353,15 @@ class CleanUp:
         gsa_match = gsa_pattern.search(content, last_day_match.end())
         if not gsa_match:
             logging.warning(f"'Guests See All' not found after last day of the week in {link}.")
-            return None
+            # Fallback: Extract a reasonable amount of text after the day match to investigate what's actually there
+            fallback_end = min(last_day_match.end() + 2000, len(content))  # Extract up to 2000 chars or end of content
+            extracted_text = content[day_start:fallback_end]
+            
+            # Log a sample of what we found instead to help debug Facebook UI changes
+            sample_text = extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text
+            logging.info(f"extract_relevant_text(): Using fallback extraction for {link}. Found text: {sample_text}")
+            
+            return extracted_text
 
         gsa_end = gsa_match.end()
 
@@ -1205,6 +1213,69 @@ class CleanUp:
             logging.info("delete_closed_venue_events(): No events found at Victoria Event Centre")
 
 
+    async def fix_extracted_text_sources(self):
+        """
+        Updates events with 'extracted_text' as source to have proper organization names.
+        Uses LLM to extract the hosting organization from event details.
+        """
+        logging.info("Starting fix for events with 'extracted_text' as source...")
+        
+        # Find all events with 'extracted_text' as source
+        events_with_bad_source = self.db_handler.execute_query(
+            "SELECT event_id, event_name, description, location FROM events WHERE source = 'extracted_text'"
+        )
+        
+        if not events_with_bad_source:
+            logging.info("fix_extracted_text_sources(): No events found with 'extracted_text' as source")
+            return
+            
+        logging.info(f"fix_extracted_text_sources(): Found {len(events_with_bad_source)} events with 'extracted_text' as source")
+        
+        updated_count = 0
+        
+        for event_id, event_name, description, location in events_with_bad_source:
+            try:
+                # Create prompt to extract organization name
+                prompt = f"""
+Extract the name of the organization, venue, or group that is hosting/organizing this event from the given information.
+
+Event Name: {event_name or 'Not specified'}
+Description: {description or 'Not specified'}
+Location: {location or 'Not specified'}
+
+Return ONLY the organization name, nothing else. If you cannot determine a specific organization, return the venue name from the location field. If no clear organization can be identified, return 'Unknown Organization'.
+
+Examples:
+- If location is "Victoria Ballroom, 1234 Main St", return "Victoria Ballroom"
+- If description mentions "hosted by Dance Victoria", return "Dance Victoria" 
+- If event is clearly at a specific venue, return that venue name
+"""
+                
+                # Get LLM response
+                response = await self.llm_handler.get_completion(prompt, "chatbot_instructions")
+                
+                if response and response.strip():
+                    new_source = response.strip()
+                    
+                    # Update the event's source
+                    update_count = self.db_handler.execute_query(
+                        "UPDATE events SET source = :new_source WHERE event_id = :event_id",
+                        {"new_source": new_source, "event_id": event_id}
+                    )
+                    
+                    if update_count and update_count > 0:
+                        updated_count += 1
+                        logging.info(f"fix_extracted_text_sources(): Updated event {event_id} '{event_name}' source to '{new_source}'")
+                    else:
+                        logging.warning(f"fix_extracted_text_sources(): Failed to update event {event_id}")
+                        
+            except Exception as e:
+                logging.error(f"fix_extracted_text_sources(): Error processing event {event_id}: {e}")
+                continue
+                
+        logging.info(f"fix_extracted_text_sources(): Successfully updated {updated_count} events")
+
+
     def apply_deduplication_response(self, response, preview_mode=False):
         """
         Apply deduplication results to the database.
@@ -1291,36 +1362,65 @@ class CleanUp:
                     
                 logging.info(f"apply_deduplication_response(): Added {len(duplicates)} proposed duplicates to {csv_file} for review")
             else:
-                # Original deletion logic
+                # Original deletion logic with improved foreign key handling
                 total_events_updated = 0
                 for dup_id in duplicates:
                     logging.info(f"apply_deduplication_response(): Repointing events from {dup_id} → {canonical_id}")
 
-                    num_events_updated = self.db_handler.execute_query(
-                        """
-                        UPDATE events 
-                        SET address_id = :canonical, location = :full_address 
-                        WHERE address_id = :duplicate
-                        """,
-                        {
-                            "canonical": canonical_id,
-                            "duplicate": dup_id,
-                            "full_address": canonical_address
-                        }
-                    )
-                    total_events_updated += num_events_updated or 0
-                    logging.info(f"apply_deduplication_response(): Updated {num_events_updated} events from {dup_id} to {canonical_id}")
+                    try:
+                        # Step 1: Update events to point to canonical address
+                        num_events_updated = self.db_handler.execute_query(
+                            """
+                            UPDATE events 
+                            SET address_id = :canonical, location = :full_address 
+                            WHERE address_id = :duplicate
+                            """,
+                            {
+                                "canonical": canonical_id,
+                                "duplicate": dup_id,
+                                "full_address": canonical_address
+                            }
+                        )
+                        total_events_updated += num_events_updated or 0
+                        logging.info(f"apply_deduplication_response(): Updated {num_events_updated} events from {dup_id} to {canonical_id}")
 
-                    # Update raw_locations to point to canonical address before deleting
-                    logging.info(f"apply_deduplication_response(): Updating raw_locations references from {dup_id} to {canonical_id}")
-                    num_raw_locations_updated = self.db_handler.execute_query(
-                        "UPDATE raw_locations SET address_id = :canonical WHERE address_id = :duplicate",
-                        {"canonical": canonical_id, "duplicate": dup_id}
-                    )
-                    logging.info(f"apply_deduplication_response(): Updated {num_raw_locations_updated} raw_locations from {dup_id} to {canonical_id}")
+                        # Step 2: Update raw_locations to point to canonical address
+                        logging.info(f"apply_deduplication_response(): Updating raw_locations references from {dup_id} to {canonical_id}")
+                        num_raw_locations_updated = self.db_handler.execute_query(
+                            "UPDATE raw_locations SET address_id = :canonical WHERE address_id = :duplicate",
+                            {"canonical": canonical_id, "duplicate": dup_id}
+                        )
+                        logging.info(f"apply_deduplication_response(): Updated {num_raw_locations_updated} raw_locations from {dup_id} to {canonical_id}")
 
-                    logging.info(f"apply_deduplication_response(): Deleting address_id {dup_id} from address table")
-                    self.db_handler.execute_query("DELETE FROM address WHERE address_id = :id", {"id": dup_id})
+                        # Step 3: Verify no references remain before deleting
+                        remaining_events = self.db_handler.execute_query(
+                            "SELECT COUNT(*) FROM events WHERE address_id = :id",
+                            {"id": dup_id}
+                        )
+                        remaining_raw_locations = self.db_handler.execute_query(
+                            "SELECT COUNT(*) FROM raw_locations WHERE address_id = :id",
+                            {"id": dup_id}
+                        )
+                        
+                        if remaining_events and remaining_events[0][0] > 0:
+                            logging.warning(f"apply_deduplication_response(): Cannot delete address_id {dup_id} - still referenced by {remaining_events[0][0]} events")
+                            continue
+                        
+                        if remaining_raw_locations and remaining_raw_locations[0][0] > 0:
+                            logging.warning(f"apply_deduplication_response(): Cannot delete address_id {dup_id} - still referenced by {remaining_raw_locations[0][0]} raw_locations")
+                            continue
+
+                        # Step 4: Safe to delete the duplicate address
+                        logging.info(f"apply_deduplication_response(): Deleting address_id {dup_id} from address table")
+                        delete_result = self.db_handler.execute_query("DELETE FROM address WHERE address_id = :id", {"id": dup_id})
+                        if delete_result is not None:
+                            logging.info(f"apply_deduplication_response(): Successfully deleted address_id {dup_id}")
+                        else:
+                            logging.error(f"apply_deduplication_response(): Failed to delete address_id {dup_id}")
+                            
+                    except Exception as e:
+                        logging.error(f"apply_deduplication_response(): Error processing duplicate address_id {dup_id}: {e}")
+                        continue
 
                 logging.info(
                     f"apply_deduplication_response(): Cluster update summary → canonical_id {canonical_id}, "
@@ -1764,28 +1864,56 @@ class CleanUp:
             logging.info(f"Deleting {len(duplicate_ids)} duplicate addresses from database...")
             deleted_count = 0
             for addr_id in duplicate_ids:
-                # First update events to point to canonical address
-                canonical_group = review_df[review_df['group_id'] == review_df[review_df['address_id'] == addr_id]['group_id'].iloc[0]]
-                canonical_id = int(canonical_group[canonical_group['status'] == 'CANONICAL']['address_id'].iloc[0])
-                canonical_address = canonical_group[canonical_group['status'] == 'CANONICAL']['full_address'].iloc[0]
-                
-                # Update events
-                self.db_handler.execute_query(
-                    "UPDATE events SET address_id = :canonical, location = :address WHERE address_id = :duplicate",
-                    {"canonical": canonical_id, "address": canonical_address, "duplicate": addr_id}
-                )
-                
-                # Update raw_locations to point to canonical address before deleting
-                logging.info(f"Updating raw_locations references from {addr_id} to {canonical_id}")
-                num_raw_locations_updated = self.db_handler.execute_query(
-                    "UPDATE raw_locations SET address_id = :canonical WHERE address_id = :duplicate",
-                    {"canonical": canonical_id, "duplicate": addr_id}
-                )
-                logging.info(f"Updated {num_raw_locations_updated} raw_locations from {addr_id} to {canonical_id}")
-                
-                # Delete duplicate address
-                self.db_handler.execute_query("DELETE FROM address WHERE address_id = :id", {"id": addr_id})
-                deleted_count += 1
+                try:
+                    # First update events to point to canonical address
+                    canonical_group = review_df[review_df['group_id'] == review_df[review_df['address_id'] == addr_id]['group_id'].iloc[0]]
+                    canonical_id = int(canonical_group[canonical_group['status'] == 'CANONICAL']['address_id'].iloc[0])
+                    canonical_address = canonical_group[canonical_group['status'] == 'CANONICAL']['full_address'].iloc[0]
+                    
+                    # Step 1: Update events
+                    events_updated = self.db_handler.execute_query(
+                        "UPDATE events SET address_id = :canonical, location = :address WHERE address_id = :duplicate",
+                        {"canonical": canonical_id, "address": canonical_address, "duplicate": addr_id}
+                    )
+                    logging.info(f"Updated {events_updated or 0} events from address_id {addr_id} to {canonical_id}")
+                    
+                    # Step 2: Update raw_locations to point to canonical address before deleting
+                    logging.info(f"Updating raw_locations references from {addr_id} to {canonical_id}")
+                    num_raw_locations_updated = self.db_handler.execute_query(
+                        "UPDATE raw_locations SET address_id = :canonical WHERE address_id = :duplicate",
+                        {"canonical": canonical_id, "duplicate": addr_id}
+                    )
+                    logging.info(f"Updated {num_raw_locations_updated} raw_locations from {addr_id} to {canonical_id}")
+                    
+                    # Step 3: Verify no references remain before deleting
+                    remaining_events = self.db_handler.execute_query(
+                        "SELECT COUNT(*) FROM events WHERE address_id = :id",
+                        {"id": addr_id}
+                    )
+                    remaining_raw_locations = self.db_handler.execute_query(
+                        "SELECT COUNT(*) FROM raw_locations WHERE address_id = :id",
+                        {"id": addr_id}
+                    )
+                    
+                    if remaining_events and remaining_events[0][0] > 0:
+                        logging.warning(f"Cannot delete address_id {addr_id} - still referenced by {remaining_events[0][0]} events")
+                        continue
+                    
+                    if remaining_raw_locations and remaining_raw_locations[0][0] > 0:
+                        logging.warning(f"Cannot delete address_id {addr_id} - still referenced by {remaining_raw_locations[0][0]} raw_locations")
+                        continue
+
+                    # Step 4: Safe to delete duplicate address
+                    delete_result = self.db_handler.execute_query("DELETE FROM address WHERE address_id = :id", {"id": addr_id})
+                    if delete_result is not None:
+                        deleted_count += 1
+                        logging.info(f"Successfully deleted address_id {addr_id}")
+                    else:
+                        logging.error(f"Failed to delete address_id {addr_id}")
+                        
+                except Exception as e:
+                    logging.error(f"Error processing duplicate address_id {addr_id}: {e}")
+                    continue
                 
             logging.info(f"Successfully deleted {deleted_count} duplicate addresses")
             return deleted_count
@@ -1914,6 +2042,9 @@ async def main():
 
     # Delete events at closed venues
     await clean_up_instance.delete_closed_venue_events()
+
+    # Fix events with 'extracted_text' as source
+    await clean_up_instance.fix_extracted_text_sources()
 
     # Fix no urls in events
     await clean_up_instance.process_events_without_url()

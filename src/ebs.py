@@ -220,8 +220,23 @@ class EventbriteScraper:
                     logging.error(f"def perform_search(): Search box not found (attempt {attempt}).")
                     raise Exception("Search box not found.")
 
-                await search_box.fill(query)
-                await search_box.press("Enter")
+                # Add retry logic for DOM attachment issues
+                try:
+                    await search_box.fill(query)
+                    await search_box.press("Enter")
+                except Exception as fill_error:
+                    if "not attached to the DOM" in str(fill_error):
+                        logging.info(f"def perform_search(): DOM attachment issue, waiting and retrying fill for '{query}'")
+                        await asyncio.sleep(2)  # Wait for DOM to stabilize
+                        # Re-query the element
+                        search_box = await self.read_extract.page.query_selector(search_selector)
+                        if search_box:
+                            await search_box.fill(query)
+                            await search_box.press("Enter")
+                        else:
+                            raise Exception("Search box disappeared after DOM detachment")
+                    else:
+                        raise fill_error
                 logging.info(f"def perform_search(): Performed search '{query}' (attempt {attempt}).")
 
                 to = random.randint(15000 // 2, int(15000 * 1.5))
