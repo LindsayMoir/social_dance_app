@@ -13,6 +13,7 @@ import os
 import sys
 import logging
 import yaml
+from datetime import datetime
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -133,12 +134,18 @@ def process_query(request: QueryRequest):
                 for msg in recent_messages[-3:]  # Last 3 messages for context
             ])
             
+            # Get current date context
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            current_day_of_week = datetime.now().isoweekday()  # Monday=1, Sunday=7
+            
             # Construct contextual prompt
             prompt = base_prompt.format(
                 context_info=str(context),
                 conversation_history=history_text,
                 intent=intent,
-                entities=str(entities)
+                entities=str(entities),
+                current_date=current_date,
+                current_day_of_week=current_day_of_week
             )
             prompt += f"\n\nCurrent User Question: \"{user_input}\""
             
