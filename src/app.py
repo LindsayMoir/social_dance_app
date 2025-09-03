@@ -160,78 +160,78 @@ if process_input:
         events = data["data"]
 
         # Process events data
-            if events:
-                # Show results summary
-                intent_info = f" (Intent: {data.get('intent', 'search')})" if data.get('intent') else ""
-                st.success(f"Found {len(events)} events{intent_info}")
-                
-                # Add follow-up suggestion buttons based on intent
-                if data.get('intent') == 'search' and len(events) > 0:
-                    st.write("💡 **Try these follow-up questions:**")
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        if st.button("Show different styles"):
-                            st.session_state["suggested_input"] = "What other dance styles are available?"
-                            st.rerun()
-                    with col2:
-                        if st.button("Show classes instead"):
-                            st.session_state["suggested_input"] = "Any classes or workshops?"
-                            st.rerun()
-                    with col3:
-                        if st.button("Show tomorrow"):
-                            st.session_state["suggested_input"] = "What about tomorrow?"
-                            st.rerun()
-                
-                # Create a scrollable container to hold the events
-                with st.container():
-                    st.markdown("<hr>", unsafe_allow_html=True)  # Add a separator line
+        if events:
+            # Show results summary
+            intent_info = f" (Intent: {data.get('intent', 'search')})" if data.get('intent') else ""
+            st.success(f"Found {len(events)} events{intent_info}")
+            
+            # Add follow-up suggestion buttons based on intent
+            if data.get('intent') == 'search' and len(events) > 0:
+                st.write("💡 **Try these follow-up questions:**")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    if st.button("Show different styles"):
+                        st.session_state["suggested_input"] = "What other dance styles are available?"
+                        st.rerun()
+                with col2:
+                    if st.button("Show classes instead"):
+                        st.session_state["suggested_input"] = "Any classes or workshops?"
+                        st.rerun()
+                with col3:
+                    if st.button("Show tomorrow"):
+                        st.session_state["suggested_input"] = "What about tomorrow?"
+                        st.rerun()
+            
+            # Create a scrollable container to hold the events
+            with st.container():
+                st.markdown("<hr>", unsafe_allow_html=True)  # Add a separator line
 
-                    for i, event in enumerate(events):
-                        event_name = event.get('event_name', 'No Name')
-                        url = event.get('url', '#')
-                        
-                        # Create expandable event cards
-                        with st.expander(f"🎵 {event_name}", expanded=i < 3):  # Expand first 3 events
-                            # Only create a hyperlink if the URL is properly formatted
-                            if isinstance(url, str) and url.startswith("http"):
-                                st.markdown(f'🔗 [**Event Link**]({url})')
-                            
-                            # Display event details in a more organized way
-                            col1, col2 = st.columns(2)
-                            
-                            with col1:
-                                st.write(f"**Dance Style:** {event.get('dance_style', 'N/A')}")
-                                st.write(f"**Event Type:** {event.get('event_type', 'N/A')}")
-                                st.write(f"**Day:** {event.get('day_of_week', 'N/A')}")
-                                st.write(f"**Date:** {event.get('start_date', 'N/A')}")
-                            
-                            with col2:
-                                st.write(f"**Time:** {event.get('start_time', 'N/A')} - {event.get('end_time', 'N/A')}")
-                                st.write(f"**Price:** {event.get('price', 'N/A')}")
-                                st.write(f"**Source:** {event.get('source', 'N/A')}")
-                            
-                            st.write(f"**Location:** {event.get('location', 'N/A')}")
-                            
-                            if event.get('description'):
-                                st.write(f"**Description:** {event.get('description')}")
-                            
-                            st.markdown("---")
-            else:
-                # If no events are returned and a valid SQL query exists, call error_handling with a custom message BEFORE showing the SQL query.
-                if data.get('sql_query'):
-                    error_handling("No events returned", custom_message="Sorry, I could not find those events in my database.")
+                for i, event in enumerate(events):
+                    event_name = event.get('event_name', 'No Name')
+                    url = event.get('url', '#')
                     
-                    # Show refinement suggestions when no results found
-                    st.write("💡 **Try refining your search:**")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("Try different dance style"):
-                            st.session_state["suggested_input"] = "Show me any dance events"
-                            st.rerun()
-                    with col2:
-                        if st.button("Expand time range"):
-                            st.session_state["suggested_input"] = "Show me events this week"
-                            st.rerun()
+                    # Create expandable event cards
+                    with st.expander(f"🎵 {event_name}", expanded=i < 3):  # Expand first 3 events
+                        # Only create a hyperlink if the URL is properly formatted
+                        if isinstance(url, str) and url.startswith("http"):
+                            st.markdown(f'🔗 [**Event Link**]({url})')
+                        
+                        # Display event details in a more organized way
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.write(f"**Dance Style:** {event.get('dance_style', 'N/A')}")
+                            st.write(f"**Event Type:** {event.get('event_type', 'N/A')}")
+                            st.write(f"**Day:** {event.get('day_of_week', 'N/A')}")
+                            st.write(f"**Date:** {event.get('start_date', 'N/A')}")
+                        
+                        with col2:
+                            st.write(f"**Time:** {event.get('start_time', 'N/A')} - {event.get('end_time', 'N/A')}")
+                            st.write(f"**Price:** {event.get('price', 'N/A')}")
+                            st.write(f"**Source:** {event.get('source', 'N/A')}")
+                        
+                        st.write(f"**Location:** {event.get('location', 'N/A')}")
+                        
+                        if event.get('description'):
+                            st.write(f"**Description:** {event.get('description')}")
+                        
+                        st.markdown("---")
+        else:
+            # If no events are returned and a valid SQL query exists, call error_handling with a custom message BEFORE showing the SQL query.
+            if data.get('sql_query'):
+                error_handling("No events returned", custom_message="Sorry, I could not find those events in my database.")
+                
+                # Show refinement suggestions when no results found
+                st.write("💡 **Try refining your search:**")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Try different dance style"):
+                        st.session_state["suggested_input"] = "Show me any dance events"
+                        st.rerun()
+                with col2:
+                    if st.button("Expand time range"):
+                        st.session_state["suggested_input"] = "Show me events this week"
+                        st.rerun()
             
         # Display the SQL query in an expandable section
         with st.expander("🔍 View Generated SQL Query", expanded=False):
