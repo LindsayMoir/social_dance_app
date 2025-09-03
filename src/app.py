@@ -175,27 +175,30 @@ if process_input:
     except Exception as e:
         error_handling(e)
 
-# If there are messages, show the full conversation thread like ChatGPT
+# Display conversation in ChatGPT style: Input → Response → Input → Response
 if st.session_state["messages"]:
     st.markdown("---")
     
-    # Display full conversation history in chronological order (oldest first)
-    for i, message in enumerate(st.session_state["messages"]):
-        if message["role"] == "user":
-            st.markdown(f"### 🧑 You:")
-            st.markdown(f"*{message['content']}*")
-            
-        elif message["role"] == "assistant":
+    # Process messages in pairs (user question + assistant response)
+    for i in range(0, len(st.session_state["messages"]), 2):
+        # User message
+        user_msg = st.session_state["messages"][i]
+        st.markdown(f"### 🧑 You:")
+        st.markdown(f"*{user_msg['content']}*")
+        
+        # Assistant response (if it exists)
+        if i + 1 < len(st.session_state["messages"]):
+            assistant_msg = st.session_state["messages"][i + 1]
             st.markdown(f"### 🤖 Assistant:")
             
             # Display events if they exist in this message
-            events = message.get("events", [])
+            events = assistant_msg.get("events", [])
             if events:
-                intent_info = f" (Intent: {message.get('intent', 'search')})" if message.get('intent') else ""
+                intent_info = f" (Intent: {assistant_msg.get('intent', 'search')})" if assistant_msg.get('intent') else ""
                 st.success(f"Found {len(events)} events{intent_info}")
                 
-                # Add follow-up suggestion buttons only for the most recent assistant message
-                if i == len(st.session_state["messages"]) - 1 and message.get('intent') == 'search' and len(events) > 0:
+                # Add follow-up suggestion buttons only for the most recent response
+                if i + 1 == len(st.session_state["messages"]) - 1 and assistant_msg.get('intent') == 'search' and len(events) > 0:
                     st.write("💡 **Try these follow-up questions:**")
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -217,8 +220,8 @@ if st.session_state["messages"]:
                         event_name = event.get('event_name', 'No Name')
                         url = event.get('url', '#')
                         
-                        # Create expandable event cards (expand first 2 for latest query only)
-                        expanded = (i == len(st.session_state["messages"]) - 1 and j < 2)
+                        # Create expandable event cards (expand first 2 for latest response only)
+                        expanded = (i + 1 == len(st.session_state["messages"]) - 1 and j < 2)
                         with st.expander(f"🎵 {event_name}", expanded=expanded):
                             # Only create a hyperlink if the URL is properly formatted
                             if isinstance(url, str) and url.startswith("http"):
@@ -243,11 +246,14 @@ if st.session_state["messages"]:
                             if event.get('description'):
                                 st.write(f"**Description:** {event.get('description')}")
             else:
-                # Handle case where no events were found
-                st.info("No events found for this query.")
+                # Handle case where no events were found or general response
+                if assistant_msg.get('content'):
+                    st.info(assistant_msg['content'])
+                else:
+                    st.info("No events found for this query.")
                 
-                # Show refinement suggestions for the most recent query with no results
-                if i == len(st.session_state["messages"]) - 1:
+                # Show refinement suggestions for the most recent response with no results
+                if i + 1 == len(st.session_state["messages"]) - 1:
                     st.write("💡 **Try refining your search:**")
                     col1, col2 = st.columns(2)
                     with col1:
@@ -259,76 +265,78 @@ if st.session_state["messages"]:
                             st.session_state["suggested_input"] = "Show me events this week"
                             st.rerun()
             
-            # Show SQL query for the most recent query only
-            if i == len(st.session_state["messages"]) - 1 and message.get("sql_query"):
+            # Show SQL query for the most recent response only
+            if i + 1 == len(st.session_state["messages"]) - 1 and assistant_msg.get("sql_query"):
                 with st.expander("🔍 View Generated SQL Query", expanded=False):
-                    st.code(message.get('sql_query', 'No SQL query provided'), language='sql')
+                    st.code(assistant_msg.get('sql_query', 'No SQL query provided'), language='sql')
         
-        # Add separator between conversation turns
-        if i < len(st.session_state["messages"]) - 1:
+        # Show input field after each response (except the last one gets special treatment)
+        if i + 1 < len(st.session_state["messages"]) - 1:  # Not the last pair
             st.markdown("---")
-    
-    # Show the input field at the bottom for continued conversation
-    with st.container():
-        st.markdown("### 💭 Continue the Conversation")
-        
-        # Get user input for follow-up
-        followup_input = st.text_area("Ask another question or refine your search:", height=100, key="followup_input")
-        
-        # Create columns for buttons
-        col1, col2, col3 = st.columns([2, 1, 1])
-        
-        with col1:
-            if st.button("Send", type="primary", key="followup_send"):
-                if followup_input.strip():
-                    # Add to messages and process
-                    st.session_state["messages"].append({"role": "user", "content": followup_input})
-                    
-                    # Process the follow-up input
-                    try:
-                        payload = {
-                            "user_input": followup_input,
-                            "session_token": st.session_state["session_token"]
-                        }
-                        response = requests.post(FASTAPI_API_URL, json=payload)
-                        response.raise_for_status()
-                        data = response.json()
-                        
-                        # Update session state
-                        if data.get("conversation_id"):
-                            st.session_state["conversation_id"] = data["conversation_id"]
-                        if data.get("intent"):
-                            st.session_state["last_intent"] = data["intent"]
-                        
-                        # Store the complete response data for this follow-up query
-                        query_result = {
-                            "role": "assistant",
-                            "content": f"Found {len(data['data'])} events" if data.get('data') else "No events found",
-                            "events": data.get('data', []),
-                            "sql_query": data.get('sql_query', ''),
-                            "intent": data.get('intent', ''),
-                            "timestamp": followup_input  # Store what user asked
-                        }
-                        st.session_state["messages"].append(query_result)
-                        
-                        st.rerun()  # Refresh to show new results
-                        
-                    except Exception as e:
-                        error_handling(e)
+        else:  # This is the most recent exchange, show the active input field
+            st.markdown("---")
+            
+            # Show the active input field for continued conversation
+            with st.container():
+                st.markdown("### 💭 Continue the Conversation")
+                
+                # Get user input for follow-up
+                followup_input = st.text_area("Ask another question or refine your search:", height=100, key="followup_input")
+                
+                # Create columns for buttons
+                col1, col2, col3 = st.columns([2, 1, 1])
+                
+                with col1:
+                    if st.button("Send", type="primary", key="followup_send"):
+                        if followup_input.strip():
+                            # Add to messages and process
+                            st.session_state["messages"].append({"role": "user", "content": followup_input})
+                            
+                            # Process the follow-up input
+                            try:
+                                payload = {
+                                    "user_input": followup_input,
+                                    "session_token": st.session_state["session_token"]
+                                }
+                                response = requests.post(FASTAPI_API_URL, json=payload)
+                                response.raise_for_status()
+                                data = response.json()
+                                
+                                # Update session state
+                                if data.get("conversation_id"):
+                                    st.session_state["conversation_id"] = data["conversation_id"]
+                                if data.get("intent"):
+                                    st.session_state["last_intent"] = data["intent"]
+                                
+                                # Store the complete response data for this follow-up query
+                                query_result = {
+                                    "role": "assistant",
+                                    "content": f"Found {len(data['data'])} events" if data.get('data') else "No events found",
+                                    "events": data.get('data', []),
+                                    "sql_query": data.get('sql_query', ''),
+                                    "intent": data.get('intent', ''),
+                                    "timestamp": followup_input  # Store what user asked
+                                }
+                                st.session_state["messages"].append(query_result)
+                                
+                                st.rerun()  # Refresh to show new results
+                                
+                            except Exception as e:
+                                error_handling(e)
+                                st.rerun()
+                
+                with col2:
+                    if st.button("New Search", key="followup_new"):
+                        # Clear conversation context for new search
+                        st.session_state["session_token"] = str(uuid.uuid4())
+                        st.session_state["conversation_id"] = None
+                        st.session_state["last_intent"] = None
+                        st.session_state["messages"] = []
                         st.rerun()
-        
-        with col2:
-            if st.button("New Search", key="followup_new"):
-                # Clear conversation context for new search
-                st.session_state["session_token"] = str(uuid.uuid4())
-                st.session_state["conversation_id"] = None
-                st.session_state["last_intent"] = None
-                st.session_state["messages"] = []
-                st.rerun()
-        
-        with col3:
-            if st.button("Clear Chat", key="followup_clear"):
-                st.session_state["messages"] = []
-                st.rerun()
+                
+                with col3:
+                    if st.button("Clear Chat", key="followup_clear"):
+                        st.session_state["messages"] = []
+                        st.rerun()
 else:
     st.info("💡 Start a conversation by asking a question above!")
