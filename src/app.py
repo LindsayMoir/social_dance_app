@@ -158,107 +158,115 @@ if process_input:
         if data.get("intent"):
             st.session_state["last_intent"] = data["intent"]
         
-        # Display results
-        st.markdown("### 🎉 Search Results")
-        
-        # Get the event data from the response
-        events = data["data"]
+        # Store the complete response data for this query in session state
+        query_result = {
+            "role": "assistant",
+            "content": f"Found {len(data['data'])} events" if data.get('data') else "No events found",
+            "events": data.get('data', []),
+            "sql_query": data.get('sql_query', ''),
+            "intent": data.get('intent', ''),
+            "timestamp": input_to_process  # Store what user asked
+        }
+        st.session_state["messages"].append(query_result)
 
-        # Process events data
-        if events:
-            # Show results summary
-            intent_info = f" (Intent: {data.get('intent', 'search')})" if data.get('intent') else ""
-            st.success(f"Found {len(events)} events{intent_info}")
-            
-            # Add follow-up suggestion buttons based on intent
-            if data.get('intent') == 'search' and len(events) > 0:
-                st.write("💡 **Try these follow-up questions:**")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if st.button("Show different styles"):
-                        st.session_state["suggested_input"] = "What other dance styles are available?"
-                        st.rerun()
-                with col2:
-                    if st.button("Show classes instead"):
-                        st.session_state["suggested_input"] = "Any classes or workshops?"
-                        st.rerun()
-                with col3:
-                    if st.button("Show tomorrow"):
-                        st.session_state["suggested_input"] = "What about tomorrow?"
-                        st.rerun()
-            
-            # Create a scrollable container to hold the events
-            with st.container():
-                st.markdown("<hr>", unsafe_allow_html=True)  # Add a separator line
-
-                for i, event in enumerate(events):
-                    event_name = event.get('event_name', 'No Name')
-                    url = event.get('url', '#')
-                    
-                    # Create expandable event cards
-                    with st.expander(f"🎵 {event_name}", expanded=i < 3):  # Expand first 3 events
-                        # Only create a hyperlink if the URL is properly formatted
-                        if isinstance(url, str) and url.startswith("http"):
-                            st.markdown(f'🔗 [**Event Link**]({url})')
-                        
-                        # Display event details in a more organized way
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.write(f"**Dance Style:** {event.get('dance_style', 'N/A')}")
-                            st.write(f"**Event Type:** {event.get('event_type', 'N/A')}")
-                            st.write(f"**Day:** {event.get('day_of_week', 'N/A')}")
-                            st.write(f"**Date:** {event.get('start_date', 'N/A')}")
-                        
-                        with col2:
-                            st.write(f"**Time:** {event.get('start_time', 'N/A')} - {event.get('end_time', 'N/A')}")
-                            st.write(f"**Price:** {event.get('price', 'N/A')}")
-                            st.write(f"**Source:** {event.get('source', 'N/A')}")
-                        
-                        st.write(f"**Location:** {event.get('location', 'N/A')}")
-                        
-                        if event.get('description'):
-                            st.write(f"**Description:** {event.get('description')}")
-                        
-                        st.markdown("---")
-        else:
-            # If no events are returned and a valid SQL query exists, call error_handling with a custom message BEFORE showing the SQL query.
-            if data.get('sql_query'):
-                error_handling("No events returned", custom_message="Sorry, I could not find those events in my database.")
-                
-                # Show refinement suggestions when no results found
-                st.write("💡 **Try refining your search:**")
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Try different dance style"):
-                        st.session_state["suggested_input"] = "Show me any dance events"
-                        st.rerun()
-                with col2:
-                    if st.button("Expand time range"):
-                        st.session_state["suggested_input"] = "Show me events this week"
-                        st.rerun()
-            
-        # Display the SQL query in an expandable section
-        with st.expander("🔍 View Generated SQL Query", expanded=False):
-            st.code(data.get('sql_query', 'No SQL query provided'), language='sql')
+        # Just refresh the page to show the new conversation history
+        st.rerun()
         
     except Exception as e:
         error_handling(e)
 
-# If there are messages, show the conversation flow and input field at the bottom
+# If there are messages, show the full conversation thread like ChatGPT
 if st.session_state["messages"]:
-    # Add some spacing
     st.markdown("---")
     
-    # Render the conversation history from newest to oldest
-    st.markdown("### 💬 Conversation History")
-    for message in reversed(st.session_state["messages"]):
+    # Display full conversation history in chronological order (oldest first)
+    for i, message in enumerate(st.session_state["messages"]):
         if message["role"] == "user":
-            st.markdown(f"**🧑 You:** {message['content']}")
-        else:
-            st.markdown(f"**🤖 Assistant:** {message['content']}")
-    
-    st.markdown("---")
+            st.markdown(f"### 🧑 You:")
+            st.markdown(f"*{message['content']}*")
+            
+        elif message["role"] == "assistant":
+            st.markdown(f"### 🤖 Assistant:")
+            
+            # Display events if they exist in this message
+            events = message.get("events", [])
+            if events:
+                intent_info = f" (Intent: {message.get('intent', 'search')})" if message.get('intent') else ""
+                st.success(f"Found {len(events)} events{intent_info}")
+                
+                # Add follow-up suggestion buttons only for the most recent assistant message
+                if i == len(st.session_state["messages"]) - 1 and message.get('intent') == 'search' and len(events) > 0:
+                    st.write("💡 **Try these follow-up questions:**")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if st.button(f"Show different styles", key=f"styles_{i}"):
+                            st.session_state["suggested_input"] = "What other dance styles are available?"
+                            st.rerun()
+                    with col2:
+                        if st.button(f"Show classes instead", key=f"classes_{i}"):
+                            st.session_state["suggested_input"] = "Any classes or workshops?"
+                            st.rerun()
+                    with col3:
+                        if st.button(f"Show tomorrow", key=f"tomorrow_{i}"):
+                            st.session_state["suggested_input"] = "What about tomorrow?"
+                            st.rerun()
+                
+                # Display events in expandable cards
+                with st.container():
+                    for j, event in enumerate(events):
+                        event_name = event.get('event_name', 'No Name')
+                        url = event.get('url', '#')
+                        
+                        # Create expandable event cards (expand first 2 for latest query only)
+                        expanded = (i == len(st.session_state["messages"]) - 1 and j < 2)
+                        with st.expander(f"🎵 {event_name}", expanded=expanded):
+                            # Only create a hyperlink if the URL is properly formatted
+                            if isinstance(url, str) and url.startswith("http"):
+                                st.markdown(f'🔗 [**Event Link**]({url})')
+                            
+                            # Display event details in organized columns
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.write(f"**Dance Style:** {event.get('dance_style', 'N/A')}")
+                                st.write(f"**Event Type:** {event.get('event_type', 'N/A')}")
+                                st.write(f"**Day:** {event.get('day_of_week', 'N/A')}")
+                                st.write(f"**Date:** {event.get('start_date', 'N/A')}")
+                            
+                            with col2:
+                                st.write(f"**Time:** {event.get('start_time', 'N/A')} - {event.get('end_time', 'N/A')}")
+                                st.write(f"**Price:** {event.get('price', 'N/A')}")
+                                st.write(f"**Source:** {event.get('source', 'N/A')}")
+                            
+                            st.write(f"**Location:** {event.get('location', 'N/A')}")
+                            
+                            if event.get('description'):
+                                st.write(f"**Description:** {event.get('description')}")
+            else:
+                # Handle case where no events were found
+                st.info("No events found for this query.")
+                
+                # Show refinement suggestions for the most recent query with no results
+                if i == len(st.session_state["messages"]) - 1:
+                    st.write("💡 **Try refining your search:**")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("Try different dance style", key=f"diff_style_{i}"):
+                            st.session_state["suggested_input"] = "Show me any dance events"
+                            st.rerun()
+                    with col2:
+                        if st.button("Expand time range", key=f"expand_time_{i}"):
+                            st.session_state["suggested_input"] = "Show me events this week"
+                            st.rerun()
+            
+            # Show SQL query for the most recent query only
+            if i == len(st.session_state["messages"]) - 1 and message.get("sql_query"):
+                with st.expander("🔍 View Generated SQL Query", expanded=False):
+                    st.code(message.get('sql_query', 'No SQL query provided'), language='sql')
+        
+        # Add separator between conversation turns
+        if i < len(st.session_state["messages"]) - 1:
+            st.markdown("---")
     
     # Show the input field at the bottom for continued conversation
     with st.container():
