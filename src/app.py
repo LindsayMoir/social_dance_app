@@ -300,6 +300,17 @@ if st.session_state["messages"]:
                         if data.get("intent"):
                             st.session_state["last_intent"] = data["intent"]
                         
+                        # Store the complete response data for this follow-up query
+                        query_result = {
+                            "role": "assistant",
+                            "content": f"Found {len(data['data'])} events" if data.get('data') else "No events found",
+                            "events": data.get('data', []),
+                            "sql_query": data.get('sql_query', ''),
+                            "intent": data.get('intent', ''),
+                            "timestamp": followup_input  # Store what user asked
+                        }
+                        st.session_state["messages"].append(query_result)
+                        
                         st.rerun()  # Refresh to show new results
                         
                     except Exception as e:
