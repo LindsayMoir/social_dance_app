@@ -5,6 +5,7 @@ import requests
 import os
 import yaml
 import logging
+import uuid
 from dotenv import load_dotenv
 
 
@@ -31,9 +32,21 @@ if not FASTAPI_API_URL:
 
 st.set_page_config(layout="wide")
 
-# Initialize the chat message history in session state
+# Initialize session state for conversation management
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
+
+# Initialize session token for conversation context
+if "session_token" not in st.session_state:
+    st.session_state["session_token"] = str(uuid.uuid4())
+    logging.info(f"app.py: Generated new session token: {st.session_state['session_token']}")
+
+# Initialize conversation context
+if "conversation_id" not in st.session_state:
+    st.session_state["conversation_id"] = None
+
+if "last_intent" not in st.session_state:
+    st.session_state["last_intent"] = None
 
 # Load chatbot instructions from a file specified in the YAML config
 prompt_config = config['prompts']['chatbot_instructions']
@@ -75,61 +88,185 @@ def error_handling(e, custom_message=None):
     logging.error(f"app.py: Error encountered - {e}")
 
 
+# Show conversation context info (for debugging)
+if st.session_state.get("conversation_id"):
+    with st.expander("🔍 Conversation Info", expanded=False):
+        st.write(f"**Session Token:** {st.session_state['session_token'][:8]}...")
+        st.write(f"**Conversation ID:** {st.session_state['conversation_id'][:8] if st.session_state['conversation_id'] else 'None'}...")
+        st.write(f"**Last Intent:** {st.session_state.get('last_intent', 'None')}")
+
 # Get user input and send it to the FastAPI backend
 user_input = st.text_area("Ask a question, then click Send:", height=100)
 
-if st.button("Send"):
+# Create columns for buttons
+col1, col2, col3 = st.columns([2, 1, 1])
+
+with col1:
+    send_button = st.button("Send", type="primary")
+
+with col2:
+    if st.button("New Search"):
+        # Clear conversation context for new search
+        st.session_state["session_token"] = str(uuid.uuid4())
+        st.session_state["conversation_id"] = None
+        st.session_state["last_intent"] = None
+        st.session_state["messages"] = []
+        st.rerun()
+
+with col3:
+    if st.button("Clear Chat"):
+        st.session_state["messages"] = []
+        st.rerun()
+
+if send_button:
     if user_input.strip():
         # Display the user's message in the chat history
         st.session_state["messages"].append({"role": "user", "content": user_input})
         logging.info("app.py: About to send user input to FastAPI backend.")
         try:
-            # Send the query to the FastAPI backend
-            response = requests.post(FASTAPI_API_URL, json={"user_input": user_input})
+            # Send the query to the FastAPI backend with session context
+            payload = {
+                "user_input": user_input,
+                "session_token": st.session_state["session_token"]
+            }
+            response = requests.post(FASTAPI_API_URL, json=payload)
             response.raise_for_status()
             data = response.json()
+            
+            # Update session state with conversation info
+            if data.get("conversation_id"):
+                st.session_state["conversation_id"] = data["conversation_id"]
+            if data.get("intent"):
+                st.session_state["last_intent"] = data["intent"]
 
             # Get the event data from the response
             events = data["data"]
             if events:
+                # Show results summary
+                intent_info = f" (Intent: {data.get('intent', 'search')})" if data.get('intent') else ""
+                st.success(f"Found {len(events)} events{intent_info}")
+                
+                # Add follow-up suggestion buttons based on intent
+                if data.get('intent') == 'search' and len(events) > 0:
+                    st.write("💡 **Try these follow-up questions:**")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if st.button("Show different styles"):
+                            st.session_state["suggested_input"] = "What other dance styles are available?"
+                            st.rerun()
+                    with col2:
+                        if st.button("Show classes instead"):
+                            st.session_state["suggested_input"] = "Any classes or workshops?"
+                            st.rerun()
+                    with col3:
+                        if st.button("Show tomorrow"):
+                            st.session_state["suggested_input"] = "What about tomorrow?"
+                            st.rerun()
+                
                 # Create a scrollable container to hold the events
                 with st.container():
                     st.markdown("<hr>", unsafe_allow_html=True)  # Add a separator line
 
-                    for event in events:
+                    for i, event in enumerate(events):
                         event_name = event.get('event_name', 'No Name')
                         url = event.get('url', '#')
                         
-                        # Only create a hyperlink if the URL is properly formatted (starts with "http")
-                        if isinstance(url, str) and url.startswith("http"):
-                            st.markdown(f'<a href="{url}" target="_blank"><strong>{event_name}</strong></a>', unsafe_allow_html=True)
-                        else:
-                            st.markdown(f"**{event_name}**")
-
-                        # Display other event details (one row per column)
-                        for column_name, value in event.items():
-                            if column_name not in ('event_name', 'url'):
-                                st.markdown(f"**{column_name}**: {value}")
-                        
-                        st.markdown("<hr>", unsafe_allow_html=True)
+                        # Create expandable event cards
+                        with st.expander(f"🎵 {event_name}", expanded=i < 3):  # Expand first 3 events
+                            # Only create a hyperlink if the URL is properly formatted
+                            if isinstance(url, str) and url.startswith("http"):
+                                st.markdown(f'🔗 [**Event Link**]({url})')
+                            
+                            # Display event details in a more organized way
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.write(f"**Dance Style:** {event.get('dance_style', 'N/A')}")
+                                st.write(f"**Event Type:** {event.get('event_type', 'N/A')}")
+                                st.write(f"**Day:** {event.get('day_of_week', 'N/A')}")
+                                st.write(f"**Date:** {event.get('start_date', 'N/A')}")
+                            
+                            with col2:
+                                st.write(f"**Time:** {event.get('start_time', 'N/A')} - {event.get('end_time', 'N/A')}")
+                                st.write(f"**Price:** {event.get('price', 'N/A')}")
+                                st.write(f"**Source:** {event.get('source', 'N/A')}")
+                            
+                            st.write(f"**Location:** {event.get('location', 'N/A')}")
+                            
+                            if event.get('description'):
+                                st.write(f"**Description:** {event.get('description')}")
+                            
+                            st.markdown("---")
             else:
                 # If no events are returned and a valid SQL query exists, call error_handling with a custom message BEFORE showing the SQL query.
                 if data.get('sql_query'):
                     error_handling("No events returned", custom_message="Sorry, I could not find those events in my database.")
+                    
+                    # Show refinement suggestions when no results found
+                    st.write("💡 **Try refining your search:**")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("Try different dance style"):
+                            st.session_state["suggested_input"] = "Show me any dance events"
+                            st.rerun()
+                    with col2:
+                        if st.button("Expand time range"):
+                            st.session_state["suggested_input"] = "Show me events this week"
+                            st.rerun()
             
-            # Display the SQL query (shown after error handling if triggered)
-            st.markdown(f"**SQL Query**:\n```\n{data.get('sql_query', 'No SQL query provided')}\n```")
+            # Display the SQL query in an expandable section
+            with st.expander("🔍 View Generated SQL Query", expanded=False):
+                st.code(data.get('sql_query', 'No SQL query provided'), language='sql')
             
         except Exception as e:
             error_handling(e)
     else:
         st.write("Enter your question above and click Send")
 else:
-    st.write("Enter your question above and click Send")
-
-# Render the conversation history from newest to oldest without a header
-for message in reversed(st.session_state["messages"]):
-    if message["role"] == "user":
-        st.markdown(f"**You wrote:** {message['content']}")
+    # Handle suggested input from buttons
+    if "suggested_input" in st.session_state:
+        user_input = st.session_state["suggested_input"]
+        del st.session_state["suggested_input"]
+        
+        # Process the suggested input automatically
+        if user_input.strip():
+            st.session_state["messages"].append({"role": "user", "content": user_input})
+            logging.info("app.py: About to send suggested input to FastAPI backend.")
+            
+            try:
+                payload = {
+                    "user_input": user_input,
+                    "session_token": st.session_state["session_token"]
+                }
+                response = requests.post(FASTAPI_API_URL, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                
+                # Update session state
+                if data.get("conversation_id"):
+                    st.session_state["conversation_id"] = data["conversation_id"]
+                if data.get("intent"):
+                    st.session_state["last_intent"] = data["intent"]
+                
+                # Display results (simplified for suggested queries)
+                events = data["data"]
+                if events:
+                    st.success(f"Found {len(events)} events")
+                    for event in events[:3]:  # Show first 3 results
+                        st.write(f"🎵 **{event.get('event_name', 'No Name')}** - {event.get('dance_style', 'N/A')} on {event.get('start_date', 'N/A')}")
+                
+            except Exception as e:
+                error_handling(e)
+        
+        st.rerun()
     else:
-        st.markdown(message["content"])
+        st.write("Enter your question above and click Send")
+
+# Render the conversation history from newest to oldest
+if st.session_state["messages"]:
+    st.markdown("### 💬 Conversation History")
+    for message in reversed(st.session_state["messages"]):
+        if message["role"] == "user":
+            st.markdown(f"**🧑 You:** {message['content']}")
+        else:
+            st.markdown(f"**🤖 Assistant:** {message['content']}")

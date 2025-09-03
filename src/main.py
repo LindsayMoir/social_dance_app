@@ -27,6 +27,8 @@ print("Updated sys.path:", sys.path)
 print("Current working directory:", os.getcwd())
 
 from llm import LLMHandler  # Import the LLMHandler module
+from db import DatabaseHandler  # Import DatabaseHandler for conversation management
+from conversation_manager import ConversationManager  # Import ConversationManager
 
 # Load environment variables
 load_dotenv()
@@ -49,8 +51,10 @@ except Exception as e:
 
 logging.info("main.py: Configuration loaded.")
 
-# Initialize the LLMHandler
+# Initialize the LLMHandler and DatabaseHandler
 llm_handler = LLMHandler(config_path=config_path)
+db_handler = DatabaseHandler(config)
+conversation_manager = ConversationManager(db_handler)
 
 # Get the DATABASE_URL from environment variables
 if os.getenv("RENDER"):
@@ -72,9 +76,10 @@ logging.info("main.py: SQLAlchemy engine created.")
 # Initialize the FastAPI app
 app = FastAPI(title="Social Dance Chatbot API")
 
-# Define the query request model
+# Define the query request models
 class QueryRequest(BaseModel):
     user_input: str
+    session_token: str = None  # Optional session token for conversation context
 
 @app.get("/")
 def read_root():
@@ -86,22 +91,74 @@ def process_query(request: QueryRequest):
     if not user_input:
         raise HTTPException(status_code=400, detail="User input is empty.")
     
-    # Load the SQL prompt template from the YAML config
-    prompt_config = config['prompts']['sql']
-    if isinstance(prompt_config, dict):
-        prompt_file_path = os.path.join(base_dir, prompt_config['file'])
-    else:
-        # Backward compatibility with old string format
-        prompt_file_path = os.path.join(base_dir, prompt_config)
-    try:
-        with open(prompt_file_path, "r") as file:
-            base_prompt = file.read()
-    except Exception as e:
-        logging.error(f"Error reading prompt file: {e}")
-        raise HTTPException(status_code=500, detail="Error reading prompt file.")
+    # Handle session-based conversation context
+    session_token = request.session_token
+    use_contextual_prompt = session_token is not None
     
-    # Construct the full prompt for the language model
-    prompt = f"{base_prompt}\n\nUser Question:\n\n\"{user_input}\""
+    if use_contextual_prompt:
+        try:
+            # Get or create conversation
+            conversation_id = conversation_manager.create_or_get_conversation(session_token)
+            
+            # Get conversation context and recent messages
+            context = conversation_manager.get_conversation_context(conversation_id)
+            recent_messages = conversation_manager.get_recent_messages(conversation_id, limit=5)
+            
+            # Classify intent and extract entities
+            intent = conversation_manager.classify_intent(user_input, context, recent_messages)
+            entities = conversation_manager.extract_entities(user_input, context)
+            
+            # Add user message to conversation
+            conversation_manager.add_message(
+                conversation_id=conversation_id,
+                role="user", 
+                content=user_input,
+                intent=intent,
+                entities=entities
+            )
+            
+            # Use contextual prompt template
+            prompt_file_path = os.path.join(base_dir, 'prompts', 'contextual_sql_prompt.txt')
+            with open(prompt_file_path, "r") as file:
+                base_prompt = file.read()
+            
+            # Format conversation history for prompt
+            history_text = "\n".join([
+                f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
+                for msg in recent_messages[-3:]  # Last 3 messages for context
+            ])
+            
+            # Construct contextual prompt
+            prompt = base_prompt.format(
+                context_info=str(context),
+                conversation_history=history_text,
+                intent=intent,
+                entities=str(entities)
+            )
+            prompt += f"\n\nCurrent User Question: \"{user_input}\""
+            
+        except Exception as e:
+            logging.error(f"Error with contextual conversation: {e}")
+            # Fall back to non-contextual mode
+            use_contextual_prompt = False
+    
+    if not use_contextual_prompt:
+        # Use original SQL prompt template (backward compatibility)
+        prompt_config = config['prompts']['sql']
+        if isinstance(prompt_config, dict):
+            prompt_file_path = os.path.join(base_dir, prompt_config['file'])
+        else:
+            prompt_file_path = os.path.join(base_dir, prompt_config)
+        
+        try:
+            with open(prompt_file_path, "r") as file:
+                base_prompt = file.read()
+        except Exception as e:
+            logging.error(f"Error reading prompt file: {e}")
+            raise HTTPException(status_code=500, detail="Error reading prompt file.")
+        
+        prompt = f"{base_prompt}\n\nUser Question:\n\n\"{user_input}\""
+    
     logging.info(f"Constructed Prompt: {prompt}")
     
     # Query the language model for a raw SQL query
@@ -119,21 +176,53 @@ def process_query(request: QueryRequest):
         logging.info(f"Sanitized SQL Query: {sanitized_query}")
         
         try:
-            # Execute the SQL query using SQLAlchemy
-            with engine.connect() as conn:
-                result = conn.execute(text(sanitized_query))
-                rows = result.fetchall()
-            columns = result.keys()
-            data = [dict(zip(columns, row)) for row in rows]
+            # Execute the SQL query using DatabaseHandler pattern
+            rows = db_handler.execute_query(sanitized_query)
+            if not rows:
+                data = []
+            else:
+                # Get column names from the query result
+                # For SELECT queries, we need to parse the columns from the SQL
+                columns = [
+                    'event_name', 'event_type', 'dance_style', 'day_of_week',
+                    'start_date', 'end_date', 'start_time', 'end_time', 'source',
+                    'url', 'price', 'description', 'location'
+                ]
+                data = [dict(zip(columns, row)) for row in rows]
         except Exception as db_err:
             error_message = f"Database Error: {db_err}"
             logging.error(error_message)
             raise HTTPException(status_code=500, detail=error_message)
         
+        # Update conversation context if using sessions
+        if use_contextual_prompt and session_token:
+            try:
+                # Add assistant message to conversation
+                conversation_manager.add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=f"Found {len(data)} events",
+                    sql_query=sanitized_query,
+                    result_count=len(data)
+                )
+                
+                # Update context with last search criteria for future refinements
+                search_context = {
+                    "last_search_criteria": entities,
+                    "last_query": sanitized_query,
+                    "last_result_count": len(data)
+                }
+                conversation_manager.update_conversation_context(conversation_id, search_context)
+                
+            except Exception as e:
+                logging.error(f"Error updating conversation context: {e}")
+        
         return {
             "sql_query": sanitized_query,
             "data": data,
-            "message": "Here are the results from your query."
+            "message": "Here are the results from your query.",
+            "conversation_id": conversation_id if use_contextual_prompt else None,
+            "intent": intent if use_contextual_prompt else None
         }
     else:
         logging.warning("LLM did not return a valid SQL query.")
