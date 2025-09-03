@@ -1199,18 +1199,29 @@ class CleanUp:
     async def delete_closed_venue_events(self):
         """
         Deletes events from closed venues that are no longer operating.
-        Currently removes events at Victoria Event Centre which has permanently closed.
+        Currently removes events at Victoria Event Centre and BC Swing Dance Club Victoria which have permanently closed.
         """
         logging.info("Starting deletion of events at closed venues...")
         
-        deleted_count = self.db_handler.execute_query(
+        # Delete Victoria Event Centre events
+        deleted_count_vec = self.db_handler.execute_query(
             "DELETE FROM events WHERE location ILIKE '%Victoria Event Centre%'"
         )
         
-        if deleted_count is not None and deleted_count > 0:
-            logging.info(f"delete_closed_venue_events(): Deleted {deleted_count} event(s) at Victoria Event Centre")
+        if deleted_count_vec is not None and deleted_count_vec > 0:
+            logging.info(f"delete_closed_venue_events(): Deleted {deleted_count_vec} event(s) at Victoria Event Centre")
         else:
             logging.info("delete_closed_venue_events(): No events found at Victoria Event Centre")
+        
+        # Delete BC Swing Dance Club Victoria events
+        deleted_count_bcswing = self.db_handler.execute_query(
+            "DELETE FROM events WHERE location ILIKE '%BC Swing Dance Club Victoria%'"
+        )
+        
+        if deleted_count_bcswing is not None and deleted_count_bcswing > 0:
+            logging.info(f"delete_closed_venue_events(): Deleted {deleted_count_bcswing} event(s) at BC Swing Dance Club Victoria")
+        else:
+            logging.info("delete_closed_venue_events(): No events found at BC Swing Dance Club Victoria")
 
 
     async def fix_extracted_text_sources(self):

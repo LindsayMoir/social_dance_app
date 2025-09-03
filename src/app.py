@@ -158,11 +158,28 @@ if process_input:
         if data.get("intent"):
             st.session_state["last_intent"] = data["intent"]
         
+        # Create a more conversational response based on the query type and results
+        events = data.get('data', [])
+        user_question = input_to_process.lower()
+        
+        if len(events) == 0:
+            # Provide context-aware response for no results
+            if any(word in user_question for word in ['duplicate', 'same', 'similar', 'correct', 'which one']):
+                assistant_content = "I can't analyze or compare events to determine duplicates, but I can help you search for specific events. Could you tell me more about what you're looking for?"
+            elif any(word in user_question for word in ['why', 'how', 'explain', 'what does', 'tell me about']):
+                assistant_content = "I'm designed to search for dance events, but I can't provide detailed explanations about event data. Let me help you find the events you're interested in instead!"
+            elif any(word in user_question for word in ['when', 'where', 'time', 'location', 'address']):
+                assistant_content = "I couldn't find events matching that specific query. Try asking about dance events in a broader way, like 'salsa events this week' or 'dance classes near me'."
+            else:
+                assistant_content = "I couldn't find events matching your request. I specialize in finding dance events - try asking about specific dance styles, locations, or time periods!"
+        else:
+            assistant_content = f"Found {len(events)} events"
+        
         # Store the complete response data for this query in session state
         query_result = {
             "role": "assistant",
-            "content": f"Found {len(data['data'])} events" if data.get('data') else "No events found",
-            "events": data.get('data', []),
+            "content": assistant_content,
+            "events": events,
             "sql_query": data.get('sql_query', ''),
             "intent": data.get('intent', ''),
             "timestamp": input_to_process  # Store what user asked
@@ -280,8 +297,9 @@ if st.session_state["messages"]:
             with st.container():
                 st.markdown("### 💭 Continue the Conversation")
                 
-                # Get user input for follow-up
-                followup_input = st.text_area("Ask another question or refine your search:", height=100, key="followup_input")
+                # Get user input for follow-up (use dynamic key to ensure fresh input field)
+                input_key = f"followup_input_{len(st.session_state['messages'])}"
+                followup_input = st.text_area("Ask another question or refine your search:", height=100, key=input_key)
                 
                 # Create columns for buttons
                 col1, col2, col3 = st.columns([2, 1, 1])
