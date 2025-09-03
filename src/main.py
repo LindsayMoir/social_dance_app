@@ -95,6 +95,11 @@ def process_query(request: QueryRequest):
     session_token = request.session_token
     use_contextual_prompt = session_token is not None
     
+    # Initialize variables for both contextual and non-contextual paths
+    conversation_id = None
+    intent = None
+    entities = {}
+    
     if use_contextual_prompt:
         try:
             # Get or create conversation

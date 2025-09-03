@@ -95,32 +95,37 @@ if st.session_state.get("conversation_id"):
         st.write(f"**Conversation ID:** {st.session_state['conversation_id'][:8] if st.session_state['conversation_id'] else 'None'}...")
         st.write(f"**Last Intent:** {st.session_state.get('last_intent', 'None')}")
 
-# Create a container for the input that's always visible
-with st.container():
-    st.markdown("### 💭 Ask a Question")
-    
-    # Get user input
-    user_input = st.text_area("Ask a question, then click Send:", height=100, key="user_input")
-    
-    # Create columns for buttons
-    col1, col2, col3 = st.columns([2, 1, 1])
-    
-    with col1:
-        send_button = st.button("Send", type="primary")
-    
-    with col2:
-        if st.button("New Search"):
-            # Clear conversation context for new search
-            st.session_state["session_token"] = str(uuid.uuid4())
-            st.session_state["conversation_id"] = None
-            st.session_state["last_intent"] = None
-            st.session_state["messages"] = []
-            st.rerun()
-    
-    with col3:
-        if st.button("Clear Chat"):
-            st.session_state["messages"] = []
-            st.rerun()
+# Show initial input field only if no messages yet
+if not st.session_state["messages"]:
+    with st.container():
+        st.markdown("### 💭 Ask a Question")
+        
+        # Get user input
+        user_input = st.text_area("Ask a question, then click Send:", height=100, key="user_input")
+        
+        # Create columns for buttons
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            send_button = st.button("Send", type="primary")
+        
+        with col2:
+            if st.button("New Search"):
+                # Clear conversation context for new search
+                st.session_state["session_token"] = str(uuid.uuid4())
+                st.session_state["conversation_id"] = None
+                st.session_state["last_intent"] = None
+                st.session_state["messages"] = []
+                st.rerun()
+        
+        with col3:
+            if st.button("Clear Chat"):
+                st.session_state["messages"] = []
+                st.rerun()
+else:
+    # If there are messages, we'll show the input field after the conversation
+    send_button = False
+    user_input = ""
 
 # Process user input
 process_input = False
@@ -239,20 +244,72 @@ if process_input:
         
     except Exception as e:
         error_handling(e)
-        
-    # Clear the input field after processing
-    st.rerun()
 
-# Add some spacing
-st.markdown("---")
-
-# Render the conversation history from newest to oldest
+# If there are messages, show the conversation flow and input field at the bottom
 if st.session_state["messages"]:
+    # Add some spacing
+    st.markdown("---")
+    
+    # Render the conversation history from newest to oldest
     st.markdown("### 💬 Conversation History")
     for message in reversed(st.session_state["messages"]):
         if message["role"] == "user":
             st.markdown(f"**🧑 You:** {message['content']}")
         else:
             st.markdown(f"**🤖 Assistant:** {message['content']}")
+    
+    st.markdown("---")
+    
+    # Show the input field at the bottom for continued conversation
+    with st.container():
+        st.markdown("### 💭 Continue the Conversation")
+        
+        # Get user input for follow-up
+        followup_input = st.text_area("Ask another question or refine your search:", height=100, key="followup_input")
+        
+        # Create columns for buttons
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            if st.button("Send", type="primary", key="followup_send"):
+                if followup_input.strip():
+                    # Add to messages and process
+                    st.session_state["messages"].append({"role": "user", "content": followup_input})
+                    
+                    # Process the follow-up input
+                    try:
+                        payload = {
+                            "user_input": followup_input,
+                            "session_token": st.session_state["session_token"]
+                        }
+                        response = requests.post(FASTAPI_API_URL, json=payload)
+                        response.raise_for_status()
+                        data = response.json()
+                        
+                        # Update session state
+                        if data.get("conversation_id"):
+                            st.session_state["conversation_id"] = data["conversation_id"]
+                        if data.get("intent"):
+                            st.session_state["last_intent"] = data["intent"]
+                        
+                        st.rerun()  # Refresh to show new results
+                        
+                    except Exception as e:
+                        error_handling(e)
+                        st.rerun()
+        
+        with col2:
+            if st.button("New Search", key="followup_new"):
+                # Clear conversation context for new search
+                st.session_state["session_token"] = str(uuid.uuid4())
+                st.session_state["conversation_id"] = None
+                st.session_state["last_intent"] = None
+                st.session_state["messages"] = []
+                st.rerun()
+        
+        with col3:
+            if st.button("Clear Chat", key="followup_clear"):
+                st.session_state["messages"] = []
+                st.rerun()
 else:
     st.info("💡 Start a conversation by asking a question above!")
