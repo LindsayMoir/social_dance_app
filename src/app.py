@@ -95,52 +95,71 @@ if st.session_state.get("conversation_id"):
         st.write(f"**Conversation ID:** {st.session_state['conversation_id'][:8] if st.session_state['conversation_id'] else 'None'}...")
         st.write(f"**Last Intent:** {st.session_state.get('last_intent', 'None')}")
 
-# Get user input and send it to the FastAPI backend
-user_input = st.text_area("Ask a question, then click Send:", height=100)
+# Create a container for the input that's always visible
+with st.container():
+    st.markdown("### 💭 Ask a Question")
+    
+    # Get user input
+    user_input = st.text_area("Ask a question, then click Send:", height=100, key="user_input")
+    
+    # Create columns for buttons
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        send_button = st.button("Send", type="primary")
+    
+    with col2:
+        if st.button("New Search"):
+            # Clear conversation context for new search
+            st.session_state["session_token"] = str(uuid.uuid4())
+            st.session_state["conversation_id"] = None
+            st.session_state["last_intent"] = None
+            st.session_state["messages"] = []
+            st.rerun()
+    
+    with col3:
+        if st.button("Clear Chat"):
+            st.session_state["messages"] = []
+            st.rerun()
 
-# Create columns for buttons
-col1, col2, col3 = st.columns([2, 1, 1])
+# Process user input
+process_input = False
+if send_button and user_input.strip():
+    process_input = True
+    input_to_process = user_input
+elif "suggested_input" in st.session_state:
+    process_input = True  
+    input_to_process = st.session_state["suggested_input"]
+    del st.session_state["suggested_input"]
 
-with col1:
-    send_button = st.button("Send", type="primary")
+if process_input:
+    # Display the user's message in the chat history
+    st.session_state["messages"].append({"role": "user", "content": input_to_process})
+    logging.info("app.py: About to send user input to FastAPI backend.")
+    
+    try:
+        # Send the query to the FastAPI backend with session context
+        payload = {
+            "user_input": input_to_process,
+            "session_token": st.session_state["session_token"]
+        }
+        response = requests.post(FASTAPI_API_URL, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Update session state with conversation info
+        if data.get("conversation_id"):
+            st.session_state["conversation_id"] = data["conversation_id"]
+        if data.get("intent"):
+            st.session_state["last_intent"] = data["intent"]
+        
+        # Display results
+        st.markdown("### 🎉 Search Results")
+        
+        # Get the event data from the response
+        events = data["data"]
 
-with col2:
-    if st.button("New Search"):
-        # Clear conversation context for new search
-        st.session_state["session_token"] = str(uuid.uuid4())
-        st.session_state["conversation_id"] = None
-        st.session_state["last_intent"] = None
-        st.session_state["messages"] = []
-        st.rerun()
-
-with col3:
-    if st.button("Clear Chat"):
-        st.session_state["messages"] = []
-        st.rerun()
-
-if send_button:
-    if user_input.strip():
-        # Display the user's message in the chat history
-        st.session_state["messages"].append({"role": "user", "content": user_input})
-        logging.info("app.py: About to send user input to FastAPI backend.")
-        try:
-            # Send the query to the FastAPI backend with session context
-            payload = {
-                "user_input": user_input,
-                "session_token": st.session_state["session_token"]
-            }
-            response = requests.post(FASTAPI_API_URL, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            
-            # Update session state with conversation info
-            if data.get("conversation_id"):
-                st.session_state["conversation_id"] = data["conversation_id"]
-            if data.get("intent"):
-                st.session_state["last_intent"] = data["intent"]
-
-            # Get the event data from the response
-            events = data["data"]
+        # Process events data
             if events:
                 # Show results summary
                 intent_info = f" (Intent: {data.get('intent', 'search')})" if data.get('intent') else ""
@@ -214,53 +233,18 @@ if send_button:
                             st.session_state["suggested_input"] = "Show me events this week"
                             st.rerun()
             
-            # Display the SQL query in an expandable section
-            with st.expander("🔍 View Generated SQL Query", expanded=False):
-                st.code(data.get('sql_query', 'No SQL query provided'), language='sql')
-            
-        except Exception as e:
-            error_handling(e)
-    else:
-        st.write("Enter your question above and click Send")
-else:
-    # Handle suggested input from buttons
-    if "suggested_input" in st.session_state:
-        user_input = st.session_state["suggested_input"]
-        del st.session_state["suggested_input"]
+        # Display the SQL query in an expandable section
+        with st.expander("🔍 View Generated SQL Query", expanded=False):
+            st.code(data.get('sql_query', 'No SQL query provided'), language='sql')
         
-        # Process the suggested input automatically
-        if user_input.strip():
-            st.session_state["messages"].append({"role": "user", "content": user_input})
-            logging.info("app.py: About to send suggested input to FastAPI backend.")
-            
-            try:
-                payload = {
-                    "user_input": user_input,
-                    "session_token": st.session_state["session_token"]
-                }
-                response = requests.post(FASTAPI_API_URL, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                
-                # Update session state
-                if data.get("conversation_id"):
-                    st.session_state["conversation_id"] = data["conversation_id"]
-                if data.get("intent"):
-                    st.session_state["last_intent"] = data["intent"]
-                
-                # Display results (simplified for suggested queries)
-                events = data["data"]
-                if events:
-                    st.success(f"Found {len(events)} events")
-                    for event in events[:3]:  # Show first 3 results
-                        st.write(f"🎵 **{event.get('event_name', 'No Name')}** - {event.get('dance_style', 'N/A')} on {event.get('start_date', 'N/A')}")
-                
-            except Exception as e:
-                error_handling(e)
+    except Exception as e:
+        error_handling(e)
         
-        st.rerun()
-    else:
-        st.write("Enter your question above and click Send")
+    # Clear the input field after processing
+    st.rerun()
+
+# Add some spacing
+st.markdown("---")
 
 # Render the conversation history from newest to oldest
 if st.session_state["messages"]:
@@ -270,3 +254,5 @@ if st.session_state["messages"]:
             st.markdown(f"**🧑 You:** {message['content']}")
         else:
             st.markdown(f"**🤖 Assistant:** {message['content']}")
+else:
+    st.info("💡 Start a conversation by asking a question above!")
