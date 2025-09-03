@@ -24,7 +24,7 @@ import requests
 from sqlalchemy import create_engine, MetaData, Table, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 import sys
 import yaml
 import warnings
