@@ -715,8 +715,8 @@ class CleanUp:
         # Also delete events with specific problematic location
         location_condition = "location = 'BC Swing Dance Club, Victoria, BC, CA'"
         
-        # Also delete events with "Carolyn Gebbie" or "BC Swing Dance Club Victoria" in the source column
-        source_condition = "source = 'Carolyn Gebbie' OR source = 'BC Swing Dance Club Victoria'"
+        # Also delete events with "Carolyn Gebbie", "BC Swing Dance Club Victoria", or "Swing X" in the source column
+        source_condition = "source = 'Carolyn Gebbie' OR source = 'BC Swing Dance Club Victoria' OR source = 'Swing X'"
         
         sql = f"""
             DELETE FROM events
