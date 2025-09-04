@@ -149,6 +149,11 @@ def process_query(request: QueryRequest):
             )
             prompt += f"\n\nCurrent User Question: \"{user_input}\""
             
+            # DEBUG: Log the full prompt to see what's being sent to LLM
+            logging.info("=== FULL PROMPT BEING SENT TO LLM ===")
+            logging.info(prompt)
+            logging.info("=== END PROMPT ===")
+            
         except Exception as e:
             logging.error(f"Error with contextual conversation: {e}")
             # Fall back to non-contextual mode
@@ -170,6 +175,12 @@ def process_query(request: QueryRequest):
             raise HTTPException(status_code=500, detail="Error reading prompt file.")
         
         prompt = f"{base_prompt}\n\nUser Question:\n\n\"{user_input}\""
+        
+        # DEBUG: Log that we're using non-contextual prompt
+        logging.info("=== USING NON-CONTEXTUAL PROMPT ===")
+        logging.info("=== FULL PROMPT BEING SENT TO LLM ===")
+        logging.info(prompt)
+        logging.info("=== END PROMPT ===")
     
     logging.info(f"Constructed Prompt: {prompt}")
     
