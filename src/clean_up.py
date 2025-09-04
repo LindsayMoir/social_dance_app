@@ -715,18 +715,21 @@ class CleanUp:
         # Also delete events with specific problematic location
         location_condition = "location = 'BC Swing Dance Club, Victoria, BC, CA'"
         
+        # Also delete events with "Carolyn Gebbie" or "BC Swing Dance Club Victoria" in the source column
+        source_condition = "source = 'Carolyn Gebbie' OR source = 'BC Swing Dance Club Victoria'"
+        
         sql = f"""
             DELETE FROM events
-            WHERE {conditions} OR {location_condition};
+            WHERE {conditions} OR {location_condition} OR ({source_condition});
         """
         rows_deleted = self.db_handler.execute_query(sql)
         if rows_deleted is not None:
             logging.info(
-                f"known_incorrect(): Deleted {rows_deleted} event(s) matching keywords: {known_incorrect_urls} or problematic location"
+                f"known_incorrect(): Deleted {rows_deleted} event(s) matching keywords: {known_incorrect_urls}, problematic location, or problematic sources"
             )
         else:
             logging.error(
-                f"known_incorrect(): Failed to delete events matching keywords: {known_incorrect_urls} or problematic location"
+                f"known_incorrect(): Failed to delete events matching keywords: {known_incorrect_urls}, problematic location, or problematic sources"
             )
 
 
