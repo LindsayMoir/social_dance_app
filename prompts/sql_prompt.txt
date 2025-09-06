@@ -62,9 +62,13 @@ Only fall back to start_date >= (CURRENT_DATE - INTERVAL '7 days') to prevent ve
 Always exclude events where start_date is more than one week in the past.
 When the user refers to relative terms, interpret as follows (in Pacific Standard Time):
 
-“today” / “tonight” / “this morning” / “this afternoon” / “this evening” ⇒ start_date = CURRENT_DATE
-“yesterday” ⇒ start_date = (CURRENT_DATE - INTERVAL '1 day')
-“1 week ago” ⇒ start_date >= (CURRENT_DATE - INTERVAL '7 days')
+"today" / "tonight" / "this morning" / "this afternoon" / "this evening" ⇒ start_date = CURRENT_DATE
+"yesterday" ⇒ start_date = (CURRENT_DATE - INTERVAL '1 day')
+"1 week ago" ⇒ start_date >= (CURRENT_DATE - INTERVAL '7 days')
+
+IMPORTANT: For "last [weekday]" queries (e.g. "last wednesday"):
+Use this pattern: start_date >= (CURRENT_DATE - INTERVAL '7 days') AND start_date < CURRENT_DATE AND EXTRACT(DOW FROM start_date) = N
+Where N is: Monday=1, Tuesday=2, Wednesday=3, Thursday=4, Friday=5, Saturday=6, Sunday=0
 
 5. Handling dance_style
 The user may mention a single- or multi-word style (e.g. “Argentine Tango,” “West Coast Swing,” “WCS”).
