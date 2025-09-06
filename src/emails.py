@@ -142,23 +142,58 @@ class GmailProcessor:
         """
         logging.info(f"def driver(): Processing emails from CSV: {csv_path}")
         df = pd.read_csv(csv_path)
+        
+        # Initialize database handler for counting events
+        db_handler = DatabaseHandler(config)
+        
+        # Track results per email
+        email_results = {}
+        successful_emails = []
+        failed_emails = []
 
         for idx, row in df.iterrows():
             email, source, keywords, prompt_type = row
+            
+            # Get event count before processing this email
+            events_before = db_handler.execute_query("SELECT COUNT(*) FROM events")[0][0]
+            
             extracted_text = self.fetch_latest_email(email)
 
             if extracted_text:
                 # Process extracted text with LLMHandler
                 parent_url = 'email inbox'
                 llm_status = self.llm_handler.process_llm_response(email, parent_url, extracted_text, source, keywords, prompt_type)
+                
+                # Get event count after processing this email
+                events_after = db_handler.execute_query("SELECT COUNT(*) FROM events")[0][0]
+                events_added = events_after - events_before
+                
                 if llm_status:
                     logging.info(f"def driver(): process_llm_response success for email: {email}")
+                    successful_emails.append(email)
+                    email_results[email] = events_added
+                    logging.info(f"Email {email}: Added {events_added} events to database")
                 else:
                     logging.warning(f"def driver(): process_llm_response failed for email: {email}")
+                    failed_emails.append(email)
+                    email_results[email] = 0
             else:
                 logging.error(f"def driver(): No extracted text pulled from email: {email}")
+                failed_emails.append(email)
+                email_results[email] = 0
 
-        logging.info(f"Processed {idx} emails from emails .csv")
+        # Summary logging
+        total_emails = len(df)
+        total_events_added = sum(email_results.values())
+        
+        logging.info(f"Email processing summary:")
+        logging.info(f"Total emails in CSV: {total_emails}")
+        logging.info(f"Successfully processed: {len(successful_emails)} emails: {successful_emails}")
+        logging.info(f"Failed to process: {len(failed_emails)} emails: {failed_emails}")
+        logging.info(f"Events added per email:")
+        for email, count in email_results.items():
+            logging.info(f"  {email}: {count} events added")
+        logging.info(f"Total events added across all emails: {total_events_added}")
         
         return
     

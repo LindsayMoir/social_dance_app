@@ -54,6 +54,16 @@ DAY OF WEEK: {current_day_of_week} (Monday=1, Tuesday=2, Wednesday=3, Thursday=4
 • "this week": start_date BETWEEN CURRENT_DATE AND (CURRENT_DATE + INTERVAL '7 days')
 • "next week": start_date BETWEEN (CURRENT_DATE + INTERVAL '7 days') AND (CURRENT_DATE + INTERVAL '14 days')
 
+🔹 LAST DAY PATTERNS (find most recent occurrence of specific weekday):
+• "last monday": start_date = CURRENT_DATE - INTERVAL '((EXTRACT(DOW FROM CURRENT_DATE) - 1 + 7) % 7) days'
+• "last tuesday": start_date = CURRENT_DATE - INTERVAL '((EXTRACT(DOW FROM CURRENT_DATE) - 2 + 7) % 7) days'  
+• "last wednesday": start_date = CURRENT_DATE - INTERVAL '((EXTRACT(DOW FROM CURRENT_DATE) - 3 + 7) % 7) days'
+• "last thursday": start_date = CURRENT_DATE - INTERVAL '((EXTRACT(DOW FROM CURRENT_DATE) - 4 + 7) % 7) days'
+• "last friday": start_date = CURRENT_DATE - INTERVAL '((EXTRACT(DOW FROM CURRENT_DATE) - 5 + 7) % 7) days'
+• "last saturday": start_date = CURRENT_DATE - INTERVAL '((EXTRACT(DOW FROM CURRENT_DATE) - 6 + 7) % 7) days'
+• "last sunday": start_date = CURRENT_DATE - INTERVAL '((EXTRACT(DOW FROM CURRENT_DATE) - 0 + 7) % 7) days'
+IMPORTANT: Use EXACT equality (=) not ranges for "last [day]" - you want the specific date only
+
 🔹 WEEKEND PATTERNS (use EXTRACT(DOW), never BETWEEN):
 • "this weekend"/"coming weekend": 
   - Mon-Thu: start_date > CURRENT_DATE AND EXTRACT(DOW FROM start_date) IN (5,6,0) AND start_date <= (CURRENT_DATE + INTERVAL '6 days')
@@ -91,7 +101,9 @@ Clarification triggers:
 • Unsafe input
 • Context contradictions
 
-=== EXAMPLE ===
+=== EXAMPLES ===
+
+🔹 WEEKEND EXAMPLE:
 "Show me west coast swing events this weekend" (today=Thursday):
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events  
@@ -99,6 +111,17 @@ WHERE (dance_style ILIKE '%west coast swing%' OR dance_style ILIKE '%wcs%')
   AND start_date > CURRENT_DATE
   AND EXTRACT(DOW FROM start_date) IN (5,6,0)  
   AND start_date <= (CURRENT_DATE + INTERVAL '6 days')
+  AND event_type ILIKE '%social dance%'
+ORDER BY start_date, start_time
+LIMIT 30
+
+🔹 LAST DAY EXAMPLE:
+"Was there a rueda event sponsored by uvic last wednesday?" (today=Friday):
+SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
+FROM events
+WHERE dance_style ILIKE '%rueda%'
+  AND source ILIKE '%uvic%'
+  AND start_date = CURRENT_DATE - INTERVAL '((EXTRACT(DOW FROM CURRENT_DATE) - 3 + 7) % 7) days'
   AND event_type ILIKE '%social dance%'
 ORDER BY start_date, start_time
 LIMIT 30
