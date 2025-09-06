@@ -42,6 +42,7 @@ debug:
   address_fix: debug/address_fix.csv
   after_url_updated: debug/after_url_updated.csv
   before_url_updated: debug/before_url_updated.csv
+  prompt_debug: true
 fuzzywuzzy:
   hurdle: 70
 input:

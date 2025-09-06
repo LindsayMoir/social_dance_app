@@ -89,7 +89,7 @@ def error_handling(e, custom_message=None):
 
 
 # Show conversation context info (for debugging)
-if st.session_state.get("conversation_id"):
+if config.get('debug', {}).get('prompt_debug', False) and st.session_state.get("conversation_id"):
     with st.expander("🔍 Conversation Info", expanded=False):
         st.write(f"**Session Token:** {st.session_state['session_token'][:8]}...")
         st.write(f"**Conversation ID:** {st.session_state['conversation_id'][:8] if st.session_state['conversation_id'] else 'None'}...")
