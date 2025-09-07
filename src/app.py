@@ -44,10 +44,18 @@ with open(config_path, "r") as f:
     config = yaml.safe_load(f)
 logging.info("app.py: config completed.")
 
-# Get FastAPI API URL from environment variable
-FASTAPI_API_URL = os.getenv("FASTAPI_API_URL", "https://social-dance-app-ws-main.onrender.com/query")
+# Get FastAPI API URL - conditional for local vs Render
+if os.getenv("RENDER"):
+    # On Render: use the production URL  
+    FASTAPI_API_URL = "https://social-dance-app-ws-main.onrender.com/query"
+    logging.info("app.py: Using production FastAPI URL for Render")
+else:
+    # Locally: always use localhost (ignore environment variable to prevent confusion)
+    FASTAPI_API_URL = "http://localhost:8000/query"
+    logging.info(f"app.py: Using local FastAPI URL: {FASTAPI_API_URL}")
+
 if not FASTAPI_API_URL:
-    raise ValueError("The environment variable FASTAPI_API_URL is not set.")
+    raise ValueError("The FastAPI API URL could not be determined.")
 
 st.set_page_config(layout="wide")
 
