@@ -123,20 +123,41 @@ def process_query(request: QueryRequest):
                 entities=entities
             )
             
+            # Get updated recent messages INCLUDING the current user message
+            recent_messages_updated = conversation_manager.get_recent_messages(conversation_id, limit=5)
+            
             # Use contextual prompt template
             prompt_file_path = os.path.join(base_dir, 'prompts', 'contextual_sql_prompt.txt')
             with open(prompt_file_path, "r") as file:
                 base_prompt = file.read()
             
-            # Format conversation history for prompt
+            # Format conversation history for prompt (include current user message)
             history_text = "\n".join([
                 f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
-                for msg in recent_messages[-3:]  # Last 3 messages for context
+                for msg in recent_messages_updated[-3:]  # Last 3 messages for context
             ])
             
             # Get current date context
             current_date = datetime.now().strftime("%Y-%m-%d")
             current_day_of_week = datetime.now().isoweekday()  # Monday=1, Sunday=7
+            
+            # Handle query concatenation for refinements
+            if intent == 'refinement':
+                # Get the original search query from context
+                original_query = context.get('last_search_query', '')
+                if original_query:
+                    # Concatenate original query with current input
+                    combined_query = f"{original_query} {user_input}"
+                    logging.info(f"REFINEMENT: Combining '{original_query}' + '{user_input}' = '{combined_query}'")
+                else:
+                    combined_query = user_input
+                    logging.warning("REFINEMENT: No original query found in context, using current input only")
+            else:
+                # New search - use input as-is and store it for future refinements
+                combined_query = user_input
+                # Store the original query for future refinements
+                context['last_search_query'] = user_input
+                logging.info(f"NEW SEARCH: Storing original query: '{user_input}'")
             
             # Construct contextual prompt
             prompt = base_prompt.format(
@@ -147,7 +168,7 @@ def process_query(request: QueryRequest):
                 current_date=current_date,
                 current_day_of_week=current_day_of_week
             )
-            prompt += f"\n\nCurrent User Question: \"{user_input}\""
+            prompt += f"\n\nCurrent User Question: \"{combined_query}\""
             
             # DEBUG: Log the full prompt to see what's being sent to LLM
             logging.info("=== FULL PROMPT BEING SENT TO LLM ===")
@@ -233,7 +254,8 @@ def process_query(request: QueryRequest):
                 search_context = {
                     "last_search_criteria": entities,
                     "last_query": sanitized_query,
-                    "last_result_count": len(data)
+                    "last_result_count": len(data),
+                    "last_search_query": combined_query if intent == 'search' else context.get('last_search_query', user_input)
                 }
                 conversation_manager.update_conversation_context(conversation_id, search_context)
                 

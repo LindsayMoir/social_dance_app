@@ -50,9 +50,11 @@ DAY OF WEEK: {current_day_of_week} (Monday=1, Tuesday=2, Wednesday=3, Thursday=4
 • Timeframe specified (today/tomorrow/this week/next week/weekend/dates) → use ONLY that window, NO default floor
 
 🔹 CONTEXT-AWARE BEHAVIOR:
-• INTENT "search": Base on current input, default to event_type ILIKE '%social dance%'
-• INTENT "refinement": Keep last search, change only user modifications  
-• INTENT "follow_up": Keep WHERE filters identical, may change ORDER BY
+• INTENT "search": Process the user question as a new search query
+• INTENT "refinement": The user question contains the original query PLUS refinement (e.g., "Where can I dance tonight? Just salsa please")
+
+🔹 QUERY HANDLING:
+The "Current User Question" contains the complete query to process. For refinements, the original query and refinement have been automatically combined for you. Just interpret the complete question naturally.
 
 🔹 DATE PATTERNS (PostgreSQL EXTRACT(DOW): 0=Sunday, 1=Monday...6=Saturday):
 • "today"/"tonight": start_date = CURRENT_DATE

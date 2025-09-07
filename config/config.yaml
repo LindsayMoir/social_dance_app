@@ -66,7 +66,7 @@ llm:
   anthropic_model: claude-opus-4-20250514
   mistral_model: mistral-large-2411
   openai_model: gpt-5-mini
-  provider: openai
+  provider: mistral
   spend_money: true
 location:
   epicentre: Victoria, British Columbia, Canada

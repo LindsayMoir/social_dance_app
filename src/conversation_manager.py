@@ -210,7 +210,8 @@ class ConversationManager:
     
     def classify_intent(self, user_input: str, context: Dict, recent_messages: List[Dict]) -> str:
         """
-        Classify user intent based on input and conversation context.
+        Classify user intent based on conversation context.
+        Simple approach: if there's a previous search, treat as refinement. Otherwise, new search.
         
         Args:
             user_input: User's message
@@ -218,37 +219,15 @@ class ConversationManager:
             recent_messages: Recent conversation messages
             
         Returns:
-            str: Classified intent ('search', 'refinement', 'clarification', 'follow_up')
+            str: Classified intent ('search' or 'refinement')
         """
-        user_input_lower = user_input.lower()
-        
-        # Check for refinement keywords
-        refinement_keywords = [
-            'more', 'different', 'instead', 'other', 'also', 'too', 'actually',
-            'what about', 'how about', 'any', 'show me', 'find', 'not',
-            'exclude', 'without', 'except', 'change', 'switch'
-        ]
-        
-        # Check for follow-up keywords
-        follow_up_keywords = [
-            'when', 'where', 'what time', 'how much', 'cost', 'price',
-            'details', 'more info', 'tell me about', 'address', 'location'
-        ]
-        
         # Check if there are previous assistant messages with results
-        has_previous_results = any(
-            msg['role'] == 'assistant' and msg.get('result_count', 0) > 0 
+        has_previous_search = any(
+            msg['role'] == 'assistant' and msg.get('result_count', 0) >= 0  # Include 0 results 
             for msg in recent_messages
-        )
+        ) or context.get('last_search_query')
         
-        if has_previous_results:
-            if any(keyword in user_input_lower for keyword in refinement_keywords):
-                return 'refinement'
-            elif any(keyword in user_input_lower for keyword in follow_up_keywords):
-                return 'follow_up'
-        
-        # Default to new search if no previous context or clear new search intent
-        return 'search'
+        return 'refinement' if has_previous_search else 'search'
     
     def extract_entities(self, user_input: str, context: Dict) -> Dict:
         """
