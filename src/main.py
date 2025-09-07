@@ -160,23 +160,37 @@ def process_query(request: QueryRequest):
             current_date = datetime.now().strftime("%Y-%m-%d")
             current_day_of_week = datetime.now().isoweekday()  # Monday=1, Sunday=7
             
-            # Handle query concatenation for refinements
+            # Handle query concatenation for refinements (up to 5 parts)
             if intent == 'refinement':
-                # Get the original search query from context
-                original_query = context.get('last_search_query', '')
-                if original_query:
-                    # Concatenate original query with current input
-                    combined_query = f"{original_query} {user_input}"
-                    logging.info(f"REFINEMENT: Combining '{original_query}' + '{user_input}' = '{combined_query}'")
+                # Get the current combined query and concatenation count from context
+                current_combined_query = context.get('last_search_query', '')
+                concatenation_count = context.get('concatenation_count', 1)
+                
+                if current_combined_query and concatenation_count < 5:
+                    # Concatenate current combined query with new input
+                    combined_query = f"{current_combined_query} {user_input}"
+                    concatenation_count += 1
+                    logging.info(f"REFINEMENT #{concatenation_count}: Combining '{current_combined_query}' + '{user_input}' = '{combined_query}'")
+                elif concatenation_count >= 5:
+                    # Max concatenations reached, treat as new search
+                    combined_query = user_input
+                    concatenation_count = 1
+                    logging.info(f"REFINEMENT: Max concatenations (5) reached, treating as new search: '{user_input}'")
                 else:
                     combined_query = user_input
+                    concatenation_count = 1
                     logging.warning("REFINEMENT: No original query found in context, using current input only")
+                
+                # Update context with the new combined query and count
+                context['last_search_query'] = combined_query
+                context['concatenation_count'] = concatenation_count
             else:
-                # New search - use input as-is and store it for future refinements
+                # New search - use input as-is and reset concatenation count
                 combined_query = user_input
-                # Store the original query for future refinements
+                # Store the query and reset concatenation count for future refinements
                 context['last_search_query'] = user_input
-                logging.info(f"NEW SEARCH: Storing original query: '{user_input}'")
+                context['concatenation_count'] = 1
+                logging.info(f"NEW SEARCH: Storing query: '{user_input}' (concatenation count reset to 1)")
             
             # Construct contextual prompt
             prompt = base_prompt.format(
@@ -274,7 +288,8 @@ def process_query(request: QueryRequest):
                     "last_search_criteria": entities,
                     "last_query": sanitized_query,
                     "last_result_count": len(data),
-                    "last_search_query": combined_query if intent == 'search' else context.get('last_search_query', user_input)
+                    "last_search_query": context.get('last_search_query', combined_query),
+                    "concatenation_count": context.get('concatenation_count', 1)
                 }
                 conversation_manager.update_conversation_context(conversation_id, search_context)
                 

@@ -206,7 +206,7 @@ class ConversationManager:
                 "sql_query": row[3],
                 "result_count": row[4],
                 "intent": row[5],
-                "entities": json.loads(row[6]) if row[6] else {},
+                "entities": json.loads(row[6]) if isinstance(row[6], str) and row[6] else (row[6] if row[6] else {}),
                 "created_at": row[7]
             }
             messages.append(message)
