@@ -135,7 +135,13 @@ class ConversationManager:
         
         if result:
             context_json = result[0][0]
-            return json.loads(context_json) if context_json else {}
+            if context_json:
+                # Handle both string (JSON) and dict (already parsed JSONB) cases
+                if isinstance(context_json, str):
+                    return json.loads(context_json)
+                else:
+                    return context_json  # Already a dict from JSONB
+            return {}
         
         return {}
     
