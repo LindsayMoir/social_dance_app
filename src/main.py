@@ -34,8 +34,27 @@ from conversation_manager import ConversationManager  # Import ConversationManag
 # Load environment variables
 load_dotenv()
 
-# Set up basic logging
-logging.basicConfig(level=logging.INFO)
+# Set up conditional logging (files locally, console on Render)
+if os.getenv("RENDER"):
+    # On Render: use console logging (gets captured by Render's log system)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+    )
+    logging.info("main.py: Using console logging for Render")
+else:
+    # Locally: use file logging
+    script_name = os.path.splitext(os.path.basename(__file__))[0]
+    logging_file = f"logs/{script_name}_log.txt"
+    logging.basicConfig(
+        filename=logging_file,
+        filemode="a",
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        force=True
+    )
+    logging.info("main.py: Using file logging locally")
+    
 logging.info("main.py starting...")
 
 # Calculate the base directory and config path
