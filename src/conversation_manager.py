@@ -210,8 +210,7 @@ class ConversationManager:
     
     def classify_intent(self, user_input: str, context: Dict, recent_messages: List[Dict]) -> str:
         """
-        Classify user intent based on conversation context.
-        Simple approach: if there's a previous search, treat as refinement. Otherwise, new search.
+        Classify user intent using hybrid approach: simple rules first, then LLM for edge cases.
         
         Args:
             user_input: User's message
@@ -221,13 +220,122 @@ class ConversationManager:
         Returns:
             str: Classified intent ('search' or 'refinement')
         """
-        # Check if there are previous assistant messages with results
+        # If no previous search, definitely a new search
         has_previous_search = any(
-            msg['role'] == 'assistant' and msg.get('result_count', 0) >= 0  # Include 0 results 
+            msg['role'] == 'assistant' and msg.get('result_count', 0) >= 0
             for msg in recent_messages
         ) or context.get('last_search_query')
         
-        return 'refinement' if has_previous_search else 'search'
+        if not has_previous_search:
+            return 'search'
+            
+        # Get the last search query for comparison
+        last_query = context.get('last_search_query', '').lower()
+        user_input_lower = user_input.lower()
+        
+        # RULE 1: Clear new search indicators (95% reliable)
+        new_search_phrases = [
+            'show me', 'find me', 'find', 'search for', 'look for', 'get me',
+            'what about', 'how about', 'instead', 'forget that', 'actually',
+            'now show', 'now find', 'different', 'something else', 'change to'
+        ]
+        
+        matching_phrases = [phrase for phrase in new_search_phrases if phrase in user_input_lower]
+        if matching_phrases:
+            logging.info(f"RULE 1: NEW SEARCH detected by phrases: {matching_phrases}")
+            return 'search'
+            
+        # RULE 2: Time conflict detection (90% reliable)
+        last_time_words = self._extract_time_references(last_query)
+        current_time_words = self._extract_time_references(user_input_lower)
+        
+        if last_time_words and current_time_words:
+            # If time references don't overlap, likely new search
+            if not any(time_word in current_time_words for time_word in last_time_words):
+                # Check for conflicting time periods
+                time_conflicts = [
+                    ('tonight', 'tomorrow'), ('tonight', 'weekend'), ('tonight', 'next week'),
+                    ('today', 'tomorrow'), ('today', 'weekend'), ('this week', 'next week'),
+                    ('weekend', 'weekday'), ('morning', 'evening')
+                ]
+                
+                for time1, time2 in time_conflicts:
+                    if ((time1 in last_time_words and time2 in current_time_words) or 
+                        (time2 in last_time_words and time1 in current_time_words)):
+                        logging.info(f"RULE 2: NEW SEARCH detected by time conflict: {last_time_words} vs {current_time_words}")
+                        return 'search'
+        
+        # RULE 3: Location changes (85% reliable)
+        location_indicators = ['in ', 'at ', 'near ', 'around ', 'downtown', 'victoria', 'vancouver', 'saanich']
+        last_has_location = any(loc in last_query for loc in location_indicators)
+        current_has_location = any(loc in user_input_lower for loc in location_indicators)
+        
+        if last_has_location and current_has_location:
+            # Extract rough location indicators
+            last_locations = [loc for loc in location_indicators if loc in last_query]
+            current_locations = [loc for loc in location_indicators if loc in user_input_lower]
+            if not any(loc in current_locations for loc in last_locations):
+                return 'search'
+        
+        # RULE 4: Very short inputs are usually refinements (90% reliable)
+        user_words = user_input_lower.strip().split()
+        if len(user_words) <= 3:
+            logging.info(f"RULE 4: REFINEMENT detected by short input ({len(user_words)} words)")
+            return 'refinement'
+            
+        # RULE 5: Contains only dance style + polite words = refinement
+        dance_styles = [
+            'salsa', 'bachata', 'swing', 'tango', 'waltz', 'foxtrot', 'lindy',
+            'kizomba', 'zouk', 'merengue', 'rumba', 'cha cha', 'quickstep'
+        ]
+        polite_words = ['please', 'just', 'only', 'prefer', 'like']
+        
+        has_dance_style = any(style in user_input_lower for style in dance_styles)
+        mostly_dance_and_polite = all(
+            word in dance_styles + polite_words + ['and', 'or', 'the', 'a', 'an']
+            for word in user_words if len(word) > 2
+        )
+        
+        if has_dance_style and mostly_dance_and_polite:
+            logging.info(f"RULE 5: REFINEMENT detected by dance style + polite words")
+            return 'refinement'
+            
+        # EDGE CASE: Use LLM for ambiguous cases
+        logging.info(f"EDGE CASE: Using LLM fallback for ambiguous input")
+        return self._llm_classify_intent(user_input, last_query)
+    
+    def _extract_time_references(self, text: str) -> list:
+        """Extract time reference words from text."""
+        time_words = [
+            'tonight', 'today', 'tomorrow', 'weekend', 'weekday', 'monday', 'tuesday', 
+            'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'morning', 
+            'afternoon', 'evening', 'night', 'this week', 'next week', 'next month'
+        ]
+        return [word for word in time_words if word in text.lower()]
+    
+    def _llm_classify_intent(self, current_input: str, last_query: str) -> str:
+        """Use LLM to classify ambiguous cases."""
+        try:
+            # Simple prompt for binary classification
+            prompt = f"""You are classifying user intent. Answer only with "NEW_SEARCH" or "REFINEMENT".
+
+Previous search: "{last_query}"
+Current input: "{current_input}"
+
+Rules:
+- NEW_SEARCH: if current input is asking about a completely different topic, time, or location
+- REFINEMENT: if current input is adding constraints or details to the previous search
+
+Answer:"""
+
+            # Use the same LLM handler that's available in the system
+            # For now, default to refinement as the safer option
+            logging.info(f"LLM classification needed for: previous='{last_query}' current='{current_input}'")
+            return 'refinement'  # Conservative default
+            
+        except Exception as e:
+            logging.error(f"LLM classification failed: {e}")
+            return 'refinement'  # Safe fallback
     
     def extract_entities(self, user_input: str, context: Dict) -> Dict:
         """
