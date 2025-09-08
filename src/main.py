@@ -93,6 +93,49 @@ else:
 engine = create_engine(DATABASE_URL)
 logging.info("main.py: SQLAlchemy engine created.")
 
+def generate_interpretation(user_query: str, config: dict) -> str:
+    """
+    Generate a natural language interpretation of the user's search intent.
+    
+    Args:
+        user_query: The user's input query
+        config: Configuration dictionary containing location settings
+        
+    Returns:
+        str: Natural language interpretation of the search intent
+    """
+    # Load interpretation prompt
+    interpretation_prompt_path = os.path.join(base_dir, 'prompts', 'interpretation_prompt.txt')
+    try:
+        with open(interpretation_prompt_path, "r") as file:
+            interpretation_template = file.read()
+    except Exception as e:
+        logging.error(f"Error reading interpretation prompt: {e}")
+        return f"My understanding is that you want to search for: {user_query}"
+    
+    # Get current context
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_day_of_week = datetime.now().strftime("%A")
+    current_time = datetime.now().strftime("%H:%M PDT")
+    default_city = config.get('location', {}).get('epicentre', 'your area')
+    
+    # Format the interpretation prompt
+    formatted_prompt = interpretation_template.format(
+        current_date=current_date,
+        current_day_of_week=current_day_of_week,
+        current_time=current_time,
+        default_city=default_city,
+        user_query=user_query
+    )
+    
+    # Query LLM for interpretation
+    interpretation = llm_handler.query_llm('', formatted_prompt)
+    
+    if not interpretation:
+        return f"My understanding is that you want to search for dance events related to: {user_query}"
+    
+    return interpretation.strip()
+
 # Initialize the FastAPI app
 app = FastAPI(title="Social Dance Chatbot API")
 
@@ -101,9 +144,100 @@ class QueryRequest(BaseModel):
     user_input: str
     session_token: str = None  # Optional session token for conversation context
 
+class ConfirmationRequest(BaseModel):
+    confirmation: str  # "yes", "clarify", or "no"
+    session_token: str  # Required for confirmation
+    clarification: str = None  # Optional clarification text for "clarify" option
+
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the Social Dance Chatbot API!"}
+
+@app.post("/confirm")
+def process_confirmation(request: ConfirmationRequest):
+    """
+    Handle user confirmations for pending queries.
+    """
+    confirmation = request.confirmation.lower().strip()
+    session_token = request.session_token
+    clarification = request.clarification
+    
+    if not session_token:
+        raise HTTPException(status_code=400, detail="Session token is required for confirmations.")
+    
+    # Get conversation and pending query
+    conversation_id = conversation_manager.create_or_get_conversation(session_token)
+    pending_query = conversation_manager.get_pending_query(conversation_id)
+    
+    if not pending_query:
+        raise HTTPException(status_code=400, detail="No pending query found for confirmation.")
+    
+    if confirmation == "yes":
+        # Execute the pending SQL query
+        try:
+            sanitized_query = pending_query["sql_query"]
+            logging.info(f"CONFIRMATION: Executing confirmed query: {sanitized_query}")
+            
+            rows = db_handler.execute_query(sanitized_query)
+            if not rows:
+                data = []
+            else:
+                columns = [
+                    'event_name', 'event_type', 'dance_style', 'day_of_week',
+                    'start_date', 'end_date', 'start_time', 'end_time', 'source',
+                    'url', 'price', 'description', 'location'
+                ]
+                data = [dict(zip(columns, row)) for row in rows]
+            
+            # Add assistant message and clear pending query
+            conversation_manager.add_message(
+                conversation_id=conversation_id,
+                role="assistant",
+                content=f"Found {len(data)} events",
+                sql_query=sanitized_query,
+                result_count=len(data)
+            )
+            
+            conversation_manager.clear_pending_query(conversation_id)
+            
+            return {
+                "sql_query": sanitized_query,
+                "data": data,
+                "message": "Here are the results from your confirmed query.",
+                "conversation_id": conversation_id,
+                "confirmed": True
+            }
+            
+        except Exception as db_err:
+            error_message = f"Database Error: {db_err}"
+            logging.error(error_message)
+            conversation_manager.clear_pending_query(conversation_id)
+            raise HTTPException(status_code=500, detail=error_message)
+    
+    elif confirmation == "clarify":
+        # Handle clarification - treat as new query with clarification text
+        if not clarification:
+            raise HTTPException(status_code=400, detail="Clarification text is required when selecting 'clarify' option.")
+        
+        # Clear pending query and process clarification as new query
+        conversation_manager.clear_pending_query(conversation_id)
+        
+        # Create a new QueryRequest and process it
+        clarification_request = QueryRequest(user_input=clarification, session_token=session_token)
+        return process_query(clarification_request)
+    
+    elif confirmation == "no":
+        # User rejected the interpretation - clear pending query
+        conversation_manager.clear_pending_query(conversation_id)
+        
+        return {
+            "message": "Query cancelled. Please provide a new search request.",
+            "conversation_id": conversation_id,
+            "cancelled": True
+        }
+    
+    else:
+        raise HTTPException(status_code=400, detail="Invalid confirmation option. Use 'yes', 'clarify', or 'no'.")
 
 @app.post("/query")
 def process_query(request: QueryRequest):
@@ -252,57 +386,57 @@ def process_query(request: QueryRequest):
         sanitized_query = sanitized_query.split(";")[0]
         logging.info(f"Sanitized SQL Query: {sanitized_query}")
         
+        # Generate natural language interpretation instead of executing immediately
         try:
-            # Execute the SQL query using DatabaseHandler pattern
-            rows = db_handler.execute_query(sanitized_query)
-            if not rows:
-                data = []
+            # Get the combined query for interpretation
+            if use_contextual_prompt:
+                query_for_interpretation = combined_query
             else:
-                # Get column names from the query result
-                # For SELECT queries, we need to parse the columns from the SQL
-                columns = [
-                    'event_name', 'event_type', 'dance_style', 'day_of_week',
-                    'start_date', 'end_date', 'start_time', 'end_time', 'source',
-                    'url', 'price', 'description', 'location'
-                ]
-                data = [dict(zip(columns, row)) for row in rows]
-        except Exception as db_err:
-            error_message = f"Database Error: {db_err}"
-            logging.error(error_message)
-            raise HTTPException(status_code=500, detail=error_message)
-        
-        # Update conversation context if using sessions
-        if use_contextual_prompt and session_token:
-            try:
-                # Add assistant message to conversation
-                conversation_manager.add_message(
-                    conversation_id=conversation_id,
-                    role="assistant",
-                    content=f"Found {len(data)} events",
-                    sql_query=sanitized_query,
-                    result_count=len(data)
-                )
-                
-                # Update context with last search criteria for future refinements
-                search_context = {
-                    "last_search_criteria": entities,
-                    "last_query": sanitized_query,
-                    "last_result_count": len(data),
-                    "last_search_query": context.get('last_search_query', combined_query),
-                    "concatenation_count": context.get('concatenation_count', 1)
-                }
-                conversation_manager.update_conversation_context(conversation_id, search_context)
-                
-            except Exception as e:
-                logging.error(f"Error updating conversation context: {e}")
-        
-        return {
-            "sql_query": sanitized_query,
-            "data": data,
-            "message": "Here are the results from your query.",
-            "conversation_id": conversation_id if use_contextual_prompt else None,
-            "intent": intent if use_contextual_prompt else None
-        }
+                query_for_interpretation = user_input
+            
+            interpretation = generate_interpretation(query_for_interpretation, config)
+            logging.info(f"Generated interpretation: {interpretation}")
+            
+            # Store pending query for confirmation if using sessions
+            if use_contextual_prompt and session_token:
+                try:
+                    conversation_manager.store_pending_query(
+                        conversation_id=conversation_id,
+                        user_input=user_input,
+                        combined_query=query_for_interpretation,
+                        interpretation=interpretation,
+                        sql_query=sanitized_query
+                    )
+                    
+                    # Update context with concatenation info for next refinement
+                    search_context = {
+                        "last_search_query": context.get('last_search_query', combined_query),
+                        "concatenation_count": context.get('concatenation_count', 1)
+                    }
+                    conversation_manager.update_conversation_context(conversation_id, search_context)
+                    
+                except Exception as e:
+                    logging.error(f"Error storing pending query: {e}")
+                    raise HTTPException(status_code=500, detail=f"Error storing query for confirmation: {e}")
+            
+            # Return interpretation with confirmation options
+            return {
+                "interpretation": interpretation,
+                "confirmation_required": True,
+                "conversation_id": conversation_id if use_contextual_prompt else None,
+                "intent": intent if use_contextual_prompt else None,
+                "message": f"{interpretation}\n\nIf that is correct, please select one of these options:\n1. Yes\n2. Yes, but I want to clarify the request\n3. No, I am going to give you a different request",
+                "options": ["yes", "clarify", "no"]
+            }
+            
+        except Exception as e:
+            logging.error(f"Error generating interpretation: {e}")
+            # Fallback for non-contextual queries - just return a simple message
+            return {
+                "message": f"I understand you want to search for: {user_input}. Please confirm if this is correct.",
+                "confirmation_required": True,
+                "simple_confirmation": True
+            }
     else:
         logging.warning("LLM did not return a valid SQL query.")
         return {

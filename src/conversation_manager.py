@@ -170,6 +170,72 @@ class ConversationManager:
         
         self.db_handler.execute_query(update_query, params)
     
+    def store_pending_query(self, conversation_id: str, user_input: str, combined_query: str, 
+                           interpretation: str, sql_query: str):
+        """
+        Store a pending query awaiting user confirmation.
+        
+        Args:
+            conversation_id: UUID of the conversation
+            user_input: Original user input
+            combined_query: Combined query with concatenations
+            interpretation: Natural language interpretation
+            sql_query: Generated SQL query ready for execution
+        """
+        pending_data = {
+            "pending_confirmation": True,
+            "pending_user_input": user_input,
+            "pending_combined_query": combined_query,
+            "pending_interpretation": interpretation,
+            "pending_sql_query": sql_query,
+            "pending_timestamp": datetime.now().isoformat()
+        }
+        
+        self.update_conversation_context(conversation_id, pending_data)
+        logging.info(f"ConversationManager: Stored pending query for confirmation in conversation {conversation_id}")
+    
+    def get_pending_query(self, conversation_id: str) -> Dict:
+        """
+        Retrieve pending query data if one exists.
+        
+        Args:
+            conversation_id: UUID of the conversation
+            
+        Returns:
+            Dict: Pending query data or empty dict if none
+        """
+        context = self.get_conversation_context(conversation_id)
+        
+        if context.get("pending_confirmation"):
+            return {
+                "user_input": context.get("pending_user_input"),
+                "combined_query": context.get("pending_combined_query"),
+                "interpretation": context.get("pending_interpretation"),
+                "sql_query": context.get("pending_sql_query"),
+                "timestamp": context.get("pending_timestamp")
+            }
+        
+        return {}
+    
+    def clear_pending_query(self, conversation_id: str):
+        """
+        Clear pending query data from conversation context.
+        
+        Args:
+            conversation_id: UUID of the conversation
+        """
+        context_update = {
+            "pending_confirmation": False,
+            "pending_user_input": None,
+            "pending_combined_query": None,
+            "pending_interpretation": None,
+            "pending_sql_query": None,
+            "pending_timestamp": None
+        }
+        
+        self.update_conversation_context(conversation_id, context_update)
+        logging.info(f"ConversationManager: Cleared pending query from conversation {conversation_id}")
+    
     def get_recent_messages(self, conversation_id: str, limit: int = 5) -> List[Dict]:
         """
         Get recent messages from the conversation.

@@ -44,18 +44,20 @@ with open(config_path, "r") as f:
     config = yaml.safe_load(f)
 logging.info("app.py: config completed.")
 
-# Get FastAPI API URL - conditional for local vs Render
+# Get FastAPI API URLs - conditional for local vs Render
 if os.getenv("RENDER"):
-    # On Render: use the production URL  
-    FASTAPI_API_URL = "https://social-dance-app-ws-main.onrender.com/query"
-    logging.info("app.py: Using production FastAPI URL for Render")
+    # On Render: use the production URLs  
+    FASTAPI_QUERY_URL = "https://social-dance-app-ws-main.onrender.com/query"
+    FASTAPI_CONFIRM_URL = "https://social-dance-app-ws-main.onrender.com/confirm"
+    logging.info("app.py: Using production FastAPI URLs for Render")
 else:
     # Locally: always use localhost (ignore environment variable to prevent confusion)
-    FASTAPI_API_URL = "http://localhost:8000/query"
-    logging.info(f"app.py: Using local FastAPI URL: {FASTAPI_API_URL}")
+    FASTAPI_QUERY_URL = "http://localhost:8000/query"
+    FASTAPI_CONFIRM_URL = "http://localhost:8000/confirm"
+    logging.info(f"app.py: Using local FastAPI URLs: {FASTAPI_QUERY_URL}, {FASTAPI_CONFIRM_URL}")
 
-if not FASTAPI_API_URL:
-    raise ValueError("The FastAPI API URL could not be determined.")
+if not FASTAPI_QUERY_URL or not FASTAPI_CONFIRM_URL:
+    raise ValueError("The FastAPI API URLs could not be determined.")
 
 st.set_page_config(layout="wide")
 
@@ -74,6 +76,13 @@ if "conversation_id" not in st.session_state:
 
 if "last_intent" not in st.session_state:
     st.session_state["last_intent"] = None
+
+# Initialize confirmation state
+if "pending_confirmation" not in st.session_state:
+    st.session_state["pending_confirmation"] = None
+
+if "pending_interpretation" not in st.session_state:
+    st.session_state["pending_interpretation"] = None
 
 # Load chatbot instructions from a file specified in the YAML config
 prompt_config = config['prompts']['chatbot_instructions']
@@ -175,7 +184,7 @@ if process_input:
             "user_input": input_to_process,
             "session_token": st.session_state["session_token"]
         }
-        response = requests.post(FASTAPI_API_URL, json=payload)
+        response = requests.post(FASTAPI_QUERY_URL, json=payload)
         response.raise_for_status()
         data = response.json()
         
@@ -185,7 +194,27 @@ if process_input:
         if data.get("intent"):
             st.session_state["last_intent"] = data["intent"]
         
-        # Create a more conversational response based on the query type and results
+        # Handle confirmation required response
+        if data.get("confirmation_required"):
+            st.session_state["pending_confirmation"] = data
+            st.session_state["pending_interpretation"] = data.get("interpretation", "")
+            
+            # Display interpretation and confirmation options
+            assistant_content = data.get("message", "Please confirm your query.")
+            
+            query_result = {
+                "role": "assistant",
+                "content": assistant_content,
+                "events": [],
+                "pending_confirmation": True,
+                "interpretation": data.get("interpretation", ""),
+                "options": data.get("options", ["yes", "clarify", "no"]),
+                "timestamp": input_to_process
+            }
+            st.session_state["messages"].append(query_result)
+            st.rerun()
+        
+        # Handle regular results (this shouldn't happen with confirmation system, but keep for fallback)
         events = data.get('data', [])
         user_question = input_to_process.lower()
         
@@ -289,6 +318,128 @@ if st.session_state["messages"]:
                             
                             if event.get('description'):
                                 st.write(f"**Description:** {event.get('description')}")
+            elif assistant_msg.get("pending_confirmation"):
+                # Handle pending confirmation
+                if assistant_msg.get('content'):
+                    st.info(assistant_msg['content'])
+                
+                # Show confirmation buttons only for the most recent response
+                if i + 1 == len(st.session_state["messages"]) - 1:
+                    st.write("### 🤔 Please confirm your request:")
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        if st.button("✅ Yes", type="primary", key=f"confirm_yes_{i}"):
+                            # Send confirmation to backend
+                            confirm_payload = {
+                                "confirmation": "yes",
+                                "session_token": st.session_state["session_token"]
+                            }
+                            try:
+                                response = requests.post(FASTAPI_CONFIRM_URL, json=confirm_payload)
+                                response.raise_for_status()
+                                data = response.json()
+                                
+                                # Add user confirmation message to maintain conversation flow
+                                st.session_state["messages"].append({"role": "user", "content": "✅ Yes, that's correct"})
+                                
+                                # Process the confirmed results
+                                events = data.get('data', [])
+                                assistant_content = f"Found {len(events)} events"
+                                
+                                # Add the results to conversation
+                                result_msg = {
+                                    "role": "assistant",
+                                    "content": assistant_content,
+                                    "events": events,
+                                    "sql_query": data.get('sql_query', ''),
+                                    "intent": "search",  # Add intent for proper display
+                                    "confirmed": True
+                                }
+                                st.session_state["messages"].append(result_msg)
+                                st.session_state["pending_confirmation"] = None
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error processing confirmation: {e}")
+                    
+                    with col2:
+                        if st.button("📝 Clarify", key=f"confirm_clarify_{i}"):
+                            st.session_state["show_clarification_input"] = True
+                            st.rerun()
+                    
+                    with col3:
+                        if st.button("❌ No", key=f"confirm_no_{i}"):
+                            # Send rejection to backend
+                            reject_payload = {
+                                "confirmation": "no",
+                                "session_token": st.session_state["session_token"]
+                            }
+                            try:
+                                response = requests.post(FASTAPI_CONFIRM_URL, json=reject_payload)
+                                response.raise_for_status()
+                                data = response.json()
+                                
+                                # Add user rejection message to maintain conversation flow
+                                st.session_state["messages"].append({"role": "user", "content": "❌ No, that's not what I want"})
+                                
+                                # Add cancellation message
+                                cancel_msg = {
+                                    "role": "assistant",
+                                    "content": data.get("message", "Query cancelled. Please provide a new search request."),
+                                    "events": [],
+                                    "cancelled": True
+                                }
+                                st.session_state["messages"].append(cancel_msg)
+                                st.session_state["pending_confirmation"] = None
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error processing rejection: {e}")
+                    
+                    # Show clarification input if requested
+                    if st.session_state.get("show_clarification_input"):
+                        st.write("### 💬 Please provide clarification:")
+                        clarification_text = st.text_area("What would you like to clarify?", key=f"clarify_input_{i}")
+                        
+                        col_submit, col_cancel = st.columns(2)
+                        with col_submit:
+                            if st.button("Submit Clarification", type="primary", key=f"submit_clarify_{i}"):
+                                if clarification_text.strip():
+                                    # Send clarification to backend
+                                    clarify_payload = {
+                                        "confirmation": "clarify",
+                                        "session_token": st.session_state["session_token"],
+                                        "clarification": clarification_text
+                                    }
+                                    try:
+                                        response = requests.post(FASTAPI_CONFIRM_URL, json=clarify_payload)
+                                        response.raise_for_status()
+                                        data = response.json()
+                                        
+                                        # Add user clarification message to maintain conversation flow
+                                        st.session_state["messages"].append({"role": "user", "content": f"📝 Clarification: {clarification_text}"})
+                                        
+                                        # Handle new interpretation from clarification
+                                        if data.get("confirmation_required"):
+                                            new_msg = {
+                                                "role": "assistant",
+                                                "content": data.get("message", "Please confirm your updated query."),
+                                                "events": [],
+                                                "pending_confirmation": True,
+                                                "interpretation": data.get("interpretation", ""),
+                                                "options": data.get("options", ["yes", "clarify", "no"])
+                                            }
+                                            st.session_state["messages"].append(new_msg)
+                                        
+                                        st.session_state["pending_confirmation"] = None
+                                        st.session_state["show_clarification_input"] = False
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error processing clarification: {e}")
+                        
+                        with col_cancel:
+                            if st.button("Cancel", key=f"cancel_clarify_{i}"):
+                                st.session_state["show_clarification_input"] = False
+                                st.rerun()
             else:
                 # Handle case where no events were found or general response
                 if assistant_msg.get('content'):
@@ -343,7 +494,7 @@ if st.session_state["messages"]:
                                     "user_input": followup_input,
                                     "session_token": st.session_state["session_token"]
                                 }
-                                response = requests.post(FASTAPI_API_URL, json=payload)
+                                response = requests.post(FASTAPI_QUERY_URL, json=payload)
                                 response.raise_for_status()
                                 data = response.json()
                                 
@@ -353,7 +504,27 @@ if st.session_state["messages"]:
                                 if data.get("intent"):
                                     st.session_state["last_intent"] = data["intent"]
                                 
-                                # Create a more conversational response based on the query type and results
+                                # Handle confirmation required response for followup queries
+                                if data.get("confirmation_required"):
+                                    st.session_state["pending_confirmation"] = data
+                                    st.session_state["pending_interpretation"] = data.get("interpretation", "")
+                                    
+                                    # Display interpretation and confirmation options
+                                    assistant_content = data.get("message", "Please confirm your query.")
+                                    
+                                    query_result = {
+                                        "role": "assistant",
+                                        "content": assistant_content,
+                                        "events": [],
+                                        "pending_confirmation": True,
+                                        "interpretation": data.get("interpretation", ""),
+                                        "options": data.get("options", ["yes", "clarify", "no"]),
+                                        "timestamp": followup_input
+                                    }
+                                    st.session_state["messages"].append(query_result)
+                                    st.rerun()
+                                
+                                # Handle regular results (fallback for backward compatibility)
                                 events = data.get('data', [])
                                 user_question = followup_input.lower()
                                 
