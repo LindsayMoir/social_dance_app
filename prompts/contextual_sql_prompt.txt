@@ -40,10 +40,15 @@ DAY OF WEEK: {current_day_of_week} (Monday=1, Tuesday=2, Wednesday=3, Thursday=4
 === SQL GENERATION RULES ===
 
 🔹 REQUIRED FORMAT:
-• SELECT queries only with LIMIT 30
+• SELECT queries only with LIMIT (user-specified limit or default 30)
 • Column order: event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 • Default sort: ORDER BY start_date, start_time
 • Text matching: ILIKE '%keyword%' for case-insensitive search
+
+🔹 LIMIT HANDLING:
+• If user specifies a number (e.g., "10 events", "limit to 5"), use that exact number
+• If no limit specified, use LIMIT 30
+• Common phrases: "limited to X", "only X events", "show me X", "find X events"
 
 🔹 DATE FILTERING:
 • NO timeframe specified → add: start_date >= (CURRENT_DATE - INTERVAL '7 days')
@@ -123,6 +128,10 @@ WHERE (dance_style ILIKE '%west coast swing%' OR dance_style ILIKE '%wcs%')
   AND event_type ILIKE '%social dance%'
 ORDER BY start_date, start_time
 LIMIT 30
+
+🔹 LIMIT EXAMPLE:
+"Find 10 salsa events this week" (user specified limit):
+LIMIT 10
 
 🔹 LAST DAY EXAMPLE:
 "Was there a rueda event sponsored by uvic last wednesday?" (today=Friday):
