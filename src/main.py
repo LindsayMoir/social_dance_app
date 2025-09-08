@@ -425,7 +425,7 @@ def process_query(request: QueryRequest):
                 "confirmation_required": True,
                 "conversation_id": conversation_id if use_contextual_prompt else None,
                 "intent": intent if use_contextual_prompt else None,
-                "message": f"{interpretation}\n\nIf that is correct, please select one of these options:\n1. Yes\n2. Yes, but I want to clarify the request\n3. No, I am going to give you a different request",
+                "message": f"{interpretation}\n\nIf that is correct, please confirm using the buttons below:",
                 "options": ["yes", "clarify", "no"]
             }
             
