@@ -16,6 +16,18 @@ CONTEXT INFORMATION:
 - Default city: {default_city}
 - Current time: {current_time}
 
+DATE CALCULATION RULES:
+- Today = {current_date} ({current_day_of_week})
+- Tomorrow = the day after {current_date} (the day after {current_day_of_week})
+- If today is Monday, tomorrow is Tuesday
+- If today is Tuesday, tomorrow is Wednesday
+- If today is Wednesday, tomorrow is Thursday
+- If today is Thursday, tomorrow is Friday
+- If today is Friday, tomorrow is Saturday
+- If today is Saturday, tomorrow is Sunday
+- If today is Sunday, tomorrow is Monday
+- Always add exactly 1 day to the current date for "tomorrow"
+
 USER QUERY: "{user_query}"
 
 TEMPLATE FOR RESPONSE:
@@ -25,17 +37,17 @@ Generate a natural language interpretation following this pattern:
 
 EXAMPLES:
 
-Query: "Where can I dance tonight?"
-Response: "My understanding is that you want to see all social dance events available in the Victoria, BC area tonight. That would be today, September 7, 2025 after 6:00 PM PDT."
+Query: "Where can I dance tonight?" (when today is Monday, 2025-09-08)
+Response: "My understanding is that you want to see all social dance events available in the Victoria, BC area tonight. That would be today, Monday, September 8, 2025 after 6:00 PM PDT."
 
-Query: "Salsa classes this weekend"
-Response: "My understanding is that you want to see salsa classes available in the Victoria, BC area this weekend. That would be Saturday September 8 and Sunday September 9, 2025."
+Query: "Where can I dance tomorrow night?" (when today is Monday, 2025-09-08)
+Response: "My understanding is that you want to see all social dance events available in the Victoria, BC area tomorrow night. That would be Tuesday, September 9, 2025 after 6:00 PM PDT."
+
+Query: "Salsa classes this weekend" (when today is Monday, 2025-09-08)
+Response: "My understanding is that you want to see salsa classes available in the Victoria, BC area this weekend. That would be Saturday September 14 and Sunday September 15, 2025."
 
 Query: "Live music events at Crystal Garden"
 Response: "My understanding is that you want to see live music events at Crystal Garden available in the Victoria, BC area."
-
-Query: "What events does DanceVictoria have next week?"
-Response: "My understanding is that you want to see events from DanceVictoria available in the Victoria, BC area next week. That would be September 10-16, 2025."
 
 INSTRUCTIONS:
 1. Be specific about dates and times when mentioned
