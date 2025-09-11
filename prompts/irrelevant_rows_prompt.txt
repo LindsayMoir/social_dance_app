@@ -61,7 +61,11 @@ Classify the event into one or more of the following:
 - **rehearsal** (if the event is for a special group only for purposes of practising and then performing later on),
 - **workshop** (if the event is a workshop),
 - **live music"" (if the event has a live band)
-- **other** (if it doesn't clearly fall into one of the above categories). 
+- **other** (if it doesn't clearly fall into one of the above categories).
+
+### Special Event Type Rules:
+- **If the event_name or description contains the word "lesson"**, the event_type should include **"class"**.
+- This rule applies even if other event types are also present (e.g., "class, social dance"). 
 
 If an event fits multiple categories (e.g., a class that is also a social dance), list all applicable types separated by commas.
 Check each listed dance_style (above) to see if it matches any relevant dance style.
