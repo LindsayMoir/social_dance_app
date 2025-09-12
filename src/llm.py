@@ -306,8 +306,19 @@ class LLMHandler:
         try:
             prompt_config = self.config['prompts'][prompt_type]
         except KeyError:
-            prompt_config = self.config['prompts']['default']
-            logging.warning(f"def generate_prompt(): Prompt type '{prompt_type}' not found, using default")
+            # Try domain-based lookup if full URL lookup fails
+            try:
+                from urllib.parse import urlparse
+                parsed_url = urlparse(prompt_type)
+                domain = parsed_url.netloc
+                if domain:
+                    prompt_config = self.config['prompts'][domain]
+                    logging.info(f"def generate_prompt(): Using domain-based config for '{domain}'")
+                else:
+                    raise KeyError("No domain found")
+            except KeyError:
+                prompt_config = self.config['prompts']['default']
+                logging.warning(f"def generate_prompt(): Prompt type '{prompt_type}' not found, using default")
         
         # Handle both old string format and new dict format for backward compatibility
         if isinstance(prompt_config, str):

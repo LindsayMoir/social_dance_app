@@ -2470,6 +2470,79 @@ class DatabaseHandler():
             return True
 
 
+    def normalize_url(self, url):
+        """
+        Normalize URLs by removing dynamic cache parameters that don't affect the underlying content.
+        
+        This is particularly important for Instagram and Facebook CDN URLs that include
+        dynamic parameters like _nc_gid, _nc_ohc, oh, oe, etc. that change between requests
+        but point to the same underlying image.
+        
+        Args:
+            url (str): The original URL with potentially dynamic parameters
+            
+        Returns:
+            str: Normalized URL with dynamic parameters removed
+        """
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+        
+        parsed = urlparse(url)
+        
+        # Check if this is an Instagram or Facebook CDN URL
+        # Be specific about Instagram/FB domains to avoid affecting other CDN URLs
+        instagram_domains = {
+            'instagram.com',
+            'www.instagram.com', 
+            'scontent.cdninstagram.com',
+            'instagram.fcxh2-1.fna.fbcdn.net',
+            'scontent.cdninstagram.com'
+        }
+        
+        fb_cdn_domains = {
+            domain for domain in [parsed.netloc] 
+            if 'fbcdn.net' in domain and ('instagram' in domain or 'scontent' in domain)
+        }
+        
+        is_instagram_cdn = (parsed.netloc in instagram_domains or 
+                           any(domain in parsed.netloc for domain in instagram_domains) or
+                           bool(fb_cdn_domains))
+        
+        if not is_instagram_cdn:
+            return url
+        
+        # Parse query parameters
+        query_params = parse_qs(parsed.query)
+        
+        # List of dynamic parameters to remove for Instagram/FB CDN URLs
+        dynamic_params = {
+            '_nc_gid',     # Cache group ID - changes between sessions
+            '_nc_ohc',     # Cache hash - changes between requests  
+            '_nc_oc',      # Cache parameter - changes between requests
+            'oh',          # Hash parameter - changes between requests
+            'oe',          # Expiration parameter - changes over time
+            '_nc_zt',      # Zoom/time parameter
+            '_nc_ad',      # Ad parameter
+            '_nc_cid',     # Cache ID
+            'ccb',         # Cache control parameter (sometimes)
+        }
+        
+        # Remove dynamic parameters
+        filtered_params = {k: v for k, v in query_params.items() 
+                          if k not in dynamic_params}
+        
+        # Reconstruct URL with filtered parameters
+        new_query = urlencode(filtered_params, doseq=True)
+        normalized_url = urlunparse((
+            parsed.scheme,
+            parsed.netloc, 
+            parsed.path,
+            parsed.params,
+            new_query,
+            parsed.fragment
+        ))
+        
+        return normalized_url
+
     def should_process_url(self, url):
         """
         Determines whether a given URL should be processed based on its history in the database.
@@ -2489,21 +2562,28 @@ class DatabaseHandler():
         Returns:
              bool: True if the URL should be processed according to the criteria above, False otherwise.
         """
-        # 1. Filter all rows for this URL
-        df_url = self.urls_df[self.urls_df['link'] == url]
-        # If we've never recorded this URL, process it
+        # Normalize URL to handle Instagram/FB CDN dynamic parameters
+        normalized_url = self.normalize_url(url)
+        
+        # Log normalization if URL changed
+        if normalized_url != url:
+            logging.info(f"should_process_url: Normalized Instagram URL for comparison")
+        
+        # 1. Filter all rows for this normalized URL
+        df_url = self.urls_df[self.urls_df['link'] == normalized_url]
+        # If we've never recorded this normalized URL, process it
         if df_url.empty:
-            logging.info(f"should_process_url: URL {url} has never been seen before, processing it.")
+            logging.info(f"should_process_url: URL {normalized_url[:100]}... has never been seen before, processing it.")
             return True
 
         # 2. Look at the most recent "relevant" value
         last_relevant = df_url.iloc[-1]['relevant']
-        if last_relevant and self.stale_date(url):
-            logging.info(f"should_process_url: URL {url} was last seen as relevant, processing it.")
+        if last_relevant and self.stale_date(normalized_url):
+            logging.info(f"should_process_url: URL {normalized_url[:100]}... was last seen as relevant, processing it.")
             return True
 
         # 3. Last was False → check hit_ratio in self.urls_gb
-        hit_row = self.urls_gb[self.urls_gb['link'] == url]
+        hit_row = self.urls_gb[self.urls_gb['link'] == normalized_url]
 
         if not hit_row.empty:
             # Extract scalars from the grouped DataFrame
@@ -2514,12 +2594,12 @@ class DatabaseHandler():
                 logging.info(
                     "should_process_url: URL %s was last seen as not relevant "
                     "but hit_ratio (%.2f) > 0.1 or crawl_try (%d) ≤ 3, processing it.",
-                    url, hit_ratio, crawl_trys
+                    normalized_url[:100] + "...", hit_ratio, crawl_trys
                 )
                 return True
 
         # 4. Otherwise, do not process this URL
-        logging.info(f"should_process_url: URL {url} does not meet criteria for processing, skipping it.")
+        logging.info(f"should_process_url: URL {normalized_url[:100]}... does not meet criteria for processing, skipping it.")
         return False
 
 
@@ -2928,9 +3008,13 @@ class DatabaseHandler():
                 }
                 self.execute_query(insert_temp_sql, params)
             
-            # Step 3: Update events table with new address_ids
+            # Step 3: Update all tables that reference address_id with new address_ids
             events_updated = 0
+            events_history_updated = 0
+            raw_locations_updated = 0
+            
             for old_id, new_id in address_mapping.items():
+                # Update events table
                 update_events_sql = """
                 UPDATE events 
                 SET address_id = :new_id 
@@ -2939,8 +3023,30 @@ class DatabaseHandler():
                 result = self.execute_query(update_events_sql, {'new_id': new_id, 'old_id': old_id})
                 if result:
                     events_updated += 1
+                
+                # Update events_history table (only for address_ids that exist)
+                update_events_history_sql = """
+                UPDATE events_history 
+                SET address_id = :new_id 
+                WHERE address_id = :old_id;
+                """
+                result = self.execute_query(update_events_history_sql, {'new_id': new_id, 'old_id': old_id})
+                if result:
+                    events_history_updated += 1
+                
+                # Update raw_locations table (this has the foreign key constraint)
+                update_raw_locations_sql = """
+                UPDATE raw_locations 
+                SET address_id = :new_id 
+                WHERE address_id = :old_id;
+                """
+                result = self.execute_query(update_raw_locations_sql, {'new_id': new_id, 'old_id': old_id})
+                if result:
+                    raw_locations_updated += 1
             
             logging.info(f"reset_address_id_sequence(): Updated address_id in events table for {events_updated} different address IDs")
+            logging.info(f"reset_address_id_sequence(): Updated address_id in events_history table for {events_history_updated} different address IDs")
+            logging.info(f"reset_address_id_sequence(): Updated address_id in raw_locations table for {raw_locations_updated} different address IDs")
             
             # Step 4: Replace original address table with renumbered version
             # Delete all from original table
