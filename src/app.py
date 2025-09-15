@@ -62,26 +62,22 @@ if not FASTAPI_QUERY_URL or not FASTAPI_CONFIRM_URL:
 st.set_page_config(layout="wide")
 
 # Add DanceScoop branding at the top
-# Try multiple possible paths for the logo
-possible_logo_paths = [
-    os.path.join(base_dir, 'website', 'images', 'ds_logo.png'),
-    os.path.join(os.path.dirname(base_dir), 'website', 'images', 'ds_logo.png'),
-    os.path.join('/mnt/d/GitHub/social_dance_app', 'website', 'images', 'ds_logo.png')
-]
+logo_path = os.path.join(base_dir, 'website', 'images', 'ds_logo.png')
+logging.info(f"app.py: Attempting to load logo from: {logo_path}")
 
-logo_path = None
-for path in possible_logo_paths:
-    logging.info(f"app.py: Checking logo path: {path}")
-    if os.path.exists(path):
-        logo_path = path
-        logging.info(f"app.py: Found logo at: {path}")
-        break
-
-if logo_path:
-    st.image(logo_path, width=200)
-else:
+try:
+    if os.path.exists(logo_path):
+        # Read the image file as binary and pass to st.image
+        with open(logo_path, 'rb') as image_file:
+            image_data = image_file.read()
+        st.image(image_data, width=200)
+        logging.info("app.py: Successfully loaded logo image from binary data")
+    else:
+        st.markdown("# DanceScoop")
+        logging.warning(f"app.py: Logo file not found at {logo_path}")
+except Exception as e:
+    logging.error(f"app.py: Error loading logo image: {e}")
     st.markdown("# DanceScoop")
-    logging.warning(f"app.py: Logo file not found in any of these paths: {possible_logo_paths}")
 
 # Initialize session state for conversation management
 if "messages" not in st.session_state:

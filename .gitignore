@@ -14,9 +14,10 @@ output/
 # ignore all json files
 *.json
 
-# ignore all images
+# ignore all images except website/images
 images/
-# Exception: allow DanceScoop logo
+# Exception: allow website/images directory and logo
+!website/images/
 !website/images/ds_logo.png
 
 # Byte-compiled / optimized / DLL files
