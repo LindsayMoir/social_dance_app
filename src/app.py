@@ -62,11 +62,26 @@ if not FASTAPI_QUERY_URL or not FASTAPI_CONFIRM_URL:
 st.set_page_config(layout="wide")
 
 # Add DanceScoop branding at the top
-logo_path = os.path.join(base_dir, 'website', 'images', 'ds_logo.png')
-if os.path.exists(logo_path):
+# Try multiple possible paths for the logo
+possible_logo_paths = [
+    os.path.join(base_dir, 'website', 'images', 'ds_logo.png'),
+    os.path.join(os.path.dirname(base_dir), 'website', 'images', 'ds_logo.png'),
+    os.path.join('/mnt/d/GitHub/social_dance_app', 'website', 'images', 'ds_logo.png')
+]
+
+logo_path = None
+for path in possible_logo_paths:
+    logging.info(f"app.py: Checking logo path: {path}")
+    if os.path.exists(path):
+        logo_path = path
+        logging.info(f"app.py: Found logo at: {path}")
+        break
+
+if logo_path:
     st.image(logo_path, width=200)
 else:
     st.markdown("# DanceScoop")
+    logging.warning(f"app.py: Logo file not found in any of these paths: {possible_logo_paths}")
 
 # Initialize session state for conversation management
 if "messages" not in st.session_state:
