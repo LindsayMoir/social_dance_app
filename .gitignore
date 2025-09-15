@@ -16,6 +16,8 @@ output/
 
 # ignore all images
 images/
+# Exception: allow DanceScoop logo
+!website/images/ds_logo.png
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

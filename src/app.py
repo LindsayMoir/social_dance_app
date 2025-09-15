@@ -61,6 +61,13 @@ if not FASTAPI_QUERY_URL or not FASTAPI_CONFIRM_URL:
 
 st.set_page_config(layout="wide")
 
+# Add DanceScoop branding at the top
+logo_path = os.path.join(base_dir, 'website', 'images', 'ds_logo.png')
+if os.path.exists(logo_path):
+    st.image(logo_path, width=200)
+else:
+    st.markdown("# DanceScoop")
+
 # Initialize session state for conversation management
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
@@ -573,3 +580,7 @@ if st.session_state["messages"]:
                         st.rerun()
 else:
     st.info("💡 Start a conversation by asking a question above!")
+
+# Add footer with link back to main website
+st.markdown("---")
+st.markdown("To return to the DanceScoop website, [click here](https://www.dancescoop.com).")
