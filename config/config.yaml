@@ -127,9 +127,6 @@ prompts:
   https://vbds.org/other-dancing-opportunities/:
     file: prompts/default.txt
     schema: event_extraction
-  loftpubvictoria.com:
-    file: prompts/default.txt
-    schema: event_extraction
   https://www.bardandbanker.com/live-music:
     file: prompts/bard_and_banker_prompt.txt
     schema: event_extraction
@@ -142,6 +139,9 @@ prompts:
   irrelevant_rows:
     file: prompts/irrelevant_rows_prompt.txt
     schema: relevance_classification
+  loftpubvictoria.com:
+    file: prompts/default.txt
+    schema: event_extraction
   relevant_dance_url:
     file: prompts/relevant_dance_url.txt
     schema: null
