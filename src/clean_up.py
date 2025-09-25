@@ -1062,6 +1062,12 @@ class CleanUp:
 
     async def fix_specific_location_mappings(self):
         """
+        DISABLED: This function was causing address corruption by incorrectly mapping venues.
+
+        The function was querying for "Dance Victoria" address but assigning it to Victoria West Coast Swing events,
+        causing cross-contamination of venue addresses. This resulted in Victoria West Coast Swing events
+        showing up with The Loft Pub address (229 Gorge Rd) instead of their correct venue.
+
         Fixes specific known location mappings in the events table.
         Currently handles:
         1. Victoria West Coast Swing Collective Saturday events with 'Unknown' location -> address_id=39
@@ -1070,6 +1076,8 @@ class CleanUp:
         4. Events with "Fisherman's Wharf" in event name and 'Unknown' location -> address_id=542
         5. Events with "Ukrainian Cultural Centre" in event name and 'Unknown' location -> address_id=550
         """
+        logging.info("fix_specific_location_mappings(): DISABLED - Function commented out to prevent address corruption")
+        return
         logging.info("Starting fix_specific_location_mappings process...")
         
         # Case 1: Victoria West Coast Swing Collective Saturday events
