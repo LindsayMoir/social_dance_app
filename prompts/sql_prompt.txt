@@ -51,15 +51,17 @@ start_date >= CURRENT_DATE
 end_date <= CURRENT_DATE + INTERVAL 'N days'
 start_date BETWEEN X AND Y
 
-❗ IMPORTANT: Only apply start_date >= (CURRENT_DATE - INTERVAL '7 days') if the user does not specify a specific date or date range.
-If the user specifies an exact date (e.g., “on June 30”), use:
-WHERE start_date = '2025-06-30'
-and do not include start_date >= (CURRENT_DATE - INTERVAL '7 days').
+❗ CRITICAL: Only apply start_date >= (CURRENT_DATE - INTERVAL '7 days') if the user does NOT specify any time period whatsoever.
 
-If the user specifies a date range (e.g., "next 10 days"), apply that range directly.
-Only fall back to start_date >= (CURRENT_DATE - INTERVAL '7 days') to prevent very old results when no date constraint is given.
+WHEN TO EXCLUDE THE 7-DAY FILTER:
+- User specifies ANY date: "today", "tomorrow", "this Friday", "next week", "this weekend"
+- User specifies ANY range: "next 10 days", "this month"
+- User specifies exact dates: "on June 30", "September 26"
 
-Always exclude events where start_date is more than one week in the past.
+WHEN TO INCLUDE THE 7-DAY FILTER:
+- Only when user asks general questions like "dance events" with NO time specification at all
+
+If the user mentions ANY time period, use ONLY that constraint and do NOT add the 7-day lookback filter.
 When the user refers to relative terms, interpret as follows (in Pacific Standard Time):
 
 "today" / "tonight" / "this morning" / "this afternoon" / "this evening" ⇒ start_date = CURRENT_DATE
@@ -152,9 +154,8 @@ SELECT
   location
 FROM events
 WHERE dance_style ILIKE '%kizomba%'
-  AND start_date BETWEEN CURRENT_DATE 
+  AND start_date BETWEEN CURRENT_DATE
                       AND (CURRENT_DATE + INTERVAL '10 days')
-  AND start_date >= (CURRENT_DATE - INTERVAL '7 days')
   AND event_type ILIKE '%social dance%'
 ORDER BY start_date, start_time
 LIMIT 30;
@@ -181,8 +182,6 @@ SELECT
 FROM events
 WHERE dance_style ILIKE '%salsa%'
   AND start_date = CURRENT_DATE
-  AND end_date >= CURRENT_DATE
-  AND start_date >= (CURRENT_DATE - INTERVAL '7 days')
   AND event_type ILIKE '%social dance%'
 ORDER BY start_date, start_time
 LIMIT 30;
@@ -207,9 +206,35 @@ SELECT
   description,
   location
 FROM events
-WHERE (dance_style ILIKE '%wcs%' 
+WHERE (dance_style ILIKE '%wcs%'
        OR dance_style ILIKE '%west coast swing%')
   AND start_date >= (CURRENT_DATE - INTERVAL '7 days')
+  AND event_type ILIKE '%social dance%'
+ORDER BY start_date, start_time
+LIMIT 30;
+
+Example 4 (General query - USE 7-day filter)
+User Question:
+
+What dance events are available?
+
+SQL Query:
+SELECT
+  event_name,
+  event_type,
+  dance_style,
+  day_of_week,
+  start_date,
+  end_date,
+  start_time,
+  end_time,
+  source,
+  url,
+  price,
+  description,
+  location
+FROM events
+WHERE start_date >= (CURRENT_DATE - INTERVAL '7 days')
   AND event_type ILIKE '%social dance%'
 ORDER BY start_date, start_time
 LIMIT 30;
