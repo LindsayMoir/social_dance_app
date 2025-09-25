@@ -14,10 +14,10 @@ output/
 # ignore all json files
 *.json
 
-# ignore all images except website/images
+# ignore all images directories named 'images'
 images/
-# Exception: allow website/images directory and logo
-!website/images/
+# ignore website images except the logo
+website/images/*
 !website/images/ds_logo.png
 
 # Byte-compiled / optimized / DLL files
