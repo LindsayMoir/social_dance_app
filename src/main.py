@@ -14,6 +14,7 @@ import sys
 import logging
 import yaml
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -113,10 +114,13 @@ def generate_interpretation(user_query: str, config: dict) -> str:
         logging.error(f"Error reading interpretation prompt: {e}")
         return f"My understanding is that you want to search for: {user_query}"
     
-    # Get current context
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    current_day_of_week = datetime.now().strftime("%A")
-    current_time = datetime.now().strftime("%H:%M PDT")
+    # Get current context in Pacific timezone
+    pacific_tz = ZoneInfo("America/Los_Angeles")
+    now_pacific = datetime.now(pacific_tz)
+    current_date = now_pacific.strftime("%Y-%m-%d")
+    current_day_of_week = now_pacific.strftime("%A")
+    # Use %Z to automatically get PST or PDT based on daylight saving time
+    current_time = now_pacific.strftime("%H:%M %Z")
     default_city = config.get('location', {}).get('epicentre', 'your area')
     
     # Format the interpretation prompt
@@ -290,9 +294,11 @@ def process_query(request: QueryRequest):
                 for msg in recent_messages_updated[-3:]  # Last 3 messages for context
             ])
             
-            # Get current date context
-            current_date = datetime.now().strftime("%Y-%m-%d")
-            current_day_of_week = datetime.now().isoweekday()  # Monday=1, Sunday=7
+            # Get current date context in Pacific timezone
+            pacific_tz = ZoneInfo("America/Los_Angeles")
+            now_pacific = datetime.now(pacific_tz)
+            current_date = now_pacific.strftime("%Y-%m-%d")
+            current_day_of_week = now_pacific.isoweekday()  # Monday=1, Sunday=7
             
             # Handle query concatenation for refinements (up to 5 parts)
             if intent == 'refinement':

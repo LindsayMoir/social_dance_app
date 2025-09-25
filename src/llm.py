@@ -78,6 +78,7 @@ Note:
     - Logging should be configured in the main execution context to capture log messages.
 """
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 load_dotenv()
 import json
@@ -337,8 +338,9 @@ class LLMHandler:
         with open(txt_file_path, 'r') as file:
             is_relevant_txt = file.read()
 
-        # Generate the full prompt
-        today_date = datetime.now().strftime("%Y-%m-%d")
+        # Generate the full prompt with Pacific timezone
+        pacific_tz = ZoneInfo("America/Los_Angeles")
+        today_date = datetime.now(pacific_tz).strftime("%Y-%m-%d")
         prompt = (
             f"Today's date is: {today_date}. Use this for all date calculations.\n"
             f"{is_relevant_txt}\n"
