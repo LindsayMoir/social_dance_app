@@ -73,6 +73,18 @@ class EventSpider(scrapy.Spider):
         llm_handler = handlers['llm_handler']
         read_extract = handlers['read_extract']
         self.keywords_list = llm_handler.get_keywords()
+
+        # Load calendar URLs for special handling - these should always be processed
+        calendar_urls_file = self.config.get('input', {}).get('calendar_urls', 'data/other/calendar_urls.csv')
+        self.calendar_urls_set = set()
+        try:
+            if os.path.exists(calendar_urls_file):
+                calendar_df = pd.read_csv(calendar_urls_file)
+                self.calendar_urls_set = set(calendar_df['link'].tolist())
+                logging.info(f"__init__(): Loaded {len(self.calendar_urls_set)} calendar URLs for special handling")
+        except Exception as e:
+            logging.warning(f"__init__(): Could not load calendar URLs: {e}")
+
         logging.info("\n\nscraper.py starting...")
 
 
@@ -110,7 +122,11 @@ class EventSpider(scrapy.Spider):
                 logging.info(f"start_requests(): Skipping blacklisted URL {url}.")
                 continue
 
-            if not db_handler.should_process_url(url):
+            # Special handling for calendar URLs - always process them regardless of historical relevancy
+            is_calendar_url = url in self.calendar_urls_set
+            if is_calendar_url:
+                logging.info(f"start_requests(): Processing calendar URL {url} (bypassing historical relevancy)")
+            elif not db_handler.should_process_url(url):
                 logging.info(f"start_requests(): Skipping URL {url} based on historical relevancy.")
                 continue
 
