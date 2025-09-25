@@ -43,7 +43,7 @@ A row is **irrelevant (1)** if:
 - The event is **not a dance or live music event** (e.g., "Bike Repair Class", "Cemetery Tour").
 
 ### Special Cases:
-- If **source** equals "Bard and Banker", "The Loft", "Deb Rhymer Band", or "The Coda", always label the event as **relevant (0)**.
+- If **source** equals "Bard and Banker", "The Loft Pub", "The Loft", "Deb Rhymer Band", or "The Coda", always label the event as **relevant (0)**.
 - If **dance_style** contains any of the listed relevant dance styles, label the event as **relevant (0)**.
 - If the **event_name** includes "Miguelito", the row is **relevant (0)** (a special rule). 
 - If **location** includes "Dance Victoria", that also strongly indicates a dance event (relevant (0)).
