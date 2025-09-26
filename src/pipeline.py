@@ -215,7 +215,23 @@ def sync_address_sequence():
         raise Exception("Missing DATABASE_CONNECTION_STRING in environment.")
     
     # SQL to sync the sequence with current maximum address_id
+    # First create address table if it doesn't exist, then sync sequence
     sql = (
+        "CREATE TABLE IF NOT EXISTS address ("
+            "address_id SERIAL PRIMARY KEY, "
+            "full_address TEXT UNIQUE, "
+            "building_name TEXT, "
+            "street_number TEXT, "
+            "street_name TEXT, "
+            "street_type TEXT, "
+            "direction TEXT, "
+            "city TEXT, "
+            "met_area TEXT, "
+            "province_or_state TEXT, "
+            "postal_code TEXT, "
+            "country_id TEXT, "
+            "time_stamp TIMESTAMP"
+        "); "
         "SELECT setval('temp_address_id_seq1', COALESCE((SELECT MAX(address_id) FROM address), 0) + 1, false);"
     )
     command = f'psql -d "{db_conn_str}" -c "{sql}"'
