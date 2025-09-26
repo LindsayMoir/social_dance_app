@@ -5,6 +5,8 @@ import asyncio
 import logging
 import os
 import sys
+import time
+import random
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 
@@ -105,10 +107,18 @@ class ImageScraper:
         for ck in cookies:
             session.cookies.set(ck['name'], ck['value'], domain=ck['domain'])
         ua = self.config.get('crawling', {}).get('user_agent') or DEFAULT_USER_AGENT
+        # Use Instagram App ID from environment or fallback to a common one
+        ig_app_id = os.getenv('INSTAGRAM_CSE_ID') or os.getenv('INSTAGRAM_APPID_UID') or '1217981644879628'
         session.headers.update({
             "User-Agent": ua,
-            "x-csrftoken": session.cookies.get('csrftoken'),
-            "x-ig-app-id": self.config.get('crawling', {}).get('ig_app_id', ''),
+            "Referer": "https://www.instagram.com/",
+            "x-csrftoken": session.cookies.get('csrftoken', ''),
+            "x-ig-app-id": ig_app_id,
+            "x-ig-www-claim": "0",
+            "x-requested-with": "XMLHttpRequest",
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
         })
         self.ig_session = session
         return True
@@ -128,38 +138,159 @@ class ImageScraper:
         ext = Path(path).suffix.lower()
         return ext in IMAGE_EXTENSIONS
 
-
-    def download_image(self, image_url: str) -> Path | None:
+    async def _download_image_playwright(self, image_url: str, max_retries: int = 3) -> Path | None:
         """
-        Downloads an image from the specified URL and saves it to the local download directory.
+        Downloads an image using Playwright to maintain Instagram authentication context.
+        This method preserves the logged-in session state that requests.Session loses.
 
         Args:
             image_url (str): The URL of the image to download.
+            max_retries (int): Maximum number of retry attempts.
+
+        Returns:
+            Path | None: The local file path to the downloaded image if successful, or None if the download failed.
+        """
+        filename = Path(urlparse(image_url).path).name
+        local_path = self.download_dir / filename
+        if local_path.exists():
+            return local_path
+
+        # Retry mechanism with exponential backoff
+        for attempt in range(max_retries + 1):
+            try:
+                # Add random delay to avoid rate limiting
+                if attempt > 0:
+                    delay = (2 ** attempt) + random.uniform(0, 1)
+                    self.logger.info(f"Retrying Playwright download after {delay:.2f}s (attempt {attempt + 1}/{max_retries + 1})")
+                    await asyncio.sleep(delay)
+
+                # Use Playwright's authenticated context to fetch the image
+                self.logger.debug(f"Using Playwright to download Instagram image: {image_url}")
+                response = await self.read_extract.page.request.get(image_url)
+
+                if response.status == 200:
+                    image_data = await response.body()
+                    with local_path.open('wb') as f:
+                        f.write(image_data)
+                    self.logger.info(f"Downloaded Instagram image via Playwright to {local_path}")
+                    return local_path
+                elif response.status == 403:
+                    self.logger.warning(f"403 Forbidden via Playwright for {image_url} (attempt {attempt + 1}/{max_retries + 1})")
+                    if attempt == max_retries:
+                        self.logger.error(f"All Playwright retry attempts failed for {image_url} - 403 Forbidden")
+                        return None
+                elif response.status == 429:
+                    self.logger.warning(f"Rate limited via Playwright for {image_url} (attempt {attempt + 1}/{max_retries + 1})")
+                    if attempt == max_retries:
+                        self.logger.error(f"All Playwright retry attempts failed for {image_url} - Rate limited")
+                        return None
+                else:
+                    self.logger.error(f"Playwright HTTP error {response.status} for {image_url}")
+                    return None
+
+            except Exception as e:
+                self.logger.warning(f"Playwright download attempt {attempt + 1} failed for {image_url}: {e}")
+                if attempt == max_retries:
+                    self.logger.exception(f"All Playwright retry attempts failed for {image_url}")
+                    return None
+
+        return None
+
+    def download_image(self, image_url: str, max_retries: int = 3) -> Path | None:
+        """
+        Downloads an image from the specified URL and saves it to the local download directory.
+        Uses Playwright for Instagram images to maintain authentication context.
+
+        Args:
+            image_url (str): The URL of the image to download.
+            max_retries (int): Maximum number of retry attempts.
 
         Returns:
             Path | None: The local file path to the downloaded image if successful, or None if the download failed.
 
         Notes:
             - If the image already exists in the download directory, the existing file path is returned.
-            - Uses a custom User-Agent from configuration if available, otherwise uses a default.
-            - Logs the outcome of the download attempt.
+            - Uses Playwright for Instagram/Facebook CDN images to maintain authentication state.
+            - Falls back to requests session for non-Instagram images.
+            - Implements exponential backoff retry mechanism.
         """
         filename = Path(urlparse(image_url).path).name
         local_path = self.download_dir / filename
         if local_path.exists():
             return local_path
+
         ua = self.config.get('crawling', {}).get('user_agent') or DEFAULT_USER_AGENT
-        headers = {"User-Agent": ua, "Accept": "image/webp,image/apng,image/*;q=0.8"}
-        try:
-            resp = self.ig_session.get(image_url, headers=headers, stream=True, timeout=15)
-            resp.raise_for_status()
-            with local_path.open('wb') as f:
-                for chunk in resp.iter_content(8192): f.write(chunk)
-            self.logger.info(f"Downloaded image to {local_path}")
-            return local_path
-        except Exception:
-            self.logger.exception(f"Failed to download image {image_url}")
-            return None
+
+        # Enhanced headers for Instagram images
+        headers = {
+            "User-Agent": ua,
+            "Accept": "image/webp,image/apng,image/*;q=0.8,*/*;q=0.1",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Referer": "https://www.instagram.com/",
+            "Origin": "https://www.instagram.com",
+            "sec-ch-ua": '"Google Chrome";v="117", "Not;A=Brand";v="8", "Chromium";v="117"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest": "image",
+            "sec-fetch-mode": "no-cors",
+            "sec-fetch-site": "cross-site",
+        }
+
+        # Add Instagram-specific headers if we have session cookies
+        if hasattr(self, 'ig_session') and self.ig_session.cookies:
+            csrf_token = self.ig_session.cookies.get('csrftoken', '')
+            if csrf_token:
+                headers["x-csrftoken"] = csrf_token
+
+            # Use Instagram App ID from environment or fallback to a common one
+            ig_app_id = os.getenv('INSTAGRAM_CSE_ID') or os.getenv('INSTAGRAM_APPID_UID') or '1217981644879628'
+            headers["x-ig-app-id"] = ig_app_id
+
+        # Use Playwright for Instagram images to maintain authentication context
+        if 'instagram.com' in image_url or 'fbcdn.net' in image_url:
+            return self.loop.run_until_complete(self._download_image_playwright(image_url, max_retries))
+
+        # Use requests session for non-Instagram images
+        for attempt in range(max_retries + 1):
+            try:
+                # Add random delay to avoid rate limiting
+                if attempt > 0:
+                    delay = (2 ** attempt) + random.uniform(0, 1)
+                    self.logger.info(f"Retrying download after {delay:.2f}s (attempt {attempt + 1}/{max_retries + 1})")
+                    time.sleep(delay)
+
+                resp = self.ig_session.get(image_url, headers=headers, stream=True, timeout=15)
+                resp.raise_for_status()
+
+                with local_path.open('wb') as f:
+                    for chunk in resp.iter_content(8192):
+                        f.write(chunk)
+
+                self.logger.info(f"Downloaded image to {local_path}")
+                return local_path
+
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 403:
+                    self.logger.warning(f"403 Forbidden for {image_url} (attempt {attempt + 1}/{max_retries + 1})")
+                    if attempt == max_retries:
+                        self.logger.error(f"All retry attempts failed for {image_url} - 403 Forbidden")
+                        return None
+                elif e.response.status_code == 429:
+                    self.logger.warning(f"Rate limited for {image_url} (attempt {attempt + 1}/{max_retries + 1})")
+                    if attempt == max_retries:
+                        self.logger.error(f"All retry attempts failed for {image_url} - Rate limited")
+                        return None
+                else:
+                    self.logger.error(f"HTTP error {e.response.status_code} for {image_url}")
+                    return None
+            except Exception as e:
+                self.logger.warning(f"Download attempt {attempt + 1} failed for {image_url}: {e}")
+                if attempt == max_retries:
+                    self.logger.exception(f"All retry attempts failed for {image_url}")
+                    return None
+
+        return None
         
 
     def ocr_image_to_text(self, local_path: Path) -> str:
@@ -331,12 +462,29 @@ class ImageScraper:
         valid_imgs = []
         for url in img_urls:
             try:
-                # fetch into memory
-                resp = self.ig_session.get(url, timeout=10)
-                resp.raise_for_status()
-                img = Image.open(BytesIO(resp.content))
-            except Exception:
-                self.logger.info(f"Skipping {url}: failed to download/open")
+                # Use Playwright for Instagram images, requests for others
+                if 'instagram.com' in url or 'fbcdn.net' in url:
+                    # Use Playwright's authenticated context for Instagram images
+                    async def fetch_instagram_image():
+                        response = await self.read_extract.page.request.get(url)
+                        if response.status == 200:
+                            return await response.body()
+                        else:
+                            self.logger.info(f"Skipping {url}: Playwright returned status {response.status}")
+                            return None
+
+                    image_data = self.loop.run_until_complete(fetch_instagram_image())
+                    if image_data:
+                        img = Image.open(BytesIO(image_data))
+                    else:
+                        continue
+                else:
+                    # Use requests session for non-Instagram images
+                    resp = self.ig_session.get(url, timeout=10)
+                    resp.raise_for_status()
+                    img = Image.open(BytesIO(resp.content))
+            except Exception as e:
+                self.logger.info(f"Skipping {url}: failed to download/open - {e}")
                 continue
 
             w, h = img.size
