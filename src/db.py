@@ -1761,7 +1761,27 @@ class DatabaseHandler():
     def create_raw_locations_table(self):
         """
         Create the raw_locations table for caching location string to address_id mappings.
+        Creates address table first if it doesn't exist to satisfy foreign key constraint.
         """
+        # First ensure address table exists for foreign key constraint
+        address_table_query = """
+            CREATE TABLE IF NOT EXISTS address (
+                address_id SERIAL PRIMARY KEY,
+                full_address TEXT UNIQUE,
+                building_name TEXT,
+                street_number TEXT,
+                street_name TEXT,
+                street_type TEXT,
+                direction TEXT,
+                city TEXT,
+                met_area TEXT,
+                province_or_state TEXT,
+                postal_code TEXT,
+                country_id TEXT,
+                time_stamp TIMESTAMP
+            )
+        """
+
         # PostgreSQL syntax (not SQLite)
         create_table_query = """
             CREATE TABLE IF NOT EXISTS raw_locations (
@@ -1773,8 +1793,13 @@ class DatabaseHandler():
             )
         """
         try:
+            # Create address table first
+            self.execute_query(address_table_query)
+            logging.info("create_raw_locations_table: Address table creation/verification completed")
+
+            # Then create raw_locations table with foreign key
             self.execute_query(create_table_query)
-            logging.info("create_raw_locations_table: Table creation/verification completed")
+            logging.info("create_raw_locations_table: Raw locations table creation/verification completed")
             
             # Create index for faster lookups
             index_query = "CREATE INDEX IF NOT EXISTS idx_raw_location ON raw_locations(raw_location)"

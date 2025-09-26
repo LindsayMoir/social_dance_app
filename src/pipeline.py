@@ -232,7 +232,7 @@ def sync_address_sequence():
             "country_id TEXT, "
             "time_stamp TIMESTAMP"
         "); "
-        "SELECT setval('temp_address_id_seq1', COALESCE((SELECT MAX(address_id) FROM address), 0) + 1, false);"
+        "SELECT setval('address_address_id_seq', COALESCE((SELECT MAX(address_id) FROM address), 0) + 1, false);"
     )
     command = f'psql -d "{db_conn_str}" -c "{sql}"'
     logger.info(f"def sync_address_sequence(): Syncing address sequence with command: {command}")
