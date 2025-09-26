@@ -1855,7 +1855,16 @@ class DatabaseHandler():
             events_count = self.execute_query(cleanup_events_sql)
             cleanup_counts['events'] = events_count or 0
 
-            logging.info(f"clean_orphaned_references(): Cleaned up {cleanup_counts['raw_locations']} raw_locations and {cleanup_counts['events']} events with orphaned address references")
+            # Clean up events_history with non-existent address_ids (critical for preventing corruption)
+            cleanup_events_history_sql = """
+            DELETE FROM events_history
+            WHERE address_id IS NOT NULL
+              AND address_id NOT IN (SELECT address_id FROM address);
+            """
+            events_history_count = self.execute_query(cleanup_events_history_sql)
+            cleanup_counts['events_history'] = events_history_count or 0
+
+            logging.info(f"clean_orphaned_references(): Cleaned up {cleanup_counts['raw_locations']} raw_locations, {cleanup_counts['events']} events, and {cleanup_counts['events_history']} events_history records with orphaned address references")
 
         except Exception as e:
             logging.error(f"clean_orphaned_references(): Error cleaning orphaned references: {e}")
