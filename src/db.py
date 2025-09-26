@@ -1799,6 +1799,43 @@ class DatabaseHandler():
         affected_rows = self.execute_query(query)
         logging.info(f"sync_event_locations_with_address_table(): Updated {affected_rows} events to use canonical full_address.")
 
+    def clean_orphaned_references(self):
+        """
+        Clean up orphaned references in related tables to maintain referential integrity.
+
+        This function removes:
+        1. raw_locations records that reference non-existent addresses
+        2. events records that reference non-existent addresses (if any)
+
+        Returns:
+            dict: Count of cleaned up records by table
+        """
+        cleanup_counts = {}
+
+        try:
+            # Clean up orphaned raw_locations
+            cleanup_raw_locations_sql = """
+            DELETE FROM raw_locations
+            WHERE address_id NOT IN (SELECT address_id FROM address);
+            """
+            raw_locations_count = self.execute_query(cleanup_raw_locations_sql)
+            cleanup_counts['raw_locations'] = raw_locations_count or 0
+
+            # Clean up events with non-existent address_ids (should be rare)
+            cleanup_events_sql = """
+            DELETE FROM events
+            WHERE address_id IS NOT NULL
+              AND address_id NOT IN (SELECT address_id FROM address);
+            """
+            events_count = self.execute_query(cleanup_events_sql)
+            cleanup_counts['events'] = events_count or 0
+
+            logging.info(f"clean_orphaned_references(): Cleaned up {cleanup_counts['raw_locations']} raw_locations and {cleanup_counts['events']} events with orphaned address references")
+
+        except Exception as e:
+            logging.error(f"clean_orphaned_references(): Error cleaning orphaned references: {e}")
+
+        return cleanup_counts
 
     def dedup(self):
         """
@@ -1828,6 +1865,9 @@ class DatabaseHandler():
             """
             deleted_count = self.execute_query(dedup_events_query)
             logging.info("def dedup(): Deduplicated events table successfully. Rows deleted: %d", deleted_count)
+
+            # Clean up any orphaned references that might have been created
+            self.clean_orphaned_references()
 
         except Exception as e:
             logging.error("def dedup(): Failed to deduplicate tables: %s", e)
@@ -2919,6 +2959,8 @@ class DatabaseHandler():
             self.sync_event_locations_with_address_table()
             self.clean_null_strings_in_address()
             self.dedup()
+            # Clean up any remaining orphaned references before sequence reset
+            self.clean_orphaned_references()
             self.reset_address_id_sequence()
             self.update_full_address_with_building_names()
             
@@ -2936,19 +2978,28 @@ class DatabaseHandler():
     def reset_address_id_sequence(self):
         """
         Reset the address_id sequence to start from 1, updating all references in the events table.
-        
+
         This method:
+        0. Cleans up orphaned raw_locations records pointing to non-existent addresses
         1. Creates a mapping of old address_ids to new sequential IDs (1, 2, 3, ...)
         2. Updates all events table records with the new address_id values
         3. Updates the address table with new sequential IDs
         4. Resets the PostgreSQL sequence to continue from the max ID + 1
-        
+
         Returns:
             int: Number of addresses that were renumbered
         """
         try:
             logging.info("reset_address_id_sequence(): Starting address ID sequence reset...")
-            
+
+            # Step 0: Clean up orphaned raw_locations records that reference non-existent addresses
+            cleanup_orphaned_sql = """
+            DELETE FROM raw_locations
+            WHERE address_id NOT IN (SELECT address_id FROM address);
+            """
+            orphaned_count = self.execute_query(cleanup_orphaned_sql)
+            logging.info(f"reset_address_id_sequence(): Cleaned up {orphaned_count} orphaned raw_locations records")
+
             # Step 1: Get current addresses ordered by address_id and create mapping
             get_addresses_sql = """
             SELECT address_id, full_address, building_name, street_number, street_name, 
