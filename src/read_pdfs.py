@@ -125,6 +125,9 @@ class ReadPDFs:
 
             # Download and parse
             resp = requests.get(pdf_url, timeout=30)
+            if resp.status_code == 404:
+                logging.warning(f"read_write_pdf(): PDF not found (404) for '{source}': {pdf_url}")
+                continue
             resp.raise_for_status()
             pdf_file = io.BytesIO(resp.content)
 
