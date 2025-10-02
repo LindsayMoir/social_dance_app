@@ -1,0 +1,3 @@
+{
+    "cafe_casablanca": "DELETE FROM events WHERE location ILIKE '%cafe casablanca%'"
+}

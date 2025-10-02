@@ -88,6 +88,7 @@ import yaml
 from credentials import get_credentials
 from db import DatabaseHandler
 from llm import LLMHandler
+from secret_paths import get_auth_file
 
 # Get config
 with open('config/config.yaml', 'r') as file:
@@ -109,7 +110,9 @@ class FacebookEventScraper():
         self.browser = self.playwright.chromium.launch(headless=self.config['crawling']['headless'])
 
         # Create a single context & page, reusing 'facebook_auth.json'
-        self.context = self.browser.new_context(storage_state="facebook_auth.json")
+        # Uses Render Secret Files path if available, otherwise local path
+        self.facebook_auth_path = get_auth_file('facebook')
+        self.context = self.browser.new_context(storage_state=self.facebook_auth_path)
         self.page = self.context.new_page()
         # keep a stable reference for re‑use
         self.logged_in_page = self.page
@@ -203,7 +206,7 @@ class FacebookEventScraper():
 
             # Persist state
             try:
-                self.context.storage_state(path="facebook_auth.json")
+                self.context.storage_state(path=self.facebook_auth_path)
                 logging.info("login_to_facebook: session state saved (manual).")
             except Exception as e:
                 logging.warning(f"login_to_facebook: could not save session state: {e}")
@@ -234,7 +237,7 @@ class FacebookEventScraper():
 
         # 5) Persist state
         try:
-            self.context.storage_state(path="facebook_auth.json")
+            self.context.storage_state(path=self.facebook_auth_path)
             logging.info("login_to_facebook: session state saved.")
         except Exception as e:
             logging.warning(f"login_to_facebook: could not save session state: {e}")

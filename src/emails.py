@@ -61,9 +61,18 @@ load_dotenv()
 
 class GmailProcessor:
     def __init__(self, llm_handler=None):
+        from secret_paths import get_secret_path
+
         self.llm_handler = llm_handler
-        self.client_secret_path = os.getenv("GMAIL_CLIENT_SECRET_PATH")
-        self.token_path = os.getenv("GMAIL_TOKEN_PATH")
+
+        # Get paths from env vars (for local development)
+        local_client_secret = os.getenv("GMAIL_CLIENT_SECRET_PATH")
+        local_token = os.getenv("GMAIL_TOKEN_PATH")
+
+        # Use Render secret paths if available, otherwise use local paths
+        self.client_secret_path = get_secret_path("desktop_client_secret.json", local_client_secret)
+        self.token_path = get_secret_path("desktop_client_secret_token.json", local_token)
+
         self.scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
         self.service = self.authenticate_gmail()
 

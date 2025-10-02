@@ -13,6 +13,8 @@ output/
 
 # ignore all json files
 *.json
+# But include data files needed for deployment
+!data/other/sql_input.json
 
 # ignore all images directories named 'images'
 images/

@@ -35,6 +35,7 @@ import yaml
 
 from llm import LLMHandler
 from credentials import get_credentials  # Import the utility function
+from secret_paths import get_auth_file
 
 # Module-level handler that will be initialized when needed
 db_handler = None
@@ -102,7 +103,8 @@ class ReadExtract:
 
 
     async def login_to_facebook(self, organization):
-        storage = f"{organization.lower()}_auth.json"
+        # Use Render secret path if available, otherwise local path
+        storage = get_auth_file(organization.lower())
 
         # Tear down old page
         if self.page:
@@ -165,7 +167,8 @@ class ReadExtract:
         for any manual 2FA/CAPTCHA. Uses a single context/page throughout.
         Returns True on success (or if no login form is found), False on failure.
         """
-        storage_path = f"{organization.lower()}_auth.json"
+        # Use Render secret path if available, otherwise local path
+        storage_path = get_auth_file(organization.lower())
 
         # ──────────── Quick bail if already logged in ────────────
         if self.logged_in:
