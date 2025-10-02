@@ -28,6 +28,7 @@ This document lists all files required for `pipeline.py` to run successfully on 
 | `calendar_urls.csv` | ✅ Included | scraper.py | Google Calendar URLs to scrape |
 | `countries.csv` | ✅ Included | db.py | Country codes and names for address validation |
 | `edge_cases.csv` | ✅ Included | Multiple modules | Special case handling rules |
+| `email_events.csv` | ✅ Included | emails.py | Gmail-processed events for Render deployment |
 | `emails.csv` | ✅ Included | emails.py | Email sources to process |
 | `images.csv` | ✅ Included | images.py | Image URL sources |
 | `keywords.csv` | ✅ Included | fb.py, clean_up.py | Search keywords for event discovery |
@@ -77,7 +78,7 @@ All `.txt` files in the prompts directory are required:
 | `sql_prompt.txt` | Generate SQL queries |
 | `the_coda_prompt.txt` | Site-specific extraction (The Coda) |
 
-### ❌ Runtime Files (NOT in Git, created during execution)
+### ⚠️ Runtime Files (NOT in Git, but ONE needs special handling)
 
 **Location: `checkpoint/`** - Ignored by `.gitignore` (line 6)
 - `extracted_text.xlsx`
@@ -92,6 +93,7 @@ These are created during pipeline execution and don't need to be in Git.
 
 **Location: `output/`** - Ignored by `.gitignore` (line 12)
 - All output CSV files are created at runtime
+
 
 ### 🔐 Secret Files (Upload to Render Secret Files)
 
@@ -196,14 +198,59 @@ When you `git push` to GitHub:
 8. ❌ `checkpoint/`, `logs/`, `output/` → Correctly blocked (runtime directories)
 9. ❌ `.env` file → Correctly blocked (use environment variables instead)
 
+## Gmail Processing on Render
+
+**Problem:** Gmail OAuth requires interactive browser authentication, which doesn't work on Render's headless servers.
+
+**Solution:** The code has been updated to handle this automatically:
+
+### Local Development (Your Machine):
+1. Run `emails.py` locally - it processes emails via Gmail API
+2. Events are written to **BOTH**:
+   - Local database
+   - `data/other/email_events.csv` (for Render)
+3. Commit and push `data/other/email_events.csv` to Git
+
+### Render (Production):
+1. Code detects it's running on Render (via `RENDER=true` env variable)
+2. Skips Gmail authentication entirely
+3. Reads `data/other/email_events.csv` instead
+4. Inserts those events into the database
+
+### Workflow:
+```bash
+# Locally: Process emails and export to CSV
+cd src
+python emails.py
+# This creates data/other/email_events.csv
+
+# Commit and push the CSV
+git add data/other/email_events.csv
+git commit -m "Update email events for Render"
+git push
+
+# Render automatically deploys and loads events from CSV
+```
+
+### Important Notes:
+- `data/other/email_events.csv` is **NOT in `.gitignore`** (CSV files in `data/` are tracked)
+- Simply use normal git add:
+  ```bash
+  git add data/other/email_events.csv
+  ```
+- No special handling needed since it's in the `data/other/` directory with other data files
+
 ## Summary
 
 **Total Required Files:**
 - Configuration: 1 file
 - Data CSV: 11 files
 - Data TXT: 1 file
-- Data JSON: 1 file ⚠️ (blocked, needs fix)
+- Data JSON: 1 file ✅ (fixed!)
 - Prompt files: 21 files
 - Secret files: 5 files (upload separately to Render)
+- **Email events CSV: 1 file** (generated locally, pushed to Git)
 
-**Action Required:** Fix `.gitignore` to allow `data/other/sql_input.json`
+**Action Required:**
+1. ✅ `.gitignore` already fixed for `data/other/sql_input.json`
+2. ⚠️ No action needed - `data/other/email_events.csv` will be tracked automatically (CSV files in `data/` are not ignored)

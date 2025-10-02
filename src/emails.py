@@ -61,9 +61,19 @@ load_dotenv()
 
 class GmailProcessor:
     def __init__(self, llm_handler=None):
-        from secret_paths import get_secret_path
+        from secret_paths import is_render_environment
 
         self.llm_handler = llm_handler
+        self.is_render = is_render_environment()
+
+        # On Render, skip Gmail authentication entirely
+        if self.is_render:
+            logging.info("Running on Render - will use CSV file instead of Gmail API")
+            self.service = None
+            return
+
+        # Local environment - authenticate with Gmail
+        from secret_paths import get_secret_path
 
         # Get paths from env vars (for local development)
         local_client_secret = os.getenv("GMAIL_CLIENT_SECRET_PATH")
@@ -147,54 +157,143 @@ class GmailProcessor:
         """
         Reads a CSV file and processes emails in a loop.
 
+        On Render: Reads events from output/email_events.csv and writes to database
+        Locally: Processes emails from Gmail and writes to BOTH database AND output/email_events.csv
+
         :param csv_path: Path to the CSV file with columns: email, source, keywords, prompt.
         """
-        logging.info(f"def driver(): Processing emails from CSV: {csv_path}")
-        df = pd.read_csv(csv_path)
-        
-        # Initialize database handler for counting events
+        # Initialize database handler
         db_handler = DatabaseHandler(config)
-        
+
+        # RENDER MODE: Read from CSV and load into database
+        if self.is_render:
+            return self._process_from_csv(db_handler)
+
+        # LOCAL MODE: Process emails and write to both database and CSV
+        return self._process_from_gmail(csv_path, db_handler)
+
+
+    def _process_from_csv(self, db_handler):
+        """
+        Render mode: Read events from configured CSV path and insert into database.
+        """
+        csv_file = config['input']['email_events']
+
+        if not os.path.exists(csv_file):
+            logging.warning(f"def _process_from_csv(): CSV file not found: {csv_file}")
+            logging.warning("No email events to process on Render. Run emails.py locally first to generate the CSV.")
+            return
+
+        logging.info(f"def _process_from_csv(): Reading email events from {csv_file}")
+        events_df = pd.read_csv(csv_file)
+
+        if events_df.empty:
+            logging.info("def _process_from_csv(): No events found in CSV file")
+            return
+
+        # Insert events into database using the same method as write_events_to_db
+        try:
+            events_df.to_sql('events', db_handler.conn, if_exists='append', index=False, method='multi')
+            logging.info(f"def _process_from_csv(): Successfully inserted {len(events_df)} events from CSV into database")
+        except Exception as e:
+            logging.error(f"def _process_from_csv(): Failed to insert events from CSV: {e}")
+            logging.info("def _process_from_csv(): Attempting individual row insertion using multiple_db_inserts...")
+            try:
+                # Convert DataFrame to list of dicts for multiple_db_inserts
+                events_list = events_df.to_dict('records')
+                # Convert NaN to None
+                events_list = [{k: (None if pd.isna(v) else v) for k, v in event.items()} for event in events_list]
+                db_handler.multiple_db_inserts('events', events_list)
+                logging.info(f"def _process_from_csv(): Successfully inserted {len(events_list)} events using multiple_db_inserts")
+            except Exception as fallback_error:
+                logging.error(f"def _process_from_csv(): Fallback insertion also failed: {fallback_error}")
+        return
+
+
+    def _process_from_gmail(self, csv_path, db_handler):
+        """
+        Local mode: Process emails from Gmail and write to both database and CSV.
+
+        We need to intercept the events DataFrame BEFORE it's written to the database
+        so we can save it to CSV. We'll do this by temporarily patching write_events_to_db.
+        """
+        logging.info(f"def _process_from_gmail(): Processing emails from CSV: {csv_path}")
+        df = pd.read_csv(csv_path)
+
         # Track results per email
         email_results = {}
         successful_emails = []
         failed_emails = []
 
-        for idx, row in df.iterrows():
-            email, source, keywords, prompt_type = row
-            
-            # Get event count before processing this email
-            events_before = db_handler.execute_query("SELECT COUNT(*) FROM events")[0][0]
-            
-            extracted_text = self.fetch_latest_email(email)
+        # Collect all events DataFrames to export to CSV
+        all_events_dfs = []
 
-            if extracted_text:
-                # Process extracted text with LLMHandler
-                parent_url = 'email inbox'
-                llm_status = self.llm_handler.process_llm_response(email, parent_url, extracted_text, source, keywords, prompt_type)
-                
-                # Get event count after processing this email
-                events_after = db_handler.execute_query("SELECT COUNT(*) FROM events")[0][0]
-                events_added = events_after - events_before
-                
-                if llm_status:
-                    logging.info(f"def driver(): process_llm_response success for email: {email}")
-                    successful_emails.append(email)
-                    email_results[email] = events_added
-                    logging.info(f"Email {email}: Added {events_added} events to database")
+        # Monkey-patch write_events_to_db to also save DataFrames
+        original_write_events_to_db = db_handler.write_events_to_db
+
+        def patched_write_events_to_db(events_df, url, parent_url, source, keywords):
+            # Save the DataFrame before it's written to database
+            all_events_dfs.append(events_df.copy())
+            # Call the original method
+            return original_write_events_to_db(events_df, url, parent_url, source, keywords)
+
+        # Apply the patch
+        db_handler.write_events_to_db = patched_write_events_to_db
+
+        try:
+            for idx, row in df.iterrows():
+                email, source, keywords, prompt_type = row
+
+                # Get event count before processing this email
+                events_before = db_handler.execute_query("SELECT COUNT(*) FROM events")[0][0]
+
+                extracted_text = self.fetch_latest_email(email)
+
+                if extracted_text:
+                    # Process extracted text with LLMHandler (this will call write_events_to_db)
+                    parent_url = 'email inbox'
+                    llm_status = self.llm_handler.process_llm_response(email, parent_url, extracted_text, source, keywords, prompt_type)
+
+                    # Get event count after processing this email
+                    events_after = db_handler.execute_query("SELECT COUNT(*) FROM events")[0][0]
+                    events_added = events_after - events_before
+
+                    if llm_status:
+                        logging.info(f"def _process_from_gmail(): process_llm_response success for email: {email}")
+                        successful_emails.append(email)
+                        email_results[email] = events_added
+                        logging.info(f"Email {email}: Added {events_added} events to database")
+                    else:
+                        logging.warning(f"def _process_from_gmail(): process_llm_response failed for email: {email}")
+                        failed_emails.append(email)
+                        email_results[email] = 0
                 else:
-                    logging.warning(f"def driver(): process_llm_response failed for email: {email}")
+                    logging.error(f"def _process_from_gmail(): No extracted text pulled from email: {email}")
                     failed_emails.append(email)
                     email_results[email] = 0
-            else:
-                logging.error(f"def driver(): No extracted text pulled from email: {email}")
-                failed_emails.append(email)
-                email_results[email] = 0
+
+        finally:
+            # Restore original method
+            db_handler.write_events_to_db = original_write_events_to_db
+
+        # Write all events to CSV for Render to use
+        csv_output_path = config['input']['email_events']
+        os.makedirs(os.path.dirname(csv_output_path), exist_ok=True)
+
+        if all_events_dfs:
+            # Combine all DataFrames
+            combined_df = pd.concat(all_events_dfs, ignore_index=True)
+            combined_df.to_csv(csv_output_path, index=False)
+            logging.info(f"def _process_from_gmail(): Exported {len(combined_df)} events to {csv_output_path}")
+        else:
+            # Create empty file if no events
+            pd.DataFrame().to_csv(csv_output_path, index=False)
+            logging.info(f"def _process_from_gmail(): No events to export, created empty {csv_output_path}")
 
         # Summary logging
         total_emails = len(df)
         total_events_added = sum(email_results.values())
-        
+
         logging.info(f"Email processing summary:")
         logging.info(f"Total emails in CSV: {total_emails}")
         logging.info(f"Successfully processed: {len(successful_emails)} emails: {successful_emails}")
@@ -203,7 +302,7 @@ class GmailProcessor:
         for email, count in email_results.items():
             logging.info(f"  {email}: {count} events added")
         logging.info(f"Total events added across all emails: {total_events_added}")
-        
+
         return
     
 

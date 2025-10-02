@@ -53,6 +53,7 @@ input:
   countries: data/other/countries.csv
   data_keywords: data/other/keywords.csv
   edge_cases: data/other/edge_cases.csv
+  email_events: data/other/email_events.csv
   emails: data/other/emails.csv
   gs_urls: data/urls/gs_urls.csv
   images: data/other/images.csv
