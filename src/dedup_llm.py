@@ -1088,6 +1088,10 @@ class DeduplicationHandler:
         'address_id' and the corresponding address has a postal code. Optional fields like 'source',
         'dance_style', 'event_type', 'start_time', and 'url' contribute fractional points if present.
         The length of the 'description' field also slightly increases the score.
+
+        Events from "Victoria Latin Dance Association" receive a significant penalty as their information
+        is often incorrect when copied from other sources.
+
         Args:
             row (pd.Series): A pandas Series representing a single event row with expected fields.
             address_df (pd.DataFrame): A DataFrame containing address information, indexed by 'address_id'.
@@ -1114,6 +1118,11 @@ class DeduplicationHandler:
                 score += 0.5
 
         score += 0.01 * len(row['description']) if row['description'] else 0
+
+        # Deprioritize Victoria Latin Dance Association events as they often have incorrect information
+        if row.get('source') == 'Victoria Latin Dance Association':
+            score -= 100
+
         return score
 
 
