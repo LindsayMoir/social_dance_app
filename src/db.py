@@ -64,11 +64,8 @@ class DatabaseHandler():
             logging.info("def __init__(): Running locally.")
             self.conn = self.get_db_connection()
             logging.info("def __init__(): Database connection established for social_dance_db.")
-
-            # Create address_db_engine
-            self.address_db_engine = create_engine(os.getenv("ADDRESS_DB_CONNECTION_STRING"), 
-                                                   isolation_level="AUTOCOMMIT")
-            logging.info("def __init__(): Database connection established for address_db.")
+            # Note: The 'locations' table (Canadian postal code database) is now part of social_dance_db
+            # Previously this was in a separate address_db, but has been consolidated for simplicity
 
         if self.conn is None:
                 raise ConnectionError("def __init__(): DatabaseHandler: Failed to establish a database connection.")
@@ -728,7 +725,7 @@ class DatabaseHandler():
             FROM locations
             WHERE mail_postal_code = %s;
         """
-        df = pd.read_sql(query, self.address_db_engine, params=(postal_code,))
+        df = pd.read_sql(query, self.conn, params=(postal_code,))
 
         # Single or multiple rows
         if df.empty:
