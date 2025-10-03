@@ -96,9 +96,11 @@ def _get_auth_from_db(service: str) -> Optional[dict]:
         return None
 
     try:
+        from sqlalchemy import text
         with engine.connect() as conn:
             result = conn.execute(
-                f"SELECT auth_data FROM auth_storage WHERE service_name = '{service}'"
+                text("SELECT auth_data FROM auth_storage WHERE service_name = :service"),
+                {"service": service}
             ).fetchone()
             if result:
                 logging.info(f"Retrieved auth for '{service}' from database")
