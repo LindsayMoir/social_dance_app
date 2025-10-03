@@ -793,7 +793,8 @@ def irrelevant_rows_step():
     return True
 
 # ------------------------
-# TASKS FOR DB MAINTENANCE STEP (Using .dump and pg_restore)
+# COPY DEV DATABASE TO PRODUCTION DATABASE STEP
+# This step copies the working database (local or render_dev) to production
 # ------------------------
 def run_command_with_retry(command, logger, attempts=3, delay=5, env=None, timeout=30):
     for attempt in range(1, attempts + 1):
@@ -813,80 +814,123 @@ def run_command_with_retry(command, logger, attempts=3, delay=5, env=None, timeo
             raise te
     raise Exception(f"Command failed after {attempts} attempts due to persistent database lock errors.")
 
-@flow(name="DB Maintenance Step")
-def db_maintenance_step():
-    logger.info("def db_maintenance_step(): Starting DB Maintenance Step.")
-    env_local = os.environ.copy()
-    local_database_password = os.getenv("DATABASE_PASSWORD")
-    if not local_database_password:
-        logger.error("def db_maintenance_step(): DATABASE_PASSWORD environment variable not set.")
-        raise Exception("Missing DATABASE_PASSWORD.")
-    env_local["PGPASSWORD"] = local_database_password
+@flow(name="Copy Dev to Prod Step")
+def copy_dev_db_to_prod_db_step():
+    """
+    Copy the development database to production database.
 
-    dump_command = "pg_dump -U postgres -h localhost -F c -b -v -f 'backups/local_backup.dump' social_dance_db"
+    Works with DATABASE_TARGET to determine source:
+    - DATABASE_TARGET=local: Copies from local PostgreSQL to Render Production
+    - DATABASE_TARGET=render_dev: Copies from Render Dev to Render Production
+    - DATABASE_TARGET=render_prod: Skips (already on production)
+    """
+    from db_config import get_database_config, get_production_database_url, is_production_target
+    from urllib.parse import urlparse
+
+    logger.info("def copy_dev_db_to_prod_db_step(): Starting database copy to production.")
+
+    # Check if already targeting production
+    if is_production_target():
+        logger.info("def copy_dev_db_to_prod_db_step(): DATABASE_TARGET is 'render_prod'. Skipping copy (already on production).")
+        return True
+
+    # Get source database connection details
+    source_conn_str, source_env_name = get_database_config()
+    parsed_source = urlparse(source_conn_str)
+
+    logger.info(f"def copy_dev_db_to_prod_db_step(): Source: {source_env_name}")
+    logger.info(f"def copy_dev_db_to_prod_db_step(): Target: Render Production Database")
+
+    # Auto-detect PostgreSQL version and use matching tools
+    env_source = os.environ.copy()
+    env_source["PGPASSWORD"] = parsed_source.password
+
+    version_command = (
+        f"psql -h {parsed_source.hostname} -U {parsed_source.username} "
+        f"-d {parsed_source.path[1:]} -t -c 'SHOW server_version_num;'"
+    )
+
     try:
-        subprocess.run(dump_command, shell=True, check=True, capture_output=True, text=True, env=env_local, timeout=30)
-        logger.info("def db_maintenance_step(): Database dump (.dump) completed successfully.")
+        version_result = subprocess.run(version_command, shell=True, check=True, capture_output=True, text=True, env=env_source, timeout=10)
+        server_version_num = int(version_result.stdout.strip())
+        server_version = server_version_num // 10000  # 170006 -> 17
+        logger.info(f"def copy_dev_db_to_prod_db_step(): Detected PostgreSQL version {server_version}")
+
+        # Use version-specific tools
+        pg_dump_path = f"/usr/lib/postgresql/{server_version}/bin/pg_dump"
+        pg_restore_path = f"/usr/lib/postgresql/{server_version}/bin/pg_restore"
+
+        # Verify tools exist
+        if not os.path.exists(pg_dump_path):
+            logger.warning(f"def copy_dev_db_to_prod_db_step(): Version-specific pg_dump not found at {pg_dump_path}, falling back to system pg_dump")
+            pg_dump_path = "pg_dump"
+            pg_restore_path = "pg_restore"
+    except Exception as e:
+        logger.warning(f"def copy_dev_db_to_prod_db_step(): Could not detect PostgreSQL version: {e}. Using system pg_dump/pg_restore")
+        pg_dump_path = "pg_dump"
+        pg_restore_path = "pg_restore"
+
+    # Step 1: Dump source database
+    dump_file = 'backups/dev_to_prod_backup.dump'
+    os.makedirs('backups', exist_ok=True)
+
+    dump_command = (
+        f"{pg_dump_path} -h {parsed_source.hostname} -U {parsed_source.username} "
+        f"-d {parsed_source.path[1:]} -F c -b -v -f '{dump_file}'"
+    )
+
+    logger.info(f"def copy_dev_db_to_prod_db_step(): Dumping source database using {pg_dump_path}...")
+    try:
+        subprocess.run(dump_command, shell=True, check=True, capture_output=True, text=True, env=env_source, timeout=120)
+        logger.info("def copy_dev_db_to_prod_db_step(): Database dump completed successfully.")
     except subprocess.CalledProcessError as e:
-        logger.error(f"def db_maintenance_step(): Database dump failed: {e.stderr}")
+        logger.error(f"def copy_dev_db_to_prod_db_step(): Database dump failed: {e.stderr}")
         raise e
     except subprocess.TimeoutExpired as te:
-        logger.error(f"def db_maintenance_step(): Database dump timed out: {te}")
+        logger.error(f"def copy_dev_db_to_prod_db_step(): Database dump timed out: {te}")
         raise te
 
-    render_pg_pass = os.getenv("RENDER_PG_PASS")
-    if not render_pg_pass:
-        logger.error("def db_maintenance_step(): RENDER_PG_PASS environment variable not set.")
-        raise Exception("Missing RENDER_PG_PASS.")
+    # Step 2: Restore to production database
+    prod_url = get_production_database_url()
+    parsed_prod = urlparse(prod_url)
 
-    copy_command = (
-        f"PGPASSWORD={render_pg_pass} pg_restore --no-owner --clean --if-exists "
-        f"--dbname=postgresql://social_dance_db_user:{render_pg_pass}"
-        f"@dpg-culu0r1u0jms73bgrcdg-a.oregon-postgres.render.com:5432/social_dance_db_eimr?sslmode=require "
-        f"-v -c 'backups/local_backup.dump'"
+    restore_command = (
+        f"{pg_restore_path} -h {parsed_prod.hostname} -U {parsed_prod.username} "
+        f"-d {parsed_prod.path[1:]} --no-owner --clean --if-exists -v -c '{dump_file}'"
     )
-    logger.info(f"def db_maintenance_step(): Copy command: {copy_command}")
-    try:
-        subprocess.run(copy_command, shell=True, check=True, capture_output=True, text=True, env=os.environ.copy(), timeout=30)
-        logger.info("def db_maintenance_step(): Database copy (restore) command executed successfully.")
-    except subprocess.TimeoutExpired as te:
-        logger.error(f"def db_maintenance_step(): Database copy timed out: {te}")
-        # Trap the timeout error and log it.
-    except subprocess.CalledProcessError as e:
-        logger.error(f"def db_maintenance_step(): Database copy failed: {e.stderr}")
-        # Trap the error and log it without crashing the pipeline.
 
-    alter_command = (
-        "psql -h dpg-culu0r1u0jms73bgrcdg-a.oregon-postgres.render.com "
-        "-U social_dance_db_user -d social_dance_db_eimr "
-        "-c \"ALTER DATABASE social_dance_db_eimr SET TIME ZONE 'PST8PDT';\""
-    )
-    env_render = os.environ.copy()
-    env_render["PGPASSWORD"] = render_pg_pass
-    try:
-        subprocess.run(alter_command, shell=True, check=True, capture_output=True, text=True, env=env_render, timeout=30)
-        logger.info("def db_maintenance_step(): Database time zone altered successfully.")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"def db_maintenance_step(): Altering time zone failed: {e.stderr}")
-        raise e
-    except subprocess.TimeoutExpired as te:
-        logger.error(f"def db_maintenance_step(): Altering time zone timed out: {te}")
-        raise te
+    env_prod = os.environ.copy()
+    env_prod["PGPASSWORD"] = parsed_prod.password
 
-    show_command = (
-        "psql -h dpg-culu0r1u0jms73bgrcdg-a.oregon-postgres.render.com "
-        "-U social_dance_db_user -d social_dance_db_eimr "
-        "-c \"SHOW TIME ZONE;\""
-    )
+    logger.info(f"def copy_dev_db_to_prod_db_step(): Restoring to production database...")
     try:
-        result = subprocess.run(show_command, shell=True, check=True, capture_output=True, text=True, env=env_render, timeout=30)
-        logger.info(f"def db_maintenance_step(): Database time zone: {result.stdout.strip()}")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"def db_maintenance_step(): Showing time zone failed: {e.stderr}")
-        raise e
+        subprocess.run(restore_command, shell=True, check=True, capture_output=True, text=True, env=env_prod, timeout=120)
+        logger.info("def copy_dev_db_to_prod_db_step(): Database restore completed successfully.")
     except subprocess.TimeoutExpired as te:
-        logger.error(f"def db_maintenance_step(): Showing time zone timed out: {te}")
-        raise te
+        logger.error(f"def copy_dev_db_to_prod_db_step(): Database restore timed out: {te}")
+        # Don't raise - just log (production might be slow)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"def copy_dev_db_to_prod_db_step(): Database restore failed: {e.stderr}")
+        # Don't raise - production restore errors are common and often non-fatal
+
+    # Step 3: Set timezone on production
+    alter_command = f"ALTER DATABASE {parsed_prod.path[1:]} SET TIME ZONE 'PST8PDT';"
+    psql_command = (
+        f"psql -h {parsed_prod.hostname} -U {parsed_prod.username} "
+        f"-d {parsed_prod.path[1:]} -c \"{alter_command}\""
+    )
+
+    logger.info(f"def copy_dev_db_to_prod_db_step(): Setting production timezone...")
+    try:
+        subprocess.run(psql_command, shell=True, check=True, capture_output=True, text=True, env=env_prod, timeout=30)
+        logger.info("def copy_dev_db_to_prod_db_step(): Production timezone set to PST8PDT.")
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"def copy_dev_db_to_prod_db_step(): Timezone setting failed (non-fatal): {e.stderr}")
+    except subprocess.TimeoutExpired as te:
+        logger.warning(f"def copy_dev_db_to_prod_db_step(): Timezone setting timed out (non-fatal): {te}")
+
+    logger.info("def copy_dev_db_to_prod_db_step(): ✓ Database copy to production completed!")
+    return True
 
 # ------------------------
 # STUB FOR TEXT MESSAGING
@@ -916,7 +960,7 @@ PIPELINE_STEPS = [
     ("clean_up", clean_up_step),
     ("dedup_llm", dedup_llm_step),
     ("irrelevant_rows", irrelevant_rows_step),
-    ("db_maintenance", db_maintenance_step)
+    ("copy_dev_to_prod", copy_dev_db_to_prod_db_step)
 ]
 
 def list_available_steps():

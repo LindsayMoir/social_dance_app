@@ -3,24 +3,32 @@ secret_paths.py
 
 Utility module for resolving secret file paths in both local and Render environments.
 
+Priority order for finding auth credentials:
+1. Database (auth_storage table) - syncs across all environments
+2. Render Secret Files (/etc/secrets/) - for small files on Render
+3. Local filesystem - for development
+
 In local development:
-- Reads from current directory (e.g., './facebook_auth.json')
-- Uses paths from .env file for Google credentials
+- Checks database first, then falls back to local files
+- Writes auth files to database when they're updated
 
 In Render (production):
-- Reads from /etc/secrets/ directory where Render mounts Secret Files
-- Falls back to local paths if Render paths don't exist
+- Checks database first (always in sync via db copy)
+- Falls back to /etc/secrets/ for small files
+- No filesystem access needed
 
 Usage:
-    from secret_paths import get_secret_path
+    from secret_paths import get_auth_file
 
-    auth_file = get_secret_path('facebook_auth.json')
-    # Returns '/etc/secrets/facebook_auth.json' on Render
-    # Returns './facebook_auth.json' locally
+    auth_file = get_auth_file('facebook')
+    # Returns temp file path with contents from database or filesystem
 """
 
 import os
+import json
+import tempfile
 import logging
+from typing import Optional
 
 def get_secret_path(filename: str, local_path: str = None) -> str:
     """
@@ -61,21 +69,98 @@ def get_secret_path(filename: str, local_path: str = None) -> str:
     return fallback_path
 
 
+def _get_db_connection():
+    """Get database connection using centralized db_config."""
+    try:
+        from db_config import get_database_config
+        from sqlalchemy import create_engine
+        connection_string, _ = get_database_config()
+        return create_engine(connection_string)
+    except Exception as e:
+        logging.warning(f"Could not connect to database for auth storage: {e}")
+        return None
+
+
+def _get_auth_from_db(service: str) -> Optional[dict]:
+    """
+    Retrieve auth data from database auth_storage table.
+
+    Args:
+        service: Service name (e.g., 'facebook', 'eventbrite')
+
+    Returns:
+        Auth JSON data as dict, or None if not found
+    """
+    engine = _get_db_connection()
+    if not engine:
+        return None
+
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                f"SELECT auth_data FROM auth_storage WHERE service_name = '{service}'"
+            ).fetchone()
+            if result:
+                logging.info(f"Retrieved auth for '{service}' from database")
+                return result[0]  # JSONB returns as dict
+    except Exception as e:
+        logging.warning(f"Error retrieving auth from database for '{service}': {e}")
+
+    return None
+
+
+def _write_temp_auth_file(auth_data: dict, service: str) -> str:
+    """
+    Write auth data to a temporary file.
+
+    Args:
+        auth_data: Auth JSON data as dict
+        service: Service name for temp file naming
+
+    Returns:
+        Path to temporary file
+    """
+    # Create temp file in system temp directory
+    fd, temp_path = tempfile.mkstemp(suffix=f'_{service}_auth.json', text=True)
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(auth_data, f, indent=2)
+        logging.info(f"Wrote auth data for '{service}' to temp file: {temp_path}")
+        return temp_path
+    except Exception as e:
+        logging.error(f"Error writing temp auth file for '{service}': {e}")
+        os.close(fd)
+        raise
+
+
 def get_auth_file(service: str) -> str:
     """
     Get authentication file path for a specific service.
+
+    Priority order:
+    1. Database (auth_storage table)
+    2. /etc/secrets/ (Render)
+    3. Local filesystem
 
     Args:
         service: Service name (e.g., 'facebook', 'eventbrite', 'google')
 
     Returns:
-        Full path to the auth file
+        Full path to the auth file (may be temporary file if from database)
 
     Examples:
         get_auth_file('facebook')  # Returns path to facebook_auth.json
         get_auth_file('eventbrite')  # Returns path to eventbrite_auth.json
     """
-    filename = f"{service.lower()}_auth.json"
+    service = service.lower()
+
+    # 1. Try database first
+    auth_data = _get_auth_from_db(service)
+    if auth_data:
+        return _write_temp_auth_file(auth_data, service)
+
+    # 2. Fall back to filesystem
+    filename = f"{service}_auth.json"
     return get_secret_path(filename)
 
 

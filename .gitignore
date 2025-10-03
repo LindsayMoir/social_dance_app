@@ -170,3 +170,6 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# Claude Code instructions (project-specific, may contain sensitive context)
+.claude_instructions

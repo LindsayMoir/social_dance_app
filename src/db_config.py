@@ -60,14 +60,29 @@ def get_database_config() -> Tuple[str, str]:
            - RENDER=false/unset → local
         3. Choose INTERNAL vs EXTERNAL URL based on RENDER variable
     """
-    # Get explicit target (highest priority)
-    target = os.getenv('DATABASE_TARGET', '').lower().strip()
-    is_render = os.getenv('RENDER', '').lower() == 'true'
+    # Auto-detect if running on Render platform
+    # Render automatically sets these environment variables
+    is_render = (
+        os.getenv('RENDER') == 'true' or
+        os.getenv('RENDER_SERVICE_NAME') is not None or
+        os.getenv('RENDER_INSTANCE_ID') is not None or
+        'render.com' in os.getenv('HOSTNAME', '')
+    )
 
-    # If no explicit target, infer from environment
+    # Get explicit target or auto-detect
+    target = os.getenv('DATABASE_TARGET', '').lower().strip()
+
     if not target:
-        target = 'render_prod' if is_render else 'local'
-        logging.info(f"DATABASE_TARGET not set, inferred: {target}")
+        # Auto-detect based on platform
+        if is_render:
+            # Running on Render - default to render_dev (safe for CRON jobs)
+            # Production web services should set DATABASE_TARGET=render_prod explicitly
+            target = 'render_dev'
+            logging.info(f"Auto-detected: Running on Render → DATABASE_TARGET='render_dev'")
+        else:
+            # Running locally (your machine)
+            target = 'local'
+            logging.info(f"Auto-detected: Running locally → DATABASE_TARGET='local'")
     else:
         logging.info(f"DATABASE_TARGET explicitly set: {target}")
 
