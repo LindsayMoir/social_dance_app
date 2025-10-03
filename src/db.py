@@ -29,6 +29,9 @@ import sys
 import yaml
 import warnings
 
+# Import database configuration utility
+from db_config import get_database_config
+
 
 class DatabaseHandler():
     def __init__(self, config):
@@ -54,18 +57,14 @@ class DatabaseHandler():
         self.config = config
         self.load_blacklist_domains()
 
-        if os.getenv("RENDER"):
-            logging.info("def __init__(): Running on Render.")
-            connection_string = os.getenv('RENDER_EXTERNAL_DB_URL')
-            self.conn = create_engine(connection_string, isolation_level="AUTOCOMMIT")
-            logging.info("def __init__(): Database connection established for Render social_dance_db.")
-        else:
-            # Running locally
-            logging.info("def __init__(): Running locally.")
-            self.conn = self.get_db_connection()
-            logging.info("def __init__(): Database connection established for social_dance_db.")
-            # Note: The 'locations' table (Canadian postal code database) is now part of social_dance_db
-            # Previously this was in a separate address_db, but has been consolidated for simplicity
+        # Get database configuration using centralized utility
+        # This automatically handles local, render_dev, and render_prod environments
+        connection_string, env_name = get_database_config()
+        self.conn = create_engine(connection_string, isolation_level="AUTOCOMMIT")
+        logging.info(f"def __init__(): Database connection established: {env_name}")
+
+        # Note: The 'locations' table (Canadian postal code database) is now part of social_dance_db
+        # Previously this was in a separate address_db, but has been consolidated for simplicity
 
         if self.conn is None:
                 raise ConnectionError("def __init__(): DatabaseHandler: Failed to establish a database connection.")
@@ -158,18 +157,22 @@ class DatabaseHandler():
         """
         Establish and return a SQLAlchemy engine for the PostgreSQL database.
 
+        DEPRECATED: This method now uses get_database_config() internally.
+        Kept for backward compatibility with existing code.
+
         Returns:
             sqlalchemy.engine.Engine: SQLAlchemy engine instance if connection is successful.
             None: If the connection could not be established.
+
+        Note:
+            New code should use get_database_config() from db_config module directly.
+            This method is maintained for backward compatibility with:
+            - ebs.py, clean_up.py, fb.py, scraper.py, irrelevant_rows.py
         """
         try:
-            # Read the database connection parameters from the config
-            connection_string = (
-                f"postgresql://{os.getenv('DATABASE_USER')}:" 
-                f"{os.getenv('DATABASE_PASSWORD')}@"
-                f"{os.getenv('DATABASE_HOST')}/"
-                f"{os.getenv('DATABASE_NAME')}"
-            )
+            # Use centralized database configuration
+            connection_string, env_name = get_database_config()
+            logging.info(f"get_db_connection(): Connecting to {env_name}")
 
             # Create and return the SQLAlchemy engine
             engine = create_engine(connection_string, isolation_level="AUTOCOMMIT")

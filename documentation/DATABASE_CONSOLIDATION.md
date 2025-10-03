@@ -37,20 +37,6 @@ This script:
 
 ### 2. Environment Variables Update
 
-**Remove from `.env`**:
-```bash
-# No longer needed
-ADDRESS_DB_CONNECTION_STRING='postgresql://postgres:5539@localhost/address_db'
-```
-
-**Keep in `.env`** (unchanged):
-```bash
-# Local development
-DATABASE_CONNECTION_STRING='postgresql://postgres:5539@localhost/social_dance_db'
-
-# Render production
-RENDER_EXTERNAL_DB_URL='<your_render_production_url>'
-```
 
 ### 3. Code Changes
 
@@ -68,11 +54,10 @@ For testing `pipeline.py` on Render, you'll need to:
 1. **Upload the `locations` table** to your Render dev database:
    ```bash
    # Export from local
-   PGPASSWORD=5539 pg_dump -h localhost -U postgres -d social_dance_db -t locations --data-only > locations_data.sql
+   pg_dump -h localhost -U postgres -d social_dance_db -t locations --data-only > locations_data.sql
 
-   # Import to Render dev (replace with your credentials)
-   PGPASSWORD=dXBAaGYlSuIo7jFCWIgPruqyKmSjVSol psql -h dpg-d3fd48euk2gs73assq90-a \
-     -U social_dance_dev_user -d social_dance_dev_db -f locations_data.sql
+   # Import to Render dev (use credentials from Render dashboard)
+   psql -h <RENDER_DEV_HOST> -U <RENDER_DEV_USER> -d <RENDER_DEV_DB> -f locations_data.sql
    ```
 
 2. **Set environment variable** in Render:
