@@ -59,7 +59,13 @@ else:
 if not FASTAPI_QUERY_URL or not FASTAPI_CONFIRM_URL:
     raise ValueError("The FastAPI API URLs could not be determined.")
 
-st.set_page_config(layout="wide")
+# Configure page with DanceScoop branding
+favicon_path = os.path.join(base_dir, 'website', 'images', 'dancescoop.png')
+st.set_page_config(
+    layout="wide",
+    page_title="DanceScoop - Find Dance Events",
+    page_icon=favicon_path
+)
 
 # Add DanceScoop branding at the top
 logo_path = os.path.join(base_dir, 'website', 'images', 'ds_logo.png')
