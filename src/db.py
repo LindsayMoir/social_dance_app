@@ -76,9 +76,14 @@ class DatabaseHandler():
         # Get google api key
         self.google_api_key = os.getenv("GOOGLE_KEY_PW")
 
-        # Create df from urls table.
-        self.urls_df = self.create_urls_df()
-        logging.info("__init__(): URLs DataFrame created with %d rows.", len(self.urls_df))
+        # Create df from urls table (only if not on production - production doesn't have urls table)
+        from db_config import is_production_target
+        if not is_production_target():
+            self.urls_df = self.create_urls_df()
+            logging.info("__init__(): URLs DataFrame created with %d rows.", len(self.urls_df))
+        else:
+            self.urls_df = pd.DataFrame()
+            logging.info("__init__(): Skipping URLs table load on production (not needed for web service)")
 
         def _compute_hit_ratio(x):
             true_count = x.sum()
@@ -96,19 +101,23 @@ class DatabaseHandler():
             return 1.0
 
         # Create a groupby that gives a hit_ratio and a sum of crawl_try for how useful the URL is
-        self.urls_gb = (
-            self.urls_df
-            .groupby('link')
-            .agg(
-                hit_ratio=('relevant', _compute_hit_ratio),
-                crawl_try=('crawl_try', 'sum')
+        if not is_production_target():
+            self.urls_gb = (
+                self.urls_df
+                .groupby('link')
+                .agg(
+                    hit_ratio=('relevant', _compute_hit_ratio),
+                    crawl_try=('crawl_try', 'sum')
+                )
+                .reset_index()
             )
-            .reset_index()
-        )
-        logging.info(f"__init__(): urls_gb has {len(self.urls_gb)} rows and {len(self.urls_gb.columns)} columns.")
-        
-        # Create raw_locations table for caching location strings
-        self.create_raw_locations_table()
+            logging.info(f"__init__(): urls_gb has {len(self.urls_gb)} rows and {len(self.urls_gb.columns)} columns.")
+
+            # Create raw_locations table for caching location strings (only needed for pipeline)
+            self.create_raw_locations_table()
+        else:
+            self.urls_gb = pd.DataFrame()
+            logging.info("__init__(): Skipping urls_gb and raw_locations table creation on production")
 
 
     def set_llm_handler(self, llm_handler):
