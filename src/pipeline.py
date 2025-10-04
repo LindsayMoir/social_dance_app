@@ -152,24 +152,95 @@ def copy_drop_create_events():
         raise Exception("Missing DATABASE_CONNECTION_STRING in environment.")
     
     # Compose the multi-statement SQL command.
-    # First, handle the schema migration in a separate command if needed
-    check_migration_sql = """
-    SELECT COUNT(*) FROM information_schema.columns
-    WHERE table_name='events_history' AND column_name='original_event_id'
+    # First, check if events_history table exists
+    check_table_exists_sql = """
+    SELECT COUNT(*) FROM information_schema.tables
+    WHERE table_schema='public' AND table_name='events_history'
     """
 
-    check_command = f'psql -d "{db_conn_str}" -t -c "{check_migration_sql}"'
+    check_command = f'psql -d "{db_conn_str}" -t -c "{check_table_exists_sql}"'
     try:
         result = subprocess.run(check_command, shell=True, check=True, capture_output=True, text=True)
-        needs_migration = int(result.stdout.strip()) == 0
+        table_exists = int(result.stdout.strip()) > 0
     except subprocess.CalledProcessError:
-        needs_migration = True  # Assume migration needed if check fails
+        table_exists = False
 
-    if needs_migration:
-        logger.info("def copy_drop_create_events(): Migrating events_history table schema...")
-        migration_sql = (
+    # Only migrate if table exists
+    if table_exists:
+        # Check if migration is needed (original_event_id column missing)
+        check_migration_sql = """
+        SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_name='events_history' AND column_name='original_event_id'
+        """
+
+        check_command = f'psql -d "{db_conn_str}" -t -c "{check_migration_sql}"'
+        try:
+            result = subprocess.run(check_command, shell=True, check=True, capture_output=True, text=True)
+            needs_migration = int(result.stdout.strip()) == 0
+        except subprocess.CalledProcessError:
+            needs_migration = True
+
+        if needs_migration:
+            logger.info("def copy_drop_create_events(): Migrating events_history table schema...")
+            migration_sql = (
+                "BEGIN; "
+                "CREATE TABLE events_history_new ("
+                    "event_id SERIAL PRIMARY KEY, "
+                    "original_event_id INTEGER, "
+                    "event_name TEXT, "
+                    "dance_style TEXT, "
+                    "description TEXT, "
+                    "day_of_week TEXT, "
+                    "start_date DATE, "
+                    "end_date DATE, "
+                    "start_time TIME, "
+                    "end_time TIME, "
+                    "source TEXT, "
+                    "location TEXT, "
+                    "price TEXT, "
+                    "url TEXT, "
+                    "event_type TEXT, "
+                    "address_id INTEGER, "
+                    "time_stamp TIMESTAMP"
+                "); "
+                "INSERT INTO events_history_new (original_event_id, event_name, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, location, price, url, event_type, address_id, time_stamp) "
+                "SELECT event_id, event_name, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, location, price, url, event_type, address_id, time_stamp FROM events_history; "
+                "DROP TABLE events_history; "
+                "ALTER TABLE events_history_new RENAME TO events_history; "
+                "COMMIT;"
+            )
+            migration_command = f'psql -d "{db_conn_str}" -c "{migration_sql}"'
+            try:
+                result = subprocess.run(migration_command, shell=True, check=True, capture_output=True, text=True)
+                logger.info(f"def copy_drop_create_events(): Schema migration completed: {result.stdout}")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"def copy_drop_create_events(): Schema migration failed: {e.stderr}")
+                raise e
+        else:
+            logger.info("def copy_drop_create_events(): events_history table already has correct schema, skipping migration")
+    else:
+        logger.info("def copy_drop_create_events(): events_history table does not exist, will be created fresh")
+
+    # Check if events table exists before trying to copy it
+    check_events_exists_sql = """
+    SELECT COUNT(*) FROM information_schema.tables
+    WHERE table_schema='public' AND table_name='events'
+    """
+
+    check_command = f'psql -d "{db_conn_str}" -t -c "{check_events_exists_sql}"'
+    try:
+        result = subprocess.run(check_command, shell=True, check=True, capture_output=True, text=True)
+        events_table_exists = int(result.stdout.strip()) > 0
+    except subprocess.CalledProcessError:
+        events_table_exists = False
+
+    # Build SQL based on whether events table exists
+    if events_table_exists:
+        # Events table exists - copy to history then recreate
+        logger.info("def copy_drop_create_events(): Events table exists, copying to events_history")
+        sql = (
             "BEGIN; "
-            "CREATE TABLE events_history_new ("
+            "CREATE TABLE IF NOT EXISTS events_history ("
                 "event_id SERIAL PRIMARY KEY, "
                 "original_event_id INTEGER, "
                 "event_name TEXT, "
@@ -188,63 +259,71 @@ def copy_drop_create_events():
                 "address_id INTEGER, "
                 "time_stamp TIMESTAMP"
             "); "
-            "INSERT INTO events_history_new (original_event_id, event_name, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, location, price, url, event_type, address_id, time_stamp) "
-            "SELECT event_id, event_name, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, location, price, url, event_type, address_id, time_stamp FROM events_history; "
-            "DROP TABLE events_history; "
-            "ALTER TABLE events_history_new RENAME TO events_history; "
-            "COMMIT;"
+            "INSERT INTO events_history (original_event_id, event_name, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, location, price, url, event_type, address_id, time_stamp) "
+            "SELECT event_id, event_name, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, location, price, url, event_type, address_id, time_stamp FROM events; "
+            "DROP TABLE IF EXISTS events; "
+            "CREATE TABLE IF NOT EXISTS events ("
+                "event_id SERIAL PRIMARY KEY, "
+                "event_name TEXT, "
+                "dance_style TEXT, "
+                "description TEXT, "
+                "day_of_week TEXT, "
+                "start_date DATE, "
+                "end_date DATE, "
+                "start_time TIME, "
+                "end_time TIME, "
+                "source TEXT, "
+                "location TEXT, "
+                "price TEXT, "
+                "url TEXT, "
+                "event_type TEXT, "
+                "address_id INTEGER, "
+                "time_stamp TIMESTAMP"
+            "); COMMIT;"
         )
-        migration_command = f'psql -d "{db_conn_str}" -c "{migration_sql}"'
-        try:
-            result = subprocess.run(migration_command, shell=True, check=True, capture_output=True, text=True)
-            logger.info(f"def copy_drop_create_events(): Schema migration completed: {result.stdout}")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"def copy_drop_create_events(): Schema migration failed: {e.stderr}")
-            raise e
-
-    # Now proceed with the main operation
-    sql = (
-        "BEGIN; "
-        "CREATE TABLE IF NOT EXISTS events_history ("
-            "event_id SERIAL PRIMARY KEY, "
-            "original_event_id INTEGER, "
-            "event_name TEXT, "
-            "dance_style TEXT, "
-            "description TEXT, "
-            "day_of_week TEXT, "
-            "start_date DATE, "
-            "end_date DATE, "
-            "start_time TIME, "
-            "end_time TIME, "
-            "source TEXT, "
-            "location TEXT, "
-            "price TEXT, "
-            "url TEXT, "
-            "event_type TEXT, "
-            "address_id INTEGER, "
-            "time_stamp TIMESTAMP"
-        "); "
-        "INSERT INTO events_history (original_event_id, event_name, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, location, price, url, event_type, address_id, time_stamp) SELECT event_id, event_name, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, location, price, url, event_type, address_id, time_stamp FROM events; "
-        "DROP TABLE IF EXISTS events; "
-        "CREATE TABLE IF NOT EXISTS events ("
-            "event_id SERIAL PRIMARY KEY, "
-            "event_name TEXT, "
-            "dance_style TEXT, "
-            "description TEXT, "
-            "day_of_week TEXT, "
-            "start_date DATE, "
-            "end_date DATE, "
-            "start_time TIME, "
-            "end_time TIME, "
-            "source TEXT, "
-            "location TEXT, "
-            "price TEXT, "
-            "url TEXT, "
-            "event_type TEXT, "
-            "address_id INTEGER, "
-            "time_stamp TIMESTAMP"
-        "); COMMIT;"
-    )
+    else:
+        # Events table doesn't exist - just create both tables fresh
+        logger.info("def copy_drop_create_events(): Events table does not exist, creating fresh tables")
+        sql = (
+            "BEGIN; "
+            "CREATE TABLE IF NOT EXISTS events_history ("
+                "event_id SERIAL PRIMARY KEY, "
+                "original_event_id INTEGER, "
+                "event_name TEXT, "
+                "dance_style TEXT, "
+                "description TEXT, "
+                "day_of_week TEXT, "
+                "start_date DATE, "
+                "end_date DATE, "
+                "start_time TIME, "
+                "end_time TIME, "
+                "source TEXT, "
+                "location TEXT, "
+                "price TEXT, "
+                "url TEXT, "
+                "event_type TEXT, "
+                "address_id INTEGER, "
+                "time_stamp TIMESTAMP"
+            "); "
+            "CREATE TABLE IF NOT EXISTS events ("
+                "event_id SERIAL PRIMARY KEY, "
+                "event_name TEXT, "
+                "dance_style TEXT, "
+                "description TEXT, "
+                "day_of_week TEXT, "
+                "start_date DATE, "
+                "end_date DATE, "
+                "start_time TIME, "
+                "end_time TIME, "
+                "source TEXT, "
+                "location TEXT, "
+                "price TEXT, "
+                "url TEXT, "
+                "event_type TEXT, "
+                "address_id INTEGER, "
+                "time_stamp TIMESTAMP"
+            "); COMMIT;"
+        )
     command = f'psql -d "{db_conn_str}" -c "{sql}"'
     logger.info(f"def copy_drop_create_events(): Running SQL command: {command}")
     try:
