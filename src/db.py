@@ -2993,7 +2993,20 @@ class DatabaseHandler():
             self.dedup()
             # Clean up any remaining orphaned references before sequence reset
             self.clean_orphaned_references()
-            self.reset_address_id_sequence()
+
+            # COMMENTED OUT: reset_address_id_sequence() causes race conditions with concurrent processes
+            # This function renumbers all address_ids sequentially (1, 2, 3...) and updates all foreign keys.
+            # Problem: If multiple processes (pipeline, web service, or manual operations) access the database
+            # simultaneously, the renumbering creates corruption as IDs change mid-operation.
+            #
+            # To re-enable safely:
+            # 1. Ensure NO other processes are accessing the database (stop web service, CRON jobs, manual queries)
+            # 2. Uncomment the line below
+            # 3. Run the pipeline once for maintenance
+            # 4. Re-comment this line before resuming normal operations
+            #
+            # self.reset_address_id_sequence()
+
             self.update_full_address_with_building_names()
             
             # Fix events with address_id = 0 using existing deduplication logic
