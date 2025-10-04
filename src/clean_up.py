@@ -221,6 +221,9 @@ class CleanUp:
                 context = page.context
                 await context.storage_state(path="auth.json")
                 logging.info("Session state saved (async).")
+                # Sync to database
+                from secret_paths import sync_auth_to_db
+                sync_auth_to_db("auth.json", 'facebook')
             except Exception as e:
                 logging.warning(f"Could not save session state (async): {e}")
 
@@ -858,6 +861,9 @@ class CleanUp:
 
                 await context.storage_state(path=storage_path)
                 logging.info("Saved session to google_auth.json")
+                # Sync to database
+                from secret_paths import sync_auth_to_db
+                sync_auth_to_db(storage_path, 'google')
                 await browser.close()
 
                 return extracted_text
@@ -1384,9 +1390,68 @@ Examples:
                     
                 logging.info(f"apply_deduplication_response(): Added {len(duplicates)} proposed duplicates to {csv_file} for review")
             else:
+                # VALIDATION: Ensure duplicates have same street_number and street_name as canonical
+                # This prevents LLM from incorrectly merging completely different addresses
+                canonical_street_info = self.db_handler.execute_query(
+                    "SELECT street_number, street_name FROM address WHERE address_id = :id",
+                    {"id": canonical_id}
+                )
+                if not canonical_street_info:
+                    logging.warning(f"apply_deduplication_response(): Cannot find canonical address {canonical_id}, skipping group")
+                    continue
+
+                canonical_street_num, canonical_street_name = canonical_street_info[0]
+
+                # Validate each duplicate before merging
+                validated_duplicates = []
+                for dup_id in duplicates:
+                    dup_street_info = self.db_handler.execute_query(
+                        "SELECT street_number, street_name, full_address FROM address WHERE address_id = :id",
+                        {"id": dup_id}
+                    )
+                    if not dup_street_info:
+                        logging.warning(f"apply_deduplication_response(): Duplicate address {dup_id} not found, skipping")
+                        continue
+
+                    dup_street_num, dup_street_name, dup_full_addr = dup_street_info[0]
+
+                    # CRITICAL: street_number and street_name must match
+                    # Treat None/empty as wildcards (allow match if either is missing)
+                    has_canonical_street_num = canonical_street_num and canonical_street_num.strip()
+                    has_dup_street_num = dup_street_num and dup_street_num.strip()
+
+                    if has_canonical_street_num and has_dup_street_num:
+                        street_num_match = canonical_street_num.strip().lower() == dup_street_num.strip().lower()
+                    else:
+                        # At least one is missing street number - allow merge
+                        street_num_match = True
+
+                    has_canonical_street_name = canonical_street_name and canonical_street_name.strip()
+                    has_dup_street_name = dup_street_name and dup_street_name.strip()
+
+                    if has_canonical_street_name and has_dup_street_name:
+                        street_name_match = canonical_street_name.strip().lower() == dup_street_name.strip().lower()
+                    else:
+                        # At least one is missing street name - allow merge
+                        street_name_match = True
+
+                    if street_num_match and street_name_match:
+                        validated_duplicates.append(dup_id)
+                        logging.info(f"apply_deduplication_response(): ✓ Validated duplicate {dup_id} → {canonical_id}")
+                    else:
+                        logging.error(
+                            f"apply_deduplication_response(): ✗ REJECTED merge {dup_id} → {canonical_id} - "
+                            f"Street mismatch! Canonical: '{canonical_street_num} {canonical_street_name}' != "
+                            f"Duplicate: '{dup_street_num} {dup_street_name}' (full: {dup_full_addr})"
+                        )
+
+                if not validated_duplicates:
+                    logging.info(f"apply_deduplication_response(): No valid duplicates for canonical {canonical_id}, skipping group")
+                    continue
+
                 # Original deletion logic with improved foreign key handling
                 total_events_updated = 0
-                for dup_id in duplicates:
+                for dup_id in validated_duplicates:
                     logging.info(f"apply_deduplication_response(): Repointing events from {dup_id} → {canonical_id}")
 
                     try:
@@ -1624,7 +1689,7 @@ Examples:
     def building_names_fuzzy_match(self, records: List[Dict], log_file_path: str) -> bool:
         """
         Checks if there's a fuzzy match between non-empty building names.
-        Only returns True if fuzzy match ratio > 70 and fewer than 5 valid names exist.
+        Only returns True if fuzzy match ratio > 90 and fewer than 5 valid names exist.
         """
         from rapidfuzz import fuzz
 
@@ -1638,7 +1703,7 @@ Examples:
         for i in range(len(names)):
             for j in range(i+1, len(names)):
                 score = fuzz.token_sort_ratio(names[i], names[j])
-                if score > 70:
+                if score > 90:
                     with open(log_file_path, "a", encoding="utf-8") as f:
                         f.write("--- STATUS ---\n")
                         f.write("Fuzzy match on building names above threshold. Sending to LLM.\n")
@@ -1664,7 +1729,7 @@ Examples:
 
         for i in range(len(building_names)):
             for j in range(i+1, len(building_names)):
-                if fuzz.token_set_ratio(building_names[i], building_names[j]) > 70:
+                if fuzz.token_set_ratio(building_names[i], building_names[j]) > 90:
                     return False
 
         return True

@@ -208,6 +208,9 @@ class FacebookEventScraper():
             try:
                 self.context.storage_state(path=self.facebook_auth_path)
                 logging.info("login_to_facebook: session state saved (manual).")
+                # Sync to database
+                from secret_paths import sync_auth_to_db
+                sync_auth_to_db(self.facebook_auth_path, 'facebook')
             except Exception as e:
                 logging.warning(f"login_to_facebook: could not save session state: {e}")
             return True
@@ -239,6 +242,9 @@ class FacebookEventScraper():
         try:
             self.context.storage_state(path=self.facebook_auth_path)
             logging.info("login_to_facebook: session state saved.")
+            # Sync to database
+            from secret_paths import sync_auth_to_db
+            sync_auth_to_db(self.facebook_auth_path, 'facebook')
         except Exception as e:
             logging.warning(f"login_to_facebook: could not save session state: {e}")
 

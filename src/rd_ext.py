@@ -147,6 +147,9 @@ class ReadExtract:
         try:
             await self.page.context.storage_state(path=storage)
             logging.info("login_to_facebook: session saved.")
+            # Sync to database
+            from secret_paths import sync_auth_to_db
+            sync_auth_to_db(storage, 'facebook')
         except Exception as e:
             logging.warning(f"login_to_facebook: could not save session: {e}")
 
@@ -252,6 +255,9 @@ class ReadExtract:
             try:
                 await self.context.storage_state(path=storage_path)
                 logging.info("login_to_website(): Saved Eventbrite session state.")
+                # Sync to database
+                from secret_paths import sync_auth_to_db
+                sync_auth_to_db(storage_path, organization)
             except Exception as e:
                 logging.warning(f"login_to_website(): Could not save Eventbrite session: {e}")
 
@@ -280,6 +286,9 @@ class ReadExtract:
         try:
             await self.context.storage_state(path=storage_path)
             logging.info(f"login_to_website(): Saved session state for {organization}.")
+            # Sync to database
+            from secret_paths import sync_auth_to_db
+            sync_auth_to_db(storage_path, organization)
         except Exception as e:
             logging.warning(f"login_to_website(): Could not save session state: {e}")
 

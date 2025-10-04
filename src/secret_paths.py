@@ -166,6 +166,76 @@ def get_auth_file(service: str) -> str:
     return get_secret_path(filename)
 
 
+def sync_auth_to_db(file_path: str, service_name: str = None) -> bool:
+    """
+    Sync an auth file to the database auth_storage table.
+    Called automatically after auth files are written.
+
+    Args:
+        file_path: Path to the auth file (e.g., 'facebook_auth.json' or '/path/to/eventbrite_auth.json')
+        service_name: Optional service name override. If not provided, extracted from filename.
+
+    Returns:
+        True if sync successful, False otherwise
+
+    Examples:
+        sync_auth_to_db('facebook_auth.json')  # service_name = 'facebook'
+        sync_auth_to_db('/path/to/eventbrite_auth.json', 'eventbrite')
+    """
+    try:
+        # Extract service name from filename if not provided
+        if service_name is None:
+            filename = os.path.basename(file_path)
+            # Remove _auth.json or .json suffix
+            service_name = filename.replace('_auth.json', '').replace('.json', '')
+            # Handle special cases like desktop_client_secret_token.json
+            if 'gmail' in filename.lower() or 'client_secret' in filename.lower():
+                service_name = 'google'
+
+        # Read the auth file
+        if not os.path.exists(file_path):
+            logging.warning(f"Auth file not found for sync: {file_path}")
+            return False
+
+        with open(file_path, 'r') as f:
+            auth_data = json.load(f)
+
+        file_size = os.path.getsize(file_path)
+
+        # Get database connection
+        engine = _get_db_connection()
+        if not engine:
+            logging.warning(f"Could not sync {service_name} auth to database - no DB connection")
+            return False
+
+        # Insert or update in database
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            json_str = json.dumps(auth_data)
+            conn.execute(text("""
+                INSERT INTO auth_storage (service_name, auth_data, file_size_bytes, notes)
+                VALUES (:service, :data, :size, :notes)
+                ON CONFLICT (service_name)
+                DO UPDATE SET
+                    auth_data = EXCLUDED.auth_data,
+                    file_size_bytes = EXCLUDED.file_size_bytes,
+                    notes = EXCLUDED.notes
+            """), {
+                'service': service_name,
+                'data': json_str,
+                'size': file_size,
+                'notes': f'Auto-synced from {file_path}'
+            })
+            conn.commit()
+
+        logging.info(f"Synced {service_name} auth ({file_size:,} bytes) to database")
+        return True
+
+    except Exception as e:
+        logging.error(f"Failed to sync {service_name} auth to database: {e}")
+        return False
+
+
 def is_render_environment() -> bool:
     """
     Check if code is running in Render environment.

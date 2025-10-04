@@ -629,9 +629,9 @@ class DeduplicationHandler:
 
     def handle_existing_location(self, location, group, dry_run, fix_events):
         """
-        Handles events associated with an existing location by updating their address IDs.
-        This method checks if the given location exists and retrieves its corresponding address ID.
-        For each event in the provided group, it prepares to update the event's address ID.
+        Handles events associated with an existing location by updating their address IDs and location fields.
+        This method checks if the given location exists and retrieves its corresponding address ID and full_address.
+        For each event in the provided group, it prepares to update the event's address ID and location.
         If `dry_run` is True, the updates are appended to the `fix_events` list for review without making changes to the database.
         Otherwise, the events are updated in the database using SQL.
         Args:
@@ -643,12 +643,12 @@ class DeduplicationHandler:
             bool: True if the location exists and events were processed; False otherwise.
         """
 
-        address_id = self.find_address_id_by_location(location)
-        logging.info(f"handle_existing_location: Found address_id {address_id} for location '{location}'")
-        
+        address_id, full_address = self.find_address_id_by_location(location)
+        logging.info(f"handle_existing_location: Found address_id {address_id} with full_address '{full_address}' for location '{location}'")
+
         if address_id:
             for _, row in group.iterrows():
-                new_data = {"address_id": int(address_id)}
+                new_data = {"address_id": int(address_id), "location": full_address}
                 logging.info(f"handle_existing_location: Preparing update for event_id {row['event_id']} with {new_data}")
                 if dry_run:
                     fix_events.append({**row.to_dict(), **new_data})
@@ -813,17 +813,17 @@ class DeduplicationHandler:
 
     def find_address_id_by_location(self, location):
         """
-        Retrieves the address ID corresponding to a given location.
+        Retrieves the address ID and full_address corresponding to a given location.
         Args:
             location (str): The full address to search for in the database.
         Returns:
-            int or None: The address ID if found, otherwise None.
+            tuple: (address_id, full_address) if found, otherwise (None, None).
         Raises:
             Exception: If there is an error executing the database query.
         """
-        sql = "SELECT address_id FROM address WHERE full_address = :location"
+        sql = "SELECT address_id, full_address FROM address WHERE full_address = :location"
         result = self.db_handler.execute_query(sql, {"location": location})
-        return int(result[0][0]) if result else None
+        return (int(result[0][0]), result[0][1]) if result else (None, None)
     
 
     def delete_event_if_completely_empty(self, row, dry_run, fix_events):

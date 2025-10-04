@@ -2785,87 +2785,76 @@ class DatabaseHandler():
 
     def check_image_events_exist(self, image_url: str) -> bool:
         """
-        Checks if there are any events associated with the specified image URL.
+        Always returns False to force re-scraping of images/PDFs.
 
-        This method performs the following steps:
-        1. Checks the `events` table for any events with the given image URL.
-        2. If no events are found, checks the `events_history` table for matching events.
-        3. If events are found in the history, copies only the most recent version of each unique event (grouped by all fields except `time_stamp`) from `events_history` into the `events` table.
+        DISABLED: Previously checked events table and copied from events_history, but this
+        caused data corruption issues. All images/PDFs are now re-scraped on every run to
+        ensure fresh, accurate data with correct address normalization.
 
         Args:
             image_url (str): The URL of the image to check for associated events.
 
         Returns:
-            bool: True if events exist for the given image URL (either already present or copied from history), False otherwise.
+            bool: Always returns False to force re-scraping.
         """
-        # 1) Check live events table
-        sql_live = """
-        SELECT COUNT(*)
-        FROM events
-        WHERE url = :url
-        """
-        params = {'url': image_url}
-        logging.info(f"check_image_events_exist(): image_url is: {image_url}")
-        live = self.execute_query(sql_live, params)
-        if live and live[0][0] > 0:
-            logging.info(f"check_image_events_exist(): live is: {live[0][0]}")
-            logging.info(f"check_image_events_exist(): Events already exist for URL: {image_url}")
-            return True
+        logging.info(f"check_image_events_exist(): Forcing re-scrape for URL: {image_url}")
+        return False
 
-        # 2) Check history table
-        sql_hist = """
-        SELECT COUNT(*)
-        FROM events_history
-        WHERE url = :url
-        """
-        hist = self.execute_query(sql_hist, params)
-        if not (hist and hist[0][0] > 0):
-            logging.info(f"check_image_events_exist(): No history events for URL: {image_url}")
-            return False
-
-        # 3) Copy only the most‐recent history row per unique event into events
-        sql_copy = """
-        INSERT INTO events (
-            event_name, dance_style, description, day_of_week,
-            start_date, end_date, start_time, end_time,
-            source, location, price, url,
-            event_type, address_id, time_stamp
-        )
-        SELECT
-            sub.event_name, sub.dance_style, sub.description, sub.day_of_week,
-            sub.start_date, sub.end_date, sub.start_time, sub.end_time,
-            sub.source, sub.location, sub.price, sub.url,
-            sub.event_type, sub.address_id, sub.time_stamp
-        FROM (
-            SELECT DISTINCT ON (
-                event_name, dance_style, description, day_of_week,
-                start_date, end_date, start_time, end_time,
-                source, location, price, url,
-                event_type, address_id
-            )
-                event_name, dance_style, description, day_of_week,
-                start_date, end_date, start_time, end_time,
-                source, location, price, url,
-                event_type, address_id, time_stamp
-            FROM events_history
-            WHERE url = :url
-            AND start_date >= (CURRENT_DATE - (:days * INTERVAL '1 day'))
-            ORDER BY
-                event_name, dance_style, description, day_of_week,
-                start_date, end_date, start_time, end_time,
-                source, location, price, url,
-                event_type, address_id,
-                time_stamp DESC
-        ) AS sub
-        """
-        params_copy = {
-            'url':  image_url,
-            'days': self.config['clean_up']['old_events']  # e.g. 3 → includes start_date ≥ today−3d
-        }
-        self.execute_query(sql_copy, params_copy)
-
-        logging.info(f"check_image_events_exist(): Copied most‐recent history events into events for URL: {image_url}")
-        return True
+        # DISABLED CODE - DO NOT USE (address_ids in events_history are corrupted):
+        # # 2) Check history table
+        # sql_hist = """
+        # SELECT COUNT(*)
+        # FROM events_history
+        # WHERE url = :url
+        # """
+        # hist = self.execute_query(sql_hist, params)
+        # if not (hist and hist[0][0] > 0):
+        #     logging.info(f"check_image_events_exist(): No history events for URL: {image_url}")
+        #     return False
+        #
+        # # 3) Copy only the most‐recent history row per unique event into events
+        # sql_copy = """
+        # INSERT INTO events (
+        #     event_name, dance_style, description, day_of_week,
+        #     start_date, end_date, start_time, end_time,
+        #     source, location, price, url,
+        #     event_type, address_id, time_stamp
+        # )
+        # SELECT
+        #     sub.event_name, sub.dance_style, sub.description, sub.day_of_week,
+        #     sub.start_date, sub.end_date, sub.start_time, sub.end_time,
+        #     sub.source, sub.location, sub.price, sub.url,
+        #     sub.event_type, sub.address_id, sub.time_stamp
+        # FROM (
+        #     SELECT DISTINCT ON (
+        #         event_name, dance_style, description, day_of_week,
+        #         start_date, end_date, start_time, end_time,
+        #         source, location, price, url,
+        #         event_type, address_id
+        #     )
+        #         event_name, dance_style, description, day_of_week,
+        #         start_date, end_date, start_time, end_time,
+        #         source, location, price, url,
+        #         event_type, address_id, time_stamp
+        #     FROM events_history
+        #     WHERE url = :url
+        #     AND start_date >= (CURRENT_DATE - (:days * INTERVAL '1 day'))
+        #     ORDER BY
+        #         event_name, dance_style, description, day_of_week,
+        #         start_date, end_date, start_time, end_time,
+        #         source, location, price, url,
+        #         event_type, address_id,
+        #         time_stamp DESC
+        # ) AS sub
+        # """
+        # params_copy = {
+        #     'url':  image_url,
+        #     'days': self.config['clean_up']['old_events']  # e.g. 3 → includes start_date ≥ today−3d
+        # }
+        # self.execute_query(sql_copy, params_copy)
+        #
+        # logging.info(f"check_image_events_exist(): Copied most‐recent history events into events for URL: {image_url}")
+        # return True
     
 
     def sql_input(self, file_path: str):

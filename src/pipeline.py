@@ -817,7 +817,15 @@ def run_command_with_retry(command, logger, attempts=3, delay=5, env=None, timeo
 @flow(name="Copy Dev to Prod Step")
 def copy_dev_db_to_prod_db_step():
     """
-    Copy the development database to production database.
+    Copy only the required tables from development to production database.
+
+    Tables copied:
+    - events: Main event data
+    - conversations: User conversation tracking
+    - conversation_messages: Conversation history
+
+    Tables NOT copied (only used during pipeline):
+    - address, raw_locations, events_history, auth_storage
 
     Works with DATABASE_TARGET to determine source:
     - DATABASE_TARGET=local: Copies from local PostgreSQL to Render Production
@@ -827,7 +835,7 @@ def copy_dev_db_to_prod_db_step():
     from db_config import get_database_config, get_production_database_url, is_production_target
     from urllib.parse import urlparse
 
-    logger.info("def copy_dev_db_to_prod_db_step(): Starting database copy to production.")
+    logger.info("def copy_dev_db_to_prod_db_step(): Starting table copy to production.")
 
     # Check if already targeting production
     if is_production_target():
@@ -870,24 +878,30 @@ def copy_dev_db_to_prod_db_step():
         pg_dump_path = "pg_dump"
         pg_restore_path = "pg_restore"
 
-    # Step 1: Dump source database
+    # Tables to copy to production (only what's needed for web service)
+    REQUIRED_TABLES = ['events', 'conversations', 'conversation_messages']
+
+    # Step 1: Dump only required tables from source database
     dump_file = 'backups/dev_to_prod_backup.dump'
     os.makedirs('backups', exist_ok=True)
 
+    # Build table list for pg_dump
+    table_args = ' '.join([f"-t {table}" for table in REQUIRED_TABLES])
+
     dump_command = (
         f"{pg_dump_path} -h {parsed_source.hostname} -U {parsed_source.username} "
-        f"-d {parsed_source.path[1:]} -F c -b -v -f '{dump_file}'"
+        f"-d {parsed_source.path[1:]} {table_args} -F c -b -v -f '{dump_file}'"
     )
 
-    logger.info(f"def copy_dev_db_to_prod_db_step(): Dumping source database using {pg_dump_path}...")
+    logger.info(f"def copy_dev_db_to_prod_db_step(): Dumping tables {REQUIRED_TABLES} using {pg_dump_path}...")
     try:
         subprocess.run(dump_command, shell=True, check=True, capture_output=True, text=True, env=env_source, timeout=120)
-        logger.info("def copy_dev_db_to_prod_db_step(): Database dump completed successfully.")
+        logger.info("def copy_dev_db_to_prod_db_step(): Table dump completed successfully.")
     except subprocess.CalledProcessError as e:
-        logger.error(f"def copy_dev_db_to_prod_db_step(): Database dump failed: {e.stderr}")
+        logger.error(f"def copy_dev_db_to_prod_db_step(): Table dump failed: {e.stderr}")
         raise e
     except subprocess.TimeoutExpired as te:
-        logger.error(f"def copy_dev_db_to_prod_db_step(): Database dump timed out: {te}")
+        logger.error(f"def copy_dev_db_to_prod_db_step(): Table dump timed out: {te}")
         raise te
 
     # Step 2: Restore to production database
@@ -902,15 +916,15 @@ def copy_dev_db_to_prod_db_step():
     env_prod = os.environ.copy()
     env_prod["PGPASSWORD"] = parsed_prod.password
 
-    logger.info(f"def copy_dev_db_to_prod_db_step(): Restoring to production database...")
+    logger.info(f"def copy_dev_db_to_prod_db_step(): Restoring tables to production database...")
     try:
         subprocess.run(restore_command, shell=True, check=True, capture_output=True, text=True, env=env_prod, timeout=120)
-        logger.info("def copy_dev_db_to_prod_db_step(): Database restore completed successfully.")
+        logger.info("def copy_dev_db_to_prod_db_step(): Table restore completed successfully.")
     except subprocess.TimeoutExpired as te:
-        logger.error(f"def copy_dev_db_to_prod_db_step(): Database restore timed out: {te}")
+        logger.error(f"def copy_dev_db_to_prod_db_step(): Table restore timed out: {te}")
         # Don't raise - just log (production might be slow)
     except subprocess.CalledProcessError as e:
-        logger.error(f"def copy_dev_db_to_prod_db_step(): Database restore failed: {e.stderr}")
+        logger.error(f"def copy_dev_db_to_prod_db_step(): Table restore failed: {e.stderr}")
         # Don't raise - production restore errors are common and often non-fatal
 
     # Step 3: Set timezone on production
@@ -929,7 +943,7 @@ def copy_dev_db_to_prod_db_step():
     except subprocess.TimeoutExpired as te:
         logger.warning(f"def copy_dev_db_to_prod_db_step(): Timezone setting timed out (non-fatal): {te}")
 
-    logger.info("def copy_dev_db_to_prod_db_step(): ✓ Database copy to production completed!")
+    logger.info(f"def copy_dev_db_to_prod_db_step(): ✓ Table copy to production completed! Copied tables: {REQUIRED_TABLES}")
     return True
 
 # ------------------------

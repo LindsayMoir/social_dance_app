@@ -118,6 +118,10 @@ class GmailProcessor:
                     token_file.write(creds.to_json())
                     logging.info(f"Saved new token file at {self.token_path}")
 
+                # Sync to database
+                from secret_paths import sync_auth_to_db
+                sync_auth_to_db(self.token_path, 'google')
+
         logging.info("Successfully authenticated with Gmail API.")
         return build("gmail", "v1", credentials=creds)
 
