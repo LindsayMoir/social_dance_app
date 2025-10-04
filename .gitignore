@@ -21,6 +21,7 @@ images/
 # ignore website images except the logo
 website/images/*
 !website/images/ds_logo.png
+!website/images/dancescoop.png
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
