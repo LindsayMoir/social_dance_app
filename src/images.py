@@ -138,7 +138,7 @@ class ImageScraper:
         ext = Path(path).suffix.lower()
         return ext in IMAGE_EXTENSIONS
 
-    async def _download_image_playwright(self, image_url: str, max_retries: int = 3) -> Path | None:
+    async def _download_image_playwright(self, image_url: str, max_retries: int = 1) -> Path | None:
         """
         Downloads an image using Playwright to maintain Instagram authentication context.
         This method preserves the logged-in session state that requests.Session loses.
@@ -196,7 +196,7 @@ class ImageScraper:
 
         return None
 
-    def download_image(self, image_url: str, max_retries: int = 3) -> Path | None:
+    def download_image(self, image_url: str, max_retries: int = 1) -> Path | None:
         """
         Downloads an image from the specified URL and saves it to the local download directory.
         Uses Playwright for Instagram images to maintain authentication context.
