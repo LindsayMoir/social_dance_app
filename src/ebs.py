@@ -138,6 +138,11 @@ class EventbriteScraper:
                 timeout=to
             )
             logging.info("def eventbrite_search(): Navigated to Eventbrite.")
+
+            # Check for CAPTCHA after navigation
+            from captcha_handler import CaptchaHandler
+            await CaptchaHandler.detect_and_handle_async(self.read_extract.page, "Eventbrite", timeout=5000)
+
         except Exception as e:
             logging.error(f"def eventbrite_search(): Error navigating to Eventbrite: {e}")
             return  # cannot proceed without homepage

@@ -184,21 +184,20 @@ class FacebookEventScraper():
         if not headless:
             print("\n=== MANUAL FACEBOOK LOGIN ===")
             print("1) In the browser window, enter your username/password and complete any 2FA.")
-            input("   Once you’ve logged in successfully, press ENTER here to continue… ")
+            input("   Once you've logged in successfully, press ENTER here to continue… ")
             try:
                 page.reload(wait_until="networkidle", timeout=20000)
             except PlaywrightTimeoutError:
                 logging.warning("login_to_facebook: reload after manual login timed out; continuing.")
 
-            # CAPTCHA detection
-            try:
-                page.wait_for_selector("iframe[src*='recaptcha']", timeout=5000)
-                logging.info("login_to_facebook: CAPTCHA detected—please solve it now.")
-                page.screenshot(path="debug/recap_manual.png", full_page=True)
-                input("   After solving the CAPTCHA, press ENTER here to continue… ")
-                page.reload(wait_until="networkidle", timeout=20000)
-            except PlaywrightTimeoutError:
-                pass  # no CAPTCHA
+            # CAPTCHA detection using centralized handler
+            from captcha_handler import CaptchaHandler
+            captcha_detected = CaptchaHandler.detect_and_handle_sync(page, "Facebook", timeout=5000)
+            if captcha_detected:
+                try:
+                    page.reload(wait_until="networkidle", timeout=20000)
+                except PlaywrightTimeoutError:
+                    logging.warning("login_to_facebook: reload after CAPTCHA timed out; continuing.")
 
             if "login" in page.url.lower():
                 logging.error("login_to_facebook: still on login page after manual flow.")

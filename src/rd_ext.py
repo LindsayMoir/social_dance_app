@@ -129,14 +129,9 @@ class ReadExtract:
         await self.page.click("button[name='login']")
         await asyncio.sleep(random.uniform(3,6))
 
-        # 3) Detect reCAPTCHA
-        try:
-            await self.page.wait_for_selector("iframe[src*='recaptcha']", timeout=10000)
-            await self.page.screenshot(path="debug/facebook_recaptcha.png", full_page=True)
-            logging.info("login_to_facebook: reCAPTCHA detected—please solve in browser.")
-            input("After solving CAPTCHA, press Enter to continue…")
-        except PlaywrightTimeoutError:
-            logging.info("login_to_facebook: no reCAPTCHA detected.")
+        # 3) Detect CAPTCHA using centralized handler
+        from captcha_handler import CaptchaHandler
+        await CaptchaHandler.detect_and_handle_async(self.page, "Facebook", timeout=10000)
 
         # 4) Finalize
         await asyncio.sleep(random.uniform(3,6))
@@ -272,10 +267,9 @@ class ReadExtract:
         await self.page.click(submit_selector)
         await self.page.wait_for_timeout(random.uniform(3, 6))
 
-        # Let user solve CAPTCHA or any extra challenge
-        logging.warning("login_to_website(): If a CAPTCHA or other challenge appeared, solve it now and press Enter.")
-        input("Press Enter once you’ve completed any challenge…")
-        await self.page.wait_for_timeout(random.uniform(3, 6))
+        # Detect CAPTCHA using centralized handler
+        from captcha_handler import CaptchaHandler
+        await CaptchaHandler.detect_and_handle_async(self.page, organization, timeout=5000)
 
         # Final verification
         if "login" in self.page.url.lower():

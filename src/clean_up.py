@@ -842,12 +842,9 @@ class CleanUp:
                 logging.info(f"Navigating to Google search URL: {search_url}")
                 await page.goto(search_url, timeout=20000)
 
-                # Detect CAPTCHA
-                if "sorry" in page.url.lower() or await page.query_selector("form[action^='/sorry/']"):
-                    logging.warning("CAPTCHA detected. Please solve manually.")
-                    print("\n🔐 CAPTCHA DETECTED 🔐")
-                    print("Solve CAPTCHA in browser. Press Enter when complete.")
-                    await asyncio.get_running_loop().run_in_executor(None, input)
+                # Detect CAPTCHA using centralized handler
+                from captcha_handler import CaptchaHandler
+                await CaptchaHandler.detect_and_handle_async(page, "Google Search", timeout=5000)
 
                 # Wait and scroll for more content
                 await page.wait_for_timeout(2000)
