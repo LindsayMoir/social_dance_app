@@ -2,12 +2,12 @@
 scraper.py
 
 The EventSpider handles URL extraction,
-dynamic content extraction, and Google Calendar event processing. 
+dynamic content extraction, and Google Calendar event processing.
 
 Dependencies:
     - Scrapy, requests, pandas, yaml, logging, shutil, etc.
-    - Local modules: DatabaseHandler (from db.py), LLMHandler (from llm.py), 
-      ReadExtract (from rd_ext.py), and credentials (from credentials.py).
+    - Local modules: DatabaseHandler (from db.py), LLMHandler (from llm.py),
+      and credentials (from credentials.py).
 """
 
 import base64
@@ -29,7 +29,6 @@ import subprocess
 from credentials import get_credentials
 from db import DatabaseHandler
 from llm import LLMHandler
-from rd_ext import ReadExtract
 
 # --------------------------------------------------
 # Global objects initialization.
@@ -48,11 +47,9 @@ def get_handlers():
         db_handler = DatabaseHandler(config)
         llm_handler = LLMHandler(config_path="config/config.yaml")
         db_handler.set_llm_handler(llm_handler)  # Connect the LLM to the DB handler
-        read_extract = ReadExtract("config/config.yaml")
         _handlers_cache = {
             'db_handler': db_handler,
-            'llm_handler': llm_handler,
-            'read_extract': read_extract
+            'llm_handler': llm_handler
         }
     return _handlers_cache
 
@@ -68,10 +65,9 @@ class EventSpider(scrapy.Spider):
         self.visited_link = set()  # Track visited URLs
         # Initialize handlers when spider starts, not at module import
         handlers = get_handlers()
-        global db_handler, llm_handler, read_extract
+        global db_handler, llm_handler
         db_handler = handlers['db_handler']
         llm_handler = handlers['llm_handler']
-        read_extract = handlers['read_extract']
         self.keywords_list = llm_handler.get_keywords()
 
         # Load calendar URLs for special handling - these should always be processed
@@ -462,7 +458,6 @@ if __name__ == "__main__":
     handlers = get_handlers()
     db_handler = handlers['db_handler']
     llm_handler = handlers['llm_handler']
-    read_extract = handlers['read_extract']
     scraper = EventSpider(config)
     file_name = os.path.basename(__file__)
     start_df = db_handler.count_events_urls_start(file_name)

@@ -418,22 +418,27 @@ class ReadExtract:
             await self.playwright.stop()
 
 
-    async def main(self, url: str, multiple: bool = False):
+    async def extract_from_url(self, url: str, multiple: bool = False):
         """
-        Initialize browser, then perform either single or multi-page scraping based on `multiple` flag.
-        """
-        await self.init_browser()
-        logging.info(f"main(): Initialized browser for {url} (multiple={multiple})")
+        Extracts text from URL(s) without managing browser lifecycle.
+        Browser must already be initialized before calling this method.
 
-        # Single-URL mode
+        Args:
+            url: The URL to extract from
+            multiple: Whether to follow links on the page and extract from multiple URLs
+
+        Returns:
+            str or dict: Text content if single, or dict of {url: text} if multiple
+        """
+        logging.info(f"extract_from_url(): Processing {url} (multiple={multiple})")
+
         # Check urls to see if they should be scraped
         if not get_db_handler().should_process_url(url):
-            logging.info(f"def eventbrite_search(): Skipping URL {url} based on historical relevancy.")
+            logging.info(f"extract_from_url(): Skipping URL {url} based on historical relevancy.")
             return None
-        
+
         if not multiple:
             text = await self.extract_event_text(url)
-            await self.close()
             return text
 
         # Multi-URL mode: discover and scrape all same-domain links
@@ -450,16 +455,27 @@ class ReadExtract:
 
             # Check urls to see if they should be scraped
             if not get_db_handler().should_process_url(link):
-                logging.info(f"def eventbrite_search(): Skipping URL {link} based on historical relevancy.")
+                logging.info(f"extract_from_url(): Skipping URL {link} based on historical relevancy.")
                 continue
-            
+
             text = await self.extract_event_text(link)
             results[link] = text
 
-        await self.close()
         if len(results) == 1:
             return main_text
         return results
+
+    async def main(self, url: str, multiple: bool = False):
+        """
+        Initialize browser, then perform either single or multi-page scraping based on `multiple` flag.
+        """
+        await self.init_browser()
+        logging.info(f"main(): Initialized browser for {url} (multiple={multiple})")
+
+        result = await self.extract_from_url(url, multiple)
+
+        await self.close()
+        return result
 
 
     async def extract_links(self, url: str) -> list:
@@ -579,20 +595,33 @@ if __name__ == "__main__":
     # Read .csv file to deal with oddities
     df = pd.read_csv(config['input']['edge_cases'])
 
-    # Expecting columns in order: source, keywords, url, multiple
-    for source, keywords, url, multiple in df.itertuples(index=False, name=None):
-        multiple_flag = str(multiple).strip().lower() == 'yes'
-        logging.info(f"__main__: url={url}, source={source}, keywords={keywords}, multiple={multiple_flag}")
-        extracted = asyncio.run(read_extract.main(url, multiple_flag))
+    # Define async function to process all URLs with single browser instance
+    async def process_all_urls():
+        # Initialize browser once
+        await read_extract.init_browser()
+        logging.info("__main__: Browser initialized once for all URLs")
 
-        # If multiple events were found (i.e. extracted is a dict), process each event separately
-        if isinstance(extracted, dict):
-            for event_url, text in extracted.items():
-                parent_url = url # Use the original URL as parent
-                llm_status = llm_handler.process_llm_response(event_url, parent_url, text, source, keywords, prompt_type=url)
-        else:
-            parent_url = ''  # No parent URL for single events
-            llm_status = llm_handler.process_llm_response(url, parent_url, extracted, source, keywords, prompt_type=url)
+        # Expecting columns in order: source, keywords, url, multiple
+        for source, keywords, url, multiple in df.itertuples(index=False, name=None):
+            multiple_flag = str(multiple).strip().lower() == 'yes'
+            logging.info(f"__main__: url={url}, source={source}, keywords={keywords}, multiple={multiple_flag}")
+            extracted = await read_extract.extract_from_url(url, multiple_flag)
+
+            # If multiple events were found (i.e. extracted is a dict), process each event separately
+            if isinstance(extracted, dict):
+                for event_url, text in extracted.items():
+                    parent_url = url # Use the original URL as parent
+                    llm_status = llm_handler.process_llm_response(event_url, parent_url, text, source, keywords, prompt_type=url)
+            else:
+                parent_url = ''  # No parent URL for single events
+                llm_status = llm_handler.process_llm_response(url, parent_url, extracted, source, keywords, prompt_type=url)
+
+        # Close browser once after all URLs processed
+        await read_extract.close()
+        logging.info("__main__: Browser closed after processing all URLs")
+
+    # Run the async function
+    asyncio.run(process_all_urls())
 
     # Add uvic wednesday rueda event. This event sometimes appears and then it dissapears. Lets just put it in.
     read_extract.uvic_rueda()
