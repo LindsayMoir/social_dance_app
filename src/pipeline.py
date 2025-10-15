@@ -159,10 +159,11 @@ def copy_log_files():
 # ------------------------
 @task
 def copy_drop_create_events():
-    db_conn_str = os.getenv("DATABASE_CONNECTION_STRING")
-    if not db_conn_str:
-        logger.error("def copy_drop_create_events(): DATABASE_CONNECTION_STRING environment variable not set.")
-        raise Exception("Missing DATABASE_CONNECTION_STRING in environment.")
+    # Use the centralized database configuration
+    sys.path.insert(0, 'src')
+    from secret_paths import get_database_config
+    db_conn_str, env_name = get_database_config()
+    logger.info(f"def copy_drop_create_events(): Using database: {env_name}")
     
     # Compose the multi-statement SQL command.
     # First, check if events_history table exists
@@ -353,10 +354,11 @@ def copy_drop_create_events():
 @task
 def sync_address_sequence():
     """Synchronizes the address sequence with the current maximum address_id to prevent unique constraint violations."""
-    db_conn_str = os.getenv("DATABASE_CONNECTION_STRING")
-    if not db_conn_str:
-        logger.error("def sync_address_sequence(): DATABASE_CONNECTION_STRING environment variable not set.")
-        raise Exception("Missing DATABASE_CONNECTION_STRING in environment.")
+    # Use the centralized database configuration
+    sys.path.insert(0, 'src')
+    from secret_paths import get_database_config
+    db_conn_str, env_name = get_database_config()
+    logger.info(f"def sync_address_sequence(): Using database: {env_name}")
     
     # SQL to sync the sequence with current maximum address_id
     # First create address table if it doesn't exist, then sync sequence
@@ -748,13 +750,27 @@ def db_step():
 # ------------------------
 @task
 def backup_db_step():
-    backup_cmd = "pg_dump -U postgres -h localhost -F c -b -v -f 'backups/checkpoint.dump' social_dance_db"
-    db_password = os.getenv("DATABASE_PASSWORD")
-    if not db_password:
-        logger.error("def backup_db_step(): DATABASE_PASSWORD environment variable not set.")
-        raise Exception("Missing DATABASE_PASSWORD.")
+    # Use the centralized database configuration
+    sys.path.insert(0, 'src')
+    from secret_paths import get_database_config
+    db_conn_str, env_name = get_database_config()
+    logger.info(f"def backup_db_step(): Using database: {env_name}")
+
+    # Parse connection string to extract components
+    # Expected format: postgresql://USER:PASS@HOST:PORT/DATABASE
+    import re
+    match = re.match(r'postgresql://([^:]+):([^@]+)@([^:/]+)(?::(\d+))?/(.+)', db_conn_str)
+    if not match:
+        logger.error(f"def backup_db_step(): Invalid database connection string format")
+        raise Exception("Invalid database connection string")
+
+    user, password, host, port, dbname = match.groups()
+    port = port or "5432"
+
+    backup_cmd = f"pg_dump -U {user} -h {host} -p {port} -F c -b -v -f 'backups/checkpoint.dump' {dbname}"
+
     env = os.environ.copy()
-    env["PGPASSWORD"] = db_password
+    env["PGPASSWORD"] = password
     logger.info(f"def backup_db_step(): Backing up database with command: {backup_cmd}")
     try:
         result_backup = subprocess.run(backup_cmd, shell=True, check=True, capture_output=True, text=True, env=env)
