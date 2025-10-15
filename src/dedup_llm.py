@@ -61,19 +61,10 @@ class DeduplicationHandler:
     
     def _setup_logging(self):
         """
-        Configures the logging settings for the application.
+        Configures the logging settings for the application using centralized logging utility.
         """
-         # Build log_file name
-        script_name = os.path.splitext(os.path.basename(__file__))[0]
-        logging_file = f"logs/{script_name}_log.txt" 
-        logging.basicConfig(
-            filename=logging_file,
-            filemode='a',
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-            datefmt='%Y-%m-%d %H:%M:%S',
-            force=True
-        )
+        from logging_config import setup_logging
+        setup_logging('dedup_llm')
         logging.info("\n\ndedup_llm.py starting...")
         logging.info(f"def _setup_logging(): Logging configured and run started at time: {datetime.now()}")
 

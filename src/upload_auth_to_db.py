@@ -21,7 +21,9 @@ load_dotenv(env_path)
 from db_config import get_database_config
 from sqlalchemy import create_engine, text
 
-logging.basicConfig(level=logging.INFO)
+# Setup centralized logging
+from logging_config import setup_logging
+setup_logging('upload_auth_to_db')
 logger = logging.getLogger(__name__)
 
 

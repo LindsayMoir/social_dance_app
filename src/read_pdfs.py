@@ -14,21 +14,9 @@ from dateutil import parser as dateparser
 with open('config/config.yaml', 'r') as f:
     config = yaml.safe_load(f)
 
-# ── 2) Set up logging (console + file) ─────────────────────────────────────────
-handlers = [logging.StreamHandler()]
- # Build log_file name
-script_name = os.path.splitext(os.path.basename(__file__))[0]
-log_file = f"logs/{script_name}_log.txt" 
-if log_file:
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
-    handlers.append(logging.FileHandler(log_file, mode='a'))
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=handlers,
-    force=True
-)
+# ── 2) Set up centralized logging ──────────────────────────────────────────────
+from logging_config import setup_logging
+setup_logging('read_pdfs')
 
 # ── 3) Initialize external handlers ────────────────────────────────────────────
 from llm import LLMHandler

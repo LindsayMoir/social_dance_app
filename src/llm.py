@@ -40,15 +40,13 @@ Classes:
 
 Usage Example:
     if __name__ == "__main__":
-        # Load configuration and configure logging
+        # Setup centralized logging
+        from logging_config import setup_logging
+        setup_logging('llm')
+
+        # Load configuration
         with open('config/config.yaml', 'r') as file:
             config = yaml.safe_load(file)
-        logging.basicConfig(
-            filename=config['logging']['log_file'],
-            filemode='a',
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s - %(message)s"
-        )
 
         # Instantiate the LLM handler
         llm_handler = LLMHandler(config_path="config/config.yaml")
@@ -1199,19 +1197,14 @@ class LLMHandler:
 # Run the LLM
 if __name__ == "__main__":
 
+    # Setup centralized logging
+    from logging_config import setup_logging
+    setup_logging('llm')
+
     # Get config
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-     # Build log_file name
-    script_name = os.path.splitext(os.path.basename(__file__))[0]
-    logging_file = f"logs/{script_name}_log.txt"
-    logging.basicConfig(
-        filename=logging_file,
-        filemode='a',
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s"
-    )
     logging.info("\n\nllm.py starting...")
 
     # Get the start time

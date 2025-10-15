@@ -558,21 +558,14 @@ class ReadExtract:
 
 if __name__ == "__main__":
 
+    # Setup centralized logging
+    from logging_config import setup_logging
+    setup_logging('rd_ext')
+
     # Get config
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-     # Build log_file name
-    script_name = os.path.splitext(os.path.basename(__file__))[0]
-    logging_file = f"logs/{script_name}_log.txt" 
-    logging.basicConfig(
-        filename=logging_file,
-        filemode='a',
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt='%Y-%m-%d %H:%M:%S',
-        force=True
-    )
     logging.info("\n\nrd_ext.py starting...")
 
     # Get the start time

@@ -9,6 +9,11 @@ import logging
 import os
 import pandas as pd
 
+# Setup centralized logging before anything else
+sys.path.insert(0, 'src')
+from logging_config import setup_logging
+setup_logging('pipeline')
+
 # Configure Prefect based on environment
 if os.getenv('RENDER') == 'true':
     # On Render: Use Prefect Cloud for remote monitoring
@@ -39,16 +44,6 @@ log_cfg = cfg.get("logging", {})
 log_dir = log_cfg.get("dir") or os.path.dirname(log_cfg.get("log_file", "")) or "logs"
 os.makedirs(log_dir, exist_ok=True)
 
-# ─── 2) Pipeline uses console logging only (no log files) ────────────────────
-
-# ─── 4) Configure Python logging (console only, no file) ─────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
 logger = logging.getLogger(__name__)
 
 # Define common configuration updates for all pipeline steps

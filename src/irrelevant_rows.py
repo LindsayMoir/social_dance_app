@@ -68,33 +68,10 @@ class IrrelevantRowsHandler:
     
     def _setup_logging(self):
         """
-        Configures the logging settings for the application.
-
-        This method sets up the logging configuration using the parameters specified
-        in the `self.config` dictionary. It configures the log file, log level, log 
-        format, and date format. Once configured, it logs an informational message 
-        indicating that logging has been set up and the run has started.
-
-        The logging configuration includes:
-        - Log file path: specified by `self.config['logging']['log_file_p2']`
-        - File mode: 'w' (write mode)
-        - Log level: INFO
-        - Log format: "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
-        - Date format: '%Y-%m-%d %H:%M:%S'
-
-        Logs an informational message with the current date and time when logging is configured.
+        Configures the logging settings for the application using centralized logging utility.
         """
-         # Build log_file name
-        script_name = os.path.splitext(os.path.basename(__file__))[0]
-        logging_file = f"logs/{script_name}_log.txt" 
-        logging.basicConfig(
-            filename=logging_file,
-            filemode='a',
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-            datefmt='%Y-%m-%d %H:%M:%S',
-            force=True
-        )
+        from logging_config import setup_logging
+        setup_logging('irrelevant_rows')
         logging.info("\n\nirrelevant_rows.py starting...")
         logging.info(f"def _setup_logging(): Logging configured and run started at time: {datetime.now()}")
 

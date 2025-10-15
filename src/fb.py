@@ -23,16 +23,10 @@ Classes:
 Usage Example:
     if __name__ == "__main__":
         # Load configuration and configure logging
+        from logging_config import setup_logging
+        setup_logging('fb')
         with open('config/config.yaml', 'r') as file:
             config = yaml.safe_load(file)
-        logging.basicConfig(
-            filename=config['logging']['log_file_p2'],
-            filemode='a',
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s - %(message)s",
-            datefmt='%Y-%m-%d %H:%M:%S',
-            force=True
-        )
 
         # Initialize dependencies
         llm_handler = LLMHandler(config_path='config/config.yaml')
@@ -959,17 +953,9 @@ def main():
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
 
-    # Build log_file name
-    script_name = os.path.splitext(os.path.basename(__file__))[0]
-    logging_file = f"logs/{script_name}_log.txt" 
-    logging.basicConfig(
-        filename=logging_file,
-        filemode='a',
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt='%Y-%m-%d %H:%M:%S',
-        force=True
-    )
+    # Setup centralized logging
+    from logging_config import setup_logging
+    setup_logging('fb')
     logging.info("\n\nfb.py starting...")
 
     start_time = datetime.now()

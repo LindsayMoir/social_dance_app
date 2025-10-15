@@ -44,21 +44,15 @@ pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
 # 1. Load environment and configuration
 load_dotenv()
+
+# Setup centralized logging
+from logging_config import setup_logging
+setup_logging('images')
+
 config_path = Path("config/config.yaml")
 with config_path.open() as f:
     config = yaml.safe_load(f)
 
- # Build log_file name
-script_name = os.path.splitext(os.path.basename(__file__))[0]
-logging_file = f"logs/{script_name}_log.txt" 
-logging.basicConfig(
-    filename=logging_file,
-    filemode='a', 
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt='%Y-%m-%d %H:%M:%S',
-    force=True
-)
 logger = logging.getLogger(__name__)
 logger.info("\n\nStarting images.py ...")
 

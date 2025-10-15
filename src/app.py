@@ -1,4 +1,4 @@
-# app.py 
+# app.py
 
 import streamlit as st
 import requests
@@ -8,28 +8,9 @@ import logging
 import uuid
 from dotenv import load_dotenv
 
-
-# Set up conditional logging (files locally, console on Render)
-if os.getenv("RENDER"):
-    # On Render: use console logging (gets captured by Render's log system)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
-    )
-    logging.info("app.py: Using console logging for Render")
-else:
-    # Locally: use file logging
-    script_name = os.path.splitext(os.path.basename(__file__))[0]
-    logging_file = f"logs/{script_name}_log.txt"
-    logging.basicConfig(
-        filename=logging_file,
-        filemode="a",
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-        force=True
-    )
-    logging.info("app.py: Using file logging locally")
-    
+# Setup centralized logging
+from logging_config import setup_logging
+setup_logging('app')
 logging.info("app.py: Streamlit app starting...")
 
 # Load environment variables and configuration
