@@ -161,7 +161,7 @@ def copy_log_files():
 def copy_drop_create_events():
     # Use the centralized database configuration
     sys.path.insert(0, 'src')
-    from secret_paths import get_database_config
+    from db_config import get_database_config
     db_conn_str, env_name = get_database_config()
     logger.info(f"def copy_drop_create_events(): Using database: {env_name}")
     
@@ -356,7 +356,7 @@ def sync_address_sequence():
     """Synchronizes the address sequence with the current maximum address_id to prevent unique constraint violations."""
     # Use the centralized database configuration
     sys.path.insert(0, 'src')
-    from secret_paths import get_database_config
+    from db_config import get_database_config
     db_conn_str, env_name = get_database_config()
     logger.info(f"def sync_address_sequence(): Using database: {env_name}")
     
@@ -752,7 +752,7 @@ def db_step():
 def backup_db_step():
     # Use the centralized database configuration
     sys.path.insert(0, 'src')
-    from secret_paths import get_database_config
+    from db_config import get_database_config
     db_conn_str, env_name = get_database_config()
     logger.info(f"def backup_db_step(): Using database: {env_name}")
 
