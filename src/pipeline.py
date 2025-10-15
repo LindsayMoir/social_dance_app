@@ -8,6 +8,19 @@ load_dotenv()
 import logging
 import os
 import pandas as pd
+
+# Configure Prefect based on environment
+if os.getenv('RENDER') == 'true':
+    # On Render: Use Prefect Cloud for remote monitoring
+    # The PREFECT_API_CLOUD_URL and PREFECT_API_KEY from .env will be used
+    os.environ['PREFECT_API_URL'] = os.getenv('PREFECT_API_CLOUD_URL', '')
+    # Remove local server URL if set
+    os.environ.pop('PREFECT_SERVER_DATABASE_CONNECTION_URL', None)
+    logging.info("Prefect configured for Render (using Prefect Cloud)")
+else:
+    # Local: Use local Prefect server
+    logging.info("Prefect configured for local server")
+
 from prefect import flow, task
 import shutil
 import subprocess
