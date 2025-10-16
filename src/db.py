@@ -2653,13 +2653,18 @@ class DatabaseHandler():
         Returns:
              bool: True if the URL should be processed according to the criteria above, False otherwise.
         """
+        # If urls_df is empty (e.g., on production), always process
+        if self.urls_df.empty:
+            logging.info(f"should_process_url: URLs table not loaded (production mode), processing URL.")
+            return True
+
         # Normalize URL to handle Instagram/FB CDN dynamic parameters
         normalized_url = self.normalize_url(url)
-        
+
         # Log normalization if URL changed
         if normalized_url != url:
             logging.info(f"should_process_url: Normalized Instagram URL for comparison")
-        
+
         # 1. Filter all rows for this normalized URL
         df_url = self.urls_df[self.urls_df['link'] == normalized_url]
         # If we've never recorded this normalized URL, process it
