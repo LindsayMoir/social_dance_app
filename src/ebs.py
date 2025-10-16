@@ -496,6 +496,11 @@ def import_ebs_events_from_csv(db_handler, config):
             logging.warning("import_ebs_events_from_csv(): CSV file is empty")
             return
 
+        # Drop event_id column if present to avoid sequence conflicts
+        if 'event_id' in df.columns:
+            df = df.drop(columns=['event_id'])
+            logging.info("import_ebs_events_from_csv(): Dropped event_id column to let database auto-generate IDs")
+
         logging.info(f"import_ebs_events_from_csv(): Found {len(df)} events to import")
 
         # Use write_events_to_db which handles address processing and address_id assignment

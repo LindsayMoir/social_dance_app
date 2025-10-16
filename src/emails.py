@@ -188,6 +188,11 @@ class GmailProcessor:
             logging.info("def _process_from_csv(): No events found in CSV file")
             return
 
+        # Drop event_id column if present to avoid sequence conflicts
+        if 'event_id' in events_df.columns:
+            events_df = events_df.drop(columns=['event_id'])
+            logging.info("def _process_from_csv(): Dropped event_id column to let database auto-generate IDs")
+
         # Insert events into database using the same method as write_events_to_db
         try:
             events_df.to_sql('events', db_handler.conn, if_exists='append', index=False, method='multi')
