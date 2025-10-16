@@ -10,6 +10,7 @@ mistralai==1.7.0
 numpy==2.2.5
 openai==1.78.1
 pandas==2.2.3
+playwright==1.52.0
 prefect==3.4.1
 psycopg2-binary==2.9.10
 pyap==0.3.1
@@ -17,6 +18,7 @@ pydantic==2.11.4
 python-dotenv==1.1.0
 python-levenshtein==0.27.1
 pyyaml==6.0.2
+scrapy-playwright==0.0.43
 sqlalchemy==2.0.40
 streamlit==1.45.1
 requests==2.32.3
