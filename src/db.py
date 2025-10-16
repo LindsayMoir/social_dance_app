@@ -1109,7 +1109,7 @@ class DatabaseHandler():
             df = self._rename_google_calendar_columns(df)
             df['dance_style'] = ', '.join(keywords) if isinstance(keywords, list) else keywords
 
-        source = source if source else url.split('.')[-2]
+        source = source if source else (url.split('.')[-2] if url and '.' in url and len(url.split('.')) >= 2 else 'unknown')
         df['source'] = df.get('source', pd.Series([''] * len(df))).replace('', source).fillna(source)
         df['url'] = df.get('url', pd.Series([''] * len(df))).replace('', url).fillna(url)
 
