@@ -8,9 +8,13 @@ load_dotenv()
 import logging
 import os
 import pandas as pd
+import shutil
+import subprocess
+import sys
+import time
+import yaml
 
-# Setup centralized logging before anything else
-sys.path.insert(0, 'src')
+# Setup centralized logging (logging_config.py is in the same directory)
 from logging_config import setup_logging
 setup_logging('pipeline')
 
@@ -27,11 +31,6 @@ else:
     logging.info("Prefect configured for local server")
 
 from prefect import flow, task
-import shutil
-import subprocess
-import sys
-import time
-import yaml
 
 
 # ─── 1) Load YAML config ─────────────────────────────────────────────────────
