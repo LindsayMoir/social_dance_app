@@ -732,10 +732,13 @@ class FacebookEventScraper():
             else:
                 logging.info("def driver_fb_search(): No extracted text found for any URLs.")
 
-            # Checkpoint the keywords
+            # Checkpoint the keywords (only locally, not on Render)
             keywords_df.loc[idx, 'processed'] = True
-            keywords_df.to_csv(self.config['checkpoint']['fb_search'], index=False)
-            logging.info(f"def driver_fb_search(): Keywords checkpoint updated.")
+            if os.getenv('RENDER') != 'true':
+                keywords_df.to_csv(self.config['checkpoint']['fb_search'], index=False)
+                logging.info(f"def driver_fb_search(): Keywords checkpoint updated.")
+            else:
+                logging.info(f"def driver_fb_search(): Skipping checkpoint write on Render")
 
 
     def driver_fb_urls(self) -> None:
@@ -760,7 +763,8 @@ class FacebookEventScraper():
         # 2) Add checkpoint columns
         fb_urls_df['processed'] = False
         fb_urls_df['events_processed'] = False
-        fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+        if os.getenv('RENDER') != 'true':
+            fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
 
         # 3) Iterate each base Facebook URL
         if fb_urls_df.shape[0] > 0:
@@ -786,8 +790,11 @@ class FacebookEventScraper():
 
                 # Mark as processed
                 fb_urls_df.loc[fb_urls_df['link'] == base_url, 'processed'] = True
-                fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
-                logging.info(f"def driver_fb_urls(): Base URL marked processed: {base_url}")
+                if os.getenv('RENDER') != 'true':
+                    fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+                    logging.info(f"def driver_fb_urls(): Base URL marked processed: {base_url}")
+                else:
+                    logging.info(f"def driver_fb_urls(): Skipping checkpoint write on Render")
 
                 # Honor the run limit
                 if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
@@ -826,16 +833,22 @@ class FacebookEventScraper():
                         fb_urls_df.loc[fb_urls_df['link'] == event_url, 'processed'] = True
                         fb_urls_df.loc[fb_urls_df['link'] == event_url, 'events_processed'] = True
 
-                    fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
-                    logging.info(f"def driver_fb_urls(): Event URL marked processed: {event_url}")
+                    if os.getenv('RENDER') != 'true':
+                        fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+                        logging.info(f"def driver_fb_urls(): Event URL marked processed: {event_url}")
+                    else:
+                        logging.info(f"def driver_fb_urls(): Skipping checkpoint write on Render")
 
                     if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                         break
 
                 # 6) Finally mark that we've scraped events for the base URL
                 fb_urls_df.loc[fb_urls_df['link'] == base_url, 'events_processed'] = True
-                fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
-                logging.info(f"def driver_fb_urls(): Events_scraped flag set for base URL: {base_url}")
+                if os.getenv('RENDER') != 'true':
+                    fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+                    logging.info(f"def driver_fb_urls(): Events_scraped flag set for base URL: {base_url}")
+                else:
+                    logging.info(f"def driver_fb_urls(): Skipping checkpoint write on Render")
 
         else:
             logging.warning("def driver_fb_urls(): No Facebook URLs returned from the database.")
