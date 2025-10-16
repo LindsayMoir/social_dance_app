@@ -1148,7 +1148,11 @@ class DatabaseHandler():
             self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
             return
 
-        df.to_csv('output/cleaned_events.csv', index=False)
+        # Write debug CSV (only locally, not on Render)
+        if os.getenv('RENDER') != 'true':
+            os.makedirs('output', exist_ok=True)
+            df.to_csv('output/cleaned_events.csv', index=False)
+
         logging.info(f"write_events_to_db: Number of events to write: {len(df)}")
 
         df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
@@ -2488,14 +2492,18 @@ class DatabaseHandler():
         results_df['time_stamp'] = datetime.now()
         results_df['elapsed_time'] = results_df['time_stamp'] - results_df['start_time_df']
 
-        # Write the df to a csv file
-        output_file = self.config['output']['events_urls_diff']
-        if not os.path.isfile(output_file):
-            results_df.to_csv(output_file, index=False)
+        # Write the df to a csv file (only locally, not on Render)
+        if os.getenv('RENDER') != 'true':
+            output_file = self.config['output']['events_urls_diff']
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            if not os.path.isfile(output_file):
+                results_df.to_csv(output_file, index=False)
+            else:
+                results_df.to_csv(output_file, mode='a', header=False, index=False)
+            logging.info(f"def count_events_urls_end(): Wrote events and urls statistics to: {output_file}")
         else:
-            results_df.to_csv(output_file, mode='a', header=False, index=False)
-
-        logging.info(f"def count_events_urls_end(): Wrote events and urls statistics to: {output_file}")
+            logging.info(f"def count_events_urls_end(): Skipping CSV write on Render (ephemeral filesystem)")
 
 
     def stale_date(self, url):
