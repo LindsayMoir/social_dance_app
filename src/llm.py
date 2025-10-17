@@ -118,8 +118,9 @@ class LLMHandler:
 
         # Set up Mistral client with timeout
         mistral_api_key = os.environ["MISTRAL_API_KEY"]
-        # Set reasonable timeout for Mistral API calls (60 seconds)
-        self.mistral_client = Mistral(api_key=mistral_api_key, timeout=60.0)
+        # Set reasonable timeout for Mistral API calls (60 seconds = 60000 milliseconds)
+        # Note: Mistral uses timeout_ms (milliseconds) instead of timeout (seconds)
+        self.mistral_client = Mistral(api_key=mistral_api_key, timeout_ms=60000)
 
         # Get the keywords      
         self.keywords_list = self.get_keywords()
