@@ -26,6 +26,18 @@ if os.getenv('RENDER') == 'true':
     # Remove local server URL if set
     os.environ.pop('PREFECT_SERVER_DATABASE_CONNECTION_URL', None)
     logging.info("Prefect configured for Render (using Prefect Cloud)")
+
+    # Set Playwright browser path for Render environment
+    # This ensures all subprocess calls (scraper.py, fb.py, etc.) can find the browsers
+    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/opt/render/project/src/.playwright'
+    logging.info("Playwright browser path set to /opt/render/project/src/.playwright")
+
+    # Reduce only the most verbose Prefect internal logging
+    # Keep INFO level for application logs, but reduce Prefect framework noise
+    logging.getLogger('prefect.flow_engine').setLevel(logging.WARNING)
+    logging.getLogger('prefect.task_engine').setLevel(logging.WARNING)
+    logging.getLogger('httpx').setLevel(logging.WARNING)  # Silence HTTP request logs
+    logging.getLogger('httpcore').setLevel(logging.WARNING)
 else:
     # Local: Use local Prefect server
     logging.info("Prefect configured for local server")
@@ -1240,7 +1252,11 @@ def run_pipeline(start_step: str, end_step: str = None):
                     time.sleep(5)
                     retry_count += 1
                 else:
-                    raise e
+                    # Log error with full details for troubleshooting
+                    import traceback
+                    logger.error(f"❌ Step '{name}' failed: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    sys.exit(1)
         else:
             logger.error(f"Step {name} failed after 3 retries due to database locked errors.")
             sys.exit(1)

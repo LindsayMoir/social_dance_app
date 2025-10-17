@@ -1,0 +1,5 @@
+cd /opt/render/project/src && python src/pipeline.py --mode 3 --start_step 6
+
+cd /opt/render/project/src && python src/pipeline.py --mode 1
+
+cd /opt/render/project/src && python src/pipeline.py --mode 3 --start_step 8

@@ -45,6 +45,7 @@ import yaml
 
 from db import DatabaseHandler
 from llm import LLMHandler
+from logging_utils import log_extracted_text
 from credentials import get_credentials
 import os
 
@@ -293,13 +294,13 @@ class CleanUp:
             content = await page.content()
             soup = BeautifulSoup(content, 'html.parser')
             extracted_text = ' '.join(soup.stripped_strings)
-            logging.info(f"(async) raw text from {link}: {extracted_text}")
+            log_extracted_text("extract_event_text (async)", link, extracted_text, logging.getLogger(__name__))
 
             if extracted_text:
                 # If you have a separate method to refine the text:
                 extracted_text = self.extract_relevant_text(extracted_text, link)
                 if extracted_text:
-                    logging.info(f"(async) def extract_event_text(): relevant text from {link}: {extracted_text}")
+                    log_extracted_text("extract_event_text (async) - relevant", link, extracted_text, logging.getLogger(__name__))
                     return extracted_text
                 else:
                     logging.info(f"(async) def extract_event_text(): No relevant text found in {link}.")
@@ -359,11 +360,11 @@ class CleanUp:
             # Fallback: Extract a reasonable amount of text after the day match to investigate what's actually there
             fallback_end = min(last_day_match.end() + 2000, len(content))  # Extract up to 2000 chars or end of content
             extracted_text = content[day_start:fallback_end]
-            
-            # Log a sample of what we found instead to help debug Facebook UI changes
-            sample_text = extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text
-            logging.info(f"extract_relevant_text(): Using fallback extraction for {link}. Found text: {sample_text}")
-            
+
+            # Log the fallback extraction using utility
+            logging.warning(f"extract_relevant_text: 'Guests See All' not found, using fallback extraction for {link}")
+            log_extracted_text("extract_relevant_text", link, extracted_text, logging.getLogger(__name__))
+
             return extracted_text
 
         gsa_end = gsa_match.end()
@@ -544,7 +545,7 @@ class CleanUp:
                 content = await page.content()
                 soup = BeautifulSoup(content, "html.parser")
                 extracted_text = " ".join(soup.stripped_strings)
-                logging.info(f"def extract_text_with_playwright_async(): Extracted text from {url}: {extracted_text}")
+                log_extracted_text("extract_text_with_playwright_async", url, extracted_text, logging.getLogger(__name__))
 
                 await browser.close()
                 return extracted_text

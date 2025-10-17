@@ -82,6 +82,7 @@ import yaml
 from credentials import get_credentials
 from db import DatabaseHandler
 from llm import LLMHandler
+from logging_utils import log_extracted_text
 from secret_paths import get_auth_file
 
 # Get config
@@ -426,7 +427,7 @@ class FacebookEventScraper():
         if not full_text:
             logging.warning(f"extract_event_text: no text from {link}")
             return None
-        logging.info(f"extract_event_text: extracted {len(full_text)} chars")
+        log_extracted_text("extract_event_text", link, full_text, logging.getLogger(__name__))
 
         return full_text
 
@@ -478,11 +479,11 @@ class FacebookEventScraper():
             # Fallback: Extract a reasonable amount of text after the day match to investigate what's actually there
             fallback_end = min(last_day_match.end() + 2000, len(content))  # Extract up to 2000 chars or end of content
             extracted_text = content[day_start:fallback_end]
-            
-            # Log a sample of what we found instead to help debug Facebook UI changes
-            sample_text = extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text
-            logging.info(f"def extract_relevant_text(): Using fallback extraction for {link}. Found text: {sample_text}")
-            
+
+            # Log the fallback extraction using utility
+            logging.warning(f"extract_relevant_text: 'Guests See All' not found, using fallback extraction for {link}")
+            log_extracted_text("extract_relevant_text", link, extracted_text, logging.getLogger(__name__))
+
             return extracted_text
 
         gsa_end = gsa_match.end()
