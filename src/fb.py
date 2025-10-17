@@ -224,7 +224,9 @@ class FacebookEventScraper():
             page.click("button[type='submit']")
             logging.info("login_to_facebook: submitted credentials.")
 
-            page.wait_for_navigation(wait_until="networkidle", timeout=20000)
+            # Wait for navigation to complete after login
+            page.wait_for_timeout(5000)  # Give Facebook time to process login
+
             if "login" in page.url.lower():
                 logging.error("login_to_facebook: still on login page after automated flow.")
                 return False
