@@ -341,7 +341,7 @@ class EventSpider(scrapy.Spider):
         }
         all_events = []
         while True:
-            response = requests.get(api_url, params=params)
+            response = requests.get(api_url, params=params, timeout=30)  # 30 second timeout
             if response.status_code == 200:
                 data = response.json()
                 all_events.extend(data.get("items", []))
@@ -438,6 +438,9 @@ class EventSpider(scrapy.Spider):
             },
             # Allow 406 so your parse() or Playwright steps still see it
             "HTTPERROR_ALLOWED_CODES": [406],
+            # Add timeouts to prevent hanging
+            "DOWNLOAD_TIMEOUT": 60,  # 60 seconds timeout for HTTP requests
+            "PLAYWRIGHT_TIMEOUT": 60000,  # 60 seconds timeout for Playwright (in milliseconds)
         })
 
         process.crawl(EventSpider, config=self.config)

@@ -110,14 +110,16 @@ class LLMHandler:
         # Inject LLMHandler back into DatabaseHandler to break circular import
         self.db_handler.set_llm_handler(self)
 
-        # Set up OpenAI client
+        # Set up OpenAI client with timeout
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         openai.api_key = self.openai_api_key
-        self.openai_client = OpenAI()
+        # Set reasonable timeout for OpenAI API calls (60 seconds)
+        self.openai_client = OpenAI(timeout=60.0)
 
-        # Set up Mistral client
+        # Set up Mistral client with timeout
         mistral_api_key = os.environ["MISTRAL_API_KEY"]
-        self.mistral_client = Mistral(api_key=mistral_api_key)
+        # Set reasonable timeout for Mistral API calls (60 seconds)
+        self.mistral_client = Mistral(api_key=mistral_api_key, timeout=60.0)
 
         # Get the keywords      
         self.keywords_list = self.get_keywords()

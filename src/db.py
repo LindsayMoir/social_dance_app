@@ -434,14 +434,15 @@ class DatabaseHandler():
 
         except SQLAlchemyError as e:
             # Handle unique constraint violations for address table gracefully
-            if "UniqueViolation" in str(e) and "unique_full_address" in str(e):
+            error_str = str(e)
+            if "UniqueViolation" in error_str and ("unique_full_address" in error_str or "address_full_address_key" in error_str):
                 logging.info(
                     "execute_query(): Address already exists (unique constraint), skipping insert"
                 )
                 return None
             else:
                 logging.error(
-                    "execute_query(): Query execution failed (%s)\nQuery was: %s", 
+                    "execute_query(): Query execution failed (%s)\nQuery was: %s",
                     e, query
                 )
                 return None
@@ -787,7 +788,7 @@ class DatabaseHandler():
 
         # Step 1: Exact match on postal code + street number (most specific)
         if postal_code and street_number:
-            logging.info(f"resolve_or_insert_address: Trying postal_code + street_number match: {postal_code}, {street_number}")
+            logging.debug(f"resolve_or_insert_address: Trying postal_code + street_number match: {postal_code}, {street_number}")
             postal_match_query = """
                 SELECT address_id, building_name, street_number, street_name, postal_code
                 FROM address
@@ -798,22 +799,22 @@ class DatabaseHandler():
                 "postal_code": postal_code,
                 "street_number": street_number
             })
-            
+
             for addr_id, b_name, s_num, s_name, p_code in postal_matches or []:
                 if building_name and b_name:
                     # Use multiple fuzzy matching algorithms
                     ratio_score = ratio(building_name, b_name)
                     partial_score = fuzz.partial_ratio(building_name, b_name)
                     token_set_score = fuzz.token_set_ratio(building_name, b_name)
-                    
+
                     # More sophisticated matching: any high score indicates a match
                     if ratio_score >= 85 or partial_score >= 95 or token_set_score >= 90:
-                        logging.info(f"Postal+street+fuzzy building match → address_id={addr_id}")
-                        logging.info(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
+                        logging.debug(f"Postal+street+fuzzy building match → address_id={addr_id}")
+                        logging.debug(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
                         return addr_id
                 else:
                     # Same postal code + street number is very likely the same location
-                    logging.info(f"Postal+street match (no building comparison) → address_id={addr_id}")
+                    logging.debug(f"Postal+street match (no building comparison) → address_id={addr_id}")
                     return addr_id
 
         # Step 2: Street number + street name match with improved building name fuzzy matching
@@ -839,42 +840,42 @@ class DatabaseHandler():
                     ratio_score = ratio(building_name, b_name)
                     partial_score = fuzz.partial_ratio(building_name, b_name)
                     token_set_score = fuzz.token_set_ratio(building_name, b_name)
-                    
+
                     if ratio_score >= 75 or partial_score >= 90 or token_set_score >= 85:
-                        logging.info(f"Street+fuzzy building match → address_id={addr_id}")
-                        logging.info(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
+                        logging.debug(f"Street+fuzzy building match → address_id={addr_id}")
+                        logging.debug(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
                         return addr_id
                 else:
-                    logging.info(f"Street match (no building name) → address_id={addr_id}")
+                    logging.debug(f"Street match (no building name) → address_id={addr_id}")
                     return addr_id
         else:
-            logging.info("resolve_or_insert_address: Missing street_number or street_name; skipping street match")
+            logging.debug("resolve_or_insert_address: Missing street_number or street_name; skipping street match")
 
         # Step 3: City + building name fuzzy match (broader search)
         if city and building_name:
-            logging.info(f"resolve_or_insert_address: Trying city + building_name match: {city}, {building_name}")
+            logging.debug(f"resolve_or_insert_address: Trying city + building_name match: {city}, {building_name}")
             city_building_query = """
                 SELECT address_id, building_name, city, postal_code
                 FROM address
                 WHERE LOWER(city) = LOWER(:city) AND building_name IS NOT NULL
             """
             city_matches = self.execute_query(city_building_query, {"city": city})
-            
+
             for addr_id, b_name, addr_city, p_code in city_matches or []:
                 if b_name:
                     ratio_score = ratio(building_name, b_name)
-                    partial_score = fuzz.partial_ratio(building_name, b_name)  
+                    partial_score = fuzz.partial_ratio(building_name, b_name)
                     token_set_score = fuzz.token_set_ratio(building_name, b_name)
-                    
+
                     # Higher thresholds for city-only matches to avoid false positives
                     if ratio_score >= 90 or partial_score >= 95 or token_set_score >= 95:
-                        logging.info(f"City+building fuzzy match → address_id={addr_id}")
-                        logging.info(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
+                        logging.debug(f"City+building fuzzy match → address_id={addr_id}")
+                        logging.debug(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
                         return addr_id
 
         # Step 4: Legacy building name-only fuzzy match (least reliable)
         if building_name:
-            logging.info(f"resolve_or_insert_address: Trying building_name-only fuzzy match: {building_name}")
+            logging.debug(f"resolve_or_insert_address: Trying building_name-only fuzzy match: {building_name}")
             query = "SELECT address_id, building_name FROM address WHERE building_name IS NOT NULL"
             candidates = self.execute_query(query)
 
@@ -883,11 +884,11 @@ class DatabaseHandler():
                     ratio_score = ratio(building_name, existing_name)
                     partial_score = fuzz.partial_ratio(building_name, existing_name)
                     token_set_score = fuzz.token_set_ratio(building_name, existing_name)
-                    
+
                     # Very high thresholds for building-name-only matches
                     if ratio_score >= 95 or (partial_score >= 98 and token_set_score >= 95):
-                        logging.info(f"Building-name-only fuzzy match → address_id={addr_id}")
-                        logging.info(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
+                        logging.debug(f"Building-name-only fuzzy match → address_id={addr_id}")
+                        logging.debug(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
                         return addr_id
 
         # Step 3: Normalize null values and prepare required fields for insert
