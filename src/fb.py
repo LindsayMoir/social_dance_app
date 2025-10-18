@@ -499,6 +499,7 @@ class FacebookEventScraper():
     def append_df_to_excel(self, df: pd.DataFrame, output_path: str):
         """
         Appends `df` to the first sheet of output_path, creating it if necessary.
+        Only called locally, not on Render.
         """
         try:
             # Load existing workbook
@@ -575,12 +576,15 @@ class FacebookEventScraper():
 
         logging.info(f"def scrape_events(): Extracted text from {len(extracted_text_list)} events.")
 
-        # Checkpoint history. Write extracted_text_list to a csv file
-        extracted_text_df = pd.DataFrame(extracted_text_list, columns=['url', 'extracted_text'])
-        extracted_text_df['time_stamp'] = datetime.now()
-        output_path = self.config['checkpoint']['extracted_text']
-        self.append_df_to_excel(extracted_text_df, output_path)
-        logging.info(f"def scrape_events(): Extracted text data written to {output_path}.")
+        # Checkpoint history. Write extracted_text_list to a csv file (only locally, not on Render)
+        if os.getenv('RENDER') != 'true':
+            extracted_text_df = pd.DataFrame(extracted_text_list, columns=['url', 'extracted_text'])
+            extracted_text_df['time_stamp'] = datetime.now()
+            output_path = self.config['checkpoint']['extracted_text']
+            self.append_df_to_excel(extracted_text_df, output_path)
+            logging.info(f"def scrape_events(): Extracted text data written to {output_path}.")
+        else:
+            logging.info(f"def scrape_events(): Skipping checkpoint write on Render")
 
         return search_url, extracted_text_list
 
