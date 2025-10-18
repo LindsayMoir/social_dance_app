@@ -755,7 +755,17 @@ class FacebookEventScraper():
         3. Writes every processed URL—including event links—to the checkpoint CSV.
         """
         # 1) Load or initialize the checkpoint dataframe
-        if config['checkpoint']['fb_urls_cp_status']:
+        # On Render, always query database fresh (no checkpointing)
+        if os.getenv('RENDER') == 'true':
+            query = text("""
+                SELECT *
+                FROM urls
+                WHERE link ILIKE :link_pattern
+            """)
+            params = {'link_pattern': '%facebook%'}
+            fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
+            logging.info(f"def driver_fb_urls(): Retrieved {fb_urls_df.shape[0]} Facebook URLs from the database.")
+        elif config['checkpoint']['fb_urls_cp_status']:
             fb_urls_df = pd.read_csv(config['checkpoint']['fb_urls_cp'])
         else:
             query = text("""
