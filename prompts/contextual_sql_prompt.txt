@@ -96,6 +96,7 @@ Allowed: 'social dance','class','workshop','other','rehearsal','live music'
 • Default: event_type ILIKE '%social dance%'
 • Learning keywords ("learn","lesson","class","workshop") → (event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')
 • Performance keywords ("playing","performing","perform","plays","band","musician","artist","who is") → (event_type ILIKE '%social dance%' OR event_type ILIKE '%live music%')
+• Venue/location queries (checking location, source, or url columns) → (event_type ILIKE '%social dance%' OR event_type ILIKE '%live music%')
 • User explicitly mentions "music" → include live music in event_type
 
 === VENUE/LOCATION MATCHING ===
@@ -170,8 +171,8 @@ WHERE dance_style ILIKE '%rueda%'
 ORDER BY start_date, start_time
 LIMIT 30
 
-🔹 VENUE EXAMPLE:
-"Who is playing at The Loft tomorrow night?" (note: "playing" triggers both social dance AND live music):
+🔹 VENUE EXAMPLE 1:
+"Who is playing at The Loft tomorrow night?" (note: venue query triggers both social dance AND live music):
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE (location ILIKE '%the loft%'
@@ -180,6 +181,22 @@ WHERE (location ILIKE '%the loft%'
        OR source ILIKE '%loft%'
        OR url ILIKE '%loft%')
   AND start_date = CURRENT_DATE + INTERVAL '1 day'
+  AND (event_type ILIKE '%social dance%' OR event_type ILIKE '%live music%')
+ORDER BY start_date, start_time
+LIMIT 30
+
+🔹 VENUE EXAMPLE 2:
+"Are there any events at the Edelweiss Club this weekend?" (note: venue query always includes both social dance AND live music):
+SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
+FROM events
+WHERE (location ILIKE '%edelweiss club%'
+       OR location ILIKE '%edelweiss%'
+       OR source ILIKE '%edelweiss club%'
+       OR source ILIKE '%edelweiss%'
+       OR url ILIKE '%edelweiss%')
+  AND start_date >= CURRENT_DATE
+  AND EXTRACT(DOW FROM start_date) IN (5,6,0)
+  AND start_date <= (CURRENT_DATE + INTERVAL '6 days')
   AND (event_type ILIKE '%social dance%' OR event_type ILIKE '%live music%')
 ORDER BY start_date, start_time
 LIMIT 30
