@@ -439,14 +439,14 @@ class EventbriteScraper:
 def export_events_to_csv(db_handler, config):
     """
     Export Eventbrite events from database to CSV file for syncing to Render.
-    Only exports events added in this session (from events_history table).
+    Exports all Eventbrite events from the database.
     Excludes event_id and address_id as these will be regenerated on Render.
     """
     csv_path = config['output']['ebs_events']
     logging.info(f"export_events_to_csv(): Exporting events to {csv_path}")
 
     try:
-        # Query to get events added today from Eventbrite
+        # Query to get all events from Eventbrite
         query = """
             SELECT DISTINCT
                 event_name, start_date, end_date, start_time, end_time,
@@ -454,7 +454,6 @@ def export_events_to_csv(db_handler, config):
                 price, location, url, source, time_stamp
             FROM events
             WHERE url ILIKE '%eventbrite%'
-            AND DATE(time_stamp) = CURRENT_DATE
             ORDER BY time_stamp DESC
         """
 

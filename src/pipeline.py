@@ -4,9 +4,12 @@ import argparse
 import copy
 import datetime
 from dotenv import load_dotenv
-load_dotenv()
 import logging
 import os
+
+# Load .env from src directory (where this script is located)
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(env_path)
 import pandas as pd
 import shutil
 import subprocess
@@ -941,27 +944,35 @@ def copy_dev_db_to_prod_db_step():
     Tables NOT copied (only used during pipeline):
     - address, raw_locations, events_history, auth_storage
 
-    Works with DATABASE_TARGET to determine source:
-    - DATABASE_TARGET=local: Copies from local PostgreSQL to Render Production
-    - DATABASE_TARGET=render_dev: Copies from Render Dev to Render Production
-    - DATABASE_TARGET=render_prod: Skips (already on production)
+    Logic:
+    - SOURCE: Uses current DATABASE_TARGET setting (local or render_dev)
+    - TARGET: ALWAYS Render Production (render_prod)
+    - If DATABASE_TARGET=render_prod, skips (source and target are the same)
+
+    This means you never need to change DATABASE_TARGET - just set it to where
+    you're working (local or render_dev) and this step will copy to production.
     """
-    from db_config import get_database_config, get_production_database_url, is_production_target
+    from db_config import get_database_config, get_production_database_url
     from urllib.parse import urlparse
 
     logger.info("def copy_dev_db_to_prod_db_step(): Starting table copy to production.")
 
-    # Check if already targeting production
-    if is_production_target():
-        logger.info("def copy_dev_db_to_prod_db_step(): DATABASE_TARGET is 'render_prod'. Skipping copy (already on production).")
-        return True
-
-    # Get source database connection details
+    # Get source database based on current DATABASE_TARGET
     source_conn_str, source_env_name = get_database_config()
     parsed_source = urlparse(source_conn_str)
 
-    logger.info(f"def copy_dev_db_to_prod_db_step(): Source: {source_env_name}")
-    logger.info(f"def copy_dev_db_to_prod_db_step(): Target: Render Production Database")
+    # Get production database (always the target)
+    prod_conn_str = get_production_database_url()
+    parsed_prod = urlparse(prod_conn_str)
+
+    # Check if source and target are the same
+    if parsed_source.hostname == parsed_prod.hostname and parsed_source.path == parsed_prod.path:
+        logger.info(f"def copy_dev_db_to_prod_db_step(): Source and target are the same (both production). Skipping copy.")
+        logger.info(f"def copy_dev_db_to_prod_db_step(): Source: {source_env_name}")
+        return True
+
+    logger.info(f"def copy_dev_db_to_prod_db_step(): Source: {source_env_name} ({parsed_source.hostname}/{parsed_source.path[1:]})")
+    logger.info(f"def copy_dev_db_to_prod_db_step(): Target: Render Production Database ({parsed_prod.hostname}/{parsed_prod.path[1:]})")
 
     # Auto-detect PostgreSQL version and use matching tools
     env_source = os.environ.copy()
@@ -1007,10 +1018,24 @@ def copy_dev_db_to_prod_db_step():
         f"-d {parsed_source.path[1:]} {table_args} -F c -b -v -f '{dump_file}'"
     )
 
+    # Get source row counts before dump
+    source_counts = {}
+    for table in REQUIRED_TABLES:
+        count_command = f"psql -h {parsed_source.hostname} -U {parsed_source.username} -d {parsed_source.path[1:]} -t -c 'SELECT COUNT(*) FROM {table};'"
+        try:
+            result = subprocess.run(count_command, shell=True, check=True, capture_output=True, text=True, env=env_source, timeout=10)
+            source_counts[table] = int(result.stdout.strip())
+            logger.info(f"def copy_dev_db_to_prod_db_step(): Source {table} count: {source_counts[table]}")
+        except Exception as e:
+            logger.error(f"def copy_dev_db_to_prod_db_step(): Failed to get source count for {table}: {e}")
+            raise e
+
     logger.info(f"def copy_dev_db_to_prod_db_step(): Dumping tables {REQUIRED_TABLES} using {pg_dump_path}...")
     try:
-        subprocess.run(dump_command, shell=True, check=True, capture_output=True, text=True, env=env_source, timeout=120)
+        result = subprocess.run(dump_command, shell=True, check=True, capture_output=True, text=True, env=env_source, timeout=120)
         logger.info("def copy_dev_db_to_prod_db_step(): Table dump completed successfully.")
+        if result.stderr:
+            logger.info(f"def copy_dev_db_to_prod_db_step(): Dump stderr: {result.stderr}")
     except subprocess.CalledProcessError as e:
         logger.error(f"def copy_dev_db_to_prod_db_step(): Table dump failed: {e.stderr}")
         raise e
@@ -1019,9 +1044,6 @@ def copy_dev_db_to_prod_db_step():
         raise te
 
     # Step 2: Restore to production database
-    prod_url = get_production_database_url()
-    parsed_prod = urlparse(prod_url)
-
     restore_command = (
         f"{pg_restore_path} -h {parsed_prod.hostname} -U {parsed_prod.username} "
         f"-d {parsed_prod.path[1:]} --no-owner --clean --if-exists -v -c '{dump_file}'"
@@ -1031,15 +1053,46 @@ def copy_dev_db_to_prod_db_step():
     env_prod["PGPASSWORD"] = parsed_prod.password
 
     logger.info(f"def copy_dev_db_to_prod_db_step(): Restoring tables to production database...")
+    restore_success = False
+    restore_error = None
     try:
-        subprocess.run(restore_command, shell=True, check=True, capture_output=True, text=True, env=env_prod, timeout=120)
+        result = subprocess.run(restore_command, shell=True, check=True, capture_output=True, text=True, env=env_prod, timeout=120)
         logger.info("def copy_dev_db_to_prod_db_step(): Table restore completed successfully.")
+        if result.stderr:
+            logger.info(f"def copy_dev_db_to_prod_db_step(): Restore stderr: {result.stderr}")
+        restore_success = True
     except subprocess.TimeoutExpired as te:
-        logger.error(f"def copy_dev_db_to_prod_db_step(): Table restore timed out: {te}")
-        # Don't raise - just log (production might be slow)
+        restore_error = f"Table restore timed out: {te}"
+        logger.error(f"def copy_dev_db_to_prod_db_step(): {restore_error}")
     except subprocess.CalledProcessError as e:
-        logger.error(f"def copy_dev_db_to_prod_db_step(): Table restore failed: {e.stderr}")
-        # Don't raise - production restore errors are common and often non-fatal
+        restore_error = f"Table restore failed with return code {e.returncode}: {e.stderr}"
+        logger.error(f"def copy_dev_db_to_prod_db_step(): {restore_error}")
+
+    # Step 2.5: Validate row counts match
+    if restore_success:
+        logger.info("def copy_dev_db_to_prod_db_step(): Validating row counts...")
+        validation_failed = False
+        for table in REQUIRED_TABLES:
+            count_command = f"psql -h {parsed_prod.hostname} -U {parsed_prod.username} -d {parsed_prod.path[1:]} -t -c 'SELECT COUNT(*) FROM {table};'"
+            try:
+                result = subprocess.run(count_command, shell=True, check=True, capture_output=True, text=True, env=env_prod, timeout=10)
+                prod_count = int(result.stdout.strip())
+                source_count = source_counts[table]
+                logger.info(f"def copy_dev_db_to_prod_db_step(): {table} - Source: {source_count}, Production: {prod_count}")
+                if prod_count != source_count:
+                    validation_failed = True
+                    logger.error(f"def copy_dev_db_to_prod_db_step(): ❌ ROW COUNT MISMATCH for {table}! Source: {source_count}, Production: {prod_count}")
+            except Exception as e:
+                validation_failed = True
+                logger.error(f"def copy_dev_db_to_prod_db_step(): Failed to validate count for {table}: {e}")
+
+        if validation_failed:
+            raise Exception("Row count validation failed! Production database does not match source. Copy was unsuccessful.")
+        else:
+            logger.info("def copy_dev_db_to_prod_db_step(): ✓ Row count validation passed - all tables match!")
+    else:
+        # Restore failed - raise exception
+        raise Exception(f"Database restore failed: {restore_error}")
 
     # Step 3: Set timezone on production
     alter_command = f"ALTER DATABASE {parsed_prod.path[1:]} SET TIME ZONE 'PST8PDT';"

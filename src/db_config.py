@@ -80,11 +80,20 @@ def get_database_config() -> Tuple[str, str]:
             target = 'render_dev'
             logging.info(f"Auto-detected: Running on Render → DATABASE_TARGET='render_dev'")
         else:
-            # Running locally (your machine)
+            # Running locally (your machine) - use local database
             target = 'local'
             logging.info(f"Auto-detected: Running locally → DATABASE_TARGET='local'")
     else:
-        logging.info(f"DATABASE_TARGET explicitly set: {target}")
+        # If DATABASE_TARGET is explicitly set but empty/whitespace, still auto-detect
+        if target == '':
+            if is_render:
+                target = 'render_dev'
+                logging.info(f"DATABASE_TARGET empty, auto-detected: Running on Render → 'render_dev'")
+            else:
+                target = 'local'
+                logging.info(f"DATABASE_TARGET empty, auto-detected: Running locally → 'local'")
+        else:
+            logging.info(f"DATABASE_TARGET explicitly set: {target}")
 
     # Map target to connection string
     # Use INTERNAL URLs when running on Render (faster), EXTERNAL from local machine
