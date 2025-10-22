@@ -843,21 +843,34 @@ def post_process_dedup_llm() -> bool:
     if 'Label' not in df.columns:
         logger.error("def post_process_dedup_llm(): 'Label' column not found in output CSV.")
         return False
-    
+
+    # Check for NaN values in Label column
+    nan_count = df['Label'].isna().sum()
+    if nan_count > 0:
+        logger.warning(f"def post_process_dedup_llm(): Found {nan_count} NaN values in Label column")
+        nan_rows = df[df['Label'].isna()][['event_id', 'event_name', 'Label']]
+        logger.warning(f"def post_process_dedup_llm(): Rows with NaN Labels:\n{nan_rows.to_string()}")
+        # Fill NaN with 0 (treat as unique/not duplicate)
+        df['Label'] = df['Label'].fillna(0)
+        df.to_csv(output_file, index=False)
+        logger.info(f"def post_process_dedup_llm(): Filled {nan_count} NaN values with 0 and saved to {output_file}")
+
     # Check if the deduplication process completed successfully
     # The presence of both 0s and 1s in Label column is expected (0=unique, 1=duplicate)
     total_rows = len(df)
     duplicates_found = (df['Label'] == 1).sum()
     unique_events = (df['Label'] == 0).sum()
-    
+
     logger.info(f"def post_process_dedup_llm(): Processed {total_rows} events: {unique_events} unique, {duplicates_found} duplicates found")
-    
+
     # Success criteria: we have data and Label column contains valid values (0 or 1)
     if total_rows > 0 and df['Label'].isin([0, 1]).all():
         logger.info("def post_process_dedup_llm(): Deduplication completed successfully.")
         return True
     else:
-        logger.error("def post_process_dedup_llm(): Invalid Label values found in output.")
+        # Report which values are invalid
+        invalid_values = df[~df['Label'].isin([0, 1])]['Label'].unique()
+        logger.error(f"def post_process_dedup_llm(): Invalid Label values found: {invalid_values}")
         return False
 
 @flow(name="Dedup LLM Step")
