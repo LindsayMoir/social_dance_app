@@ -9,8 +9,8 @@ clean_up:
 constants:
   black_list_domains: data/other/black_list_domains.csv
   delete_known_bad_urls: nuline, myglobaleventreports
-  fb_base_url: https://www.facebook.com/search/events?q=
-  fb_location_id: '&filters=eyJycF9ldmVudHNfbG9jYXRpb246MCI6IntcIm5hbWVcIjpcImZpbHRlcl9ldmVudHNfbG9jYXRpb25cIixcImFyZ3NcIjpcIjEwMzEzNTg3OTcyNzM4MlwifSJ9'
+  fb_base_url: https://www.facebook.com/search/events/?q=
+  fb_location_id: ''
   uvic_rueda_dict:
     dance_style: cuban salsa, rueda, salsa
     day_of_week: Wednesday
