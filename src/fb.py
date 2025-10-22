@@ -517,19 +517,23 @@ class FacebookEventScraper():
             df.to_excel(output_path, index=False)
     
         
-    def scrape_events(self, keywords: list[str]) -> tuple[str, list[tuple[str, str]]]:
+    def scrape_events(self, keywords: list[str], process_callback=None) -> tuple[str, int]:
         """
         Logs into Facebook once, performs searches for keywords, and extracts event link and text.
+        Events are processed immediately via callback instead of being accumulated.
 
         Args:
             keywords (list): List of keywords to search for.
+            process_callback (callable): Optional callback function(url, extracted_text, search_url)
+                                        called for each event with keywords. If None, events are
+                                        accumulated and returned (legacy behavior).
 
         Returns:
-            tuple: The last search_url used and a list of tuples containing event link and extracted text.
+            tuple: The last search_url used and count of events processed.
         """
         base_url = self.config['constants']['fb_base_url']
         location_id = self.config['constants']['fb_location_id']
-        extracted_text_list = []
+        events_processed = 0
 
         for keyword in keywords:
             search_url = f"{base_url}{keyword}{location_id}"
@@ -550,7 +554,7 @@ class FacebookEventScraper():
 
                     if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                         logging.info("def scrape_events(): Reached the URL visit limit. Stopping the scraping process.")
-                        return search_url, extracted_text_list
+                        return search_url, events_processed
 
                     extracted_text = self.extract_event_text(link)
                     if extracted_text:
@@ -567,26 +571,20 @@ class FacebookEventScraper():
                         if found_keywords:
                             self.urls_with_found_keywords += 1  # Increment URLs with found keywords
                             logging.info(f"def scrape_events(): Keywords: {found_keywords}: found in text for URL: {link}.")
-                            extracted_text_list.append((link, extracted_text))
+
+                            # Process immediately via callback if provided
+                            if process_callback:
+                                process_callback(link, extracted_text, search_url)
+
+                            events_processed += 1
                             logging.debug(f"Visited URL: {link}. Total visited: {len(self.urls_visited)}")
                         else:
                             logging.info(f"def scrape_events(): No keywords found in extracted text for URL: {link}.")
                     else:
                         logging.info(f"def scrape_events(): No text extracted for URL: {link}.")
 
-        logging.info(f"def scrape_events(): Extracted text from {len(extracted_text_list)} events.")
-
-        # Checkpoint history. Write extracted_text_list to a csv file (only locally, not on Render)
-        if os.getenv('RENDER') != 'true':
-            extracted_text_df = pd.DataFrame(extracted_text_list, columns=['url', 'extracted_text'])
-            extracted_text_df['time_stamp'] = datetime.now()
-            output_path = self.config['checkpoint']['extracted_text']
-            self.append_df_to_excel(extracted_text_df, output_path)
-            logging.info(f"def scrape_events(): Extracted text data written to {output_path}.")
-        else:
-            logging.info(f"def scrape_events(): Skipping checkpoint write on Render")
-
-        return search_url, extracted_text_list
+        logging.info(f"def scrape_events(): Processed {events_processed} events.")
+        return search_url, events_processed
 
 
     def process_fb_url(self, url: str, parent_url: str, source: str, keywords: str) -> None:
@@ -675,8 +673,7 @@ class FacebookEventScraper():
             2. Iterates over each set of keywords to construct Facebook search queries.
             3. Scrapes event-related data from the search results.
             4. For each extracted Facebook event URL:
-                - Checks if the URL has already been processed.
-                - Verifies if the crawl limit has been reached.
+                - Events are processed immediately via streaming callback (no accumulation)
                 - Searches for relevant keywords in the extracted text.
                 - If keywords are found, processes the event data using an LLM handler and writes results to the database.
             5. Updates the processed status of each keyword set and checkpoints progress to a CSV file.
@@ -692,52 +689,42 @@ class FacebookEventScraper():
             keywords_list = row['keywords'].split(',')
             source = row.get('source', '')
 
-            # Scrape the events
-            search_url, extracted_text_list = self.scrape_events(keywords_list)
-            logging.info(f"def driver_fb_search(): Extracted text based on search_url: {search_url}.")
-            
-            self.total_url_attempts += len(extracted_text_list)  # Update total URL attempts
+            # Define callback to process events immediately (streaming)
+            def process_event(url: str, extracted_text: str, parent_url: str):
+                """Callback to process each event immediately as it's extracted."""
+                logging.info(f"def driver_fb_search(): Processing Facebook URL: {url}")
 
-            if extracted_text_list:
-                for url, extracted_text in extracted_text_list:
-                    logging.info(f"def driver_fb_search(): Processing Facebook URL: {url}")
+                if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                    logging.info("def driver_fb_search(): Reached crawl limit. Stopping processing.")
+                    return
 
-                    if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                        logging.info("def driver_fb_search(): Reached crawl limit. Stopping processing.")
-                        break
+                # Check for keywords in the extracted text
+                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+                found_keywords = ', '.join(found_keywords)
+                if found_keywords:
+                    logging.info(f"def driver_fb_search(): Keywords found in text for {url}.")
 
-                    self.urls_with_extracted_text += 1  # Increment extracted text count
+                    # Set prompt and process LLM response immediately
+                    prompt_type = 'fb'
+                    llm_response = llm_handler.process_llm_response(url, parent_url, extracted_text, source, found_keywords, prompt_type)
 
-                    # Check for keywords in the extracted text
-                    found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-                    found_keywords = ', '.join(found_keywords)
-                    if found_keywords:
-                        logging.info(f"def driver_fb_search(): Keywords found in text for {url}.")
-                        self.urls_with_found_keywords += 1  # Increment URLs with found keywords
-
-                        # Set prompt and process LLM response
-                        prompt_type = 'fb'
-                        parent_url = search_url
-                        llm_response = llm_handler.process_llm_response(url, parent_url, extracted_text, source, found_keywords, prompt_type)
-
-                        # If events were successfully extracted and written to the DB
-                        if llm_response:
-                            self.events_written_to_db += 1
-                            logging.info(f"def driver_fb_search(): Events successfully written to DB for {url}.")
-                        else:
-                            logging.warning(f"def driver_fb_search(): No events extracted for {url}.")
-                            url_row = [url, parent_url, source, found_keywords, False, 1, datetime.now()]
-                            db_handler.write_url_to_db(url_row)
+                    # If events were successfully extracted and written to the DB
+                    if llm_response:
+                        self.events_written_to_db += 1
+                        logging.info(f"def driver_fb_search(): Events successfully written to DB for {url}.")
                     else:
-                        keywords = ''
-                        url_row = [url, parent_url, source, keywords, False, 1, datetime.now()]
+                        logging.warning(f"def driver_fb_search(): No events extracted for {url}.")
+                        url_row = [url, parent_url, source, found_keywords, False, 1, datetime.now()]
                         db_handler.write_url_to_db(url_row)
-                        logging.info(f"def driver_fb_search(): No keywords found in extracted text for URL: {url}.")
-                    
-                    # Add the event_url to the visited set
-                    self.urls_visited.add(url)
-            else:
-                logging.info("def driver_fb_search(): No extracted text found for any URLs.")
+                else:
+                    keywords = ''
+                    url_row = [url, parent_url, source, keywords, False, 1, datetime.now()]
+                    db_handler.write_url_to_db(url_row)
+                    logging.info(f"def driver_fb_search(): No keywords found in extracted text for URL: {url}.")
+
+            # Scrape events with streaming callback (no accumulation)
+            search_url, events_processed = self.scrape_events(keywords_list, process_callback=process_event)
+            logging.info(f"def driver_fb_search(): Processed {events_processed} events from search_url: {search_url}.")
 
             # Checkpoint the keywords (only locally, not on Render)
             keywords_df.loc[idx, 'processed'] = True
