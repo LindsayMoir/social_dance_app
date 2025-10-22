@@ -329,6 +329,9 @@ class ImageScraper:
         for Instagram-related links using a parameterized SQL query. The results from both sources are concatenated
         into a single DataFrame, and duplicate entries (based on 'link' and 'parent_url') are removed.
 
+        Instagram CDN URLs (fbcdn.net) contain time-limited access tokens that expire after 24-48 hours.
+        Old Instagram URLs are filtered out to avoid unnecessary 403/404 errors.
+
         Returns:
             pd.DataFrame: A DataFrame containing unique image links and their associated metadata from both the CSV and database.
             If the CSV file does not exist, returns an empty DataFrame.
@@ -344,20 +347,36 @@ class ImageScraper:
         df_csv = pd.read_csv(csv_path)
 
         # Parameterized query using sqlalchemy.text for safe ILIKE
+        # Only get Instagram URLs from the last 24 hours to avoid stale CDN tokens
         query = text("""
             SELECT link, parent_url, source, keywords, relevant, crawl_try, time_stamp
             FROM urls
             WHERE link ILIKE :link_pattern
+              AND time_stamp >= (CURRENT_TIMESTAMP - INTERVAL '24 hours')
         """ )
         params = {'link_pattern': '%instagram%'}
         df_db = pd.read_sql(query, self.db_handler.conn, params=params)
-        self.logger.info(f"get_image_links(): Retrieved {df_db.shape[0]} Instagram URLs from the database.")
+        self.logger.info(f"get_image_links(): Retrieved {df_db.shape[0]} Instagram URLs from the database (filtered to last 24 hours).")
 
         # Combine CSV and DB results
         df = pd.concat([df_csv, df_db], ignore_index=True)
 
         # Remove duplicates
         df = df.drop_duplicates(['link', 'parent_url']).reset_index(drop=True)
+
+        # Filter out old fbcdn URLs from CSV as well (they also expire)
+        if 'time_stamp' in df.columns:
+            df['time_stamp'] = pd.to_datetime(df['time_stamp'], errors='coerce')
+            before_filter = len(df)
+            # For fbcdn URLs, only keep recent ones (24 hours)
+            df = df[
+                ~(df['link'].str.contains('fbcdn.net', case=False, na=False) &
+                  (df['time_stamp'].isna() |
+                   (pd.Timestamp.now() - df['time_stamp'] > pd.Timedelta(hours=24))))
+            ]
+            after_filter = len(df)
+            if before_filter > after_filter:
+                self.logger.info(f"get_image_links(): Filtered out {before_filter - after_filter} stale fbcdn URLs (older than 24 hours).")
 
         # Restrict to configured maximum
         limit = self.config['crawling']['urls_run_limit']
