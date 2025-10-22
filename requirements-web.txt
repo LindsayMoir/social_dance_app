@@ -24,6 +24,7 @@ pyyaml==6.0.2
 pydantic==2.11.4
 python-dateutil==2.9.0.post0
 requests==2.32.3
+rapidfuzz==3.13.0
 
 # Google API (if needed for authentication/calendar)
 google-api-core==2.24.2
