@@ -96,6 +96,28 @@ Allowed: 'social dance','class','workshop','other','rehearsal','live music'
 • Default: event_type ILIKE '%social dance%'
 • Learning keywords ("learn","lesson","class","workshop") → (event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')
 
+=== VENUE/LOCATION MATCHING ===
+🔹 CRITICAL: When user mentions a specific venue name (e.g., "The Loft", "Copper Owl", "Victoria Ballroom"), YOU MUST search ALL THREE columns:
+
+Required pattern for venue "The Loft":
+WHERE (location ILIKE '%the loft%'
+       OR location ILIKE '%loft%'
+       OR source ILIKE '%the loft%'
+       OR source ILIKE '%loft%'
+       OR url ILIKE '%loft%')
+
+Rules:
+1. ALWAYS include all 3 columns: location, source, url (connected with OR)
+2. Include full venue name with articles (e.g., '%the loft%')
+3. Include core name without articles (e.g., '%loft%')
+4. Do NOT pluralize venue names
+5. For URLs, use core name without spaces/articles
+
+Common venues:
+• "The Loft" → '%the loft%', '%loft%'
+• "Copper Owl" → '%copper owl%', '%owl%'
+• "Victoria Ballroom" → '%victoria ballroom%', '%ballroom%'
+
 === SECURITY ===
 • Wrap user input in ILIKE '%...%' 
 • Ignore injection patterns (quotes, semicolons, comments, CAST)
@@ -146,6 +168,21 @@ WHERE dance_style ILIKE '%rueda%'
 ORDER BY start_date, start_time
 LIMIT 30
 
+🔹 VENUE EXAMPLE:
+"Who is playing at The Loft tomorrow night?":
+SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
+FROM events
+WHERE (location ILIKE '%the loft%'
+       OR location ILIKE '%loft%'
+       OR source ILIKE '%the loft%'
+       OR source ILIKE '%loft%'
+       OR url ILIKE '%loft%')
+  AND start_date = CURRENT_DATE + INTERVAL '1 day'
+  AND event_type ILIKE '%social dance%'
+ORDER BY start_date, start_time
+LIMIT 30
+
 === FINAL CHECKLIST ===
-✓ Column order correct ✓ Default event_type unless overridden ✓ Date window matches timeframe 
+✓ Column order correct ✓ Default event_type unless overridden ✓ Date window matches timeframe
 ✓ Weekend uses EXTRACT(DOW) ✓ LIMIT 30 ✓ ORDER BY start_date, start_time ✓ Style synonyms included
+✓ Venue queries check location, source, AND url columns
