@@ -141,21 +141,23 @@ WHERE (event_type ILIKE '%social dance%'
 If the user only mentions one event type, use that specific type only.
 
 7. Handling Venue/Location Names
-When the user mentions a specific venue or location name (e.g., "The Loft", "Copper Owl", "Victoria Ballroom"), search across multiple columns to maximize matches since venue names may appear in different fields:
+When the user mentions a specific venue or location name (e.g., "The Loft", "Copper Owl", "Victoria Ballroom"), YOU MUST search across ALL THREE columns to maximize matches since venue names may appear in different fields:
 
 - location (the address field)
 - source (the organization/venue name)
 - url (the website URL)
 
-IMPORTANT: Extract the core venue name without articles ("the", "a", "an") for URL matching, since URLs typically omit articles and spaces.
+CRITICAL: ALWAYS include all three columns (location, source, url) connected with OR when searching for a venue name.
 
-For example, if the user asks about "The Loft":
+Extract the core venue name without articles ("the", "a", "an") for matching. Do NOT pluralize venue names - use the exact name as stated by the user.
+
+REQUIRED PATTERN - if the user asks about "The Loft", you MUST use:
 sql
-WHERE location ILIKE '%the loft%'
-   OR location ILIKE '%loft%'
-   OR source ILIKE '%the loft%'
-   OR source ILIKE '%loft%'
-   OR url ILIKE '%loft%'
+WHERE (location ILIKE '%the loft%'
+       OR location ILIKE '%loft%'
+       OR source ILIKE '%the loft%'
+       OR source ILIKE '%loft%'
+       OR url ILIKE '%loft%')
 
 
 Pattern for venue matching:
@@ -355,12 +357,12 @@ WHERE start_date >= (CURRENT_DATE - INTERVAL '7 days')
 ORDER BY start_date, start_time
 LIMIT 30;
 
-Example 5 (Venue-specific query)
+Example 5 (Venue-specific query - MUST search location, source, AND url)
 User Question:
 
 Who is performing at The Loft tomorrow night?
 
-SQL Query:
+SQL Query (NOTE: All three columns must be checked):
 SELECT
   event_name,
   event_type,

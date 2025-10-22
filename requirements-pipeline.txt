@@ -1,0 +1,28 @@
+# Full requirements for pipeline/scraping (includes everything from requirements-web.txt plus scraping tools)
+# Use this for local development and Render cron jobs
+
+# Include all web requirements
+-r requirements-web.txt
+
+# Scraping & browser automation
+playwright==1.52.0
+scrapy==2.13.0
+scrapy-playwright==0.0.43
+beautifulsoup4==4.13.4
+
+# Workflow orchestration
+prefect==3.4.1
+
+# Document processing
+pdfplumber==0.11.6
+pytesseract==0.3.13
+openpyxl==3.1.5
+
+# Text processing & matching
+fuzzywuzzy==0.18.0
+python-levenshtein==0.27.1
+rapidfuzz==3.13.0
+pyap==0.3.1
+
+# ML/AI for embeddings
+sentence-transformers==4.1.0
