@@ -124,13 +124,13 @@ prompts:
     file: prompts/fix_dup_addresses.txt
     schema: null
   https://gotothecoda.com/calendar:
-    file: prompts/default.txt
+    file: prompts/calendar_venues.txt
     schema: event_extraction
   https://loftpubvictoria.com/events/month/:
-    file: prompts/default.txt
+    file: prompts/calendar_venues.txt
     schema: event_extraction
   https://thedukesaloon.com/:
-    file: prompts/default.txt
+    file: prompts/calendar_venues.txt
     schema: event_extraction
   https://vbds.org/other-dancing-opportunities/:
     file: prompts/default.txt

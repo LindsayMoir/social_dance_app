@@ -334,19 +334,29 @@ class LLMHandler:
             schema_type = prompt_config.get('schema')
         
         logging.info(f"def generate_prompt(): prompt type: {prompt_type}, file: {txt_file_path}, schema: {schema_type}")
-        
+
         # Get the prompt file
         with open(txt_file_path, 'r') as file:
             is_relevant_txt = file.read()
 
-        # Generate the full prompt with Pacific timezone
-        pacific_tz = ZoneInfo("America/Los_Angeles")
-        today_date = datetime.now(pacific_tz).strftime("%Y-%m-%d")
-        prompt = (
-            f"Today's date is: {today_date}. Use this for all date calculations.\n"
-            f"{is_relevant_txt}\n"
-            f"{extracted_text}\n"
-        )
+        # For calendar venue prompts, do NOT inject the current date
+        # Calendar pages have absolute dates already embedded, and injecting the current date
+        # causes the LLM to incorrectly infer years (e.g., July 5 becomes 2026 instead of 2025)
+        if 'calendar_venues.txt' in txt_file_path:
+            logging.info(f"def generate_prompt(): Skipping date injection for calendar venues prompt")
+            prompt = (
+                f"{is_relevant_txt}\n"
+                f"{extracted_text}\n"
+            )
+        else:
+            # For all other prompts, generate with Pacific timezone date
+            pacific_tz = ZoneInfo("America/Los_Angeles")
+            today_date = datetime.now(pacific_tz).strftime("%Y-%m-%d")
+            prompt = (
+                f"Today's date is: {today_date}. Use this for all date calculations.\n"
+                f"{is_relevant_txt}\n"
+                f"{extracted_text}\n"
+            )
 
         return prompt, schema_type
 

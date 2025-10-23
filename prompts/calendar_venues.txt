@@ -1,0 +1,110 @@
+Context:
+You are an expert JSON extractor specializing in event data from calendar pages.
+I am building an application to save users time when searching for social dance and live music events.
+Extract relevant event details from the webpage's text (extracted_text) according to the instructions below.
+The extracted_text is at the bottom of these instructions under the heading extracted_text.
+
+CRITICAL INSTRUCTION: Each calendar event page contains information about ONE EVENT ONLY.
+You are processing a SINGLE event page URL. Extract ONLY the information about THIS ONE EVENT.
+Do NOT extract multiple events from a single page. If you see multiple dates (e.g., "previous date" and "current date"),
+they refer to the SAME event with different scheduling information. Use the CURRENT/FINAL date for the event.
+
+Follow these steps exactly:
+________________________________________
+1. Extract Single Event
+From the extracted_text below, extract the information about THIS ONE EVENT and build a JSON object with exactly these keys:
+source, dance_style, url, event_type, event_name, day_of_week, start_date, end_date, start_time, end_time, price, location, description
+You MUST include all of these fields. If you do not have any information for one of the fields, put '' in the field.
+For the url field: Use the specific event page URL (this is a calendar venue with individual event pages).
+________________________________________
+2. Date Handling for Calendar Venues:
+•	Calendar pages display events with their FULL DATES already visible (YYYY-MM-DD format or month-day-year in text).
+•	EXTRACT DATES DIRECTLY from the event page text - do NOT infer years.
+•	If you see "July 5" and also see "2025" or "2026" anywhere on the page, use that year.
+•	If the event page URL contains a date (e.g., /2025-10-24/ or /2025-07-05/), use that date from the URL.
+•	IMPORTANT: Do NOT apply "future/past" logic to infer years. Calendar pages are pre-generated with correct dates.
+•	If an event lists a day_of_week (e.g., "Sunday", "Friday") with only month/day, pair it with the year visible on that same event page.
+•	"Today" or "Tonight" references should be interpreted as relative to when the page was created, not as the current processing date.
+________________________________________
+3. day_of_week and start_date Consistency
+•	Do not change the given day_of_week.
+•	If your computed start_date is not that weekday, verify you extracted the correct date from the page (don't change it).
+•	Adjust end_date accordingly (if single-day event, set equal to start_date).
+________________________________________
+4. Multiple Date References on Same Event:
+•	If an event page shows multiple dates (e.g., "Rescheduled from Oct 22 to Oct 23", "Previously scheduled" vs "Now scheduled"):
+	o	Use the CURRENT/FINAL date for start_date and end_date
+	o	Put the full context about date changes in the description field
+	o	Extract as ONE event only, NOT multiple events
+•	Do NOT treat different date references as separate events to extract.
+•	For example:
+	o	WRONG: Extract two events - one for Oct 22, one for Oct 23
+	o	CORRECT: Extract one event for Oct 23 with description: "Rescheduled from October 22"
+________________________________________
+5. Outdated Pages:
+•	Events explicitly marked as "canceled" or "postponed" should have that wording put in their "description" field.
+________________________________________
+6. Additional Notes:
+•	You are extracting ONE event from ONE page, so produce ONE JSON object (not an array).
+•	DO NOT return a list for a field. For example, if you found several "dance_style" (e.g. salsa, bachata, kizomba) put that in the "dance_style" field as "salsa, bachata, kizomba". Not as "[salsa, bachata, kizomba]"
+•	If an event has NO start_date (no date visible anywhere on the event page), do NOT extract it - this is an invalid event. Events without times are acceptable as long as they have a date.
+________________________________________
+7. Validate
+Once you've built the JSON object, immediately parse it in your own "mind" (i.e. treat it as if you ran it through a JSON parser).
+• 	**If it fails** (missing comma, unquoted string, trailing comma, wrong brackets…), **fix it**.
+•	**Keep repeating** this "generate → parse → fix" loop until it is **valid JSON**.
+________________________________________
+8. Output
+•	 Only output the final JSON.
+•	 Do **not** wrap it in markdown or add any comments.
+
+9. Example
+Valid output must look like (a SINGLE object, not an array):
+{
+    "source": "The Duke Saloon",
+    "dance_style": "country swing",
+    "url": "https://thedukesaloon.com/event/brayden-king-2/",
+    "event_type": "social dance",
+    "event_name": "Brayden King",
+    "day_of_week": "Thursday",
+    "start_date": "2025-10-23",
+    "end_date": "2025-10-23",
+    "start_time": "19:00",
+    "end_time": "22:00",
+    "price": "$15",
+    "location": "The Duke Saloon, Victoria, BC",
+    "description": "Country music with swing dancing"
+}
+________________________________________
+11. Incorrect Examples
+These are WRONG and should NOT be output.
+
+WRONG - Extracting multiple events from ONE page:
+[
+  {
+    "source": "The Duke Saloon",
+    "event_name": "Brayden King",
+    "day_of_week": "Wednesday",
+    "start_date": "2025-10-22"
+  },
+  {
+    "source": "The Duke Saloon",
+    "event_name": "Brayden King",
+    "day_of_week": "Thursday",
+    "start_date": "2025-10-23"
+  }
+]
+Note: WRONG! This page had two date references but is ONE event. Should extract only Thursday 2025-10-23 as the final date.
+
+WRONG - Outputting an array instead of a single object:
+[{
+    "source": "The Coda",
+    "event_name": "Sunday Afternoon Milonga",
+    "start_date": "2026-07-05"
+}]
+Note: WRONG! This is an array. Should be a single object {}, not an array [].
+________________________________________
+10. If no events are found, output exactly:
+No events found.
+________________________________________
+extracted_text
