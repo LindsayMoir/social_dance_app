@@ -448,10 +448,11 @@ class ReadExtract:
 
         # Special handling for calendar/events pages - extract individual event links
         # This avoids LLM timeout issues by processing events individually instead of all at once
-        # Supports: The Coda, The Loft, and other venues with similar structure
+        # Supports: The Coda, The Loft, The Duke Saloon, and other venues with similar structure
         calendar_venues = {
             'gotothecoda.com/calendar': 'The Coda',
             'loftpubvictoria.com/events/month': 'The Loft',
+            'thedukesaloon.com': 'The Duke Saloon',
         }
 
         for venue_url_pattern, venue_name in calendar_venues.items():
