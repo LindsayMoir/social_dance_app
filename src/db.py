@@ -926,6 +926,15 @@ class DatabaseHandler():
         # Set time_stamp for the new address
         parsed_address["time_stamp"] = datetime.now().isoformat()
 
+        # FINAL DEDUPLICATION CHECK: Before inserting, check if building_name already exists
+        building_name = parsed_address.get("building_name", "").strip()
+        if building_name and len(building_name) > 2:
+            # Try to find existing address with same building name
+            existing_addr_id = self.find_address_by_building_name(building_name, threshold=80)
+            if existing_addr_id:
+                logging.info(f"resolve_or_insert_address: Found existing address (dedup) with building_name='{building_name}' → address_id={existing_addr_id}")
+                return existing_addr_id
+
         insert_query = """
             INSERT INTO address (
                 building_name, street_number, street_name, city,
@@ -1510,6 +1519,16 @@ class DatabaseHandler():
                     logging.info(f"process_event_address: Found existing address via building name extraction: address_id={extracted_address_id}")
                     return event
 
+            # DEDUPLICATION CHECK: Before creating a new address, check if source/event_name matches existing building
+            dedup_addr_id = self.find_address_by_building_name(source, threshold=75)
+            if dedup_addr_id:
+                event["address_id"] = dedup_addr_id
+                full_address = self.get_full_address_from_id(dedup_addr_id)
+                if full_address:
+                    event["location"] = full_address
+                    logging.info(f"process_event_address: Found existing address via deduplication check: source='{source}' → address_id={dedup_addr_id}")
+                    return event
+
             # If no match found, create a minimal but valid address entry
             minimal_address = {
                 "address_id": 0,
@@ -1627,6 +1646,55 @@ class DatabaseHandler():
 
         return event
 
+
+    def find_address_by_building_name(self, building_name: str, threshold: int = 75) -> Optional[int]:
+        """
+        Find an existing address by fuzzy matching on building_name.
+        Prevents creation of duplicate addresses with the same venue name.
+
+        Args:
+            building_name (str): The venue/building name to search for
+            threshold (int): Fuzzy match score threshold (0-100)
+
+        Returns:
+            address_id if found, None otherwise
+        """
+        from fuzzywuzzy import fuzz
+
+        if not building_name or not isinstance(building_name, str):
+            return None
+
+        building_name = building_name.strip()
+
+        try:
+            # Query all addresses with building names
+            building_matches = self.execute_query(
+                "SELECT address_id, building_name FROM address WHERE building_name IS NOT NULL"
+            )
+
+            best_score = 0
+            best_addr_id = None
+
+            for addr_id, existing_building in building_matches or []:
+                if existing_building and existing_building.strip():
+                    # Use partial_ratio which is more lenient for substring matches
+                    score = fuzz.partial_ratio(building_name.lower().strip(), existing_building.lower().strip())
+
+                    if score >= threshold and score > best_score:
+                        best_score = score
+                        best_addr_id = addr_id
+                        logging.debug(f"find_address_by_building_name: '{building_name}' vs '{existing_building}' = {score}")
+
+            if best_addr_id:
+                logging.info(f"find_address_by_building_name: Found address_id={best_addr_id} for '{building_name}' (score={best_score})")
+                return best_addr_id
+
+            logging.debug(f"find_address_by_building_name: No match found for '{building_name}'")
+            return None
+
+        except Exception as e:
+            logging.warning(f"find_address_by_building_name: Error looking up '{building_name}': {e}")
+            return None
 
     def quick_address_lookup(self, location: str) -> Optional[int]:
         """
