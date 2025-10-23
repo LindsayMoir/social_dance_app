@@ -37,6 +37,7 @@ from utils.fuzzy_utils import FuzzyMatcher
 from config_manager import ConfigManager
 from repositories.address_repository import AddressRepository
 from repositories.url_repository import URLRepository
+from repositories.event_repository import EventRepository
 
 
 class DatabaseHandler():
@@ -98,6 +99,10 @@ class DatabaseHandler():
         # Initialize URLRepository for centralized URL management
         self.url_repo = URLRepository(self)
         logging.info("__init__(): URLRepository initialized")
+
+        # Initialize EventRepository for centralized event management
+        self.event_repo = EventRepository(self)
+        logging.info("__init__(): EventRepository initialized")
 
         def _compute_hit_ratio(x):
             true_count = x.sum()
@@ -824,284 +829,98 @@ class DatabaseHandler():
 
     def write_events_to_db(self, df, url, parent_url, source, keywords):
         """
+        Wrapper delegating to EventRepository.write_events_to_db().
+
         Processes and writes event data to the 'events' table in the database.
-        This method performs several data cleaning and transformation steps on the input DataFrame,
-        including renaming columns, handling missing values, formatting dates and times, and removing
-        outdated or incomplete events. It also logs relevant information and writes a record of the
-        processed URL to a separate table.
-            df (pandas.DataFrame): DataFrame containing raw event data to be processed and stored.
+        This method is maintained for backward compatibility.
+
+        Args:
+            df (pd.DataFrame): DataFrame containing raw event data.
             url (str): The URL from which the events data was sourced.
-            parent_url (str): The parent URL, if applicable, for hierarchical event sources.
-            source (str): The source identifier for the event data. If empty, it will be inferred from the URL.
-            keywords (str or list): Keywords or dance styles associated with the events. If a list, it will be joined into a string.
-            - The method automatically renames columns to match the database schema if the data is from a Google Calendar source.
-            - Missing or empty 'source' and 'url' fields are filled with appropriate values.
-            - Dates and times are coerced into standard formats; warnings during parsing are suppressed.
-            - The 'price' column is ensured to exist and is treated as text.
-            - A 'time_stamp' column is added to record the time of data insertion.
-            - The method cleans up the 'location' field and updates address IDs via a helper method.
-            - Rows with all important fields missing are dropped.
-            - Events older than a configurable number of days are excluded.
-            - If no valid events remain after cleaning, the method logs this and records the URL as not relevant.
-            - Cleaned data is saved to a CSV file for debugging and then written to the 'events' table in the database.
-            - The method logs key actions and outcomes for traceability.
+            parent_url (str): The parent URL, if applicable.
+            source (str): The source identifier for the event data.
+            keywords (str or list): Keywords or dance styles associated with events.
+
         Returns:
-            None
+            bool: True if events were written, False otherwise.
         """
-        url = '' if pd.isna(url) else str(url)
-        parent_url = '' if pd.isna(parent_url) else str(parent_url)
-
-        if 'calendar' in url or 'calendar' in parent_url:
-            df = self._rename_google_calendar_columns(df)
-            df['dance_style'] = ', '.join(keywords) if isinstance(keywords, list) else keywords
-
-        source = source if source else (url.split('.')[-2] if url and '.' in url and len(url.split('.')) >= 2 else 'unknown')
-        df['source'] = df.get('source', pd.Series([''] * len(df))).replace('', source).fillna(source)
-        df['url'] = df.get('url', pd.Series([''] * len(df))).replace('', url).fillna(url)
-
-        self._convert_datetime_fields(df)
-
-        if 'price' not in df.columns:
-            logging.warning("write_events_to_db: 'price' column is missing. Filling with empty string.")
-            df['price'] = ''
-
-        df['time_stamp'] = datetime.now()
-
-        # Clean day_of_week field to handle compound/invalid values
-        df = self._clean_day_of_week_field(df)
-
-        # Basic location cleanup
-        df = self.clean_up_address_basic(df)
-
-        # Resolve structured addresses using LLM + match/insert logic
-        updated_rows = []
-        for i, row in df.iterrows():
-            event_dict = row.to_dict()
-            event_dict = self.normalize_nulls(event_dict)
-            updated_event = self.process_event_address(event_dict)
-            for key in ["address_id", "location"]:
-                if key in updated_event:
-                    df.at[i, key] = updated_event[key]
-            updated_rows.append(updated_event)
-
-        logging.info(f"write_events_to_db: Address processing complete for {len(updated_rows)} events.")
-
-        # Remove old or incomplete events
-        df = self._filter_events(df)
-
-        if df.empty:
-            logging.info("write_events_to_db: No events remain after filtering, skipping write.")
-            self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
-            return
-
-        # Write debug CSV (only locally, not on Render)
-        if os.getenv('RENDER') != 'true':
-            os.makedirs('output', exist_ok=True)
-            df.to_csv('output/cleaned_events.csv', index=False)
-
-        logging.info(f"write_events_to_db: Number of events to write: {len(df)}")
-
-        df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
-        self.write_url_to_db([url, parent_url, source, keywords, True, 1, datetime.now()])
-        logging.info("write_events_to_db: Events data written to the 'events' table.")
+        return self.event_repo.write_events_to_db(df, url, parent_url, source, keywords)
 
 
     def _rename_google_calendar_columns(self, df):
         """
-        Renames columns of a DataFrame containing Google Calendar event data to standardized column names.
-        Parameters:
-            df (pandas.DataFrame): The input DataFrame with original Google Calendar column names.
+        Wrapper delegating to EventRepository._rename_google_calendar_columns().
+
+        Renames columns of a DataFrame containing Google Calendar event data.
+        This method is maintained for backward compatibility.
+
+        Args:
+            df (pd.DataFrame): The input DataFrame with Google Calendar column names.
+
         Returns:
-            pandas.DataFrame: A DataFrame with columns renamed to standardized names:
-                - 'URL' -> 'url'
-                - 'Type_of_Event' -> 'event_type'
-                - 'Name_of_the_Event' -> 'event_name'
-                - 'Day_of_Week' -> 'day_of_week'
-                - 'Start_Date' -> 'start_date'
-                - 'End_Date' -> 'end_date'
-                - 'Start_Time' -> 'start_time'
-                - 'End_Time' -> 'end_time'
-                - 'Price' -> 'price'
-                - 'Location' -> 'location'
-                - 'Description' -> 'description'
+            pd.DataFrame: A DataFrame with columns renamed to standardized names.
         """
-        return df.rename(columns={
-            'URL': 'url', 'Type_of_Event': 'event_type', 'Name_of_the_Event': 'event_name',
-            'Day_of_Week': 'day_of_week', 'Start_Date': 'start_date', 'End_Date': 'end_date',
-            'Start_Time': 'start_time', 'End_Time': 'end_time', 'Price': 'price',
-            'Location': 'location', 'Description': 'description'
-        })
+        return self.event_repo._rename_google_calendar_columns(df)
 
     def _convert_datetime_fields(self, df):
         """
-        Converts specific datetime-related columns in a pandas DataFrame to appropriate date and time types.
-        This method processes the following columns:
-            - 'start_date' and 'end_date': Converts to `datetime.date` objects.
-            - 'start_time' and 'end_time': Converts to `datetime.time` objects.
-        Any parsing errors are coerced to NaT/NaN. UserWarnings during conversion are suppressed.
+        Wrapper delegating to EventRepository._convert_datetime_fields().
+
+        Convert datetime-related columns to appropriate date and time types.
+        This method is maintained for backward compatibility.
+
         Args:
-            df (pandas.DataFrame): The DataFrame containing the columns to convert.
-        Returns:
-            None: The DataFrame is modified in place.
+            df (pd.DataFrame): The DataFrame to convert (modified in place).
         """
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            for col in ['start_date', 'end_date']:
-                df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
-            for col in ['start_time', 'end_time']:
-                df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
-            warnings.resetwarnings()
+        return self.event_repo._convert_datetime_fields(df)
 
     def _clean_day_of_week_field(self, df):
         """
-        Cleans and standardizes the day_of_week field to handle compound/invalid values.
-        
-        This method fixes common issues with day_of_week values:
-        - Compound values like "Friday, Saturday" -> takes first day ("Friday")
-        - Special values like "Daily" -> converts to empty string
-        - Normalizes case and whitespace
-        
+        Wrapper delegating to EventRepository._clean_day_of_week_field().
+
+        Clean and standardize the day_of_week field.
+        This method is maintained for backward compatibility.
+
         Args:
-            df (pd.DataFrame): DataFrame containing event data with day_of_week column
-            
+            df (pd.DataFrame): DataFrame containing event data.
+
         Returns:
-            pd.DataFrame: DataFrame with cleaned day_of_week values
+            pd.DataFrame: DataFrame with cleaned day_of_week values.
         """
-        if 'day_of_week' not in df.columns:
-            return df
-            
-        original_count = len(df)
-        logging.info(f"_clean_day_of_week_field: Processing {original_count} events")
-        
-        # Track changes for logging
-        changes_made = 0
-        
-        for i, row in df.iterrows():
-            original_value = row.get('day_of_week', '')
-            if pd.isna(original_value) or not str(original_value).strip():
-                continue
-                
-            day_str = str(original_value).strip()
-            cleaned_value = original_value
-            
-            # Handle compound values like "Friday, Saturday" - take first day
-            if ',' in day_str:
-                cleaned_value = day_str.split(',')[0].strip()
-                changes_made += 1
-                logging.info(f"_clean_day_of_week_field: Changed compound day '{original_value}' to '{cleaned_value}' for event at index {i}")
-                
-            # Handle special values like "Daily"
-            elif day_str.lower() in ['daily', 'every day', 'everyday']:
-                cleaned_value = ''  # Set to empty, will be handled by validation later
-                changes_made += 1
-                logging.info(f"_clean_day_of_week_field: Changed special day '{original_value}' to empty for event at index {i}")
-                
-            # Normalize standard day names (capitalize first letter)
-            else:
-                valid_days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-                day_lower = day_str.lower()
-                if day_lower in valid_days:
-                    cleaned_value = day_lower.capitalize()
-                    if cleaned_value != original_value:
-                        changes_made += 1
-                
-            # Update the DataFrame if value changed
-            if cleaned_value != original_value:
-                df.at[i, 'day_of_week'] = cleaned_value
-        
-        logging.info(f"_clean_day_of_week_field: Made {changes_made} changes to day_of_week values")
-        return df
+        return self.event_repo._clean_day_of_week_field(df)
 
     def _filter_events(self, df):
         """
-        Filters a DataFrame of events by removing rows with all important columns empty and excluding old events.
-        This method performs the following steps:
-        1. Replaces empty or whitespace-only strings in important columns with pandas NA values.
-        2. Drops rows where all important columns ('start_date', 'end_date', 'start_time', 'end_time', 'location', 'description') are missing.
-        3. Converts the 'end_date' column to datetime, coercing errors to NaT.
-        4. Removes events whose 'end_date' is older than the cutoff date, defined as the current time minus the number of days specified in the configuration under 'clean_up' -> 'old_events'.
+        Wrapper delegating to EventRepository._filter_events().
+
+        Filter a DataFrame of events by removing incomplete and old events.
+        This method is maintained for backward compatibility.
+
         Args:
             df (pd.DataFrame): DataFrame containing event data.
-        Returns:
-            pd.DataFrame: Filtered DataFrame with only relevant and recent events.
-        """
-        logging.info(f"_filter_events: Input DataFrame has {len(df)} events")
-        
-        important_cols = ['start_date', 'end_date', 'start_time', 'end_time', 'location', 'description']
-        
-        # Log missing columns
-        missing_cols = [col for col in important_cols if col not in df.columns]
-        if missing_cols:
-            logging.warning(f"_filter_events: Missing important columns: {missing_cols}")
-        
-        df[important_cols] = df[important_cols].replace(r'^\s*$', pd.NA, regex=True)
-        rows_before_dropna = len(df)
-        df = df.dropna(subset=important_cols, how='all')
-        rows_after_dropna = len(df)
-        
-        if rows_before_dropna != rows_after_dropna:
-            logging.info(f"_filter_events: Dropped {rows_before_dropna - rows_after_dropna} rows with all important columns empty")
 
-        df['end_date'] = pd.to_datetime(df['end_date'], errors='coerce')
-        cutoff = pd.Timestamp.now() - pd.Timedelta(days=self.config['clean_up']['old_events'])
-        rows_before_date_filter = len(df)
-        filtered_df = df[df['end_date'] >= cutoff].reset_index(drop=True)
-        rows_after_date_filter = len(filtered_df)
-        
-        if rows_before_date_filter != rows_after_date_filter:
-            logging.info(f"_filter_events: Dropped {rows_before_date_filter - rows_after_date_filter} events older than {cutoff.date()}")
-        
-        logging.info(f"_filter_events: Output DataFrame has {len(filtered_df)} events")
-        return filtered_df
+        Returns:
+            pd.DataFrame: Filtered DataFrame.
+        """
+        return self.event_repo._filter_events(df)
     
     
     def update_event(self, event_identifier, new_data, best_url):
         """
-        Update an existing event in the database by overlaying new data and setting the best URL.
-        This method locates an event row in the 'events' table using the provided event_identifier criteria.
-        It overlays the values from new_data onto the existing row, replacing only the fields present and non-empty in new_data.
-        The event's URL is updated to the provided best_url. The update is performed in-place; if no matching event is found,
-        the method logs an error and returns False.
-            event_identifier (dict): Dictionary specifying the criteria to uniquely identify the event row.
-                Example: {'event_name': ..., 'start_date': ..., 'start_time': ...}
-            new_data (dict): Dictionary containing new values to update in the event record. Only non-empty and non-null
-                values will overwrite existing fields.
+        Wrapper delegating to EventRepository.update_event().
+
+        Update an existing event in the database by overlaying new data.
+        This method is maintained for backward compatibility.
+
+        Args:
+            event_identifier (dict): Dictionary specifying criteria to identify the event.
+            new_data (dict): Dictionary containing new values to update.
             best_url (str): The URL to set as the event's 'url' field.
+
         Returns:
-            bool: True if the event was found and updated successfully, False otherwise.
-        Logs:
-            - Error if no matching event is found.
-            - Info when an event is successfully updated.
+            bool: True if the event was found and updated, False otherwise.
         """
-        select_query = """
-        SELECT * FROM events
-        WHERE event_name = :event_name
-        AND start_date = :start_date
-        AND start_time = :start_time
-        """
-        result = self.execute_query(select_query, event_identifier)
-        existing_row = result[0] if result else None
-        if not existing_row:
-            logging.error("update_event: No matching event found for identifier: %s", event_identifier)
-            return False
-        
-        # Overlay new data onto existing row
-        updated_data = dict(existing_row)
-        for col, new_val in new_data.items():
-            if new_val not in [None, '', pd.NaT]:
-                updated_data[col] = new_val
-        
-        # Update URL
-        updated_data['url'] = best_url
-
-        update_cols = [col for col in updated_data.keys() if col != 'event_id']
-        set_clause = ", ".join([f"{col} = :{col}" for col in update_cols])
-        update_query = f"UPDATE events SET {set_clause} WHERE event_id = :event_id"
-        updated_data['event_id'] = existing_row['event_id']
-
-        self.execute_query(update_query, updated_data)
-        logging.info("update_event: Updated event %s", updated_data)
-        return True
+        return self.event_repo.update_event(event_identifier, new_data, best_url)
 
 
     def fuzzy_match(self, a: str, b: str, threshold: int = 85) -> bool:
@@ -1603,16 +1422,10 @@ class DatabaseHandler():
 
     def fetch_events_dataframe(self):
         """
-        Fetch all events from the database and return them as a pandas DataFrame sorted by start date and time.
-
-        Returns:
-            pandas.DataFrame: A DataFrame containing all events from the 'events' table,
-            sorted by 'start_date' and 'start_time' columns.
+        Wrapper: Fetch all events from the database and return as a sorted DataFrame.
+        Delegates to EventRepository.
         """
-        query = "SELECT * FROM events"
-        df = pd.read_sql(query, self.conn)
-        df.sort_values(by=['start_date', 'start_time'], inplace=True)
-        return df
+        return self.event_repo.fetch_events_dataframe()
 
     def decide_preferred_row(self, row1, row2):
         """
@@ -1864,31 +1677,10 @@ class DatabaseHandler():
 
     def delete_event(self, url, event_name, start_date):
         """
-        Deletes an event from the 'events' table based on the provided event name and start date.
-
-            url (str): The URL of the event to be deleted. (Note: This parameter is currently unused in the deletion query.)
-
-        Returns:
-            None
-
-        Raises:
-            Exception: If an error occurs during the deletion process, it is logged and the exception is propagated.
+        Wrapper: Deletes an event from the 'events' table based on event name and start date.
+        Delegates to EventRepository.
         """
-        try:
-            logging.info("delete_event: Deleting event with URL: %s, Event Name: %s, Start Date: %s", url, event_name, start_date)
-
-            # Delete the event from 'events' table
-            delete_event_query = """
-                DELETE FROM events
-                WHERE Name_of_the_Event = :event_name
-                  AND Start_Date = :start_date;
-            """
-            params = {'event_name': event_name, 'start_date': start_date}
-            self.execute_query(delete_event_query, params)
-            logging.info("delete_event: Deleted event from 'events' table.")
-
-        except Exception as e:
-            logging.error("delete_event: Failed to delete event: %s", e)
+        return self.event_repo.delete_event(url, event_name, start_date)
 
 
     def delete_events_with_nulls(self):
@@ -1917,56 +1709,18 @@ class DatabaseHandler():
 
     def delete_event_with_event_id(self, event_id):
         """
-        Deletes an event from the 'events' table based on the provided event_id.
-
-        Args:
-            event_id (int): The unique identifier of the event to be deleted.
-
-        Returns:
-            None
-
-        Raises:
-            Exception: If the deletion fails, an exception is logged and propagated.
+        Wrapper: Deletes an event from the 'events' table based on event_id.
+        Delegates to EventRepository.
         """
-        try:
-            delete_query = """
-            DELETE FROM events
-            WHERE event_id = :event_id;
-            """
-            params = {'event_id': event_id}
-            self.execute_query(delete_query, params)
-            logging.info("delete_event_with_event_id: Deleted event with event_id %d successfully.", event_id)
-        except Exception as e:
-            logging.error("delete_event_with_event_id: Failed to delete event with event_id %d: %s", event_id, e)
+        return self.event_repo.delete_event_with_event_id(event_id)
 
     
     def delete_multiple_events(self, event_ids):
         """
-        Deletes multiple events from the 'events' table based on a list of event IDs.
-            event_ids (list): A list of event IDs (int) to be deleted from the database.
-            bool: 
-                - True if all specified events were successfully deleted.
-                - False if one or more deletions failed, or if the input list is empty.
-        Logs:
-            - A warning if no event IDs are provided.
-            - An error for each event ID that fails to be deleted.
-            - An info message summarizing the number of successful deletions.
+        Wrapper: Deletes multiple events from the 'events' table based on a list of event IDs.
+        Delegates to EventRepository.
         """
-        if not event_ids:
-            logging.warning("delete_multiple_events: No event_ids provided for deletion.")
-            return False
-
-        success_count = 0
-        for event_id in event_ids:
-            try:
-                self.delete_event_with_event_id(event_id)
-                success_count += 1
-            except Exception as e:
-                logging.error("delete_multiple_events: Error deleting event_id %d: %s", event_id, e)
-
-        logging.info("delete_multiple_events: Deleted %d out of %d events.", success_count, len(event_ids))
-        
-        return success_count == len(event_ids)  # Return True if all deletions were successful
+        return self.event_repo.delete_multiple_events(event_ids)
 
 
     def multiple_db_inserts(self, table_name, values):
