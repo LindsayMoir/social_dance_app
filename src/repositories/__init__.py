@@ -3,5 +3,6 @@ from .address_repository import AddressRepository
 from .url_repository import URLRepository
 from .event_repository import EventRepository
 from .event_management_repository import EventManagementRepository
+from .event_analysis_repository import EventAnalysisRepository
 
-__all__ = ['AddressRepository', 'URLRepository', 'EventRepository', 'EventManagementRepository']
+__all__ = ['AddressRepository', 'URLRepository', 'EventRepository', 'EventManagementRepository', 'EventAnalysisRepository']

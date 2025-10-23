@@ -39,6 +39,7 @@ from repositories.address_repository import AddressRepository
 from repositories.url_repository import URLRepository
 from repositories.event_repository import EventRepository
 from repositories.event_management_repository import EventManagementRepository
+from repositories.event_analysis_repository import EventAnalysisRepository
 
 
 class DatabaseHandler():
@@ -108,6 +109,10 @@ class DatabaseHandler():
         # Initialize EventManagementRepository for data quality operations
         self.event_mgmt_repo = EventManagementRepository(self)
         logging.info("__init__(): EventManagementRepository initialized")
+
+        # Initialize EventAnalysisRepository for reporting/analysis operations
+        self.event_analysis_repo = EventAnalysisRepository(self)
+        logging.info("__init__(): EventAnalysisRepository initialized")
 
         def _compute_hit_ratio(x):
             true_count = x.sum()
@@ -1330,64 +1335,17 @@ class DatabaseHandler():
 
     def sync_event_locations_with_address_table(self):
         """
-        Updates all events so that location = full_address from the address table for consistency.
+        Wrapper: Updates all events so that location matches canonical address table values.
+        Delegates to EventAnalysisRepository.
         """
-        query = """
-            UPDATE events e
-            SET location = a.full_address
-            FROM address a
-            WHERE e.address_id = a.address_id
-            AND (e.location IS DISTINCT FROM a.full_address);
-        """
-        affected_rows = self.execute_query(query)
-        logging.info(f"sync_event_locations_with_address_table(): Updated {affected_rows} events to use canonical full_address.")
+        return self.event_analysis_repo.sync_event_locations_with_address_table()
 
     def clean_orphaned_references(self):
         """
-        Clean up orphaned references in related tables to maintain referential integrity.
-
-        This function removes:
-        1. raw_locations records that reference non-existent addresses
-        2. events records that reference non-existent addresses (if any)
-
-        Returns:
-            dict: Count of cleaned up records by table
+        Wrapper: Clean up orphaned references in related tables.
+        Delegates to EventAnalysisRepository.
         """
-        cleanup_counts = {}
-
-        try:
-            # Clean up orphaned raw_locations
-            cleanup_raw_locations_sql = """
-            DELETE FROM raw_locations
-            WHERE address_id NOT IN (SELECT address_id FROM address);
-            """
-            raw_locations_count = self.execute_query(cleanup_raw_locations_sql)
-            cleanup_counts['raw_locations'] = raw_locations_count or 0
-
-            # Clean up events with non-existent address_ids (should be rare)
-            cleanup_events_sql = """
-            DELETE FROM events
-            WHERE address_id IS NOT NULL
-              AND address_id NOT IN (SELECT address_id FROM address);
-            """
-            events_count = self.execute_query(cleanup_events_sql)
-            cleanup_counts['events'] = events_count or 0
-
-            # Clean up events_history with non-existent address_ids (critical for preventing corruption)
-            cleanup_events_history_sql = """
-            DELETE FROM events_history
-            WHERE address_id IS NOT NULL
-              AND address_id NOT IN (SELECT address_id FROM address);
-            """
-            events_history_count = self.execute_query(cleanup_events_history_sql)
-            cleanup_counts['events_history'] = events_history_count or 0
-
-            logging.info(f"clean_orphaned_references(): Cleaned up {cleanup_counts['raw_locations']} raw_locations, {cleanup_counts['events']} events, and {cleanup_counts['events_history']} events_history records with orphaned address references")
-
-        except Exception as e:
-            logging.error(f"clean_orphaned_references(): Error cleaning orphaned references: {e}")
-
-        return cleanup_counts
+        return self.event_analysis_repo.clean_orphaned_references()
 
     def dedup(self):
         """
@@ -1714,89 +1672,18 @@ class DatabaseHandler():
 
     def count_events_urls_start(self, file_name):
         """
-        Counts the number of events and distinct URLs in the database at the start time and returns a DataFrame with the results.
-
-        Args:
-            file_name (str): The name of the .py file initiating the count.
-
-        Returns:
-            pd.DataFrame: A DataFrame containing the following columns:
-            - file_name (str): The name of the .py file.
-            - start_time (datetime): The timestamp when the count was initiated.
-            - events_count_start (int): The number of events in the database at the start time.
-            - urls_count_start (int): The number of URLs in the database at the start time.
+        Wrapper: Counts events and URLs at process start.
+        Delegates to EventAnalysisRepository.
         """
-
-        # Add a df for the name of the .py file
-        file_name_df = pd.DataFrame([[file_name]], columns=["file_name"])
-
-        # Get start_time
-        start_time = datetime.now()
-        start_time_df = pd.DataFrame([[start_time]], columns=["start_time"])
-
-        # Count events in db at start
-        sql = "SELECT COUNT(*) as events_count_start FROM events"
-        events_count_start_df = pd.read_sql(sql, self.conn)
-
-        # Count events in db at start
-        sql = "SELECT COUNT(DISTINCT link) as urls_count_start FROM urls"
-        urls_count_start_df = pd.read_sql(sql, self.conn)
-
-        # Concatenate the above dataframes into a new dataframe called start_df
-        start_df = pd.concat([file_name_df, start_time_df, events_count_start_df, urls_count_start_df], axis=1)
-        start_df.columns = ['file_name', 'start_time_df', 'events_count_start', 'urls_count_start']
-
-        return start_df
+        return self.event_analysis_repo.count_events_urls_start(file_name)
     
 
     def count_events_urls_end(self, start_df, file_name):
         """
-        Counts the number of events and URLs in the database at the end of a process, compares them with the counts at the start, 
-        and writes the results to a CSV file.
-
-        Parameters:
-        start_df (pd.DataFrame): A DataFrame containing the initial counts of events and URLs, as well as the file name and start time.
-
-        Returns:
-        None
-
-        The function performs the following steps:
-        1. Executes SQL queries to count the number of events and URLs in the database at the end of the process.
-        2. Concatenates the initial counts with the new counts into a single DataFrame.
-        3. Calculates the number of new events and URLs added to the database.
-        4. Adds a timestamp and calculates the elapsed time since the start.
-        5. Writes the resulting DataFrame to a CSV file, appending if the file already exists.
-        6. Logs the file name where the statistics were written.
+        Wrapper: Counts events and URLs at process end and writes statistics.
+        Delegates to EventAnalysisRepository.
         """
-
-        # Count events in db at end
-        sql = "SELECT COUNT(*) as events_count_end FROM events"
-        events_count_end_df = pd.read_sql(sql, self.conn)
-
-        # Count events in db at end
-        sql = "SELECT COUNT(DISTINCT link) as urls_count_end FROM urls"
-        urls_count_end_df = pd.read_sql(sql, self.conn)
-
-        # Create the dataframe
-        results_df = pd.concat([start_df, events_count_end_df, urls_count_end_df], axis=1)
-        results_df.columns = ['file_name', 'start_time_df', 'events_count_start', 'urls_count_start', 'events_count_end', 'urls_count_end']
-        results_df['new_events_in_db'] = results_df['events_count_end'] - results_df['events_count_start']
-        results_df['new_urls_in_db'] = results_df['urls_count_end'] - results_df['urls_count_start']
-        results_df['time_stamp'] = datetime.now()
-        results_df['elapsed_time'] = results_df['time_stamp'] - results_df['start_time_df']
-
-        # Write the df to a csv file (only locally, not on Render)
-        if os.getenv('RENDER') != 'true':
-            output_file = self.config['output']['events_urls_diff']
-            # Ensure output directory exists
-            os.makedirs(os.path.dirname(output_file), exist_ok=True)
-            if not os.path.isfile(output_file):
-                results_df.to_csv(output_file, index=False)
-            else:
-                results_df.to_csv(output_file, mode='a', header=False, index=False)
-            logging.info(f"def count_events_urls_end(): Wrote events and urls statistics to: {output_file}")
-        else:
-            logging.info(f"def count_events_urls_end(): Skipping CSV write on Render (ephemeral filesystem)")
+        return self.event_analysis_repo.count_events_urls_end(start_df, file_name)
 
 
     def stale_date(self, url):
