@@ -1484,6 +1484,8 @@ class DatabaseHandler():
         and updates the event with address_id and location = full_address from address table.
         """
         location = event.get("location", None)
+        event_name = event.get("event_name", "Unknown Event")
+        source = event.get("source", "Unknown Source")
 
         if location is None:
             pass  # Keep it as None
@@ -1491,10 +1493,13 @@ class DatabaseHandler():
             location = location.strip()
 
         # Handle case where location might be NaN (float), empty string, or 'Unknown'
-        if (location is None or pd.isna(location) or not isinstance(location, str) or 
+        if (location is None or pd.isna(location) or not isinstance(location, str) or
             len(location) < 5 or 'Unknown' in str(location)):
-            logging.warning("process_event_address: Location too short or invalid, attempting building name extraction: %s", location)
-            
+            logging.info(
+                "process_event_address: Location missing/invalid for event '%s' from %s, attempting building name extraction",
+                event_name, source
+            )
+
             # Try to extract building name from event details and match to existing addresses
             extracted_address_id = self._extract_address_from_event_details(event)
             if extracted_address_id:
@@ -1504,11 +1509,8 @@ class DatabaseHandler():
                     event["location"] = full_address
                     logging.info(f"process_event_address: Found existing address via building name extraction: address_id={extracted_address_id}")
                     return event
-            
+
             # If no match found, create a minimal but valid address entry
-            event_name = event.get("event_name") or "Unknown Event"
-            source = event.get("source") or "Unknown Source"
-            
             minimal_address = {
                 "address_id": 0,
                 "full_address": f"Location details unavailable - {source}",
