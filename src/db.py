@@ -2640,6 +2640,7 @@ class DatabaseHandler():
         Determines whether a given URL should be processed based on its history in the database.
 
         The decision is made according to the following rules:
+        0. If the URL is in the whitelist (data/urls/aaa_urls.csv), it should ALWAYS be processed.
         1. If the URL has never been seen before (i.e., no records in `self.urls_df`), it should be processed.
         2. If the most recent record for the URL has 'relevant' set to True, it should be processed.
         3. If the most recent record for the URL has 'relevant' set to False, the method checks the grouped statistics in `self.urls_gb`:
@@ -2665,6 +2666,19 @@ class DatabaseHandler():
         # Log normalization if URL changed
         if normalized_url != url:
             logging.info(f"should_process_url: Normalized Instagram URL for comparison")
+
+        # 0. Check if URL is in whitelist (always process) - URLs in data/urls/aaa_urls.csv should always be processed
+        try:
+            aaa_urls_path = os.path.join(self.config['input']['urls'], 'aaa_urls.csv')
+            if os.path.exists(aaa_urls_path):
+                aaa_urls_df = pd.read_csv(aaa_urls_path)
+                if 'link' in aaa_urls_df.columns:
+                    # Check if normalized_url matches any whitelist URL
+                    if normalized_url in aaa_urls_df['link'].values:
+                        logging.info(f"should_process_url: URL {normalized_url[:100]}... is in whitelist (aaa_urls.csv), processing it.")
+                        return True
+        except Exception as e:
+            logging.warning(f"should_process_url: Could not check whitelist: {e}")
 
         # 1. Filter all rows for this normalized URL
         df_url = self.urls_df[self.urls_df['link'] == normalized_url]
