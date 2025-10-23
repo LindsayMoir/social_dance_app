@@ -38,6 +38,7 @@ from config_manager import ConfigManager
 from repositories.address_repository import AddressRepository
 from repositories.url_repository import URLRepository
 from repositories.event_repository import EventRepository
+from repositories.event_management_repository import EventManagementRepository
 
 
 class DatabaseHandler():
@@ -103,6 +104,10 @@ class DatabaseHandler():
         # Initialize EventRepository for centralized event management
         self.event_repo = EventRepository(self)
         logging.info("__init__(): EventRepository initialized")
+
+        # Initialize EventManagementRepository for data quality operations
+        self.event_mgmt_repo = EventManagementRepository(self)
+        logging.info("__init__(): EventManagementRepository initialized")
 
         def _compute_hit_ratio(x):
             true_count = x.sum()
@@ -1386,38 +1391,10 @@ class DatabaseHandler():
 
     def dedup(self):
         """
-        Removes duplicate entries from the 'events' table in the database.
-
-        Duplicates in the 'events' table are identified based on matching 'address_id', 'start_date', 'end_date',
-        and start/end times within 15 minutes (900 seconds) of each other. Only the latest entry (with the highest event_id)
-        is retained for each group of duplicates; all others are deleted.
-
-        Returns:
-            int: The number of rows deleted from the 'events' table during deduplication.
-
-        Raises:
-            Exception: If an error occurs during the deduplication process, it is logged and re-raised.
+        Wrapper: Deduplicates the events table.
+        Delegates to EventManagementRepository.
         """
-        try:
-            # Deduplicate 'events' table based on 'Name_of_the_Event' and 'Start_Date'
-            dedup_events_query = """
-                DELETE FROM events e1
-                USING events e2
-                WHERE e1.event_id < e2.event_id
-                    AND e1.address_id = e2.address_id
-                    AND e1.start_date = e2.start_date
-                    AND e1.end_date = e2.end_date
-                    AND ABS(EXTRACT(EPOCH FROM (e1.start_time - e2.start_time))) <= 900
-                    AND ABS(EXTRACT(EPOCH FROM (e1.end_time - e2.end_time))) <= 900;
-            """
-            deleted_count = self.execute_query(dedup_events_query)
-            logging.info("def dedup(): Deduplicated events table successfully. Rows deleted: %d", deleted_count)
-
-            # Clean up any orphaned references that might have been created
-            self.clean_orphaned_references()
-
-        except Exception as e:
-            logging.error("def dedup(): Failed to deduplicate tables: %s", e)
+        return self.event_mgmt_repo.dedup()
 
 
     def fetch_events_dataframe(self):
@@ -1558,121 +1535,18 @@ class DatabaseHandler():
 
     def delete_old_events(self):
         """
-        The number of days is retrieved from the configuration under 'clean_up' -> 'old_events'.
-        Events with an 'End_Date' earlier than the current date minus the specified number of days are deleted.
-
-        Returns:
-            int: The number of events deleted from the database.
-
-        Raises:
-            Exception: If an error occurs during the deletion process, it is logged and re-raised.
+        Wrapper: Deletes events older than the configured threshold.
+        Delegates to EventManagementRepository.
         """
-        try:
-            days = int(self.config['clean_up']['old_events'])
-            delete_query = """
-                DELETE FROM events
-                WHERE End_Date < CURRENT_DATE - INTERVAL '%s days';
-            """ % days
-            self.execute_query(delete_query)
-            deleted_count = self.execute_query(delete_query)
-            logging.info(f"delete_old_events: Deleted {deleted_count} events older than {days} days.")
-        except Exception as e:
-            logging.error("delete_old_events: Failed to delete old events: %s", e)
+        return self.event_mgmt_repo.delete_old_events()
 
 
     def delete_likely_dud_events(self):
         """
-        Deletes likely invalid or irrelevant events from the database based on several criteria:
-        1. Deletes events where 'source', 'dance_style', and 'url' are empty strings, unless the event has an associated 'address_id'.
-        2. Deletes events whose associated address (if present) has a 'province_or_state' that is not 'BC' (British Columbia).
-        3. Deletes events whose associated address (if present) has a 'country_id' that is not 'CA' (Canada).
-        4. Deletes events where 'dance_style' and 'url' are empty strings, 'event_type' is 'other', and both 'location' and 'description' are NULL.
-        For each deletion step, logs the number of events deleted.
-        Returns:
-            None
+        Wrapper: Deletes low-quality/invalid events based on multiple criteria.
+        Delegates to EventManagementRepository.
         """
-        # 1. Delete events where source, dance_style, and url are empty, unless they have an address_id
-        delete_query_1 = """
-        DELETE FROM events
-        WHERE source = :source
-        AND dance_style = :dance_style
-        AND url = :url
-        AND address_id IS NULL
-        RETURNING event_id;
-        """
-        params = {
-            'source': '',
-            'dance_style': '',
-            'url': '',
-            'event_type': 'other'
-            }
-
-        deleted_events = self.execute_query(delete_query_1, params)
-        deleted_count = len(deleted_events) if deleted_events else 0
-        logging.info("delete_likely_dud_events: Deleted %d events with empty source, dance_style, and url, and no address_id.", deleted_count)
-
-        # 2. Delete events outside of British Columbia (BC)
-        delete_query_2 = """
-        DELETE FROM events
-        WHERE address_id IN (
-        SELECT address_id
-        FROM address
-        WHERE province_or_state IS NOT NULL
-            AND province_or_state != :province_or_state
-        )
-        RETURNING event_id;
-        """
-        params = {
-            'province_or_state': 'BC'
-            }
-        
-        deleted_events = self.execute_query(delete_query_2, params)
-        deleted_count = len(deleted_events) if deleted_events else 0
-        logging.info("delete_likely_dud_events: Deleted %d events outside of British Columbia (BC).", deleted_count)
-
-        # 3. Delete events that are not in Canada
-        delete_query_3 = """
-        DELETE FROM events
-        WHERE address_id IN (
-        SELECT address_id
-        FROM address
-        WHERE country_id IS NOT NULL
-            AND country_id != :country_id
-        )
-        RETURNING event_id;
-        """
-        params = {
-            'country_id': 'CA'
-            }
-        
-        deleted_events = self.execute_query(delete_query_3, params)
-        deleted_count = len(deleted_events) if deleted_events else 0
-        logging.info("delete_likely_dud_events: Deleted %d events that are not in Canada (CA).", deleted_count)
-
-        # 4. Delete rows in events where dance_style and url are == '' AND event_type == 'other' AND location IS NULL and description IS NULL
-        delete_query_4 = """
-        DELETE FROM events
-        WHERE dance_style = :dance_style
-            AND url = :url
-            AND event_type = :event_type
-            AND location IS NULL
-            AND description IS NULL
-        RETURNING event_id;
-        """
-        params = {
-            'dance_style': '',
-            'url': '',
-            'event_type': 'other'
-            }
-        
-        deleted_events = self.execute_query(delete_query_4, params)
-        deleted_count = len(deleted_events) if deleted_events else 0
-        logging.info(
-            "def delete_likely_dud_events(): Deleted %d events with empty "
-            "dance_style, url, event_type 'other', and null location "
-            "and description.",
-            deleted_count
-        )
+        return self.event_mgmt_repo.delete_likely_dud_events()
         
 
     def delete_event(self, url, event_name, start_date):
@@ -1685,26 +1559,10 @@ class DatabaseHandler():
 
     def delete_events_with_nulls(self):
         """
-        Deletes events from the 'events' table where both 'start_date' and 'start_time' are NULL,
-        or both 'start_time' and 'end_time' are NULL.
-
-        Returns:
-            int: The number of events deleted from the table.
-
-        Raises:
-            Exception: If an error occurs during the deletion process.
+        Wrapper: Deletes events with critical null values.
+        Delegates to EventManagementRepository.
         """
-        try:
-            delete_query = """
-            DELETE FROM events
-            WHERE (start_date IS NULL AND start_time IS NULL) OR 
-            (start_time IS NULL AND end_time IS NULL);
-            """
-            self.execute_query(delete_query)
-            deleted_count = self.execute_query(delete_query) or 0
-            logging.info("def delete_events_with_nulls(): Deleted %d events where (start_date and start_time are null).", deleted_count)
-        except Exception as e:
-            logging.error("def delete_events_with_nulls(): Failed to delete events with nulls: %s", e)
+        return self.event_mgmt_repo.delete_events_with_nulls()
 
 
     def delete_event_with_event_id(self, event_id):
@@ -1996,108 +1854,18 @@ class DatabaseHandler():
 
     def update_dow_date(self, event_id: int, corrected_date) -> bool:
         """
-        Updates the start_date and end_date fields of the event with the specified event_id to the given corrected_date.
-
-        Args:
-            event_id (int): The unique identifier of the event to update.
-            corrected_date: The new date to set for both start_date and end_date. The expected type should match the database schema (e.g., str or datetime).
-
-        Returns:
-            bool: True if the update operation was executed (does not guarantee that a row was actually updated).
+        Wrapper: Updates the start_date and end_date for an event.
+        Delegates to EventManagementRepository.
         """
-        update_query = """
-            UPDATE events
-               SET start_date = :corrected_date,
-                   end_date   = :corrected_date
-             WHERE event_id  = :event_id
+        return self.event_mgmt_repo.update_dow_date(event_id, corrected_date)
+
+
+    def check_dow_date_consistent(self) -> dict:
         """
-        params = {
-            'corrected_date': corrected_date,
-            'event_id':        event_id
-        }
-        self.execute_query(update_query, params)
-        return True
-
-
-    def check_dow_date_consistent(self) -> None:
+        Wrapper: Validates and corrects day-of-week date consistency for all events.
+        Delegates to EventManagementRepository.
         """
-        Ensures that the start_date of each event in the database matches its specified day_of_week.
-
-        This method performs the following steps:
-            1. Retrieves all events' event_id, start_date, and day_of_week from the database.
-            2. For each event, checks if the start_date's weekday matches the stored day_of_week.
-            3. If there is a mismatch, computes the minimal shift (within ±3 days) required to align the start_date
-               with the correct weekday.
-            4. Calls update_dow_date(...) to update both start_date and end_date when a shift is needed.
-            5. Logs every adjustment, including warnings for unrecognized day_of_week values and errors if updates fail.
-
-        Returns:
-            None
-        """
-        select_query = """
-            SELECT event_id, start_date, day_of_week
-              FROM events
-        """
-        rows = self.execute_query(select_query)
-        # rows is a list of tuples: (event_id, start_date, day_of_week)
-
-        name_to_wd = {
-            'monday':    0,
-            'tuesday':   1,
-            'wednesday': 2,
-            'thursday':  3,
-            'friday':    4,
-            'saturday':  5,
-            'sunday':    6
-        }
-
-        for row in rows:
-            event_id  = row[0]
-            orig_date = row[1]  # DATE
-            dow_text  = row[2]  # TEXT
-
-            if orig_date is None or not dow_text:
-                continue
-
-            key = dow_text.strip().lower()
-            if key not in name_to_wd:
-                logging.warning(
-                    "check_dow_date_consistent: event_id %s has unrecognized day_of_week '%s'; skipping.",
-                    event_id, dow_text
-                )
-                continue
-
-            target_wd  = name_to_wd[key]
-            current_wd = orig_date.weekday()
-
-            if current_wd == target_wd:
-                continue  # no change needed
-
-            # Compute minimal shift in [-3..+3] so that (orig_date + shift).weekday() == target_wd
-            diff_mod_7 = (target_wd - current_wd + 7) % 7
-            if diff_mod_7 <= 3:
-                shift = diff_mod_7
-            else:
-                shift = diff_mod_7 - 7
-
-            corrected_date = orig_date + timedelta(days=shift)
-
-            if corrected_date != orig_date:
-                success = self.update_dow_date(event_id, corrected_date)
-                if success:
-                    logging.info(
-                        "check_dow_date_consistent: event_id %d: "
-                        "start_date (and end_date) changed from %s to %s "
-                        "(day_of_week was '%s').",
-                        event_id,
-                        orig_date.isoformat(),
-                        corrected_date.isoformat(),
-                        dow_text
-                    )
-                else:
-                    logging.error(
-                        "check_dow_date_consistent: failed to update event_id %d", event_id
-                    )
+        return self.event_mgmt_repo.check_dow_date_consistent()
 
 
     def check_image_events_exist(self, image_url: str) -> bool:
