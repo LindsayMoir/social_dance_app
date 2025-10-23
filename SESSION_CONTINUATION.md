@@ -33,6 +33,7 @@ src/utils/fuzzy_utils.py                 (180 lines)    ✅ DONE
 src/config_manager.py                    (160 lines)    ✅ DONE
 tests/unit/test_fuzzy_utils.py           (100+ lines)   ✅ DONE
 tests/unit/test_config_manager.py        (90+ lines)    ✅ DONE
+pytest.ini                               (6 lines)      ✅ DONE (config for test discovery)
 ```
 
 **MODIFIED FILES:**
@@ -169,8 +170,9 @@ pytest tests/unit/ -v
 
 **To Run Tests:**
 ```bash
-# Just the new unit tests
+# Just the new unit tests (requires pytest.ini configuration file)
 pytest tests/unit/ -v
+# Result: 20 passed in 0.80s
 
 # Specific utility tests
 pytest tests/unit/test_fuzzy_utils.py -v
@@ -186,6 +188,8 @@ print("✓ FuzzyMatcher works")
 print("✓ ConfigManager works")
 EOF
 ```
+
+**Note:** A `pytest.ini` configuration file was created to ensure pytest can find the modules correctly. No PYTHONPATH manipulation needed.
 
 ---
 
