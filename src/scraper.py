@@ -84,14 +84,18 @@ class EventSpider(scrapy.Spider):
         logging.info("\n\nscraper.py starting...")
 
 
-    def start_requests(self):
+    async def start(self):
         """
         Generate start requests from URLs either in the DB or CSV files.
+
+        This method replaces the deprecated start_requests() for Scrapy 2.13+ compatibility.
+        Using async start() provides better support for async operations and is the recommended
+        approach for modern Scrapy implementations.
         """
         conn = db_handler.get_db_connection()
         if conn is None:
-            raise ConnectionError("Failed to connect to the database in start_requests.")
-        logging.info(f"def start_requests(): Connected to the database: {conn}")
+            raise ConnectionError("Failed to connect to the database in start().")
+        logging.info(f"def start(): Connected to the database: {conn}")
 
         if self.config['startup']['use_db']:
             query = "SELECT * FROM urls WHERE relevant = true;"
@@ -109,24 +113,24 @@ class EventSpider(scrapy.Spider):
 
             # ✳️ Skip Facebook or Instagram URLs immediately
             if 'facebook.com' in url.lower() or 'instagram.com' in url.lower():
-                logging.info(f"start_requests(): Skipping social media URL (fb/ig): {url}")
+                logging.info(f"start(): Skipping social media URL (fb/ig): {url}")
                 child_row = [url, '', source, [], False, 1, datetime.now()]
                 db_handler.write_url_to_db(child_row)
                 continue
 
             if db_handler.avoid_domains(url):
-                logging.info(f"start_requests(): Skipping blacklisted URL {url}.")
+                logging.info(f"start(): Skipping blacklisted URL {url}.")
                 continue
 
             # Special handling for calendar URLs - always process them regardless of historical relevancy
             is_calendar_url = url in self.calendar_urls_set
             if is_calendar_url:
-                logging.info(f"start_requests(): Processing calendar URL {url} (bypassing historical relevancy)")
+                logging.info(f"start(): Processing calendar URL {url} (bypassing historical relevancy)")
             elif not db_handler.should_process_url(url):
-                logging.info(f"start_requests(): Skipping URL {url} based on historical relevancy.")
+                logging.info(f"start(): Skipping URL {url} based on historical relevancy.")
                 continue
 
-            logging.info(f"start_requests(): Starting crawl for URL: {url}")
+            logging.info(f"start(): Starting crawl for URL: {url}")
             yield scrapy.Request(
                 url=url,
                 callback=self.parse,
