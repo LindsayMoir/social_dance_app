@@ -1,14 +1,15 @@
 Context:
-You are an expert JSON extractor. 
-I am building an application to save users time when searching for social dance and live music events. 
-Extract relevant event details from the webpage's text (extracted_text) according to the instructions below. 
+You are an expert JSON extractor.
+I am building an application to save users time when searching for social dance and live music events.
+Extract relevant event details from the webpage's text (extracted_text) according to the instructions below.
 The extracted_text is at the bottom of these instructions under the heading extracted_text.
 Follow these steps exactly:
 ________________________________________
-1. Extract  
+1. Extract
 From the extracted_text below, find every event and build a JSON **array** where each element has exactly these keys:
 source, dance_style, url, event_type, event_name, day_of_week, start_date, end_date, start_time, end_time, price, location, description
-You MUST include all of these fields. If you do not have any information for one of the fields, put '' in the field. Always fill the url field as ''.
+You MUST include all of these fields. If you do not have any information for one of the fields, put '' in the field.
+For the url field: If you are extracting from a calendar/listing page with individual event links, use the specific event page URL. Otherwise, use '' if no specific URL is available.
 ________________________________________
 2. Date Rules:
 •	Use the current date in the format YYYY-MM-DD and assume this is the PST time zone.
@@ -19,7 +20,7 @@ ________________________________________
 •	"Today" should be interpreted as the current date.
 •	If an event starts with a day_of_week (e.g. Sunday, Monday, Tuesday, Wednesday, etc.) and there is NO start_date given, then impute the start_date and end_date to be the first day_of_week going forward that you encounter in the calendar.
 	o	For example, this event "Thursday from 20:00-00:00 Hot Salsa " Would be interpreted as Thursday January 2, 2025 for the start_date and end_date, if your current date is December 28, 2024.
-•	If an event starts with Tomorrow, For example, this event "Tomorrow from 20:00-00:00 Hot Salsa " Would be interpreted as Sunday December 29, 2025 for the start_date and end_date, when your current date is December 28, 2024.
+•	If an event starts with Tomorrow, for example, this event "Tomorrow from 20:00-00:00 Hot Salsa" would be interpreted as Sunday December 29, 2024 for the start_date and end_date, when your current date is December 28, 2024.
 _____________________________________
 3. day_of_week and start_date Consistency
 •	Do not change the given day_of_week.
@@ -40,7 +41,7 @@ ________________________________________
 	o	Everything should be in that one response JSON string. 
 	o	Do NOT create a separate JSON output for recurring JSON events. 
 •	DO NOT return a list for a field. For example, if you found several "dance_style" (e.g. salsa, bachata, kizomba) put that in the "dance_style" field as "salsa, bachata, kizomba". Not as "[salsa, bachata, kizomba]"
-•	If an event has no specific dates or times mentioned, this is an invalid event. DO NOT create a JSON output for this event.
+•	If an event has NO start_date (specific date or inferred day_of_week), do NOT include it - this is an invalid event. Events without times are acceptable as long as they have a date.
 ________________________________________
 7. Validate  
 Once you’ve built the JSON array, immediately parse it in your own “mind” (i.e. treat it as if you ran it through a JSON parser).  
@@ -51,54 +52,53 @@ ________________________________________
 •	 Only output the final JSON.  
 •	 Do **not** wrap it in markdown or add any comments.  
 
-9. Example  
+9. Example
 Valid output must look like:
 [{
-    "source": "<Name of the organization, venue, or group hosting/organizing this event (e.g., 'Victoria West Coast Swing Collective', 'The Coda', 'Salsa Caliente')>",
-    "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
-    "url": "<''>",
-    "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
-    "event_name": "<event name or title>",
-    "day_of_week": "<e.g., Monday, Tuesday>",
-    "start_date": "<YYYY-MM-DD>",
-    "end_date": "<YYYY-MM-DD or same as Start_Date if single-day>",
-    "start_time": "<HH:MM>",
-    "end_time": "<HH:MM or null>",
-    "price": "<e.g., $15>",
-    "location": "<venue name and address>",
-    "description": "<short summary of event details>"
+    "source": "The Coda",
+    "dance_style": "salsa, bachata, swing",
+    "url": "https://gotothecoda.com/calendar/event/some-event",
+    "event_type": "social dance",
+    "event_name": "Friday Night Salsa Social",
+    "day_of_week": "Friday",
+    "start_date": "2025-01-10",
+    "end_date": "2025-01-10",
+    "start_time": "21:00",
+    "end_time": "23:30",
+    "price": "$15",
+    "location": "The Coda, 751 View Street, Victoria, BC, V8W 1J9",
+    "description": "Weekly Friday salsa social with live DJ"
 },
 {
-    "source": "<Name of the organization, venue, or group hosting/organizing this event (e.g., 'Victoria West Coast Swing Collective', 'The Coda', 'Salsa Caliente')>",
-    "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
-    "url": "<''>",
-    "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
-    "event_name": "<event name or title>",
-    "day_of_week": "<e.g., Monday, Tuesday>",
-    "start_date": "<YYYY-MM-DD>",
-    "end_date": "<YYYY-MM-DD or same as Start_Date if single-day>",
-    "start_time": "<HH:MM>",
-    "end_time": "<HH:MM or null>",
-    "price": "<e.g., $15>",
-    "location": "<venue name and address>",
-    "description": "<short summary of event details>"
+    "source": "The Duke Saloon",
+    "dance_style": "country swing",
+    "url": "https://thedukesaloon.com/events/some-event",
+    "event_type": "social dance",
+    "event_name": "Saturday Country Swing Night",
+    "day_of_week": "Saturday",
+    "start_date": "2025-01-11",
+    "end_date": "2025-01-11",
+    "start_time": "20:00",
+    "end_time": "23:00",
+    "price": "$10",
+    "location": "The Duke Saloon, Victoria, BC",
+    "description": "Live country music with swing dancing"
 },
 {
-    "source": "<Name of the organization, venue, or group hosting/organizing this event (e.g., 'Victoria West Coast Swing Collective', 'The Coda', 'Salsa Caliente')>",
-    "dance_style": "<choose one or muptiple: bachata, balboa, douceur, east coast swing, kizomba, lindy hop, merengue, salsa, semba, swing, tango, tarraxo, tarraxa, tarraxinha, urban kiz, west coast swing, wcs>",
-    "url": "<''>",
-    "event_type": "<choose one: social dance, class, workshop, other, rehearsal, live music>",
-    "event_name": "<event name or title>",
-    "day_of_week": "<e.g., Monday, Tuesday>",
-    "start_date": "<YYYY-MM-DD>",
-    "end_date": "<YYYY-MM-DD or same as Start_Date if single-day>",
-    "start_time": "<HH:MM>",
-    "end_time": "<HH:MM or null>",
-    "price": "<e.g., $15>",
-    "location": "<venue name and address>",
-    "description": "<short summary of event details>"
-},
-...
+    "source": "Victoria West Coast Swing Collective",
+    "dance_style": "west coast swing",
+    "url": "https://example.com/event/swing-night",
+    "event_type": "social dance",
+    "event_name": "Sunday West Coast Swing",
+    "day_of_week": "Sunday",
+    "start_date": "2025-01-12",
+    "end_date": "2025-01-12",
+    "start_time": "20:00",
+    "end_time": "23:00",
+    "price": "$12",
+    "location": "Community Centre, 123 Main St, Victoria, BC",
+    "description": "Open to all levels, beginner lesson at 7:45pm"
+}
 ]
 ________________________________________
 11. Incorrect Example
