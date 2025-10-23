@@ -32,6 +32,10 @@ import warnings
 # Import database configuration utility
 from db_config import get_database_config
 
+# Import new utilities
+from utils.fuzzy_utils import FuzzyMatcher
+from config_manager import ConfigManager
+
 
 class DatabaseHandler():
     def __init__(self, config):
