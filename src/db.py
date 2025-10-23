@@ -35,6 +35,7 @@ from db_config import get_database_config
 # Import new utilities
 from utils.fuzzy_utils import FuzzyMatcher
 from config_manager import ConfigManager
+from repositories.address_repository import AddressRepository
 
 
 class DatabaseHandler():
@@ -88,6 +89,10 @@ class DatabaseHandler():
         else:
             self.urls_df = pd.DataFrame()
             logging.info("__init__(): Skipping URLs table load on production (not needed for web service)")
+
+        # Initialize AddressRepository for centralized address management
+        self.address_repo = AddressRepository(self)
+        logging.info("__init__(): AddressRepository initialized")
 
         def _compute_hit_ratio(x):
             true_count = x.sum()
@@ -773,274 +778,66 @@ class DatabaseHandler():
         Resolves an address by checking multiple matching strategies in order of specificity.
         Uses improved fuzzy matching to prevent duplicate addresses.
 
+        This method now delegates to AddressRepository for centralized address management.
+
         Args:
             parsed_address (dict): Dictionary of parsed address fields.
 
         Returns:
             int or None: The address_id of the matched or newly inserted address.
         """
-        if not parsed_address:
-            logging.info("resolve_or_insert_address: No parsed address provided.")
-            return None
-
-        building_name = (parsed_address.get("building_name") or "").strip()
-        street_number = (parsed_address.get("street_number") or "").strip()
-        street_name = (parsed_address.get("street_name") or "").strip()
-        postal_code = (parsed_address.get("postal_code") or "").strip()
-        city = (parsed_address.get("city") or "").strip()
-        country_id = (parsed_address.get("country_id") or "").strip()
-
-        # Step 1: Exact match on postal code + street number (most specific)
-        if postal_code and street_number:
-            logging.debug(f"resolve_or_insert_address: Trying postal_code + street_number match: {postal_code}, {street_number}")
-            postal_match_query = """
-                SELECT address_id, building_name, street_number, street_name, postal_code
-                FROM address
-                WHERE LOWER(postal_code) = LOWER(:postal_code)
-                AND LOWER(street_number) = LOWER(:street_number)
-            """
-            postal_matches = self.execute_query(postal_match_query, {
-                "postal_code": postal_code,
-                "street_number": street_number
-            })
-
-            for addr_id, b_name, s_num, s_name, p_code in postal_matches or []:
-                if building_name and b_name:
-                    # Use multiple fuzzy matching algorithms
-                    ratio_score = ratio(building_name, b_name)
-                    partial_score = fuzz.partial_ratio(building_name, b_name)
-                    token_set_score = fuzz.token_set_ratio(building_name, b_name)
-
-                    # More sophisticated matching: any high score indicates a match
-                    if ratio_score >= 85 or partial_score >= 95 or token_set_score >= 90:
-                        logging.debug(f"Postal+street+fuzzy building match → address_id={addr_id}")
-                        logging.debug(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
-                        return addr_id
-                else:
-                    # Same postal code + street number is very likely the same location
-                    logging.debug(f"Postal+street match (no building comparison) → address_id={addr_id}")
-                    return addr_id
-
-        # Step 2: Street number + street name match with improved building name fuzzy matching
-        if street_number and street_name:
-            select_query = """
-                SELECT address_id, building_name, street_number, street_name, postal_code
-                FROM address
-                WHERE LOWER(street_number) = LOWER(:street_number)
-                AND (LOWER(street_name) = LOWER(:street_name) OR LOWER(street_name) = LOWER(:street_name_alt))
-            """
-            # Handle common street name variations (Niagra vs Niagara)
-            street_name_alt = street_name.replace('Niagra', 'Niagara').replace('Niagara', 'Niagra')
-            
-            street_matches = self.execute_query(select_query, {
-                "street_number": street_number,
-                "street_name": street_name,
-                "street_name_alt": street_name_alt
-            })
-
-            for addr_id, b_name, s_num, s_name, p_code in street_matches or []:
-                if building_name and b_name:
-                    # Multiple fuzzy algorithms
-                    ratio_score = ratio(building_name, b_name)
-                    partial_score = fuzz.partial_ratio(building_name, b_name)
-                    token_set_score = fuzz.token_set_ratio(building_name, b_name)
-
-                    if ratio_score >= 75 or partial_score >= 90 or token_set_score >= 85:
-                        logging.debug(f"Street+fuzzy building match → address_id={addr_id}")
-                        logging.debug(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
-                        return addr_id
-                else:
-                    logging.debug(f"Street match (no building name) → address_id={addr_id}")
-                    return addr_id
-        else:
-            logging.debug("resolve_or_insert_address: Missing street_number or street_name; skipping street match")
-
-        # Step 3: City + building name fuzzy match (broader search)
-        if city and building_name:
-            logging.debug(f"resolve_or_insert_address: Trying city + building_name match: {city}, {building_name}")
-            city_building_query = """
-                SELECT address_id, building_name, city, postal_code
-                FROM address
-                WHERE LOWER(city) = LOWER(:city) AND building_name IS NOT NULL
-            """
-            city_matches = self.execute_query(city_building_query, {"city": city})
-
-            for addr_id, b_name, addr_city, p_code in city_matches or []:
-                if b_name:
-                    ratio_score = ratio(building_name, b_name)
-                    partial_score = fuzz.partial_ratio(building_name, b_name)
-                    token_set_score = fuzz.token_set_ratio(building_name, b_name)
-
-                    # Higher thresholds for city-only matches to avoid false positives
-                    if ratio_score >= 90 or partial_score >= 95 or token_set_score >= 95:
-                        logging.debug(f"City+building fuzzy match → address_id={addr_id}")
-                        logging.debug(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
-                        return addr_id
-
-        # Step 4: Legacy building name-only fuzzy match (least reliable)
-        if building_name:
-            logging.debug(f"resolve_or_insert_address: Trying building_name-only fuzzy match: {building_name}")
-            query = "SELECT address_id, building_name FROM address WHERE building_name IS NOT NULL"
-            candidates = self.execute_query(query)
-
-            for addr_id, existing_name in candidates or []:
-                if existing_name:
-                    ratio_score = ratio(building_name, existing_name)
-                    partial_score = fuzz.partial_ratio(building_name, existing_name)
-                    token_set_score = fuzz.token_set_ratio(building_name, existing_name)
-
-                    # Very high thresholds for building-name-only matches
-                    if ratio_score >= 95 or (partial_score >= 98 and token_set_score >= 95):
-                        logging.debug(f"Building-name-only fuzzy match → address_id={addr_id}")
-                        logging.debug(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
-                        return addr_id
-
-        # Step 3: Normalize null values and prepare required fields for insert
-        parsed_address = self.normalize_nulls(parsed_address)
-        
-        # Ensure ALL fields expected by INSERT query are present (set to None if missing)
-        required_fields = [
-            "building_name", "street_number", "street_name", "city",
-            "province_or_state", "postal_code", "country_id"
-        ]
-        
-        for field in required_fields:
-            if field not in parsed_address:
-                parsed_address[field] = None
-        
-        # Set specific fields from extracted values
-        parsed_address["building_name"] = building_name or parsed_address.get("building_name")
-        parsed_address["street_number"] = street_number or parsed_address.get("street_number")
-        parsed_address["street_name"] = street_name or parsed_address.get("street_name")
-        parsed_address["country_id"] = country_id or parsed_address.get("country_id")
-
-        # Build standardized full_address from components
-        standardized_full_address = self.build_full_address(
-            building_name=parsed_address.get("building_name"),
-            street_number=parsed_address.get("street_number"),
-            street_name=parsed_address.get("street_name"),
-            street_type=parsed_address.get("street_type"),
-            city=parsed_address.get("city"),
-            province_or_state=parsed_address.get("province_or_state"),
-            postal_code=parsed_address.get("postal_code"),
-            country_id=parsed_address.get("country_id")
-        )
-        parsed_address["full_address"] = standardized_full_address
-
-        # Set time_stamp for the new address
-        parsed_address["time_stamp"] = datetime.now().isoformat()
-
-        # FINAL DEDUPLICATION CHECK: Before inserting, check if building_name already exists
-        building_name = parsed_address.get("building_name", "").strip()
-        if building_name and len(building_name) > 2:
-            # Try to find existing address with same building name
-            existing_addr_id = self.find_address_by_building_name(building_name, threshold=80)
-            if existing_addr_id:
-                logging.info(f"resolve_or_insert_address: Found existing address (dedup) with building_name='{building_name}' → address_id={existing_addr_id}")
-                return existing_addr_id
-
-        insert_query = """
-            INSERT INTO address (
-                building_name, street_number, street_name, city,
-                province_or_state, postal_code, country_id, full_address, time_stamp
-            ) VALUES (
-                :building_name, :street_number, :street_name, :city,
-                :province_or_state, :postal_code, :country_id, :full_address, :time_stamp
-            )
-            RETURNING address_id;
-        """
-
-        result = self.execute_query(insert_query, parsed_address)
-        if result:
-            address_id = result[0][0]
-            logging.info(f"Inserted new address with address_id: {address_id}")
-            return address_id
-        else:
-            # If insert failed (likely due to unique constraint), try to find existing address
-            full_address = parsed_address.get("full_address")
-            if full_address:
-                lookup_query = "SELECT address_id FROM address WHERE full_address = :full_address"
-                lookup_result = self.execute_query(lookup_query, {"full_address": full_address})
-                if lookup_result:
-                    address_id = lookup_result[0][0]
-                    logging.info(f"Found existing address with address_id: {address_id}")
-                    return address_id
-            
-            logging.error("resolve_or_insert_address: Failed to insert or find existing address")
-            return None
+        return self.address_repo.resolve_or_insert_address(parsed_address)
     
 
-    def build_full_address(self, building_name: str = None, street_number: str = None, 
-                          street_name: str = None, street_type: str = None, 
-                          city: str = None, province_or_state: str = None, 
+    def build_full_address(self, building_name: str = None, street_number: str = None,
+                          street_name: str = None, street_type: str = None,
+                          city: str = None, province_or_state: str = None,
                           postal_code: str = None, country_id: str = None) -> str:
         """
         Builds a standardized full_address string from address components.
-        
+
+        This method now delegates to AddressRepository for centralized address formatting.
+
         Format: "building_name, street_number street_name street_type, city, province_or_state postal_code, country_id"
-        
+
         Args:
             building_name: Building or venue name (optional)
             street_number: Street number
-            street_name: Street name  
+            street_name: Street name
             street_type: Street type (St, Ave, Rd, etc.)
             city: City name
             province_or_state: Province or state
             postal_code: Postal code
             country_id: Country code
-            
+
         Returns:
             str: Formatted full address
         """
-        address_parts = []
-        
-        # Add building name first if present
-        if building_name and building_name.strip():
-            address_parts.append(building_name.strip())
-        
-        # Build street address
-        street_parts = []
-        if street_number and street_number.strip():
-            street_parts.append(street_number.strip())
-        if street_name and street_name.strip():
-            street_parts.append(street_name.strip())
-        if street_type and street_type.strip():
-            street_parts.append(street_type.strip())
-        
-        if street_parts:
-            address_parts.append(' '.join(street_parts))
-        
-        # Add city
-        if city and city.strip():
-            address_parts.append(city.strip())
-        
-        # Add province/state and postal code
-        if province_or_state and province_or_state.strip():
-            if postal_code and postal_code.strip():
-                address_parts.append(f"{province_or_state.strip()} {postal_code.strip()}")
-            else:
-                address_parts.append(province_or_state.strip())
-        elif postal_code and postal_code.strip():
-            address_parts.append(postal_code.strip())
-        
-        # Add country
-        if country_id and country_id.strip():
-            address_parts.append(country_id.strip())
-        
-        return ', '.join(address_parts)
+        return self.address_repo.build_full_address(
+            building_name=building_name,
+            street_number=street_number,
+            street_name=street_name,
+            street_type=street_type,
+            city=city,
+            province_or_state=province_or_state,
+            postal_code=postal_code,
+            country_id=country_id
+        )
 
     def get_full_address_from_id(self, address_id: int) -> Optional[str]:
         """
         Returns the full_address from the address table for the given address_id.
+
+        This method now delegates to AddressRepository for centralized address lookup.
         """
-        query = "SELECT full_address FROM address WHERE address_id = :address_id"
-        result = self.execute_query(query, {"address_id": address_id})
-        return result[0][0] if result else None
+        return self.address_repo.get_full_address_from_id(address_id)
 
 
     def format_address_from_db_row(self, db_row):
         """
         Constructs a formatted address string from a database row.
+
+        This method now delegates to AddressRepository for centralized address formatting.
 
         This method takes a database row object containing address components and constructs
         a single formatted address string. The formatted address includes the street address,
@@ -1063,31 +860,7 @@ class DatabaseHandler():
                 "<street address>, <city>, <province abbreviation>, <postal code>, CA"
             Any missing components are omitted from the output.
         """
-        # Build the street portion
-        parts = [
-            str(db_row.civic_no) if db_row.civic_no else "",
-            str(db_row.civic_no_suffix) if db_row.civic_no_suffix else "",
-            db_row.official_street_name or "",
-            db_row.official_street_type or "",
-            db_row.official_street_dir or ""
-        ]
-        street_address = " ".join(part for part in parts if part).strip()
-
-        # Insert the city if available
-        city = db_row.mail_mun_name or ""
-
-        # Construct final location string
-        formatted = (
-            f"{street_address}, "
-            f"{city}, "                      # <─ Include municipality
-            f"{db_row.mail_prov_abvn or ''}, "
-            f"{db_row.mail_postal_code or ''}, CA"
-        )
-        # Clean up spacing
-        formatted = re.sub(r'\s+,', ',', formatted)
-        formatted = re.sub(r',\s+,', ',', formatted)
-        formatted = re.sub(r'\s+', ' ', formatted).strip()
-        return formatted
+        return self.address_repo.format_address_from_db_row(db_row)
     
 
     def write_events_to_db(self, df, url, parent_url, source, keywords):
@@ -1656,6 +1429,8 @@ class DatabaseHandler():
         Find an existing address by fuzzy matching on building_name.
         Prevents creation of duplicate addresses with the same venue name.
 
+        This method now delegates to AddressRepository for centralized address matching.
+
         Args:
             building_name (str): The venue/building name to search for
             threshold (int): Fuzzy match score threshold (0-100)
@@ -1663,42 +1438,7 @@ class DatabaseHandler():
         Returns:
             address_id if found, None otherwise
         """
-        from fuzzywuzzy import fuzz
-
-        if not building_name or not isinstance(building_name, str):
-            return None
-
-        building_name = building_name.strip()
-
-        try:
-            # Query all addresses with building names
-            building_matches = self.execute_query(
-                "SELECT address_id, building_name FROM address WHERE building_name IS NOT NULL"
-            )
-
-            best_score = 0
-            best_addr_id = None
-
-            for addr_id, existing_building in building_matches or []:
-                if existing_building and existing_building.strip():
-                    # Use partial_ratio which is more lenient for substring matches
-                    score = fuzz.partial_ratio(building_name.lower().strip(), existing_building.lower().strip())
-
-                    if score >= threshold and score > best_score:
-                        best_score = score
-                        best_addr_id = addr_id
-                        logging.debug(f"find_address_by_building_name: '{building_name}' vs '{existing_building}' = {score}")
-
-            if best_addr_id:
-                logging.info(f"find_address_by_building_name: Found address_id={best_addr_id} for '{building_name}' (score={best_score})")
-                return best_addr_id
-
-            logging.debug(f"find_address_by_building_name: No match found for '{building_name}'")
-            return None
-
-        except Exception as e:
-            logging.warning(f"find_address_by_building_name: Error looking up '{building_name}': {e}")
-            return None
+        return self.address_repo.find_address_by_building_name(building_name, threshold)
 
     def quick_address_lookup(self, location: str) -> Optional[int]:
         """
@@ -1706,105 +1446,12 @@ class DatabaseHandler():
         1. Exact string match on full_address
         2. Regex parsing to extract street_number + street_name for exact match
         3. Fuzzy matching on building names for the same street
-        
+
+        This method now delegates to AddressRepository for centralized address lookup.
+
         Returns address_id if found, None if LLM is needed
         """
-        from fuzzywuzzy import fuzz
-        import re
-        
-        # Step 1: Exact string match (already implemented)
-        exact_match = self.execute_query(
-            "SELECT address_id FROM address WHERE LOWER(full_address) = LOWER(:location)",
-            {"location": location}
-        )
-        if exact_match:
-            logging.info(f"quick_address_lookup: Exact match → address_id={exact_match[0][0]}")
-            return exact_match[0][0]
-        
-        # Step 2: Parse basic components with regex
-        street_pattern = r'(\d+)\s+([A-Za-z\s]+?)(?:,|\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Way|Lane|Ln|Boulevard|Blvd))'
-        street_match = re.search(street_pattern, location, re.IGNORECASE)
-        
-        if street_match:
-            street_number = street_match.group(1).strip()
-            street_name_raw = street_match.group(2).strip()
-            
-            # Clean street name (remove common suffixes if they got included)
-            street_name = re.sub(r'\b(Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Way|Lane|Ln|Boulevard|Blvd)\b', 
-                               '', street_name_raw, flags=re.IGNORECASE).strip()
-            
-            # Step 3: Find addresses with same street_number + street_name
-            street_matches = self.execute_query("""
-                SELECT address_id, building_name, full_address 
-                FROM address 
-                WHERE LOWER(street_number) = LOWER(:street_number) 
-                AND LOWER(street_name) = LOWER(:street_name)
-            """, {"street_number": street_number, "street_name": street_name})
-            
-            if street_matches:
-                # Step 4: If only one match, use it regardless of building name
-                if len(street_matches) == 1:
-                    addr_id, building_name, full_addr = street_matches[0]
-                    logging.info(f"quick_address_lookup: Single street match → address_id={addr_id}")
-                    return addr_id
-                
-                # Step 5: Try fuzzy matching on building names
-                building_pattern = r'^([^,\d]+?)(?:,|\s+\d+)'  # Text before first comma or number
-                building_match = re.search(building_pattern, location.strip())
-                
-                if building_match:
-                    location_building = building_match.group(1).strip()
-                    
-                    best_score = 0
-                    best_addr_id = None
-                    
-                    for addr_id, existing_building, full_addr in street_matches:
-                        if existing_building and existing_building.strip():
-                            score = fuzz.ratio(location_building.lower(), existing_building.lower())
-                            if score >= 85 and score > best_score:
-                                best_score = score
-                                best_addr_id = addr_id
-                    
-                    if best_addr_id:
-                        logging.info(f"quick_address_lookup: Fuzzy building match (score={best_score}) → address_id={best_addr_id}")
-                        return best_addr_id
-        
-        # Step 6: Fuzzy match on building names for locations without street numbers
-        if not street_match:
-            building_matches = self.execute_query(
-                "SELECT address_id, building_name, full_address FROM address WHERE building_name IS NOT NULL"
-            )
-            
-            best_score = 0
-            best_addr_id = None
-            
-            for addr_id, building_name, full_addr in building_matches or []:
-                if building_name and building_name.strip():
-                    # Check if location is contained in building name or vice versa
-                    score = fuzz.ratio(location.lower().strip(), building_name.lower().strip())
-                    partial_score = fuzz.partial_ratio(location.lower().strip(), building_name.lower().strip())
-                    
-                    # Use the higher score
-                    final_score = max(score, partial_score)
-                    
-                    if final_score >= 80 and final_score > best_score:
-                        best_score = final_score
-                        best_addr_id = addr_id
-                        logging.debug(f"Building match candidate: '{location}' vs '{building_name}' = {final_score}")
-            
-            if best_addr_id:
-                logging.info(f"quick_address_lookup: Fuzzy building name match (score={best_score}) → address_id={best_addr_id}")
-                return best_addr_id
-        
-        # Step 7: Last resort - fuzzy match on full addresses for very similar ones
-        all_addresses = self.execute_query("SELECT address_id, full_address FROM address")
-        for addr_id, full_addr in all_addresses or []:
-            if full_addr and fuzz.ratio(location.lower(), full_addr.lower()) >= 90:
-                logging.info(f"quick_address_lookup: Fuzzy full address match → address_id={addr_id}")
-                return addr_id
-        
-        logging.info(f"quick_address_lookup: No match found for '{location}', LLM required")
-        return None
+        return self.address_repo.quick_address_lookup(location)
 
     def cache_raw_location(self, raw_location: str, address_id: int):
         """
