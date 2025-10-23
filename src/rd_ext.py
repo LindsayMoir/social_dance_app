@@ -423,6 +423,9 @@ class ReadExtract:
         Extracts text from URL(s) without managing browser lifecycle.
         Browser must already be initialized before calling this method.
 
+        Special handling for The Coda calendar - uses extract_coda_events() to process
+        individual event links instead of extracting the entire page at once (which causes LLM timeouts).
+
         Args:
             url: The URL to extract from
             multiple: Whether to follow links on the page and extract from multiple URLs
@@ -436,6 +439,21 @@ class ReadExtract:
         if not get_db_handler().should_process_url(url):
             logging.info(f"extract_from_url(): Skipping URL {url} based on historical relevancy.")
             return None
+
+        # Special handling for The Coda calendar - extract individual event links
+        # This avoids LLM timeout issues by processing events individually instead of all at once
+        if 'gotothecoda.com/calendar' in url:
+            logging.info(f"extract_from_url(): Detected The Coda calendar, using special event extraction")
+            event_data = await self.extract_coda_events(url)
+            if event_data:
+                # Return dict mapping event URLs to their text
+                # This triggers the multi-event processing logic in __main__ (line 698-701)
+                results = {event_url: event_text for event_url, event_text in event_data}
+                logging.info(f"extract_from_url(): Returning {len(results)} Coda events as dict for multi-event processing")
+                return results
+            else:
+                logging.warning(f"extract_from_url(): No Coda events extracted from {url}, returning None")
+                return None
 
         if not multiple:
             text = await self.extract_event_text(url)
@@ -514,6 +532,117 @@ class ReadExtract:
             found.add(abs_url)
 
         return list(found)
+
+    async def extract_coda_events(self, calendar_url: str) -> list:
+        """
+        Extracts individual event links from The Coda calendar page.
+
+        The Coda displays all events as a grid of cards with "More Info" links.
+        This method:
+        1. Navigates to the calendar page
+        2. Extracts all event links
+        3. Visits each event individually
+        4. Extracts text from each event page
+        5. Returns list of (event_url, event_text) tuples
+
+        Args:
+            calendar_url (str): The Coda calendar URL (https://gotothecoda.com/calendar)
+
+        Returns:
+            list: List of tuples (event_url, event_text) for each event found
+
+        Raises:
+            Exception: If unable to navigate to calendar page
+        """
+        event_data = []
+
+        try:
+            logging.info(f"extract_coda_events(): Starting extraction from {calendar_url}")
+
+            # Navigate to the calendar page
+            if not await self.login_if_required(calendar_url):
+                logging.error(f"extract_coda_events(): Login failed for {calendar_url}")
+                return event_data
+
+            await self.page.goto(calendar_url, timeout=15000)
+            await self.page.wait_for_load_state("domcontentloaded")
+
+            # Extract all event links from the calendar page
+            # The Coda uses various link patterns - get all links and filter
+            event_links = []
+
+            # Strategy 1: Get all links and filter for event-like URLs
+            all_links = await self.page.query_selector_all("a")
+            logging.info(f"extract_coda_events(): Found {len(all_links)} total links on page")
+
+            # Look for links to individual event pages
+            unique_urls = set()
+            for link in all_links:
+                href = await link.get_attribute('href')
+                if href:
+                    # Make absolute URL
+                    if href.startswith('/'):
+                        href = urljoin(calendar_url, href)
+                    elif not href.startswith('http'):
+                        href = urljoin(calendar_url, href)
+
+                    # Check if this looks like an individual event link
+                    # The Coda events are at /show/{id} or similar patterns
+                    if ('/show/' in href or '/event' in href.lower() or '/events/' in href) and href != calendar_url:
+                        unique_urls.add(href)
+
+            event_links = list(unique_urls)
+            logging.info(f"extract_coda_events(): Filtered to {len(event_links)} unique event URLs")
+
+            if not event_links:
+                logging.warning(f"extract_coda_events(): No event links found on {calendar_url}")
+                # Log some debug info about what's on the page
+                content = await self.page.content()
+                logging.warning(f"extract_coda_events(): Page content length: {len(content)} bytes")
+                if 'more info' in content.lower():
+                    logging.warning(f"extract_coda_events(): 'more info' text exists in page")
+                if '/events/' in content or '/show/' in content:
+                    logging.warning(f"extract_coda_events(): Event-like paths exist in page")
+                return event_data
+
+            # Process each event link
+            for idx, event_url in enumerate(event_links, 1):
+                try:
+                    logging.info(f"extract_coda_events(): [{idx}/{len(event_links)}] Processing {event_url}")
+
+                    # Navigate to the event page
+                    await self.page.goto(event_url, timeout=10000)
+                    await self.page.wait_for_load_state("domcontentloaded")
+
+                    # Extract text from event page
+                    content = await self.page.content()
+                    soup = BeautifulSoup(content, 'html.parser')
+
+                    # Remove scripts and styles
+                    for tag in soup(['script', 'style']):
+                        tag.decompose()
+
+                    event_text = ' '.join(soup.stripped_strings)
+
+                    if event_text:
+                        event_data.append((event_url, event_text))
+                        logging.info(f"extract_coda_events(): Extracted {len(event_text)} chars from event {idx}")
+                    else:
+                        logging.warning(f"extract_coda_events(): No text extracted from {event_url}")
+
+                    # Small delay to avoid rate limiting
+                    await asyncio.sleep(0.5)
+
+                except Exception as e:
+                    logging.error(f"extract_coda_events(): Failed to process event link {idx}: {e}")
+                    continue
+
+            logging.info(f"extract_coda_events(): Successfully extracted {len(event_data)} events")
+            return event_data
+
+        except Exception as e:
+            logging.error(f"extract_coda_events(): Failed to extract Coda events: {e}")
+            return event_data
 
 
     def uvic_rueda(self):

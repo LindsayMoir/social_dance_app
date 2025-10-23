@@ -477,13 +477,13 @@ class FacebookEventScraper():
         gsa_pattern = re.compile(r"Guests See All", re.IGNORECASE)
         gsa_match = gsa_pattern.search(content, last_day_match.end())
         if not gsa_match:
-            logging.warning(f"def extract_relevant_text(): 'Guests See All' not found after last day of the week in {link}.")
+            logging.info(f"def extract_relevant_text(): 'Guests See All' not found after last day of the week in {link}.")
             # Fallback: Extract a reasonable amount of text after the day match to investigate what's actually there
             fallback_end = min(last_day_match.end() + 2000, len(content))  # Extract up to 2000 chars or end of content
             extracted_text = content[day_start:fallback_end]
 
             # Log the fallback extraction using utility
-            logging.warning(f"extract_relevant_text: 'Guests See All' not found, using fallback extraction for {link}")
+            logging.info(f"extract_relevant_text: 'Guests See All' not found, using fallback extraction for {link}")
             log_extracted_text("extract_relevant_text", link, extracted_text, logging.getLogger(__name__))
 
             return extracted_text

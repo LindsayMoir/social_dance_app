@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -25,6 +26,7 @@ import yaml
 from db import DatabaseHandler
 from llm import LLMHandler
 from rd_ext import ReadExtract
+from secret_paths import get_auth_file
 
 # Constants
 IMAGE_EXTENSIONS = {
@@ -83,10 +85,133 @@ class ImageScraper:
             sys.exit(1)
 
 
+    def _load_instagram_cookies(self) -> list | None:
+        """
+        Loads pre-saved Instagram authentication cookies from database or filesystem.
+
+        Priority order:
+        1. Database (auth_storage table) - synced across all environments
+        2. Render Secret Files (/etc/secrets/) - for Render environment
+        3. Local filesystem - for development
+
+        Validates that critical cookies (sessionid, csrftoken) are still valid and not expired.
+
+        Returns:
+            list | None: List of cookie dictionaries if valid, None if invalid, missing, or expired.
+        """
+        try:
+            # Use secret_paths to get auth file from database, Render secrets, or filesystem
+            auth_file_path = get_auth_file('instagram')
+            self.logger.info(f"_load_instagram_cookies(): Reading from {auth_file_path}")
+
+            if not Path(auth_file_path).exists():
+                self.logger.warning(f"_load_instagram_cookies(): Auth file not found at {auth_file_path}")
+                return None
+
+            with open(auth_file_path, 'r') as f:
+                auth_data = json.load(f)
+
+            cookies = auth_data.get('cookies', [])
+            if not cookies:
+                self.logger.warning("_load_instagram_cookies(): No cookies found in auth data")
+                return None
+
+            # Check if critical cookies are present and valid
+            cookie_dict = {c['name']: c for c in cookies}
+            critical_cookies = ['sessionid', 'csrftoken']
+
+            for cookie_name in critical_cookies:
+                if cookie_name not in cookie_dict:
+                    self.logger.warning(f"_load_instagram_cookies(): Missing critical cookie '{cookie_name}'")
+                    return None
+
+            # Verify expiration times
+            current_time = time.time()
+            for cookie in cookies:
+                expires = cookie.get('expires', -1)
+                if expires > 0 and expires < current_time:
+                    self.logger.warning(f"_load_instagram_cookies(): Cookie '{cookie['name']}' has expired (expires: {expires}, current: {current_time})")
+                    return None
+
+            self.logger.info("_load_instagram_cookies(): Successfully loaded and validated Instagram cookies from database/filesystem")
+            return cookies
+
+        except Exception as e:
+            self.logger.warning(f"_load_instagram_cookies(): Failed to load cookies: {e}")
+            return None
+
+    async def _verify_instagram_session(self) -> bool:
+        """
+        Verifies that the current Instagram session is valid by making a test request.
+
+        Returns:
+            bool: True if session is valid, False otherwise.
+        """
+        try:
+            # Try to fetch Instagram's main page as a validation test
+            response = await self.read_extract.page.request.get("https://www.instagram.com/")
+
+            if response.status == 200:
+                self.logger.info("_verify_instagram_session(): Instagram session verified successfully")
+                return True
+            elif response.status == 403 or response.status == 401:
+                self.logger.warning(f"_verify_instagram_session(): Session verification failed with status {response.status}")
+                return False
+            else:
+                self.logger.info(f"_verify_instagram_session(): Unexpected status {response.status}, continuing with session")
+                return True
+
+        except Exception as e:
+            self.logger.warning(f"_verify_instagram_session(): Failed to verify session: {e}")
+            return False
+
     async def _login_to_instagram(self) -> bool:
         if hasattr(self, 'ig_session'):
-            self.logger.info("Reusing Instagram session")
+            self.logger.info("_login_to_instagram(): Reusing existing Instagram session")
             return True
+
+        # First attempt: Try to load and use pre-saved cookies
+        self.logger.info("_login_to_instagram(): Attempting to load pre-saved Instagram cookies")
+        saved_cookies = self._load_instagram_cookies()
+
+        if saved_cookies:
+            try:
+                # Add pre-saved cookies to Playwright context
+                self.logger.info("_login_to_instagram(): Adding pre-saved cookies to Playwright context")
+                await self.read_extract.context.add_cookies(saved_cookies)
+
+                # Verify the session is valid
+                if await self._verify_instagram_session():
+                    self.logger.info("_login_to_instagram(): Pre-saved cookies verified successfully, using cached session")
+                    # Extract cookies for requests.Session
+                    cookies = await self.read_extract.context.cookies()
+                    session = requests.Session()
+                    for ck in cookies:
+                        session.cookies.set(ck['name'], ck['value'], domain=ck['domain'])
+
+                    ua = self.config.get('crawling', {}).get('user_agent') or DEFAULT_USER_AGENT
+                    ig_app_id = os.getenv('INSTAGRAM_CSE_ID') or os.getenv('INSTAGRAM_APPID_UID') or '1217981644879628'
+                    session.headers.update({
+                        "User-Agent": ua,
+                        "Referer": "https://www.instagram.com/",
+                        "x-csrftoken": session.cookies.get('csrftoken', ''),
+                        "x-ig-app-id": ig_app_id,
+                        "x-ig-www-claim": "0",
+                        "x-requested-with": "XMLHttpRequest",
+                        "sec-fetch-dest": "empty",
+                        "sec-fetch-mode": "cors",
+                        "sec-fetch-site": "same-origin",
+                    })
+                    self.ig_session = session
+                    return True
+                else:
+                    self.logger.warning("_login_to_instagram(): Pre-saved cookies failed verification, falling back to fresh login")
+
+            except Exception as e:
+                self.logger.warning(f"_login_to_instagram(): Failed to use pre-saved cookies: {e}. Attempting fresh login.")
+
+        # Fallback: Perform fresh login via credentials
+        self.logger.info("_login_to_instagram(): Performing fresh Instagram login")
         success = await self.read_extract.login_to_website(
             organization="instagram",
             login_url="https://www.instagram.com/accounts/login/",
@@ -95,7 +220,10 @@ class ImageScraper:
             submit_selector="button[type='submit']"
         )
         if not success:
+            self.logger.error("_login_to_instagram(): Fresh login attempt failed")
             return False
+
+        self.logger.info("_login_to_instagram(): Fresh login successful, setting up session")
         cookies = await self.read_extract.context.cookies()
         session = requests.Session()
         for ck in cookies:
