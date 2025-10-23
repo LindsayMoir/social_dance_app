@@ -375,18 +375,63 @@ EOF
 - All 69 unit tests passing (42 existing + 27 new)
 - Integration commits: 0953ced (creation) + 722270a (integration)
 
-### Phase 3+ Remaining Work (Not Started)
+### Phase 4 Planning (Analysis Complete, Ready for Implementation)
 
-**Task 1: Extract EventRepository**
-- Extract event CRUD operations from db.py
-- Estimated: 6-8 hours
+**Phase 4: Extract EventRepository** (Estimated: 8-10 hours)
 
-**Task 4: Refactor LLM Integration**
+**EventRepository Scope Analysis:**
+Identified ~25 event-related methods in db.py that should be consolidated:
+
+**Core CRUD Methods (Priority 1 - Essential):**
+- `write_events_to_db()` (line 825) - Primary event write operation with data validation
+- `update_event()` (line 1058) - Update existing event record
+- `delete_event()` (line 1865) - Delete event by URL/name/date
+- `delete_event_with_event_id()` (line 1918) - Delete by event ID
+- `fetch_events_dataframe()` (line 1604) - Retrieve all events as DataFrame
+
+**Event Processing Methods (Priority 2 - Processing Pipeline):**
+- `_filter_events()` (line 1015) - Filter out old/incomplete events
+- `_clean_day_of_week_field()` (line 955) - Normalize day_of_week field
+- `_rename_google_calendar_columns()` (line 909) - Handle Google Calendar format
+- `_convert_datetime_fields()` (line 935) - Convert date/time fields
+- `_extract_address_from_event_details()` (line 1168) - Extract address from event
+- `process_event_address()` (line 1226) - Full address processing pipeline
+
+**Event Management Methods (Priority 3 - Data Quality):**
+- `delete_old_events()` (line 1746) - Remove events older than threshold
+- `delete_likely_dud_events()` (line 1770) - Remove low-quality events
+- `delete_events_with_nulls()` (line 1894) - Remove incomplete records
+- `delete_multiple_events()` (line 1943) - Batch delete operations
+- `dedup()` (line 1568) - Deduplicate events table
+- `update_dow_date()` (line 2243) - Update day-of-week for event
+
+**Event Analysis Methods (Priority 4 - Reporting):**
+- `sync_event_locations_with_address_table()` (line 1507) - Sync address references
+- `clean_orphaned_references()` (line 1521) - Remove broken references
+- `check_image_events_exist()` (line 2349) - Check for image events
+- `count_events_urls_start/end()` (line 2103/2140) - Count statistics
+
+**Estimated Code Volume:** ~1,200-1,500 lines to extract
+
+**Implementation Strategy:**
+1. Phase 4a: Create EventRepository with Priority 1 CRUD methods + tests (4-5 hours)
+2. Phase 4b: Add Priority 2 processing methods + tests (3-4 hours)
+3. Phase 4c: Integrate into DatabaseHandler + verify backward compatibility (2 hours)
+4. Phases 5+: Gradually extract Priority 3 & 4 methods as dependent systems stabilize
+
+**Blocking Dependencies:**
+- Address resolution logic (already extracted to AddressRepository) ✅
+- URL processing logic (already extracted to URLRepository) ✅
+- LLM integration in process_event_address() - may need refactoring
+
+### Phase 5+ Remaining Work (Not Started)
+
+**Task 1: Refactor LLM Integration**
 - Separate providers (OpenAI, Mistral)
 - Extract schema management
 - Estimated: 12-16 hours
 
-**Task 5: Error Handling Framework**
+**Task 2: Error Handling Framework**
 - Add retry decorator
 - Add custom exception classes
 - Estimated: 4-6 hours
