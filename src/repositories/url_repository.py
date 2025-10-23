@@ -267,31 +267,88 @@ class URLRepository:
 
         return normalized_url
 
-    def should_process_url(self, url: str) -> bool:
+    def should_process_url(self, url: str, urls_df=None, urls_gb=None) -> bool:
         """
-        Determines whether a given URL should be processed based on:
-        1. Blacklist status
-        2. Staleness of associated events
-        3. General URL validity
+        Determines whether a given URL should be processed based on its history in the database.
+
+        The decision is made according to the following rules:
+        0. If the URL is in the whitelist (data/urls/aaa_urls.csv), it should ALWAYS be processed.
+        1. If the URL has never been seen before (i.e., no records in urls_df), it should be processed.
+        2. If the most recent record for the URL has 'relevant' set to True, it should be processed.
+        3. If the most recent record for the URL has 'relevant' set to False, the method checks the grouped statistics in urls_gb:
+            - If the `hit_ratio` for the URL is greater than 0.1, or
+            - If the number of crawl attempts (`crawl_try`) is less than or equal to 3,
+            then the URL should be processed.
+        4. If none of the above conditions are met, the URL should not be processed.
 
         Args:
-            url (str): The URL to evaluate for processing
+            url (str): The URL to evaluate for processing.
+            urls_df (DataFrame, optional): DataFrame of URL history. If None or empty, always process.
+            urls_gb (DataFrame, optional): Grouped statistics for URL usefulness (hit_ratio, crawl_try).
 
         Returns:
-            bool: True if the URL should be processed, False if it should be skipped
+            bool: True if the URL should be processed according to the criteria above, False otherwise.
         """
+        import os
+
         if not url:
             return False
 
-        # Check if blacklisted
-        if self.is_blacklisted(url):
-            self.logger.debug(f"should_process_url: Skipping blacklisted URL: {url}")
-            return False
+        # If urls_df is None or empty (e.g., on production), always process
+        if urls_df is None or urls_df.empty:
+            self.logger.info(f"should_process_url: URLs table not loaded (production mode), processing URL.")
+            return True
 
-        # Check if stale
-        if self.stale_date(url):
-            self.logger.debug(f"should_process_url: URL is stale, should reprocess: {url}")
-            return True  # Stale URLs should be reprocessed
+        # Normalize URL to handle Instagram/FB CDN dynamic parameters
+        normalized_url = self.normalize_url(url)
 
-        # URL is not blacklisted and not stale, safe to process
-        return True
+        # Log normalization if URL changed
+        if normalized_url != url:
+            self.logger.info(f"should_process_url: Normalized Instagram URL for comparison")
+
+        # 0. Check if URL is in whitelist (always process) - URLs in data/urls/aaa_urls.csv should always be processed
+        try:
+            aaa_urls_path = os.path.join(self.db.config['input']['urls'], 'aaa_urls.csv')
+            if os.path.exists(aaa_urls_path):
+                aaa_urls_df = pd.read_csv(aaa_urls_path)
+                if 'link' in aaa_urls_df.columns:
+                    # Check if normalized_url matches any whitelist URL
+                    if normalized_url in aaa_urls_df['link'].values:
+                        self.logger.info(f"should_process_url: URL {normalized_url[:100]}... is in whitelist (aaa_urls.csv), processing it.")
+                        return True
+        except Exception as e:
+            self.logger.warning(f"should_process_url: Could not check whitelist: {e}")
+
+        # 1. Filter all rows for this normalized URL
+        df_url = urls_df[urls_df['link'] == normalized_url]
+        # If we've never recorded this normalized URL, process it
+        if df_url.empty:
+            self.logger.info(f"should_process_url: URL {normalized_url[:100]}... has never been seen before, processing it.")
+            return True
+
+        # 2. Look at the most recent "relevant" value
+        last_relevant = df_url.iloc[-1]['relevant']
+        if last_relevant and self.stale_date(normalized_url):
+            self.logger.info(f"should_process_url: URL {normalized_url[:100]}... was last seen as relevant, processing it.")
+            return True
+
+        # 3. Last was False → check hit_ratio in urls_gb
+        if urls_gb is not None and not urls_gb.empty:
+            hit_row = urls_gb[urls_gb['link'] == normalized_url]
+
+            if not hit_row.empty:
+                # Extract scalars from the grouped DataFrame
+                hit_ratio = hit_row.iloc[0]['hit_ratio']
+                crawl_trys = hit_row.iloc[0]['crawl_try']
+
+                if hit_ratio > 0.1 or crawl_trys <= 3:
+                    self.logger.info(
+                        "should_process_url: URL %s was last seen as not relevant "
+                        "but hit_ratio (%.2f) > 0.1 or crawl_try (%d) ≤ 3, processing it.",
+                        normalized_url[:100] + "...", hit_ratio, crawl_trys
+                    )
+                    return True
+
+        # 4. Otherwise, do not process this URL
+        self.logger.info(f"should_process_url: URL {normalized_url[:100]}... does not meet criteria for processing, skipping it.")
+        return False

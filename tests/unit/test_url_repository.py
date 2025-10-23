@@ -184,16 +184,55 @@ class TestURLRepository:
         assert url_repo.normalize_url("") == ""
         assert url_repo.normalize_url(None) is None
 
-    def test_should_process_url_blacklisted(self, url_repo):
-        """Test should_process_url for blacklisted URL."""
-        assert url_repo.should_process_url("https://spam.com/page") is False
-
-    def test_should_process_url_non_blacklisted(self, url_repo, mock_db_handler):
-        """Test should_process_url for non-blacklisted URL."""
-        mock_db_handler.execute_query.return_value = None  # No events = stale
-        assert url_repo.should_process_url("https://example.com") is True
-
     def test_should_process_url_empty(self, url_repo):
         """Test should_process_url with empty URL."""
         assert url_repo.should_process_url("") is False
         assert url_repo.should_process_url(None) is False
+
+    def test_should_process_url_no_urls_df(self, url_repo):
+        """Test should_process_url with no URLs DataFrame (production mode)."""
+        # When urls_df is None or empty, always process
+        assert url_repo.should_process_url("https://example.com") is True
+        assert url_repo.should_process_url("https://spam.com/page") is True
+
+    def test_should_process_url_never_seen(self, url_repo):
+        """Test should_process_url for URL that has never been seen before."""
+        urls_df = pd.DataFrame({'link': ['https://other.com'], 'relevant': [True]})
+        # URL not in dataframe, so should process
+        assert url_repo.should_process_url("https://example.com", urls_df=urls_df) is True
+
+    def test_should_process_url_relevant_not_stale(self, url_repo, mock_db_handler):
+        """Test should_process_url for relevant URL that is not stale."""
+        urls_df = pd.DataFrame({'link': ['https://example.com'], 'relevant': [True]})
+        mock_db_handler.execute_query.return_value = [(datetime.now().date(),)]
+        # Relevant and not stale
+        assert url_repo.should_process_url("https://example.com", urls_df=urls_df) is False
+
+    def test_should_process_url_relevant_and_stale(self, url_repo, mock_db_handler):
+        """Test should_process_url for relevant URL that is stale."""
+        urls_df = pd.DataFrame({'link': ['https://example.com'], 'relevant': [True]})
+        old_date = (datetime.now() - timedelta(days=45)).date()
+        mock_db_handler.execute_query.return_value = [(old_date,)]
+        # Relevant and stale, should reprocess
+        assert url_repo.should_process_url("https://example.com", urls_df=urls_df) is True
+
+    def test_should_process_url_not_relevant_high_hit_ratio(self, url_repo):
+        """Test should_process_url for non-relevant URL with high hit ratio."""
+        urls_df = pd.DataFrame({'link': ['https://example.com'], 'relevant': [False]})
+        urls_gb = pd.DataFrame({'link': ['https://example.com'], 'hit_ratio': [0.5], 'crawl_try': [5]})
+        # Not relevant but hit_ratio > 0.1
+        assert url_repo.should_process_url("https://example.com", urls_df=urls_df, urls_gb=urls_gb) is True
+
+    def test_should_process_url_not_relevant_low_crawl_tries(self, url_repo):
+        """Test should_process_url for non-relevant URL with low crawl attempts."""
+        urls_df = pd.DataFrame({'link': ['https://example.com'], 'relevant': [False]})
+        urls_gb = pd.DataFrame({'link': ['https://example.com'], 'hit_ratio': [0.05], 'crawl_try': [2]})
+        # Not relevant but crawl_try <= 3
+        assert url_repo.should_process_url("https://example.com", urls_df=urls_df, urls_gb=urls_gb) is True
+
+    def test_should_process_url_not_relevant_skip(self, url_repo):
+        """Test should_process_url for non-relevant URL that should be skipped."""
+        urls_df = pd.DataFrame({'link': ['https://example.com'], 'relevant': [False]})
+        urls_gb = pd.DataFrame({'link': ['https://example.com'], 'hit_ratio': [0.05], 'crawl_try': [5]})
+        # Not relevant, low hit_ratio, high crawl_try
+        assert url_repo.should_process_url("https://example.com", urls_df=urls_df, urls_gb=urls_gb) is False
