@@ -16,6 +16,7 @@ Key responsibilities:
     - Safe navigation with error handling
 """
 
+import asyncio
 import logging
 import random
 import time
