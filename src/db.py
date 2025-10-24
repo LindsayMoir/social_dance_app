@@ -65,7 +65,8 @@ class DatabaseHandler():
             - Creates a DataFrame from the URLs table and computes grouped statistics for URL usefulness.
         """
         self.config = config
-        self.load_blacklist_domains()
+        # Initialize llm_handler to None - will be set later via set_llm_handler()
+        self.llm_handler = None
 
         # Get database configuration using centralized utility
         # This automatically handles local, render_dev, and render_prod environments
@@ -102,6 +103,9 @@ class DatabaseHandler():
         # Initialize URLRepository for centralized URL management
         self.url_repo = URLRepository(self)
         logging.info("__init__(): URLRepository initialized")
+
+        # Load blacklist domains AFTER URLRepository is initialized (it depends on url_repo)
+        self.load_blacklist_domains()
 
         # Initialize EventRepository for centralized event management
         self.event_repo = EventRepository(self)

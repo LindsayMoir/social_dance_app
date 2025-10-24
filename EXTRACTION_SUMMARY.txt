@@ -1,0 +1,248 @@
+================================================================================
+  DATABASEHANDLER EXTRACTION ANALYSIS - QUICK REFERENCE SUMMARY
+================================================================================
+
+CURRENT STATE:
+  - File: /src/db.py
+  - Size: 2,249 lines
+  - Methods: 72 total
+  - SRP Violations: CRITICAL
+
+KEY FINDINGS:
+  - 5 major extraction opportunities identified
+  - ~1,080 lines of code can be removed to new repositories
+  - Will reduce DatabaseHandler to ~1,169 lines (48% reduction)
+  - 22 methods recommended for extraction
+
+================================================================================
+EXTRACTION GROUPS
+================================================================================
+
+GROUP 1: DATA TRANSFORMATION & NORMALIZATION (HIGH PRIORITY)
+────────────────────────────────────────────────────────────────────────────
+Suggested Repository: AddressDataRepository
+Lines to Extract: ~180
+Methods: 7
+  ✓ normalize_nulls()                    [1860-1887]
+  ✓ clean_null_strings_in_address()     [1890-1905]
+  ✓ standardize_postal_codes()          [1908-1926]
+  ✓ clean_up_address_basic()            [542-562]
+  ✓ extract_canadian_postal_code()      [651-671]
+  ✓ is_canadian_postal_code()           [674-688]
+  ✓ format_address_from_db_row()        [810-837]
+
+Focus: Address data cleaning, validation, and transformation
+
+
+GROUP 2: LLM/AI OPERATIONS (CRITICAL PRIORITY)
+────────────────────────────────────────────────────────────────────────────
+Suggested Repository: AddressResolutionRepository
+Lines to Extract: ~220
+Methods: 3
+  ✓ process_event_address()             [1055-1212] ← MOST COMPLEX
+  ✓ _extract_address_from_event_details()[997-1053]
+  ✓ set_llm_handler()                   [152-156]
+
+Focus: LLM-based address resolution with fallback logic
+
+
+GROUP 3: CACHING & LOOKUP OPERATIONS (MEDIUM PRIORITY)
+────────────────────────────────────────────────────────────────────────────
+Suggested Repository: LocationCacheRepository
+Lines to Extract: ~110
+Methods: 4
+  ✓ cache_raw_location()                [1244-1263]
+  ✓ lookup_raw_location()               [1265-1282]
+  ✓ _get_building_name_dictionary()     [974-995]
+  ✓ create_raw_locations_table()        [1284-1333]
+
+Focus: Location-to-address caching layer
+
+
+GROUP 4: EVENT QUALITY & DEDUPLICATION (HIGH PRIORITY)
+────────────────────────────────────────────────────────────────────────────
+Suggested Repository: Enhanced EventManagementRepository
+Lines to Extract: ~250
+Methods: 4 (add to existing repo)
+  ✓ fuzzy_duplicates()                  [1423-1491] ← ~70 lines
+  ✓ is_foreign()                        [1586-1655] ← ~70 lines
+  ✓ check_image_events_exist()          [1758-1829]
+  ✓ match_civic_number()                [947-972]
+
+Focus: Event-level quality assurance and duplicate detection
+
+
+GROUP 5: ADMINISTRATIVE/MAINTENANCE (MEDIUM PRIORITY)
+────────────────────────────────────────────────────────────────────────────
+Suggested Repository: DatabaseMaintenanceRepository
+Lines to Extract: ~320
+Methods: 4
+  ✓ reset_address_id_sequence()         [1986-2180] ← HIGH RISK
+  ✓ update_full_address_with_building() [2182-2248]
+  ✓ sql_input()                         [1832-1857]
+  ✓ standardize_postal_codes()          [1908-1926] (also in Group 1)
+
+Focus: Admin operations, database maintenance
+
+
+ADDITIONAL UTILITY METHODS:
+────────────────────────────────────────────────────────────────────────────
+Recommended Relocations:
+  • fuzzy_match()                  → FuzzyMatcher utility class
+  • create_address_dict()          → AddressRepository
+  • decide_preferred_row()         → EventQualityRepository
+  • update_preferred_row_from_other()→ EventQualityRepository
+  • groupby_source()               → EventAnalysisRepository
+
+================================================================================
+ALREADY DELEGATED (31 Wrapper Methods)
+================================================================================
+
+These methods already follow repository pattern (backward compatibility):
+
+URLRepository Wrappers (5):
+  load_blacklist_domains(), avoid_domains(), write_url_to_db(),
+  stale_date(), normalize_url(), should_process_url()
+
+EventRepository Wrappers (9):
+  write_events_to_db(), _rename_google_calendar_columns(),
+  _convert_datetime_fields(), _clean_day_of_week_field(),
+  _filter_events(), update_event(), fetch_events_dataframe(),
+  delete_event(), delete_event_with_event_id(), delete_multiple_events()
+
+AddressRepository Wrappers (5):
+  resolve_or_insert_address(), build_full_address(),
+  get_full_address_from_id(), format_address_from_db_row(),
+  find_address_by_building_name(), quick_address_lookup()
+
+EventManagementRepository Wrappers (7):
+  dedup(), delete_old_events(), delete_likely_dud_events(),
+  delete_events_with_nulls(), update_dow_date(),
+  check_dow_date_consistent()
+
+EventAnalysisRepository Wrappers (5):
+  sync_event_locations_with_address_table(),
+  clean_orphaned_references(), count_events_urls_start(),
+  count_events_urls_end()
+
+================================================================================
+RECOMMENDED EXTRACTION PHASES
+================================================================================
+
+PHASE 1 - CRITICAL (Start Here)
+├─ Extract AddressResolutionRepository
+│  └─ Primary benefit: Decompose process_event_address() (160 lines)
+├─ Extract LocationCacheRepository
+│  └─ Primary benefit: Separate caching from resolution logic
+└─ Create AddressDataRepository
+   └─ Primary benefit: Data transformation isolation
+
+PHASE 2 - HIGH (Next)
+├─ Enhance EventManagementRepository with:
+│  ├─ fuzzy_duplicates() logic
+│  └─ is_foreign() logic
+└─ Move supporting dedup methods
+
+PHASE 3 - MEDIUM (Then)
+├─ Extract DatabaseMaintenanceRepository
+│  ├─ reset_address_id_sequence()
+│  ├─ update_full_address_with_building_names()
+│  └─ sql_input()
+└─ Add monitoring/health check methods
+
+PHASE 4 - LOW (Polish)
+├─ Move fuzzy_match() to utilities
+├─ Consolidate utility methods
+└─ Clean up edge cases
+
+================================================================================
+IMPACT METRICS
+================================================================================
+
+Before Extraction:
+  DatabaseHandler:      2,249 lines
+  Methods:              72 total
+  Concerns:             15+ distinct
+  Cyclomatic Complexity: HIGH (>50 estimated)
+
+After Full Extraction:
+  DatabaseHandler:      ~1,169 lines (48% reduction)
+  New Repositories:     5 classes
+  Methods per class:    5-10 (better focus)
+  Estimated Complexity: 30-40% reduction
+  SRP Violations:       Minimal
+
+Code Quality Improvements:
+  ✓ Single Responsibility: IMPROVED
+  ✓ Testability: IMPROVED (smaller focused tests)
+  ✓ Maintainability: IMPROVED (clear boundaries)
+  ✓ Extensibility: IMPROVED (replaceable components)
+  ✓ Reusability: IMPROVED (specific repositories)
+
+================================================================================
+SOLID PRINCIPLES VIOLATIONS
+================================================================================
+
+Current Violations:
+  ✗ Single Responsibility   - 15+ distinct concerns mixed
+  ✗ Open/Closed Principle   - Cannot extend LLM without modifying
+  ✗ Dependency Inversion    - Direct dependency on LLMHandler
+  ✗ High Cohesion           - Ops mixed with maintenance code
+
+After Extraction:
+  ✓ Single Responsibility   - Each repo has single focus
+  ✓ Open/Closed Principle   - Can swap implementations
+  ✓ Dependency Inversion    - Through repository interfaces
+  ✓ High Cohesion           - Clear boundaries between concerns
+
+================================================================================
+RISK ASSESSMENT
+================================================================================
+
+HIGH RISK Operations:
+  ⚠  process_event_address() extraction
+      - Complex 160-line orchestration with many edge cases
+      - Requires thorough integration testing
+      - Consider breaking into smaller sub-methods first
+
+  ⚠  reset_address_id_sequence()
+      - Requires database lock
+      - Affects ALL address references in ALL tables
+      - Should only be called during maintenance window
+      - NEVER call with concurrent processes
+
+MEDIUM RISK Operations:
+  ! LocationCacheRepository - Performance-critical path
+  ! Fuzzy duplicate detection - Complex matching logic
+  ! LLM integration - Circular dependency handling
+
+LOW RISK Operations:
+  • Data transformation utilities - Straightforward logic
+  • Admin operations - Low call frequency
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. Review this analysis with team
+2. Decide extraction order (recommend PHASE 1 first)
+3. Create DatabaseMaintenanceRepository first (safest)
+4. Add tests for each extraction
+5. Update callers to use new repositories
+6. Remove wrapper methods in cleanup phase
+7. Update documentation with new architecture
+
+Estimated Timeline:
+  Phase 1: 2-3 days (with thorough testing)
+  Phase 2: 1-2 days
+  Phase 3: 1-2 days
+  Phase 4: 1 day
+
+================================================================================
+DOCUMENTATION LOCATION
+================================================================================
+
+Full Analysis: DATABASE_HANDLER_EXTRACTION_ANALYSIS.md
+This Summary: EXTRACTION_SUMMARY.txt
+
+================================================================================
