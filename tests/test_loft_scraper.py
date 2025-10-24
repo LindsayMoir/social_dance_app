@@ -16,6 +16,7 @@ import asyncio
 import logging
 from pathlib import Path
 from datetime import datetime
+import pytest
 
 sys.path.insert(0, 'src')
 
@@ -43,6 +44,7 @@ LOFT_SOURCE = "The Loft"
 LOFT_KEYWORDS = "swing, balboa, lindy hop, east coast swing, west coast swing, wcs"
 
 
+@pytest.mark.asyncio
 async def test_loft_scraper():
     """Main test function"""
     print("\n" + "=" * 80)

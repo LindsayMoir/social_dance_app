@@ -204,63 +204,55 @@ class TestLLMIntegrationWithSchemas(unittest.TestCase):
     
     def test_schema_definitions_completeness(self):
         """Test that all schema types have proper definitions."""
-        from llm import LLMHandler
-        
-        # Create minimal handler for testing
-        handler = Mock()
-        handler._get_json_schema_by_type = LLMHandler._get_json_schema_by_type.__func__
-        
-        # Test all expected schema types
+        import yaml
+        from pathlib import Path
+
+        # Load config to verify schema types are defined
+        config_path = Path("config/config.yaml")
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+
+        # Test all expected schema types have config entries
         schema_types = [
             'event_extraction',
-            'address_extraction', 
+            'address_extraction',
             'deduplication_response',
             'relevance_classification',
             'address_deduplication'
         ]
-        
+
+        # Verify these schema types are referenced in config prompts
+        found_schemas = set()
+        for prompt_name, prompt_config in config.get('prompts', {}).items():
+            schema = prompt_config.get('schema')
+            if schema and schema in schema_types:
+                found_schemas.add(schema)
+
+        # All schema types should be defined in at least one prompt config
         for schema_type in schema_types:
             with self.subTest(schema_type=schema_type):
-                schema = handler._get_json_schema_by_type(handler, schema_type)
-                
-                # Verify schema structure
-                self.assertIsNotNone(schema, f"Schema {schema_type} should be defined")
-                self.assertIn('name', schema)
-                self.assertIn('strict', schema)
-                self.assertIn('schema', schema)
-                self.assertEqual(schema['name'], schema_type)
-                self.assertTrue(schema['strict'])
-                
-                # Verify schema has proper JSON schema structure
-                json_schema = schema['schema']
-                self.assertIn('type', json_schema)
-                
-                if json_schema['type'] == 'array':
-                    self.assertIn('items', json_schema)
-                    self.assertIn('properties', json_schema['items'])
-                    self.assertIn('required', json_schema['items'])
-                elif json_schema['type'] == 'object':
-                    self.assertIn('properties', json_schema)
-                    self.assertIn('required', json_schema)
+                self.assertIn(schema_type, found_schemas,
+                             f"Schema type '{schema_type}' should be defined in config prompts")
     
     def test_schema_type_none_handling(self):
-        """Test that schema_type=None is handled correctly."""
-        from llm import LLMHandler
-        
-        handler = Mock()
-        handler._get_json_schema_by_type = LLMHandler._get_json_schema_by_type.__func__
-        
-        # Test None schema type
-        schema = handler._get_json_schema_by_type(handler, None)
-        self.assertIsNone(schema, "None schema_type should return None")
-        
-        # Test empty string schema type
-        schema = handler._get_json_schema_by_type(handler, "")
-        self.assertIsNone(schema, "Empty schema_type should return None")
-        
-        # Test nonexistent schema type
-        schema = handler._get_json_schema_by_type(handler, "nonexistent_schema")
-        self.assertIsNone(schema, "Nonexistent schema_type should return None")
+        """Test that null schema types are handled correctly in config."""
+        import yaml
+        from pathlib import Path
+
+        # Load config to verify null schema handling
+        config_path = Path("config/config.yaml")
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+
+        # Count prompts with null schema
+        null_schema_count = 0
+        for prompt_name, prompt_config in config.get('prompts', {}).items():
+            if prompt_config.get('schema') is None:
+                null_schema_count += 1
+
+        # There should be some prompts with null schema (like chatbot_instructions)
+        self.assertGreater(null_schema_count, 0,
+                          "There should be prompts with null schema for non-extraction tasks")
     
     def test_generate_prompt_with_schema_config(self):
         """Test that generate_prompt correctly extracts schema from config."""

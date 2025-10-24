@@ -16,6 +16,7 @@ import asyncio
 import logging
 from pathlib import Path
 from datetime import datetime
+import pytest
 
 sys.path.insert(0, 'src')
 
@@ -43,6 +44,7 @@ CODA_SOURCE = "The Coda"
 CODA_KEYWORDS = "salsa, bachata, kizomba, merengue, swing, balboa, lindy hop, east coast swing, west coast swing, wcs, cuban salsa, rueda"
 
 
+@pytest.mark.asyncio
 async def test_coda_scraper():
     """Main test function"""
     print("\n" + "=" * 80)

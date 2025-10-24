@@ -144,6 +144,12 @@ prompts:
   images:
     file: prompts/images_prompt.txt
     schema: event_extraction
+  interpretation:
+    file: prompts/interpretation_prompt.txt
+    schema: null
+  contextual_sql:
+    file: prompts/contextual_sql_prompt.txt
+    schema: null
   irrelevant_rows:
     file: prompts/irrelevant_rows_prompt.txt
     schema: relevance_classification

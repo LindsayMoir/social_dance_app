@@ -191,7 +191,8 @@ class TestExplicitJSONSchema(unittest.TestCase):
         
         # Check for unexpected duplicates (some are intentional like default.txt)
         acceptable_duplicates = {
-            'prompts/default.txt'  # Used by both 'default' and URL-specific mappings
+            'prompts/default.txt',  # Used by both 'default' and URL-specific mappings
+            'prompts/calendar_venues.txt'  # Used by multiple calendar venue URLs
         }
         
         for file_path, prompt_names in file_usage.items():

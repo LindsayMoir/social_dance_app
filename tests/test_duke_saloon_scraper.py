@@ -16,6 +16,7 @@ import asyncio
 import logging
 from pathlib import Path
 from datetime import datetime
+import pytest
 
 sys.path.insert(0, 'src')
 
@@ -43,6 +44,7 @@ DUKE_SOURCE = "The Duke Saloon"
 DUKE_KEYWORDS = "country swing, swing, live music"
 
 
+@pytest.mark.asyncio
 async def test_duke_saloon_scraper():
     """Main test function"""
     print("\n" + "=" * 80)
