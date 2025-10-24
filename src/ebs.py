@@ -62,6 +62,7 @@ from db import DatabaseHandler
 from llm import LLMHandler
 from logging_config import setup_logging
 from rd_ext import ReadExtract
+from run_results_tracker import RunResultsTracker, get_database_counts
 
 
 class EventbriteScraper:
@@ -82,15 +83,13 @@ class EventbriteScraper:
         self.visited_urls = set()
         self.keywords_list = llm_handler.get_keywords()
 
+        # Initialize run results tracker
+        file_name = 'ebs.py'
+        self.run_results_tracker = RunResultsTracker(file_name, db_handler)
+        events_count, urls_count = get_database_counts(db_handler)
+        self.run_results_tracker.initialize(events_count, urls_count)
+
         # Run statistics tracking
-        if config['testing']['status']:
-            self.run_name = f"Test Run {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            self.run_description = "Test Run Description"
-        else:
-            self.run_name = "ebs Run"
-            self.run_description = f"Production {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        self.start_time = None
-        self.end_time = None
         self.urls_contacted = 0
         self.urls_with_extracted_text = 0
         self.urls_with_found_keywords = 0
@@ -369,7 +368,7 @@ class EventbriteScraper:
 
     async def driver(self):
         """ Reads keywords, performs searches, and processes extracted event URLs. """
-        self.start_time = datetime.now()  # Record start time
+        start_time = datetime.now()
 
         # Remove the output file if it exists
         output_path = self.config['output']['ebs_keywords_processed']
@@ -396,44 +395,16 @@ class EventbriteScraper:
             # 3) append to CSV (write header only if file doesn't exist yet)
             write_header = not os.path.exists(output_path)
             df_row.to_csv(output_path, mode="a", header=write_header, index=False)
-        
-        self.end_time = datetime.now()  # Record end time
+
         logging.info(f"driver(): Completed processing {len(self.visited_urls)} unique URLs.")
 
-        # Write run statistics to the database
-        await self.write_run_statistics()
+        # Finalize and write run results
+        events_count, urls_count = get_database_counts(self.db_handler)
+        self.run_results_tracker.finalize(events_count, urls_count)
+        elapsed_time = str(datetime.now() - start_time)
+        self.run_results_tracker.write_results(elapsed_time)
 
 
-    async def write_run_statistics(self):
-        """ Saves the run statistics to the database. """
-        elapsed_time = str(self.end_time - self.start_time)  # Convert timedelta to a string
-        python_file_name = __file__.split('/')[-1]
-
-        # Create a DataFrame for the run statistics
-        run_data = pd.DataFrame([{
-            "run_name": self.run_name,
-            "run_description": self.run_description,
-            "start_time": self.start_time,
-            "end_time": self.end_time,
-            "elapsed_time": elapsed_time,  # Now stored as a string
-            "python_file_name": python_file_name,
-            "unique_urls_count": len(self.visited_urls),
-            "total_url_attempts": self.urls_contacted,
-            "urls_with_extracted_text": self.urls_with_extracted_text,
-            "urls_with_found_keywords": self.urls_with_found_keywords,
-            "events_written_to_db": self.events_written_to_db,
-            "time_stamp": datetime.now()
-        }])
-
-        # Get the database connection engine
-        engine = self.db_handler.get_db_connection()
-
-        # Write the data to the "runs" table
-        try:
-            run_data.to_sql("runs", engine, if_exists="append", index=False)
-            logging.info("write_run_statistics(): Run statistics written to database successfully.")
-        except Exception as e:
-            logging.error(f"write_run_statistics(): Error writing run statistics to database: {e}")
 
 
 def export_events_to_csv(db_handler, config):

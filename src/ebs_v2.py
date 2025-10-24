@@ -29,6 +29,7 @@ import yaml
 from llm import LLMHandler
 from logging_config import setup_logging
 from base_scraper import BaseScraper
+from run_results_tracker import RunResultsTracker, get_database_counts
 
 
 class EventbriteScraperV2(BaseScraper):
@@ -59,6 +60,12 @@ class EventbriteScraperV2(BaseScraper):
         # Set up database writer with LLM's database handler
         if self.llm_handler.db_handler:
             self.set_db_writer(self.llm_handler.db_handler)
+
+        # Initialize run results tracker
+        file_name = 'ebs_v2.py'
+        self.run_results_tracker = RunResultsTracker(file_name, self.llm_handler.db_handler)
+        events_count, urls_count = get_database_counts(self.llm_handler.db_handler)
+        self.run_results_tracker.initialize(events_count, urls_count)
 
         self.keywords_list = []
         self.page = None
@@ -305,6 +312,7 @@ class EventbriteScraperV2(BaseScraper):
         """
         try:
             self.logger.info("Starting Eventbrite scraper driver")
+            start_time = datetime.now()
 
             # Initialize page if needed
             if not self.page:
@@ -336,8 +344,11 @@ class EventbriteScraperV2(BaseScraper):
                     self.logger.error(f"Error searching for {keyword}: {e}")
                     continue
 
-            # Write statistics
-            await self.write_run_statistics()
+            # Finalize and write run results
+            events_count, urls_count = get_database_counts(self.llm_handler.db_handler)
+            self.run_results_tracker.finalize(events_count, urls_count)
+            elapsed_time = str(datetime.now() - start_time)
+            self.run_results_tracker.write_results(elapsed_time)
 
             self.logger.info(f"Eventbrite scraper completed: {results}")
             return results
@@ -349,28 +360,6 @@ class EventbriteScraperV2(BaseScraper):
             # Clean up resources
             await self.close()
 
-    async def write_run_statistics(self):
-        """Write run statistics to database."""
-        try:
-            if not self.db_writer:
-                self.logger.warning("Database writer not initialized, skipping statistics")
-                return
-
-            # Calculate statistics
-            end_time = datetime.now()
-            total_time = end_time - datetime.fromisoformat(
-                str(self.stats.get('start_time', datetime.now()))
-            )
-
-            self.logger.info(f"Eventbrite scraper statistics:")
-            self.logger.info(f"  URLs visited: {self.stats['urls_visited']}")
-            self.logger.info(f"  URLs failed: {self.stats['urls_failed']}")
-            self.logger.info(f"  Events extracted: {self.stats['events_extracted']}")
-            self.logger.info(f"  Events written: {self.stats['events_written']}")
-            self.logger.info(f"  Total time: {total_time}")
-
-        except Exception as e:
-            self.logger.error(f"Error writing run statistics: {e}")
 
     async def close(self):
         """Close browser and clean up resources."""

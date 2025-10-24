@@ -81,7 +81,6 @@ class TestFacebookScraperV2Initialization:
             'process_fb_url',
             'driver_fb_search',
             'driver_fb_urls',
-            'write_run_statistics',
             'get_statistics',
             'log_statistics',
             'scrape'
@@ -468,7 +467,6 @@ class TestRefactoringMaintenance:
             'process_fb_url',
             'driver_fb_search',
             'driver_fb_urls',
-            'write_run_statistics',
         ]
 
         for method in core_methods:

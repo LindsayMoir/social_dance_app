@@ -440,26 +440,8 @@ class DatabaseHandler():
         self.execute_query(address_table_query)
         logging.info("create_tables: 'address' table created or already exists.")
 
-        # Create the 'runs' table
-        runs_table_query = """
-            CREATE TABLE IF NOT EXISTS runs (
-                run_id SERIAL PRIMARY KEY,
-                run_name TEXT UNIQUE,
-                run_description TEXT,
-                start_time TEXT,
-                end_time TEXT,
-                elapsed_time TEXT,
-                python_file_name TEXT,
-                unique_urls_count INTEGER,
-                total_url_attempts INTEGER,
-                urls_with_extracted_text INTEGER,
-                urls_with_found_keywords INTEGER,
-                events_written_to_db INTEGER,
-                time_stamp TIMESTAMP
-            )
-        """
-        self.execute_query(runs_table_query)
-        logging.info("create_tables: 'address' table created or already exists.")
+        # Note: 'runs' table has been removed and replaced with 'run_results' table in db.py
+        # See db.py for the new run_results table implementation
 
         # See if this worked.
         query = """

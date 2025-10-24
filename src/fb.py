@@ -83,6 +83,7 @@ from credentials import get_credentials
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_utils import log_extracted_text
+from run_results_tracker import RunResultsTracker, get_database_counts
 from secret_paths import get_auth_file
 
 # Get config
@@ -118,13 +119,11 @@ class FacebookEventScraper():
         else:
             logging.error("Facebook login failed.")
 
-        # Run statistics tracking
-        if config['testing']['status']:
-            self.run_name = f"Test Run {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            self.run_description = "Test Run Description"
-        else:
-            self.run_name = "Facebook Event Scraper Run"
-            self.run_description = f"Production {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        # Initialize run results tracker
+        file_name = 'fb.py'
+        self.run_results_tracker = RunResultsTracker(file_name, db_handler)
+        events_count, urls_count = get_database_counts(db_handler)
+        self.run_results_tracker.initialize(events_count, urls_count)
 
         # **Tracking Variables**
         self.unique_urls = set()  # Store unique URLs
@@ -133,13 +132,6 @@ class FacebookEventScraper():
         self.urls_with_extracted_text = 0  # URLs where text was successfully extracted
         self.urls_with_found_keywords = 0  # URLs where keywords were found
         self.events_written_to_db = 0  # Number of events successfully written to DB
-
-        # Initialize run statistics
-        self.start_time = datetime.now()
-        self.total_url_attempts = 0
-        self.urls_with_extracted_text = 0
-        self.urls_with_found_keywords = 0
-        self.events_written_to_db = 0
 
         # URL tracking
         self.urls_visited = set()
@@ -858,33 +850,6 @@ class FacebookEventScraper():
             logging.warning("def driver_fb_urls(): No Facebook URLs returned from the database.")
 
 
-    def write_run_statistics(self) -> None:
-        """
-        Writes run statistics to the database.
-        """
-        end_time = datetime.now()
-        logging.info(f"write_run_statistics(): Writing run statistics for {self.run_name}.")
-
-        elapsed_time = str(end_time - self.start_time)
-        time_stamp = datetime.now()
-
-        run_data = pd.DataFrame([{
-            "run_name": self.run_name,
-            "run_description": self.run_description,
-            "start_time": self.start_time,
-            "end_time": end_time,
-            "elapsed_time": elapsed_time,
-            "python_file_name": "fb.py",
-            "unique_urls_count": len(self.urls_visited),
-            "total_url_attempts": self.total_url_attempts,
-            "urls_with_extracted_text": self.urls_with_extracted_text,
-            "urls_with_found_keywords": self.urls_with_found_keywords,
-            "events_written_to_db": self.events_written_to_db,
-            "time_stamp": time_stamp
-        }])
-
-        run_data.to_sql("runs", db_handler.get_db_connection(), if_exists="append", index=False)
-        logging.info(f"write_run_statistics(): Run statistics written to database for {self.run_name}.")
 
 
     def checkpoint_events(self) -> None:
@@ -999,8 +964,11 @@ def main():
     # To be removed in production
     # fb_scraper.checkpoint_events()
 
-    # Write run statistics to the database
-    fb_scraper.write_run_statistics()
+    # Finalize and write run results
+    events_count, urls_count = get_database_counts(db_handler)
+    fb_scraper.run_results_tracker.finalize(events_count, urls_count)
+    elapsed_time = str(datetime.now() - start_time)
+    fb_scraper.run_results_tracker.write_results(elapsed_time)
 
     # Close browser and Playwright
     fb_scraper.browser.close()

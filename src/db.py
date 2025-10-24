@@ -323,26 +323,24 @@ class DatabaseHandler():
         self.execute_query(address_table_query)
         logging.info("create_tables: 'address' table created or already exists.")
 
-        # Create the 'runs' table
-        runs_table_query = """
-            CREATE TABLE IF NOT EXISTS runs (
-                run_id SERIAL PRIMARY KEY,
-                run_name TEXT UNIQUE,
-                run_description TEXT,
-                start_time TEXT,
-                end_time TEXT,
-                elapsed_time TEXT,
-                python_file_name TEXT,
-                unique_urls_count INTEGER,
-                total_url_attempts INTEGER,
-                urls_with_extracted_text INTEGER,
-                urls_with_found_keywords INTEGER,
-                events_written_to_db INTEGER,
-                time_stamp TIMESTAMP
+        # Create the 'run_results' table - tracks execution statistics for each scraper run
+        run_results_table_query = """
+            CREATE TABLE IF NOT EXISTS run_results (
+                run_result_id SERIAL PRIMARY KEY,
+                file_name TEXT,
+                start_time_df TEXT,
+                events_count_start INTEGER,
+                urls_count_start INTEGER,
+                events_count_end INTEGER,
+                urls_count_end INTEGER,
+                new_events_in_db INTEGER,
+                new_urls_in_db INTEGER,
+                time_stamp TIMESTAMP,
+                elapsed_time TEXT
             )
         """
-        self.execute_query(runs_table_query)
-        logging.info("create_tables: 'address' table created or already exists.")
+        self.execute_query(run_results_table_query)
+        logging.info("create_tables: 'run_results' table created or already exists.")
 
         # See if this worked.
         query = """

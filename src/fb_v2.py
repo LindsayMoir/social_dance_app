@@ -44,6 +44,7 @@ from credentials import get_credentials
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_utils import log_extracted_text
+from run_results_tracker import RunResultsTracker, get_database_counts
 from secret_paths import get_auth_file, sync_auth_to_db
 from text_utils import TextExtractor
 from url_nav import URLNavigator
@@ -128,6 +129,12 @@ class FacebookScraperV2(BaseScraper):
         else:
             self.logger.error("✗ Facebook login failed")
 
+        # Initialize run results tracker
+        file_name = 'fb_v2.py'
+        self.run_results_tracker = RunResultsTracker(file_name, self.db_handler)
+        events_count, urls_count = get_database_counts(self.db_handler)
+        self.run_results_tracker.initialize(events_count, urls_count)
+
         # Initialize run statistics
         self._init_statistics()
 
@@ -142,13 +149,6 @@ class FacebookScraperV2(BaseScraper):
 
     def _init_statistics(self) -> None:
         """Initialize run statistics tracking."""
-        if self.config['testing']['status']:
-            self.run_name = f"Test Run {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            self.run_description = "Test Run Description"
-        else:
-            self.run_name = "Facebook Event Scraper Run"
-            self.run_description = f"Production {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-
         self.stats = {
             'unique_urls': 0,
             'total_url_attempts': 0,
@@ -157,7 +157,6 @@ class FacebookScraperV2(BaseScraper):
             'events_written_to_db': 0
         }
 
-        self.start_time = datetime.now()
         self.unique_urls = set()
 
     def login_to_facebook(self) -> bool:
@@ -894,31 +893,6 @@ class FacebookScraperV2(BaseScraper):
         else:
             self.logger.warning("driver_fb_urls(): No Facebook URLs returned from database")
 
-    def write_run_statistics(self) -> None:
-        """Write run statistics to the database."""
-        end_time = datetime.now()
-        self.logger.info(f"write_run_statistics(): Writing statistics for {self.run_name}")
-
-        elapsed_time = str(end_time - self.start_time)
-        time_stamp = datetime.now()
-
-        run_data = pd.DataFrame([{
-            "run_name": self.run_name,
-            "run_description": self.run_description,
-            "start_time": self.start_time,
-            "end_time": end_time,
-            "elapsed_time": elapsed_time,
-            "python_file_name": "fb_v2.py",
-            "unique_urls_count": len(self.urls_visited),
-            "total_url_attempts": self.stats['total_url_attempts'],
-            "urls_with_extracted_text": self.stats['urls_with_extracted_text'],
-            "urls_with_found_keywords": self.stats['urls_with_found_keywords'],
-            "events_written_to_db": self.stats['events_written_to_db'],
-            "time_stamp": time_stamp
-        }])
-
-        run_data.to_sql("runs", self.db_handler.get_db_connection(), if_exists="append", index=False)
-        self.logger.info(f"write_run_statistics(): Statistics written for {self.run_name}")
 
     def get_statistics(self) -> dict:
         """
@@ -929,9 +903,7 @@ class FacebookScraperV2(BaseScraper):
         """
         return {
             **self.stats,
-            'unique_urls': len(self.urls_visited),
-            'run_name': self.run_name,
-            'start_time': self.start_time
+            'unique_urls': len(self.urls_visited)
         }
 
     def log_statistics(self) -> None:
@@ -952,13 +924,17 @@ class FacebookScraperV2(BaseScraper):
             pd.DataFrame: Extracted events (empty for FB scraper, events written to DB)
         """
         self.logger.info("FacebookScraperV2.scrape() called")
+        start_time = datetime.now()
 
         # Run drivers
         self.driver_fb_search()
         self.driver_fb_urls()
 
-        # Write statistics
-        self.write_run_statistics()
+        # Finalize and write run results
+        events_count, urls_count = get_database_counts(self.db_handler)
+        self.run_results_tracker.finalize(events_count, urls_count)
+        elapsed_time = str(datetime.now() - start_time)
+        self.run_results_tracker.write_results(elapsed_time)
 
         # Return empty DataFrame (events were written to DB)
         return pd.DataFrame()
@@ -994,6 +970,12 @@ async def main():
 
             # Log statistics
             scraper.log_statistics()
+
+            # Finalize and write run results
+            events_count, urls_count = get_database_counts(scraper.db_handler)
+            scraper.run_results_tracker.finalize(events_count, urls_count)
+            elapsed_time = str(datetime.now() - start_time)
+            scraper.run_results_tracker.write_results(elapsed_time)
 
         # Log completion
         end_time = datetime.now()
