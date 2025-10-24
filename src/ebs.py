@@ -504,7 +504,7 @@ def import_ebs_events_from_csv(db_handler, config):
 
         # Use write_events_to_db which handles address processing and address_id assignment
         # Pass empty strings for url, parent_url, source, keywords since they're already in the DataFrame
-        db_handler.write_events_to_db(df, url='', parent_url='', source='', keywords='')
+        db_handler.event_repo.write_events_to_db(df, url='', parent_url='', source='', keywords='')
 
         logging.info(f"import_ebs_events_from_csv(): Successfully imported {len(df)} events")
 

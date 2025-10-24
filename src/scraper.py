@@ -115,7 +115,7 @@ class EventSpider(scrapy.Spider):
             if 'facebook.com' in url.lower() or 'instagram.com' in url.lower():
                 logging.info(f"start(): Skipping social media URL (fb/ig): {url}")
                 child_row = [url, '', source, [], False, 1, datetime.now()]
-                db_handler.write_url_to_db(child_row)
+                db_handler.url_repo.write_url_to_db(child_row)
                 continue
 
             if db_handler.avoid_domains(url):
@@ -158,7 +158,7 @@ class EventSpider(scrapy.Spider):
         if any(dom in url for dom in ('facebook', 'instagram')):
             # record it as unwanted and stop processing immediately
             child_row = [url, '', source, [], False, 1, datetime.now()]
-            db_handler.write_url_to_db(child_row)
+            db_handler.url_repo.write_url_to_db(child_row)
             logging.info(f"def parse(): Skipping and recording unwanted original URL: {url}")
             return
         
@@ -181,13 +181,13 @@ class EventSpider(scrapy.Spider):
             if llm_status:
                 # mark as relevant
                 url_row[4] = True
-                db_handler.write_url_to_db(url_row)
+                db_handler.url_repo.write_url_to_db(url_row)
                 logging.info(f"def parse(): URL {url} marked as relevant (LLM positive).")
             else:
-                db_handler.write_url_to_db(url_row)
+                db_handler.url_repo.write_url_to_db(url_row)
                 logging.info(f"def parse(): URL {url} marked as irrelevant (LLM negative).")
         else:
-            db_handler.write_url_to_db(url_row)
+            db_handler.url_repo.write_url_to_db(url_row)
             logging.info(f"def parse(): URL {url} marked as irrelevant (no keywords).")
 
         # 3) Extract all <a href> links (limit to configured maximum)
@@ -214,7 +214,7 @@ class EventSpider(scrapy.Spider):
                 self.fetch_google_calendar_events(cal_url, url, source, keywords)
             # mark the page itself as relevant if calendar events fetched
             url_row = [cal_url, url, source, found_keywords, True, crawl_try, time_stamp]
-            db_handler.write_url_to_db(url_row)
+            db_handler.url_repo.write_url_to_db(url_row)
 
         # 5) Filter unwanted links and record them
         all_links      = {url} | set(page_links)
@@ -222,7 +222,7 @@ class EventSpider(scrapy.Spider):
         unwanted_links = all_links - filtered_links
         for link in unwanted_links:
             child_row = [link, url, source, found_keywords, False, 1, datetime.now()]
-            db_handler.write_url_to_db(child_row)
+            db_handler.url_repo.write_url_to_db(child_row)
             logging.info(f"def parse(): Recorded unwanted URL: {link}")
 
         # 6) Follow each remaining link with Playwright rendering
@@ -250,7 +250,7 @@ class EventSpider(scrapy.Spider):
 
             # record the child link before crawling
             child_row = [link, url, source, found_keywords, False, 1, datetime.now()]
-            db_handler.write_url_to_db(child_row)
+            db_handler.url_repo.write_url_to_db(child_row)
 
             if len(self.visited_link) >= self.config['crawling']['urls_run_limit']:
                 logging.info(f"parse(): Reached URL run limit ({self.config['crawling']['urls_run_limit']}); stopping crawler.")
@@ -326,7 +326,7 @@ class EventSpider(scrapy.Spider):
             logging.info(f"def process_calendar_id(): Found {len(events_df)} events for calendar_id: {calendar_id}")
             logging.info(f"def process_calendar_id(): Event columns: {list(events_df.columns)}")
             logging.info(f"def process_calendar_id(): Sample event data:\n{events_df.head(1).to_dict('records')}")
-            db_handler.write_events_to_db(events_df, calendar_id, calendar_url, source, keywords)
+            db_handler.event_repo.write_events_to_db(events_df, calendar_id, calendar_url, source, keywords)
         else:
             logging.warning(f"def process_calendar_id(): No events found for calendar_id: {calendar_id}")
 

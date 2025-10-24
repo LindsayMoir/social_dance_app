@@ -604,7 +604,7 @@ class FacebookEventScraper():
         # Ensure we can access the page
         if not self.navigate_and_maybe_login(url):
             logging.info(f"process_fb_url: cannot access {url}")
-            db_handler.write_url_to_db(url_row)
+            db_handler.url_repo.write_url_to_db(url_row)
             return
 
         # Normalize URL and initialize tracking
@@ -621,7 +621,7 @@ class FacebookEventScraper():
         # 2) Bail if no text
         if not extracted_text:
             logging.info(f"process_fb_url: no text for {url}")
-            db_handler.write_url_to_db(url_row)
+            db_handler.url_repo.write_url_to_db(url_row)
             return
         self.urls_with_extracted_text += 1
 
@@ -629,7 +629,7 @@ class FacebookEventScraper():
         keywords_found = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
         if not keywords_found:
             logging.info(f"process_fb_url: no keywords in {url}")
-            db_handler.write_url_to_db(url_row)
+            db_handler.url_repo.write_url_to_db(url_row)
             return
         self.urls_with_found_keywords += 1
 
@@ -642,19 +642,19 @@ class FacebookEventScraper():
         llm_response = llm_handler.query_llm(url, prompt, schema_type)
         if not llm_response or "No events found" in llm_response:
             logging.info(f"process_fb_url: LLM no events for {url}")
-            db_handler.write_url_to_db(url_row)
+            db_handler.url_repo.write_url_to_db(url_row)
             return
 
         # 5) Parse JSON and write to DB
         parsed = llm_handler.extract_and_parse_json(llm_response, url, schema_type)
         if not parsed:
             logging.warning(f"process_fb_url: empty LLM response for {url}")
-            db_handler.write_url_to_db(url_row)
+            db_handler.url_repo.write_url_to_db(url_row)
             return
         events_df = pd.DataFrame(parsed)
         if events_df.empty:
             logging.warning(f"process_fb_url: empty DataFrame for {url}")
-            db_handler.write_url_to_db(url_row)
+            db_handler.url_repo.write_url_to_db(url_row)
             return
 
         # Ensure URL column is populated
@@ -662,7 +662,7 @@ class FacebookEventScraper():
             events_df.loc[0, 'url'] = url
 
         # 6) Write events and mark URL
-        db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_found)
+        db_handler.event_repo.write_events_to_db(events_df, url, parent_url, source, keywords_found)
         self.events_written_to_db += len(events_df)
     
 
@@ -715,11 +715,11 @@ class FacebookEventScraper():
                     else:
                         logging.warning(f"def driver_fb_search(): No events extracted for {url}.")
                         url_row = [url, parent_url, source, found_keywords, False, 1, datetime.now()]
-                        db_handler.write_url_to_db(url_row)
+                        db_handler.url_repo.write_url_to_db(url_row)
                 else:
                     keywords = ''
                     url_row = [url, parent_url, source, keywords, False, 1, datetime.now()]
-                    db_handler.write_url_to_db(url_row)
+                    db_handler.url_repo.write_url_to_db(url_row)
                     logging.info(f"def driver_fb_search(): No keywords found in extracted text for URL: {url}.")
 
             # Scrape events with streaming callback (no accumulation)
@@ -938,20 +938,20 @@ class FacebookEventScraper():
             llm_response = llm_handler.query_llm(url, prompt, schema_type)
             if not llm_response or "No events found" in llm_response:
                 logging.info(f"checkpoint_events(): LLM returned no events for {url}")
-                db_handler.write_url_to_db(url_row)
+                db_handler.url_repo.write_url_to_db(url_row)
                 continue
 
             # 5) Parse JSON, build DataFrame
             parsed = llm_handler.extract_and_parse_json(llm_response, url, schema_type)
             if not parsed:
                 logging.warning(f"checkpoint_events(): empty LLM response for {url}")
-                db_handler.write_url_to_db(url_row)
+                db_handler.url_repo.write_url_to_db(url_row)
                 continue
 
             events_df = pd.DataFrame(parsed)
             if events_df.empty:
                 logging.warning(f"checkpoint_events(): empty DataFrame for {url}")
-                db_handler.write_url_to_db(url_row)
+                db_handler.url_repo.write_url_to_db(url_row)
                 continue
 
             # ensure the URL column is filled
@@ -959,7 +959,7 @@ class FacebookEventScraper():
                 events_df.loc[0, 'url'] = url
 
             # 6) write events and tally
-            db_handler.write_events_to_db(events_df, url, parent_url, source, found_keywords)
+            db_handler.event_repo.write_events_to_db(events_df, url, parent_url, source, found_keywords)
             self.events_written_to_db += len(events_df)
 
         logging.info(f"checkpoint_events(): Completed. Wrote {self.events_written_to_db} events.")

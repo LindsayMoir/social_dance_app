@@ -673,10 +673,10 @@ class ReadExtract:
         df = pd.DataFrame([event_dict])
 
         # 3. write to Postgres via db_handler
-        get_db_handler().write_events_to_db(df, 
-                                      url=event_dict['url'], 
+        get_db_handler().event_repo.write_events_to_db(df,
+                                      url=event_dict['url'],
                                       parent_url = '',
-                                      source=event_dict['source'], 
+                                      source=event_dict['source'],
                                       keywords=event_dict['dance_style'])
         # 4. log the action
         logging.info(f"uvic_rueda(): Added UVic Rueda event for {next_wed.isoformat()} to DB.")
