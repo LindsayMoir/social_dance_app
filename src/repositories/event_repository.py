@@ -99,8 +99,8 @@ class EventRepository:
             updated_rows = []
             for i, row in df.iterrows():
                 event_dict = row.to_dict()
-                event_dict = self.db.normalize_nulls(event_dict)
-                updated_event = self.db.process_event_address(event_dict)
+                event_dict = self.db.address_data_repo.normalize_nulls(event_dict)
+                updated_event = self.db.address_resolution_repo.process_event_address(event_dict)
                 for key in ["address_id", "location"]:
                     if key in updated_event:
                         df.at[i, key] = updated_event[key]
@@ -113,7 +113,7 @@ class EventRepository:
 
             if df.empty:
                 self.logger.info("write_events_to_db: No events remain after filtering, skipping write.")
-                self.db.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
+                self.db.url_repo.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
                 return False
 
             # Write debug CSV (only locally, not on Render)
@@ -125,7 +125,7 @@ class EventRepository:
 
             # Write to database
             df.to_sql('events', self.db.conn, if_exists='append', index=False, method='multi')
-            self.db.write_url_to_db([url, parent_url, source, keywords, True, 1, datetime.now()])
+            self.db.url_repo.write_url_to_db([url, parent_url, source, keywords, True, 1, datetime.now()])
             self.logger.info("write_events_to_db: Events data written to the 'events' table.")
             return True
 

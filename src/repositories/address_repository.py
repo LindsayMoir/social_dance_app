@@ -179,7 +179,7 @@ class AddressRepository:
                         return addr_id
 
         # Step 5: Normalize null values and prepare required fields for insert
-        parsed_address = self.db.normalize_nulls(parsed_address)
+        parsed_address = self.db.address_data_repo.normalize_nulls(parsed_address)
 
         # Ensure ALL fields expected by INSERT query are present (set to None if missing)
         required_fields = [
