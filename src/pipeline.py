@@ -719,40 +719,41 @@ def read_pdfs_step():
     restore_config(original_config, "read_pdfs")
     return True
 
-# ------------------------
-# TASKS FOR DB.PY STEP
-# ------------------------
-@task
-def run_db_script():
-    try:
-        result = subprocess.run([sys.executable, "src/db.py"], check=True)
-        logger.info("def run_db_script(): db.py executed successfully.")
-        return "Script completed successfully"
-    except subprocess.CalledProcessError as e:
-        error_message = f"db.py failed with return code: {e.returncode}"
-        logger.error(f"def run_db_script(): {error_message}")
-        raise Exception(error_message)
-
-@flow(name="DB Step")
-def db_step():
-    original_config = backup_and_update_config("db", updates=COMMON_CONFIG_UPDATES)
-    write_run_config.submit("db", original_config)
-    if not dummy_pre_process("db"):
-        send_text_message("db.py pre-processing failed.")
-        restore_config(original_config, "db")
-        raise Exception("db.py pre-processing failed. Pipeline stopped.")
-    run_db_script()
-    dummy_post_process("db")
-    restore_config(original_config, "db")
-    # After the first run, if drop_tables is True, update the config file to set it to False.
-    with open(CONFIG_PATH, "r") as f:
-        updated_config = yaml.safe_load(f)
-    if updated_config['testing'].get('drop_tables', False):
-        updated_config['testing']['drop_tables'] = False
-        with open(CONFIG_PATH, "w") as f:
-            yaml.dump(updated_config, f)
-        logger.info("db_step: Updated config['testing']['drop_tables'] to False after first run.")
-    return True
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE: DB.PY STEP REMOVED (October 24, 2025)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# db.py is a utility module containing database initialization and table creation
+# logic. It is NOT meant to be run as a standalone script in the pipeline.
+#
+# Database table creation now happens automatically when scrapers initialize
+# their database connections. The tables are created in src/db.py through the
+# DatabaseHandler.create_tables() method, which is called during initialization.
+#
+# Run Results Tracking (October 24, 2025 Refactoring):
+# ─────────────────────────────────────────────────────────────────────────────
+# The old 'runs' table has been replaced with the 'run_results' table. All
+# scrapers now use the RunResultsTracker utility (src/run_results_tracker.py)
+# to automatically track execution statistics:
+#
+# - file_name: Name of the script that ran
+# - start_time_df: ISO format start timestamp
+# - events_count_start/end: Event count at start/end of execution
+# - urls_count_start/end: URL count at start/end of execution
+# - new_events_in_db: Delta events added (end - start)
+# - new_urls_in_db: Delta URLs added (end - start)
+# - elapsed_time: Total execution duration
+# - time_stamp: When the row was inserted
+#
+# This is handled transparently by each scraper - no pipeline changes needed.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# If you need to manually create/reset tables, use:
+#   from db import DatabaseHandler
+#   handler = DatabaseHandler()
+#   handler.create_tables()
+#
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ------------------------
 # TASK FOR DATABASE BACKUP STEP (Using .dump)
@@ -1279,7 +1280,9 @@ PIPELINE_STEPS = [
     ("images", images_step),
     ("read_pdfs", read_pdfs_step),
     ("backup_db", backup_db_step),
-    ("db", db_step),
+    # NOTE: "db" step removed (Oct 24, 2025) - db.py is a utility module, not a runnable script
+    # Database tables are now created automatically by scrapers during initialization
+    # Run results are tracked by RunResultsTracker (src/run_results_tracker.py)
     ("clean_up", clean_up_step),
     ("dedup_llm", dedup_llm_step),
     ("irrelevant_rows", irrelevant_rows_step),
