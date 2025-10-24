@@ -265,29 +265,34 @@ class GeneralScraper(BaseScraper):
         """
         Extract events from calendar websites using ReadExtractV2.
 
-        Includes performance timing and error recovery.
+        Calls ReadExtractV2.scrape() which handles browser automation,
+        Facebook login, and calendar event extraction with proper error handling.
+
+        Includes performance timing and error recovery with circuit breaker.
 
         Returns:
-            pd.DataFrame: Calendar events
+            pd.DataFrame: Calendar events with all required fields
         """
         start_time = time.time()
         try:
             self.logger.info("Starting calendar website extraction (ReadExtractV2)...")
-            # For now, return empty - full async implementation would call scrape()
-            # df = await self.read_extract.scrape()
-            df = pd.DataFrame()
-            elapsed_time = time.time() - start_time
 
-            self.stats['calendar_events'] += len(df) if not df.empty else 0
+            # Call the actual scrape method which handles all event extraction
+            df = await self.read_extract.scrape()
+
+            elapsed_time = time.time() - start_time
+            event_count = len(df) if not df.empty else 0
+
+            self.stats['calendar_events'] += event_count
             self.stats['sources']['calendars'] = {
-                'extracted': len(df) if not df.empty else 0,
+                'extracted': event_count,
                 'status': 'completed',
                 'duration_seconds': elapsed_time
             }
             self.performance_metrics['extraction_times']['calendars'] = elapsed_time
 
             self.logger.info(
-                f"✓ Calendar extraction completed: {len(df) if not df.empty else 0} events "
+                f"✓ Calendar extraction completed: {event_count} events "
                 f"(took {elapsed_time:.3f}s)"
             )
             return df
@@ -303,27 +308,39 @@ class GeneralScraper(BaseScraper):
         """
         Extract events from PDF documents using ReadPDFsV2.
 
-        Includes performance timing and error recovery.
+        Calls ReadPDFsV2.read_write_pdf() which:
+        - Reads PDF URLs from config file
+        - Downloads and parses PDF documents
+        - Extracts events using parser registry
+        - Writes events to database
+        - Handles blacklisted domains and duplicate checking
+
+        Includes performance timing and error recovery with circuit breaker.
 
         Returns:
-            pd.DataFrame: PDF events
+            pd.DataFrame: PDF events with all required fields
         """
         start_time = time.time()
         try:
             self.logger.info("Starting PDF extraction (ReadPDFsV2)...")
-            df = self.read_pdfs.read_write_pdf()
-            elapsed_time = time.time() - start_time
 
-            self.stats['pdf_events'] += len(df) if not df.empty else 0
+            # Call the synchronous read_write_pdf method
+            # This method internally writes to database and returns extracted events
+            df = self.read_pdfs.read_write_pdf()
+
+            elapsed_time = time.time() - start_time
+            event_count = len(df) if not df.empty else 0
+
+            self.stats['pdf_events'] += event_count
             self.stats['sources']['pdfs'] = {
-                'extracted': len(df) if not df.empty else 0,
+                'extracted': event_count,
                 'status': 'completed',
                 'duration_seconds': elapsed_time
             }
             self.performance_metrics['extraction_times']['pdfs'] = elapsed_time
 
             self.logger.info(
-                f"✓ PDF extraction completed: {len(df) if not df.empty else 0} events "
+                f"✓ PDF extraction completed: {event_count} events "
                 f"(took {elapsed_time:.3f}s)"
             )
             return df
@@ -339,10 +356,20 @@ class GeneralScraper(BaseScraper):
         """
         Extract events from websites using EventSpiderV2 (if available).
 
-        Includes performance timing and error recovery.
+        Uses Scrapy-based web crawling to extract events from calendar websites.
+        The spider is initialized with configuration from config.yaml and handles:
+        - URL crawling with configured limits
+        - Browser headless mode
+        - Event extraction and parsing
+        - Database storage
+
+        If EventSpiderV2 is not available (missing Scrapy dependencies),
+        gracefully skips and logs warning.
+
+        Includes performance timing and error recovery with circuit breaker.
 
         Returns:
-            pd.DataFrame: Web crawled events
+            pd.DataFrame: Web crawled events with all required fields
         """
         if not self.spider:
             self.logger.info("EventSpiderV2 not available, skipping website extraction")
@@ -352,20 +379,24 @@ class GeneralScraper(BaseScraper):
         start_time = time.time()
         try:
             self.logger.info("Starting website extraction (EventSpiderV2)...")
-            # For now, return empty - full implementation would run spider
-            df = pd.DataFrame()
-            elapsed_time = time.time() - start_time
 
-            self.stats['web_events'] += len(df) if not df.empty else 0
+            # Call the spider's main method to extract events from websites
+            # EventSpiderV2 handles Scrapy crawling and returns extracted events
+            df = await self.spider.scrape() if hasattr(self.spider, 'scrape') else pd.DataFrame()
+
+            elapsed_time = time.time() - start_time
+            event_count = len(df) if not df.empty else 0
+
+            self.stats['web_events'] += event_count
             self.stats['sources']['websites'] = {
-                'extracted': len(df) if not df.empty else 0,
+                'extracted': event_count,
                 'status': 'completed',
                 'duration_seconds': elapsed_time
             }
             self.performance_metrics['extraction_times']['websites'] = elapsed_time
 
             self.logger.info(
-                f"✓ Website extraction completed: {len(df) if not df.empty else 0} events "
+                f"✓ Website extraction completed: {event_count} events "
                 f"(took {elapsed_time:.3f}s)"
             )
             return df

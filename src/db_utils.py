@@ -40,6 +40,19 @@ class DBWriter:
         self.db = db_handler
         self.logger = logger or logging.getLogger(__name__)
 
+    @property
+    def db_handler(self):
+        """
+        Backward compatibility property for accessing the DatabaseHandler.
+
+        Some code (like read_pdfs_v2.py) expects self.db_writer.db_handler,
+        but DBWriter stores it as self.db. This property provides the alias.
+
+        Returns:
+            DatabaseHandler: The underlying database handler instance
+        """
+        return self.db
+
     def normalize_event_data(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """
         Normalize event data for database insertion.
