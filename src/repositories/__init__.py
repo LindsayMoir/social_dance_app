@@ -7,5 +7,6 @@ from .event_analysis_repository import EventAnalysisRepository
 from .address_resolution_repository import AddressResolutionRepository
 from .address_data_repository import AddressDataRepository
 from .location_cache_repository import LocationCacheRepository
+from .database_maintenance_repository import DatabaseMaintenanceRepository
 
-__all__ = ['AddressRepository', 'URLRepository', 'EventRepository', 'EventManagementRepository', 'EventAnalysisRepository', 'AddressResolutionRepository', 'AddressDataRepository', 'LocationCacheRepository']
+__all__ = ['AddressRepository', 'URLRepository', 'EventRepository', 'EventManagementRepository', 'EventAnalysisRepository', 'AddressResolutionRepository', 'AddressDataRepository', 'LocationCacheRepository', 'DatabaseMaintenanceRepository']
