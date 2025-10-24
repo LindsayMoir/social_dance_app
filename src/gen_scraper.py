@@ -46,6 +46,7 @@ from base_scraper import BaseScraper
 from rd_ext_v2 import ReadExtractV2
 from read_pdfs_v2 import ReadPDFsV2
 from llm import LLMHandler
+from run_results_tracker import RunResultsTracker, get_database_counts
 
 setup_logging('gen_scraper')
 
@@ -92,6 +93,13 @@ class GeneralScraper(BaseScraper):
 
         # Initialize LLM handler (shared across all extractors)
         self.llm_handler = LLMHandler(config_path=config_path)
+
+        # Initialize run results tracker for execution statistics
+        file_name = 'gen_scraper.py'
+        self.run_results_tracker = RunResultsTracker(file_name, self.llm_handler.db_handler)
+        events_count, urls_count = get_database_counts(self.llm_handler.db_handler)
+        self.run_results_tracker.initialize(events_count, urls_count)
+        self.logger.info(f"RunResultsTracker initialized for {file_name}")
 
         # Initialize component extractors with shared resources
         self.logger.info("Initializing component extractors...")
@@ -688,6 +696,12 @@ async def main():
         with GeneralScraper() as scraper:
             # Run parallel pipeline
             results = await scraper.run_pipeline_parallel()
+
+            # Finalize run results tracking
+            events_count, urls_count = get_database_counts(scraper.llm_handler.db_handler)
+            scraper.run_results_tracker.finalize(events_count, urls_count)
+            elapsed_time = str(datetime.now() - start_time)
+            scraper.run_results_tracker.write_results(elapsed_time)
 
             # Log statistics
             scraper.log_statistics()
