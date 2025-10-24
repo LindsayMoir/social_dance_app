@@ -100,14 +100,14 @@ class AddressResolutionRepository:
             quick_addr_id = self.db.quick_address_lookup(location)
             if quick_addr_id:
                 # Cache for future use
-                self.db.location_cache_repo.cache_raw_location(location, quick_addr_id)
+                self.db.cache_raw_location(location, quick_addr_id)
                 return self._finalize_event_with_address(event, quick_addr_id, location, "quick_lookup")
 
             # STEP 3: LLM processing (if available)
             if self.llm:
                 address_id = self._resolve_via_llm(event, location)
                 if address_id:
-                    self.db.location_cache_repo.cache_raw_location(location, address_id)
+                    self.db.cache_raw_location(location, address_id)
                     return self._finalize_event_with_address(event, address_id, location, "llm")
 
             # STEP 4: Create minimal fallback address
@@ -211,7 +211,7 @@ class AddressResolutionRepository:
                 return None
 
             # Normalize nulls and resolve address
-            parsed_address = self.db.address_data_repo.normalize_nulls(parsed_results[0])
+            parsed_address = self.db.normalize_nulls(parsed_results[0])
             address_id = self.db.resolve_or_insert_address(parsed_address)
 
             if address_id:
