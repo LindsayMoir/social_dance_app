@@ -1,0 +1,34 @@
+# Local Development Configuration
+# Used for development and testing on local machines
+
+environment: local
+debug: true
+log_level: DEBUG
+log_format: detailed
+
+crawling:
+  headless: false  # Show browser window for debugging
+  scroll_depth: 3  # Reduced for faster testing
+  urls_run_limit: 10  # Small limit for quick testing
+  prompt_max_length: 4000
+  timeout_seconds: 30
+
+database:
+  type: sqlite
+  path: data/social_dance_dev.db
+
+monitoring:
+  enabled: false
+  metrics_port: 8000
+  health_check_interval: 60
+
+performance:
+  max_workers: 2  # Limited for local development
+  batch_size: 50
+  cache_size_mb: 50
+  timeout_seconds: 300
+
+testing:
+  status: true
+  mock_requests: false
+  enable_logging: true

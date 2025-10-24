@@ -1,0 +1,85 @@
+# Production Environment Configuration
+# Used for live deployment with high reliability and security
+
+environment: production
+debug: false
+log_level: WARNING  # Only warnings and errors
+log_format: json  # JSON for structured logging
+
+crawling:
+  headless: true
+  scroll_depth: 10  # Full crawling depth
+  urls_run_limit: 10000  # Full limit
+  prompt_max_length: 8000
+  timeout_seconds: 60  # Higher timeout for reliability
+
+database:
+  type: postgresql
+  host: ${DATABASE_HOST}
+  port: ${DATABASE_PORT:-5432}
+  name: social_dance_prod
+  user: ${DATABASE_USER}
+  password: ${DATABASE_PASSWORD}
+  ssl_mode: require  # Require SSL
+  pool_size: 20
+  pool_timeout: 30
+
+monitoring:
+  enabled: true
+  metrics_port: 8000
+  health_check_interval: 60
+
+performance:
+  max_workers: 8  # More workers for production
+  batch_size: 200
+  cache_size_mb: 500  # Larger cache
+  timeout_seconds: 600  # 10-minute timeout
+
+testing:
+  status: false
+  mock_requests: false
+  enable_logging: true
+
+# Production-specific settings
+retry_policy:
+  max_retries: 5  # More retries
+  backoff_factor: 2.0
+  max_backoff: 300  # Cap at 5 minutes
+
+error_handling:
+  circuit_breaker_threshold: 10
+  circuit_breaker_timeout: 300
+  fallback_enabled: true
+
+# Alerting
+alerts:
+  enabled: true
+  slack_webhook: ${SLACK_WEBHOOK_PROD}
+  pagerduty_key: ${PAGERDUTY_KEY}
+  email_recipients:
+    - ops@example.com
+    - alerts@example.com
+
+# Security
+security:
+  require_auth: true
+  api_key_validation: true
+  request_signing: true
+
+# Rate limiting
+rate_limiting:
+  enabled: true
+  requests_per_minute: 100
+  per_ip_limit: 50
+
+# Backup
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention_days: 30
+
+# Metrics and observability
+observability:
+  prometheus_enabled: true
+  jaeger_enabled: false  # Enable if using distributed tracing
+  enable_profiling: false

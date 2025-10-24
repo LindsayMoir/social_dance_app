@@ -1,0 +1,49 @@
+# Staging Environment Configuration
+# Used for pre-production testing and validation
+
+environment: staging
+debug: false
+log_level: INFO
+log_format: json
+
+crawling:
+  headless: true
+  scroll_depth: 5
+  urls_run_limit: 500  # Moderate limit for staging
+  prompt_max_length: 8000
+  timeout_seconds: 30
+
+database:
+  type: postgresql  # Use PostgreSQL for staging
+  host: ${DATABASE_HOST:-localhost}
+  port: ${DATABASE_PORT:-5432}
+  name: social_dance_staging
+  user: ${DATABASE_USER}
+  password: ${DATABASE_PASSWORD}
+
+monitoring:
+  enabled: true
+  metrics_port: 8000
+  health_check_interval: 300
+
+performance:
+  max_workers: 4
+  batch_size: 100
+  cache_size_mb: 200
+  timeout_seconds: 300
+
+testing:
+  status: false
+  mock_requests: false
+  enable_logging: true
+
+# Staging-specific settings
+retry_policy:
+  max_retries: 3
+  backoff_factor: 1.5
+
+alerts:
+  enabled: true
+  slack_webhook: ${SLACK_WEBHOOK_STAGING}
+  email_recipients:
+    - staging-team@example.com
