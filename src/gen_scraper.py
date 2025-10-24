@@ -107,17 +107,17 @@ class GeneralScraper(BaseScraper):
         self.read_pdfs = ReadPDFsV2(config_path)
 
         # Set shared database writer for all extractors
-        if self.db_writer:
-            self.read_extract.set_db_writer(self.db_writer.db_handler)
-            self.read_pdfs.set_db_writer(self.db_writer.db_handler)
+        if self.llm_handler.db_handler:
+            self.read_extract.set_db_writer(self.llm_handler.db_handler)
+            self.read_pdfs.set_db_writer(self.llm_handler.db_handler)
 
         # Try to load EventSpiderV2 if available (Scrapy integration)
         self.spider = None
         try:
             from scraper_v2 import EventSpiderV2
             self.spider = EventSpiderV2(self.config)
-            if self.db_writer:
-                self.spider.set_db_writer(self.db_writer.db_handler)
+            if self.llm_handler.db_handler:
+                self.spider.set_db_writer(self.llm_handler.db_handler)
             self.logger.info("✓ EventSpiderV2 loaded successfully")
         except (ImportError, Exception) as e:
             self.logger.warning(f"EventSpiderV2 not available: {e}")
