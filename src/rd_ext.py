@@ -36,6 +36,8 @@ import yaml
 from llm import LLMHandler
 from credentials import get_credentials  # Import the utility function
 from secret_paths import get_auth_file
+from base_scraper import BaseScraper
+from auth_manager import AuthenticationManager
 
 # Module-level handler that will be initialized when needed
 db_handler = None

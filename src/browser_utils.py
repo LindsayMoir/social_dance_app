@@ -19,9 +19,9 @@ Key responsibilities:
 import logging
 import random
 import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError
-from playwright.async_api import async_playwright, AsyncBrowser, AsyncBrowserContext, AsyncPage
+from playwright.async_api import async_playwright
 
 
 class PlaywrightManager:
@@ -172,12 +172,12 @@ class PlaywrightManager:
         self.logger.info(f"Browser launched (headless={self.headless})")
         return browser
 
-    async def launch_browser_async(self) -> AsyncBrowser:
+    async def launch_browser_async(self) -> Any:
         """
         Launch a Chromium browser asynchronously.
 
         Returns:
-            AsyncBrowser: Async Playwright Browser instance
+            Any: Async Playwright Browser instance
         """
         playwright = await async_playwright().start()
         browser = await playwright.chromium.launch(headless=self.headless)
@@ -213,12 +213,12 @@ class PlaywrightManager:
         self.logger.error(f"Failed to navigate to {url} after {max_retries} attempts")
         return False
 
-    async def navigate_safe_async(self, page: AsyncPage, url: str, max_retries: int = 3) -> bool:
+    async def navigate_safe_async(self, page: Any, url: str, max_retries: int = 3) -> bool:
         """
         Navigate to URL asynchronously with error handling and retries.
 
         Args:
-            page (AsyncPage): Async Playwright page
+            page (Any): Async Playwright page
             url (str): URL to navigate to
             max_retries (int): Maximum number of retry attempts
 
