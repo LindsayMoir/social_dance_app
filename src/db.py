@@ -40,6 +40,7 @@ from repositories.url_repository import URLRepository
 from repositories.event_repository import EventRepository
 from repositories.event_management_repository import EventManagementRepository
 from repositories.event_analysis_repository import EventAnalysisRepository
+from repositories.address_resolution_repository import AddressResolutionRepository
 
 
 class DatabaseHandler():
@@ -113,6 +114,10 @@ class DatabaseHandler():
         # Initialize EventAnalysisRepository for reporting/analysis operations
         self.event_analysis_repo = EventAnalysisRepository(self)
         logging.info("__init__(): EventAnalysisRepository initialized")
+
+        # Initialize AddressResolutionRepository for LLM-based address resolution
+        self.address_resolution_repo = AddressResolutionRepository(self, self.llm_handler)
+        logging.info("__init__(): AddressResolutionRepository initialized")
 
         def _compute_hit_ratio(x):
             true_count = x.sum()
@@ -996,220 +1001,21 @@ class DatabaseHandler():
 
     def _extract_address_from_event_details(self, event: Dict[str, Any]) -> Optional[int]:
         """
-        Attempts to extract building names from event_name and description, 
+        Wrapper: Attempts to extract building names from event_name and description,
         then matches them against existing addresses in the database.
-        
-        Args:
-            event: Dictionary containing event data
-            
-        Returns:
-            int or None: address_id if a match is found, None otherwise
+
+        Delegates to AddressResolutionRepository.
         """
-        building_dict = self._get_building_name_dictionary()
-        if not building_dict:
-            return None
-            
-        # Collect text to search from event details
-        search_texts = []
-        event_name = event.get("event_name", "")
-        description = event.get("description", "")
-        
-        if event_name:
-            search_texts.append(str(event_name))
-        if description:
-            search_texts.append(str(description))
-            
-        if not search_texts:
-            return None
-            
-        # Search for building names in the text
-        combined_text = " ".join(search_texts).lower()
-        
-        # First try exact matches
-        for building_name, address_id in building_dict.items():
-            if building_name in combined_text:
-                logging.info(f"_extract_address_from_event_details: Found exact match '{building_name}' -> address_id={address_id}")
-                return address_id
-                
-        # Then try fuzzy matching for partial matches
-        best_match = None
-        best_score = 0
-        
-        for building_name, address_id in building_dict.items():
-            # Skip very short building names for fuzzy matching to avoid false positives
-            if len(building_name) < 6:
-                continue
-                
-            score = fuzz.partial_ratio(building_name, combined_text)
-            if score > 80 and score > best_score:  # High threshold for fuzzy matching
-                best_score = score
-                best_match = (building_name, address_id)
-                
-        if best_match:
-            building_name, address_id = best_match
-            logging.info(f"_extract_address_from_event_details: Found fuzzy match '{building_name}' (score: {best_score}) -> address_id={address_id}")
-            return address_id
-            
-        return None
+        return self.address_resolution_repo._extract_address_from_event_details(event)
 
     def process_event_address(self, event: dict) -> dict:
         """
-        Uses the LLM to parse a structured address from the location, inserts or reuses the address in the DB,
-        and updates the event with address_id and location = full_address from address table.
+        Wrapper: Uses the LLM to parse a structured address from the location, inserts or reuses
+        the address in the DB, and updates the event with address_id and location.
+
+        Delegates to AddressResolutionRepository.
         """
-        location = event.get("location", None)
-        event_name = event.get("event_name", "Unknown Event")
-        source = event.get("source", "Unknown Source")
-
-        if location is None:
-            pass  # Keep it as None
-        elif isinstance(location, str):
-            location = location.strip()
-
-        # Handle case where location might be NaN (float), empty string, or 'Unknown'
-        if (location is None or pd.isna(location) or not isinstance(location, str) or
-            len(location) < 5 or 'Unknown' in str(location)):
-            logging.info(
-                "process_event_address: Location missing/invalid for event '%s' from %s, attempting building name extraction",
-                event_name, source
-            )
-
-            # Try to extract building name from event details and match to existing addresses
-            extracted_address_id = self._extract_address_from_event_details(event)
-            if extracted_address_id:
-                event["address_id"] = extracted_address_id
-                full_address = self.get_full_address_from_id(extracted_address_id)
-                if full_address:
-                    event["location"] = full_address
-                    logging.info(f"process_event_address: Found existing address via building name extraction: address_id={extracted_address_id}")
-                    return event
-
-            # DEDUPLICATION CHECK: Before creating a new address, check if source/event_name matches existing building
-            dedup_addr_id = self.find_address_by_building_name(source, threshold=75)
-            if dedup_addr_id:
-                event["address_id"] = dedup_addr_id
-                full_address = self.get_full_address_from_id(dedup_addr_id)
-                if full_address:
-                    event["location"] = full_address
-                    logging.info(f"process_event_address: Found existing address via deduplication check: source='{source}' → address_id={dedup_addr_id}")
-                    return event
-
-            # If no match found, create a minimal but valid address entry
-            minimal_address = {
-                "address_id": 0,
-                "full_address": f"Location details unavailable - {source}",
-                "building_name": str(event_name)[:50],  # Use event name as building
-                "street_number": "",
-                "street_name": "",
-                "street_type": "",
-                "direction": None,
-                "city": "Unknown",
-                "met_area": None,
-                "province_or_state": "BC", 
-                "postal_code": None,
-                "country_id": "CA",
-                "time_stamp": None
-            }
-            
-            address_id = self.resolve_or_insert_address(minimal_address)
-            if address_id:
-                event["address_id"] = address_id
-                full_address = self.get_full_address_from_id(address_id)
-                if full_address:
-                    event["location"] = full_address
-                else:
-                    event["location"] = minimal_address["full_address"]  # Fallback to our description
-                logging.info(f"process_event_address: Created minimal address entry with address_id={address_id}")
-                return event
-            else:
-                logging.error("process_event_address: Failed to create minimal address entry, setting default values")
-                # Final fallback - set reasonable defaults instead of None
-                event["address_id"] = 0
-                event["location"] = f"Location unavailable - {source}"
-                return event
-
-        # STEP 1: Check raw_locations cache (fastest - exact string match)
-        cached_addr_id = self.lookup_raw_location(location)
-        if cached_addr_id:
-            full_address = self.get_full_address_from_id(cached_addr_id)
-            event["address_id"] = cached_addr_id
-            if full_address:
-                event["location"] = full_address
-            logging.info(f"process_event_address: Cache hit for '{location}' → address_id={cached_addr_id}")
-            return event
-
-        # STEP 2: Try intelligent address parsing (fuzzy matching, regex)
-        quick_addr_id = self.quick_address_lookup(location)
-        if quick_addr_id:
-            # Cache this mapping for future use
-            self.cache_raw_location(location, quick_addr_id)
-            full_address = self.get_full_address_from_id(quick_addr_id)
-            event["address_id"] = quick_addr_id
-            if full_address:
-                event["location"] = full_address
-            logging.info(f"process_event_address: Quick lookup found address_id={quick_addr_id} for '{location}'")
-            return event
-
-        # STEP 3: LLM processing (last resort)
-        # Generate the LLM prompt
-        prompt, schema_type = self.llm_handler.generate_prompt(event.get("url", "address_fix"), location, "address_internet_fix")
-
-        # Query the LLM
-        llm_response = self.llm_handler.query_llm(event.get("url", "").strip(), prompt, schema_type)
-
-        # Parse the LLM response into a usable dict
-        parsed_results = self.llm_handler.extract_and_parse_json(llm_response, "address_fix", schema_type)
-        if not parsed_results or not isinstance(parsed_results, list) or not isinstance(parsed_results[0], dict):
-            logging.warning("process_event_address: Could not parse address from LLM response, creating minimal address")
-            # Create minimal address using event name and location
-            event_name = event.get("event_name") or "Unknown Event"
-            minimal_address = {
-                "building_name": str(event_name)[:50],
-                "street_name": location[:50] if location else "Unknown Location",
-                "city": "Unknown",
-                "province_or_state": "BC",
-                "country_id": "Canada"
-            }
-            address_id = self.resolve_or_insert_address(minimal_address)
-            if address_id:
-                event["address_id"] = address_id
-                return event
-            else:
-                logging.error("process_event_address: Failed to create minimal address")
-                return event
-
-        # ✅ Normalize null-like strings in one place
-        parsed_address = self.normalize_nulls(parsed_results[0])
-
-        # Step 4: Get or insert address_id
-        address_id = self.resolve_or_insert_address(parsed_address)
-        
-        # Ensure we got a valid address_id  
-        if not address_id:
-            logging.warning("process_event_address: resolve_or_insert_address failed, creating minimal address as last resort")
-            # Last resort: create very minimal address entry
-            event_name = event.get("event_name") or "Event"
-            minimal_address = {
-                "building_name": str(event_name)[:50],
-                "city": "Location Unknown", 
-                "province_or_state": "BC",
-                "country_id": "Canada"
-            }
-            address_id = self.resolve_or_insert_address(minimal_address)
-            if not address_id:
-                logging.error("process_event_address: All address resolution attempts failed")
-                return event
-
-        # STEP 3: Cache the raw location → address_id mapping for future use
-        self.cache_raw_location(location, address_id)
-
-        # Step 5: Force consistency: always use address.full_address
-        full_address = self.get_full_address_from_id(address_id)
-        event["address_id"] = address_id
-        if full_address:
-            event["location"] = full_address
-
-        return event
+        return self.address_resolution_repo.process_event_address(event)
 
 
     def find_address_by_building_name(self, building_name: str, threshold: int = 75) -> Optional[int]:
