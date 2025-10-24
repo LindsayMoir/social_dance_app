@@ -540,7 +540,7 @@ class ImageScraper:
             resp.raise_for_status()
         except Exception as e:
             self.logger.error(f"process_webpage_url(): Failed to fetch {page_url}: {e}")
-            self.db_handler.write_url_to_db(url_row)
+            self.db_handler.url_repo.write_url_to_db(url_row)
             return
 
         # strip scripts/styles & extract visible text
@@ -560,7 +560,7 @@ class ImageScraper:
             )
             if not pw_text:
                 self.logger.info(f"process_webpage_url(): Playwright extraction failed for {page_url}")
-                self.db_handler.write_url_to_db(url_row)
+                self.db_handler.url_repo.write_url_to_db(url_row)
                 return
             text = pw_text
             self.logger.info(f"process_webpage_url(): Playwright-extracted text length {len(text)}")
@@ -568,14 +568,14 @@ class ImageScraper:
 
         if not text:
             self.logger.info(f"process_webpage_url(): No visible text in {page_url}")
-            self.db_handler.write_url_to_db(url_row)
+            self.db_handler.url_repo.write_url_to_db(url_row)
             return
 
         # keyword filtering
         found = [kw for kw in self.keywords_list if kw.lower() in text.lower()]
         if not found:
             self.logger.info(f"process_webpage_url(): No keywords found in {page_url}")
-            self.db_handler.write_url_to_db(url_row)
+            self.db_handler.url_repo.write_url_to_db(url_row)
             return
         self.logger.info(f"process_webpage_url(): Keywords {found} found in {page_url}")
 
@@ -673,13 +673,13 @@ class ImageScraper:
         if self.db_handler.check_image_events_exist(image_url):
             self.logger.info(f"process_image_url(): Events already exist for {image_url}, skipping OCR.")
             url_row = (image_url, parent_url, source, keywords, True, 1, datetime.now())
-            self.db_handler.write_url_to_db(url_row)
+            self.db_handler.url_repo.write_url_to_db(url_row)
             return
         
         # Check and see if we should process this url
         if not self.db_handler.should_process_url(image_url):
             self.logger.info(f"process_image_url(): should_process_url for {image_url}, returned False.")
-            self.db_handler.write_url_to_db(url_row)
+            self.db_handler.url_repo.write_url_to_db(url_row)
             return
 
         # Download the image
@@ -687,7 +687,7 @@ class ImageScraper:
         path = self.download_image(image_url)
         if not path:
             self.logger.error(f"process_image_url(): download_image() failed for {image_url}")
-            self.db_handler.write_url_to_db(url_row)
+            self.db_handler.url_repo.write_url_to_db(url_row)
             return
         self.logger.info(f"process_image_url(): Image saved to {path}")
 
@@ -696,7 +696,7 @@ class ImageScraper:
         text = self.ocr_image_to_text(path)
         if not text:
             self.logger.info(f"process_image_url(): No text extracted from {path}, skipping.")
-            self.db_handler.write_url_to_db(url_row)
+            self.db_handler.url_repo.write_url_to_db(url_row)
             return
         self.logger.info(f"process_image_url(): Extracted text length {len(text)} characters")
         self.logger.info(f"process_image_url(): Extracted text: \n{text}")
@@ -705,7 +705,7 @@ class ImageScraper:
         found = [kw for kw in self.keywords_list if kw.lower() in text.lower()]
         if not found:
             self.logger.info(f"process_image_url(): No relevant keywords in OCR text for {image_url}")
-            self.db_handler.write_url_to_db(url_row)
+            self.db_handler.url_repo.write_url_to_db(url_row)
             return
         self.logger.info(f"process_image_url(): Found keywords {found} in image {image_url}")
 

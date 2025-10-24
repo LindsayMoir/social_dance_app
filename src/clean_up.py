@@ -450,7 +450,7 @@ class CleanUp:
                             source = merged_row["source"]
                             keywords = merged_row["dance_style"]
                             # Write URL to db
-                            self.db_handler.write_url_to_db(source, keywords, best_url, "", True, 1)
+                            self.db_handler.url_repo.write_url_to_db(source, keywords, best_url, "", True, 1)
 
             else:
                 logging.info(f"def process_events_without_url(): Event {event_name} and {event_row.event_id} is not relevant.")

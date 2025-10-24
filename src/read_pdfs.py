@@ -96,13 +96,13 @@ class ReadPDFs:
             # Skip if already in events (or copied from history)
             if self.db.check_image_events_exist(pdf_url):
                 logging.info(f"read_write_pdf(): Already have events for URL: {pdf_url}")
-                self.db.write_url_to_db((pdf_url, parent_url, source, keywords, True, 1, datetime.now()))
+                self.db.url_repo.write_url_to_db((pdf_url, parent_url, source, keywords, True, 1, datetime.now()))
                 continue
 
             # Should we crawl it?
             if not self.db.should_process_url(pdf_url):
                 logging.info(f"read_write_pdf():should_process_url returned False for {pdf_url}")
-                self.db.write_url_to_db((pdf_url, parent_url, source, keywords, False, 1, datetime.now()))
+                self.db.url_repo.write_url_to_db((pdf_url, parent_url, source, keywords, False, 1, datetime.now()))
                 continue
 
             # Find the right parser
@@ -140,7 +140,7 @@ class ReadPDFs:
             self.db.multiple_db_inserts('events', records)
 
             # Mark URL as done
-            self.db.write_url_to_db((pdf_url, parent_url, source, keywords, True, 1, datetime.now()))
+            self.db.url_repo.write_url_to_db((pdf_url, parent_url, source, keywords, True, 1, datetime.now()))
             all_events.append(df)
 
         # No events at all?

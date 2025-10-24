@@ -184,23 +184,23 @@ class LLMHandler:
                 if llm_status:
                     # Mark the event link as relevant
                     relevant = True
-                    self.db_handler.write_url_to_db(url_row)
+                    self.db_handler.url_repo.write_url_to_db(url_row)
                     return True
                 else:
                     # Mark the event link as irrelevant
                     relevant = False
-                    self.db_handler.write_url_to_db(url_row)
+                    self.db_handler.url_repo.write_url_to_db(url_row)
                     return False
             else:
                 # Mark the event link as irrelevant
                 relevant = False
-                self.db_handler.write_url_to_db(url_row)
+                self.db_handler.url_repo.write_url_to_db(url_row)
                 return False
         else:
             logging.info(f"def driver(): No keywords found in text for URL {url}\n search_term {search_term}.")
             # Mark the event link as irrelevant
             relevant = False
-            self.db_handler.write_url_to_db(url_row)
+            self.db_handler.url_repo.write_url_to_db(url_row)
             return False
     
 
@@ -266,7 +266,7 @@ class LLMHandler:
 
             if parsed_result:
                 events_df = pd.DataFrame(parsed_result)
-                self.db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_list)
+                self.db_handler.event_repo.write_events_to_db(events_df, url, parent_url, source, keywords_list)
                 logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
                 return True
         
