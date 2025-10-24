@@ -214,7 +214,11 @@ class AddressRepository:
         parsed_address["time_stamp"] = datetime.now().isoformat()
 
         # FINAL DEDUPLICATION CHECK: Before inserting, check if building_name already exists
-        building_name = parsed_address.get("building_name", "").strip()
+        building_name = parsed_address.get("building_name") or ""
+        if isinstance(building_name, str):
+            building_name = building_name.strip()
+        else:
+            building_name = ""
         if building_name and len(building_name) > 2:
             # Try to find existing address with same building name
             existing_addr_id = self.find_address_by_building_name(building_name, threshold=80)
