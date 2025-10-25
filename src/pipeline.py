@@ -469,7 +469,7 @@ def gen_scraper_step():
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # NOTE: gs.py MUST run BEFORE gen_scraper_step because it generates gs_urls.csv
-# which is used as input by gen_scraper_step and scraper_step.
+# which is used as input by gen_scraper_step (now includes web crawling with Playwright).
 #
 # This step:
 # 1. Reads keywords from config['input']['data_keywords']
