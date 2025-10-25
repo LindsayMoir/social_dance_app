@@ -2103,8 +2103,13 @@ async def main():
     # Count events and urls before cleanup
     start_df = db_handler.count_events_urls_start(file_name)
 
+    # Run fuzzy duplicate detection and removal early in the process
+    logging.info("Running fuzzy duplicate detection and removal...")
+    db_handler.fuzzy_duplicates()
+    logging.info("Fuzzy duplicate removal completed.")
+
     # Fix duplicate rows in the address table
-    
+
     # First, clean up any existing 'null' strings in the database
     logging.info("Cleaning up null strings in address table...")
     clean_up_instance.db_handler.clean_null_strings_in_address()
@@ -2149,11 +2154,6 @@ async def main():
     # Method 2: LLM-based deduplication for remaining candidates (costs money)
     logging.info("Starting LLM-based address deduplication for remaining candidates...")
     clean_up_instance.process_address_duplicates_with_llm()
-
-    # Run deduplication methods from db.py to ensure all duplicates are removed
-    logging.info("Running fuzzy duplicate detection and removal...")
-    db_handler.fuzzy_duplicates()
-    logging.info("Fuzzy duplicate removal completed.")
 
     db_handler.count_events_urls_end(start_df, file_name)
     logging.info(f"Wrote events and urls statistics to: {file_name}")

@@ -1316,22 +1316,17 @@ PIPELINE_STEPS = [
     ("copy_drop_create_events", copy_drop_create_events),
     ("sync_address_sequence", sync_address_sequence),
     ("emails", emails_step),
-    ("gs", gs_step),  # ✓ RESTORED: Must run BEFORE gen_scraper (generates gs_urls.csv)
+    ("gs", gs_step),  
     ("ebs", ebs_step),
-    ("gen_scraper", gen_scraper_step),  # ✓ CONSOLIDATED: Unified extraction with Playwright web crawler
+    ("gen_scraper", gen_scraper_step),
     ("fb", fb_step),
     ("images", images_step),
     ("backup_db", backup_db_step),
-    # NOTE: "db" step removed (Oct 24, 2025) - db.py is a utility module, not a runnable script
-    # Database tables are now created automatically by scrapers during initialization
-    # Run results are tracked by RunResultsTracker (src/run_results_tracker.py)
     ("clean_up", clean_up_step),
     ("dedup_llm", dedup_llm_step),
     ("irrelevant_rows", irrelevant_rows_step),
     ("copy_dev_to_prod", copy_dev_db_to_prod_db_step),
     ("download_render_logs", download_render_logs_step)
-    # REMOVED: ("read_pdfs", read_pdfs_step), - Replaced by gen_scraper_step
-    # REMOVED: ("scraper", scraper_step), - Consolidated into gen_scraper_step (Playwright-based crawler)
 ]
 
 def list_available_steps():

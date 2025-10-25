@@ -102,6 +102,9 @@ prompts:
   chatbot_instructions:
     file: prompts/chatbot_instructions.txt
     schema: null
+  contextual_sql:
+    file: prompts/contextual_sql_prompt.txt
+    schema: null
   dedup:
     file: prompts/dedup_prompt.txt
     schema: deduplication_response
@@ -146,9 +149,6 @@ prompts:
     schema: event_extraction
   interpretation:
     file: prompts/interpretation_prompt.txt
-    schema: null
-  contextual_sql:
-    file: prompts/contextual_sql_prompt.txt
     schema: null
   irrelevant_rows:
     file: prompts/irrelevant_rows_prompt.txt
