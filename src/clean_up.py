@@ -2150,6 +2150,11 @@ async def main():
     logging.info("Starting LLM-based address deduplication for remaining candidates...")
     clean_up_instance.process_address_duplicates_with_llm()
 
+    # Run deduplication methods from db.py to ensure all duplicates are removed
+    logging.info("Running fuzzy duplicate detection and removal...")
+    db_handler.fuzzy_duplicates()
+    logging.info("Fuzzy duplicate removal completed.")
+
     db_handler.count_events_urls_end(start_df, file_name)
     logging.info(f"Wrote events and urls statistics to: {file_name}")
 
