@@ -667,40 +667,9 @@ def rd_ext_step():
 # ------------------------
 # TASKS FOR SCRAPER.PY STEP
 # ------------------------
-@task
-def pre_process_scraper():
-    logger.info("def pre_process_scraper(): scraper step: Pre-processing complete with crawling.headless = True.")
-    return True
-
-@task
-def run_scraper_script():
-    try:
-        result = subprocess.run([sys.executable, "src/scraper.py"], check=True)
-        logger.info("def run_scraper_script(): scraper.py executed successfully.")
-        return "Script completed successfully"
-    except subprocess.CalledProcessError as e:
-        error_message = f"scraper.py failed with return code: {e.returncode}"
-        logger.error(f"def run_scraper_script(): {error_message}")
-        raise Exception(error_message)
-
-@task
-def post_process_scraper():
-    return True
-
-@flow(name="Scraper Step")
-def scraper_step():
-    scraper_updates = copy.deepcopy(COMMON_CONFIG_UPDATES)
-    scraper_updates["crawling"]["urls_run_limit"] = 1500
-    original_config = backup_and_update_config("scraper", updates=scraper_updates)
-    write_run_config.submit("scraper", original_config)
-    if not pre_process_scraper():
-        send_text_message("scraper.py pre-processing failed.")
-        restore_config(original_config, "scraper")
-        raise Exception("scraper.py pre-processing failed. Pipeline stopped.")
-    run_scraper_script()
-    post_process_scraper()
-    restore_config(original_config, "scraper")
-    return True
+# SCRAPER STEP REMOVED (consolidated into gen_scraper_step with Playwright)
+# The web crawling functionality has been integrated directly into gen_scraper.py
+# using async Playwright instead of Scrapy EventSpider
 
 # ------------------------
 # TASKS FOR FB.PY STEP
@@ -1349,8 +1318,7 @@ PIPELINE_STEPS = [
     ("emails", emails_step),
     ("gs", gs_step),  # ✓ RESTORED: Must run BEFORE gen_scraper (generates gs_urls.csv)
     ("ebs", ebs_step),
-    ("gen_scraper", gen_scraper_step),  # ✓ Oct 24 (CORRECTED): Unified extraction (replaces rd_ext + read_pdfs, NOT gs)
-    ("scraper", scraper_step),
+    ("gen_scraper", gen_scraper_step),  # ✓ CONSOLIDATED: Unified extraction with Playwright web crawler
     ("fb", fb_step),
     ("images", images_step),
     ("backup_db", backup_db_step),
@@ -1363,6 +1331,7 @@ PIPELINE_STEPS = [
     ("copy_dev_to_prod", copy_dev_db_to_prod_db_step),
     ("download_render_logs", download_render_logs_step)
     # REMOVED: ("read_pdfs", read_pdfs_step), - Replaced by gen_scraper_step
+    # REMOVED: ("scraper", scraper_step), - Consolidated into gen_scraper_step (Playwright-based crawler)
 ]
 
 def list_available_steps():

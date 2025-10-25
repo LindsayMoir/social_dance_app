@@ -28,18 +28,23 @@ Optimizations:
 Sources integrated:
 1. ReadExtractV2 - Calendar website event extraction
 2. ReadPDFsV2 - PDF document event extraction
-3. EventSpiderV2 - Web crawling with Scrapy (when available)
+3. Playwright Web Crawler - Async web crawling and event extraction from URLs
 """
 
 import asyncio
+import base64
 import hashlib
 import logging
+import os
+import re
 import time
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional, Tuple, Set
 
 import pandas as pd
+import requests
 import yaml
+from playwright.async_api import async_playwright, Page
 
 from logging_config import setup_logging
 from base_scraper import BaseScraper
@@ -47,6 +52,7 @@ from rd_ext_v2 import ReadExtractV2
 from read_pdfs_v2 import ReadPDFsV2
 from llm import LLMHandler
 from run_results_tracker import RunResultsTracker, get_database_counts
+from credentials import get_credentials
 
 setup_logging('gen_scraper')
 
@@ -111,16 +117,20 @@ class GeneralScraper(BaseScraper):
             self.read_extract.set_db_writer(self.llm_handler.db_handler)
             self.read_pdfs.set_db_writer(self.llm_handler.db_handler)
 
-        # Try to load EventSpiderV2 if available (Scrapy integration)
-        self.spider = None
+        # Initialize Playwright-based web crawler (replacing Scrapy EventSpider)
+        self.visited_urls = set()  # Track visited URLs during crawl
+        self.keywords_list = self.llm_handler.get_keywords() if hasattr(self.llm_handler, 'get_keywords') else []
+
+        # Load calendar URLs for special handling
+        self.calendar_urls_set = set()
         try:
-            from scraper_v2 import EventSpiderV2
-            self.spider = EventSpiderV2(self.config)
-            if self.llm_handler.db_handler:
-                self.spider.set_db_writer(self.llm_handler.db_handler)
-            self.logger.info("✓ EventSpiderV2 loaded successfully")
-        except (ImportError, Exception) as e:
-            self.logger.warning(f"EventSpiderV2 not available: {e}")
+            calendar_urls_file = self.config.get('input', {}).get('calendar_urls', 'data/other/calendar_urls.csv')
+            if os.path.exists(calendar_urls_file):
+                calendar_df = pd.read_csv(calendar_urls_file)
+                self.calendar_urls_set = set(calendar_df['link'].tolist())
+                self.logger.info(f"✓ Loaded {len(self.calendar_urls_set)} calendar URLs")
+        except Exception as e:
+            self.logger.warning(f"Could not load calendar URLs: {e}")
 
         # Deduplication tracking with optimization
         self.seen_events = set()  # Track event hashes (O(1) lookup)
@@ -352,41 +362,348 @@ class GeneralScraper(BaseScraper):
             return pd.DataFrame()
 
 
+    def _extract_calendar_ids(self, calendar_url: str) -> List[str]:
+        """Extract Google Calendar IDs from URL."""
+        pattern = r'src=([^&]+%40group.calendar.google.com)'
+        ids = re.findall(pattern, calendar_url)
+        return [id.replace('%40', '@') for id in ids]
+
+    def _decode_calendar_id(self, calendar_url: str) -> Optional[str]:
+        """Decode calendar ID from URL using base64 if needed."""
+        try:
+            start_idx = calendar_url.find("src=") + 4
+            end_idx = calendar_url.find("&", start_idx)
+            calendar_id = calendar_url[start_idx:end_idx] if end_idx != -1 else calendar_url[start_idx:]
+
+            if self._is_valid_calendar_id(calendar_id):
+                return calendar_id
+
+            padded_id = calendar_id + '=' * (4 - len(calendar_id) % 4)
+            decoded = base64.b64decode(padded_id).decode('utf-8', errors='ignore')
+            if self._is_valid_calendar_id(decoded):
+                return decoded
+
+            return None
+        except Exception as e:
+            self.logger.debug(f"Failed to decode calendar ID: {e}")
+            return None
+
+    def _is_valid_calendar_id(self, calendar_id: str) -> bool:
+        """Check if calendar ID is valid format."""
+        pattern = re.compile(r'^[a-zA-Z0-9_.+-]+@(group\.calendar\.google\.com|gmail\.com)$')
+        return bool(pattern.fullmatch(calendar_id))
+
+    async def _fetch_google_calendar_events(self, calendar_id: str) -> pd.DataFrame:
+        """Fetch events from a Google Calendar."""
+        try:
+            _, api_key, _ = get_credentials('Google')
+            days_ahead = self.config['date_range']['days_ahead']
+            api_url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
+
+            params = {
+                "key": api_key,
+                "singleEvents": "true",
+                "timeMin": datetime.now(timezone.utc).isoformat(),
+                "timeMax": (datetime.now(timezone.utc) + timedelta(days=days_ahead)).isoformat(),
+                "fields": "items, nextPageToken",
+                "maxResults": 100
+            }
+
+            all_events = []
+            while True:
+                response = requests.get(api_url, params=params, timeout=30)
+                if response.status_code == 200:
+                    data = response.json()
+                    all_events.extend(data.get("items", []))
+                    if not data.get("nextPageToken"):
+                        break
+                    params["pageToken"] = data.get("nextPageToken")
+                else:
+                    self.logger.warning(f"Google Calendar API error {response.status_code} for {calendar_id}")
+                    break
+
+            if not all_events:
+                return pd.DataFrame()
+
+            df = pd.json_normalize(all_events)
+            return self._clean_calendar_events(df)
+        except Exception as e:
+            self.logger.debug(f"Error fetching Google Calendar events: {e}")
+            return pd.DataFrame()
+
+    def _clean_calendar_events(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Clean and normalize calendar events DataFrame."""
+        try:
+            df = df.copy()
+            required_columns = ['htmlLink', 'summary', 'start.date', 'end.date', 'location',
+                              'start.dateTime', 'end.dateTime', 'description']
+
+            for col in required_columns:
+                if col not in df.columns:
+                    df[col] = ''
+
+            df['start.dateTime'] = df['start.dateTime'].fillna(df['start.date'])
+            df['end.dateTime'] = df['end.dateTime'].fillna(df['end.date'])
+            df.drop(columns=['start.date', 'end.date'], inplace=True)
+
+            df = df[['htmlLink', 'summary', 'location', 'start.dateTime', 'end.dateTime', 'description']]
+            df['Price'] = pd.to_numeric(df['description'].str.extract(r'\$(\d{1,5})')[0], errors='coerce')
+            df['description'] = df['description'].apply(
+                lambda x: re.sub(r'\s{2,}', ' ', re.sub(r'<[^>]*>', ' ', str(x))).strip()
+            ).str.replace('&#39;', "'").str.replace("you're", "you are")
+
+            def split_datetime(dt_str):
+                if 'T' in str(dt_str):
+                    date_str, time_str = str(dt_str).split('T')
+                    return date_str, time_str[:8]
+                return str(dt_str), None
+
+            df['Start_Date'], df['Start_Time'] = zip(*df['start.dateTime'].apply(
+                lambda x: split_datetime(x) if x else ('', '')
+            ))
+            df['End_Date'], df['End_Time'] = zip(*df['end.dateTime'].apply(
+                lambda x: split_datetime(x) if x else ('', '')
+            ))
+            df.drop(columns=['start.dateTime', 'end.dateTime'], inplace=True)
+
+            df = df.rename(columns={
+                'htmlLink': 'URL',
+                'summary': 'Name_of_the_Event',
+                'location': 'Location',
+                'description': 'Description'
+            })
+
+            # Determine event type
+            event_type_map = {
+                'class': 'class', 'classes': 'class',
+                'dance': 'social dance', 'dancing': 'social dance',
+                'weekend': 'workshop', 'workshop': 'workshop',
+                'rehearsal': 'rehearsal'
+            }
+
+            def determine_event_type(row):
+                name = row.get('Name_of_the_Event') or ''
+                description = row.get('Description') or ''
+                combined = f"{name} {description}".lower()
+                if 'class' in combined and 'dance' in combined:
+                    return 'class, social dance'
+                for word, event_type in event_type_map.items():
+                    if word in combined:
+                        return event_type
+                return 'other'
+
+            df['Type_of_Event'] = df.apply(determine_event_type, axis=1)
+            df['Start_Date'] = pd.to_datetime(df['Start_Date'], errors='coerce').dt.date
+            df['End_Date'] = pd.to_datetime(df['End_Date'], errors='coerce').dt.date
+            df['Day_of_Week'] = pd.to_datetime(df['Start_Date']).dt.day_name()
+
+            df = df[['URL', 'Type_of_Event', 'Name_of_the_Event', 'Day_of_Week', 'Start_Date',
+                    'End_Date', 'Start_Time', 'End_Time', 'Price', 'Location', 'Description']]
+            df = df.sort_values(by=['Start_Date', 'Start_Time']).reset_index(drop=True)
+
+            return df
+        except Exception as e:
+            self.logger.debug(f"Error cleaning calendar events: {e}")
+            return pd.DataFrame()
+
+    async def _crawl_url_with_playwright(self, url: str, parent_url: str = '',
+                                        source: str = '', keywords: List[str] = None) -> Tuple[pd.DataFrame, List[str]]:
+        """
+        Crawl a single URL with Playwright and extract relevant information.
+
+        Returns:
+            Tuple[pd.DataFrame, List[str]]: (events_found, new_links)
+        """
+        if keywords is None:
+            keywords = []
+
+        events = []
+        new_links = []
+
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=self.config['crawling'].get('headless', True))
+                page = await browser.new_page()
+                page.set_default_timeout(60000)  # 60 second timeout
+
+                try:
+                    await page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                    extracted_text = await page.content()
+
+                    # Check for relevant keywords
+                    found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+
+                    # Record URL in database with relevance status
+                    url_row = [url, parent_url, source, found_keywords, len(found_keywords) > 0, 1, datetime.now()]
+                    if hasattr(self.llm_handler.db_handler, 'url_repo'):
+                        try:
+                            self.llm_handler.db_handler.url_repo.write_url_to_db(url_row)
+                        except Exception as e:
+                            self.logger.debug(f"Failed to record URL: {e}")
+
+                    # Process keywords with LLM if found
+                    if found_keywords:
+                        try:
+                            llm_status = self.llm_handler.process_llm_response(
+                                url, parent_url, extracted_text, source, found_keywords, 'default'
+                            )
+                            self.logger.info(f"URL {url} marked as {'relevant' if llm_status else 'irrelevant'} by LLM")
+                        except Exception as e:
+                            self.logger.debug(f"LLM processing error: {e}")
+
+                    # Extract links from page
+                    links = await page.evaluate('''() => {
+                        return Array.from(document.querySelectorAll('a'))
+                            .map(a => a.href)
+                            .filter(href => href && (href.startsWith('http://') || href.startsWith('https://')))
+                    }''')
+                    new_links = list(set(links))[:self.config['crawling'].get('max_website_urls', 10)]
+
+                    # Extract Google Calendar iframes and emails
+                    calendar_elements = await page.evaluate('''() => {
+                        const cals = [];
+                        document.querySelectorAll('iframe').forEach(iframe => {
+                            if (iframe.src) cals.push(iframe.src);
+                        });
+                        return cals;
+                    }''')
+
+                    for cal_url in calendar_elements:
+                        calendar_ids = self._extract_calendar_ids(cal_url)
+                        if not calendar_ids:
+                            if self._is_valid_calendar_id(cal_url):
+                                calendar_ids = [cal_url]
+                            else:
+                                decoded = self._decode_calendar_id(cal_url)
+                                if decoded:
+                                    calendar_ids = [decoded]
+
+                        for calendar_id in calendar_ids:
+                            try:
+                                cal_events = await self._fetch_google_calendar_events(calendar_id)
+                                if not cal_events.empty:
+                                    events.append(cal_events)
+                                    self.logger.info(f"Extracted {len(cal_events)} events from calendar {calendar_id}")
+                            except Exception as e:
+                                self.logger.debug(f"Error processing calendar {calendar_id}: {e}")
+
+                except asyncio.TimeoutError:
+                    self.logger.warning(f"Timeout loading page: {url}")
+                except Exception as e:
+                    self.logger.debug(f"Error processing page {url}: {e}")
+                finally:
+                    await page.close()
+                    await browser.close()
+
+        except Exception as e:
+            self.logger.debug(f"Error in Playwright crawl for {url}: {e}")
+
+        result_df = pd.concat(events, ignore_index=True) if events else pd.DataFrame()
+        return result_df, new_links
+
     async def extract_from_websites_async(self) -> pd.DataFrame:
         """
-        Extract events from websites using EventSpiderV2 (if available).
+        Extract events from websites using Playwright-based web crawler.
 
-        Uses Scrapy-based web crawling to extract events from calendar websites.
-        The spider is initialized with configuration from config.yaml and handles:
-        - URL crawling with configured limits
-        - Browser headless mode
-        - Event extraction and parsing
-        - Database storage
-
-        If EventSpiderV2 is not available (missing Scrapy dependencies),
-        gracefully skips and logs warning.
+        Replaces Scrapy EventSpider with async Playwright-based crawling that:
+        - Reads URLs from database or CSV files
+        - Crawls websites using Playwright browser automation
+        - Extracts events from pages and Google Calendars
+        - Handles URL relevance detection with LLM
+        - Follows discovered links up to configured limits
+        - Records all URLs and their relevance status in database
 
         Includes performance timing and error recovery with circuit breaker.
 
         Returns:
             pd.DataFrame: Web crawled events with all required fields
         """
-        if not self.spider:
-            self.logger.info("EventSpiderV2 not available, skipping website extraction")
-            self.stats['sources']['websites'] = {'extracted': 0, 'status': 'not_available', 'duration_seconds': 0}
-            return pd.DataFrame()
-
         start_time = time.time()
-        try:
-            self.logger.info("Starting website extraction (EventSpiderV2)...")
+        all_events = []
 
-            # Call the spider's main method to extract events from websites
-            # EventSpiderV2 handles Scrapy crawling and returns extracted events
-            df = await self.spider.scrape() if hasattr(self.spider, 'scrape') else pd.DataFrame()
+        try:
+            self.logger.info("Starting website extraction (Playwright web crawler)...")
+
+            # Get URLs to crawl
+            urls_to_crawl = []
+            try:
+                if self.config['startup'].get('use_db', False):
+                    # Load from database
+                    conn = self.llm_handler.db_handler.get_db_connection()
+                    if conn:
+                        query = "SELECT * FROM urls WHERE relevant = true LIMIT ?"
+                        urls_df = pd.read_sql_query(
+                            query, conn,
+                            params=(self.config['crawling'].get('urls_run_limit', 500),)
+                        )
+                        urls_to_crawl = [
+                            (row['link'], row.get('source', ''), row.get('keywords', []))
+                            for _, row in urls_df.iterrows()
+                        ]
+                else:
+                    # Load from CSV files
+                    urls_dir = self.config['input']['urls']
+                    if os.path.exists(urls_dir):
+                        csv_files = [os.path.join(urls_dir, f) for f in os.listdir(urls_dir) if f.endswith('.csv')]
+                        for csv_file in csv_files:
+                            df = pd.read_csv(csv_file)
+                            for _, row in df.iterrows():
+                                urls_to_crawl.append((row['link'], row.get('source', ''), row.get('keywords', [])))
+            except Exception as e:
+                self.logger.warning(f"Error loading URLs: {e}")
+
+            if not urls_to_crawl:
+                self.logger.info("No URLs to crawl")
+                self.stats['sources']['websites'] = {'extracted': 0, 'status': 'no_urls', 'duration_seconds': 0}
+                return pd.DataFrame()
+
+            self.logger.info(f"Starting crawl of {len(urls_to_crawl)} URLs")
+
+            # Crawl URLs
+            crawled_count = 0
+            for url, source, keywords in urls_to_crawl:
+                if crawled_count >= self.config['crawling'].get('urls_run_limit', 500):
+                    self.logger.info(f"Reached URL limit ({crawled_count})")
+                    break
+
+                # Skip already visited
+                if url in self.visited_urls:
+                    continue
+
+                # Skip blacklisted domains
+                if hasattr(self.llm_handler.db_handler, 'avoid_domains'):
+                    if self.llm_handler.db_handler.avoid_domains(url):
+                        self.logger.debug(f"Skipping blacklisted URL: {url}")
+                        continue
+
+                # Skip social media
+                if any(domain in url.lower() for domain in ['facebook.com', 'instagram.com']):
+                    self.logger.debug(f"Skipping social media URL: {url}")
+                    continue
+
+                self.visited_urls.add(url)
+                crawled_count += 1
+
+                self.logger.info(f"Crawling [{crawled_count}/{len(urls_to_crawl)}]: {url}")
+
+                try:
+                    events_df, new_links = await self._crawl_url_with_playwright(url, '', source, keywords)
+                    if not events_df.empty:
+                        all_events.append(events_df)
+                        self.logger.info(f"Extracted {len(events_df)} events from {url}")
+                except Exception as e:
+                    self.logger.debug(f"Error crawling URL {url}: {e}")
+
+            # Combine results
+            if all_events:
+                result = pd.concat(all_events, ignore_index=True)
+                event_count = len(result)
+                self.logger.info(f"Extracted {event_count} total events from {crawled_count} URLs")
+            else:
+                result = pd.DataFrame()
+                event_count = 0
 
             elapsed_time = time.time() - start_time
-            event_count = len(df) if not df.empty else 0
-
             self.stats['web_events'] += event_count
             self.stats['sources']['websites'] = {
                 'extracted': event_count,
@@ -399,7 +716,8 @@ class GeneralScraper(BaseScraper):
                 f"✓ Website extraction completed: {event_count} events "
                 f"(took {elapsed_time:.3f}s)"
             )
-            return df
+            return result
+
         except Exception as e:
             elapsed_time = time.time() - start_time
             self.logger.error(f"Error extracting from websites: {e} (took {elapsed_time:.3f}s)")
