@@ -603,15 +603,22 @@ class GeneralScraper(BaseScraper):
 
     async def extract_from_websites_async(self) -> pd.DataFrame:
         """
-        Extract events from websites using Playwright-based web crawler.
+        Extract events from websites using Playwright-based web crawler with depth-aware crawling.
 
         Replaces Scrapy EventSpider with async Playwright-based crawling that:
-        - Reads URLs from database or CSV files
+        - Reads URLs from database or CSV files (including gs_urls.csv)
         - Crawls websites using Playwright browser automation
         - Extracts events from pages and Google Calendars
         - Handles URL relevance detection with LLM
-        - Follows discovered links up to configured limits
+        - Follows discovered links recursively up to depth_limit (default: 2)
         - Records all URLs and their relevance status in database
+        - Respects whitelist, blacklist, and historical relevancy checks
+
+        Depth-aware behavior:
+        - Level 0: Root URLs from gs_urls.csv or database
+        - Level 1: Links discovered on root pages (e.g., /classes-and-workshops/)
+        - Level 2: Links discovered on level 1 pages
+        - Stops at depth_limit from config['crawling']['depth_limit']
 
         Includes performance timing and error recovery with circuit breaker.
 
@@ -680,12 +687,16 @@ class GeneralScraper(BaseScraper):
             except Exception as e:
                 self.logger.debug(f"Could not load URL history for should_process_url checks: {e}")
 
-            # Crawl URLs
+            # Crawl URLs with depth tracking for recursive link following
+            depth_limit = self.config['crawling'].get('depth_limit', 2)
+            max_links_per_page = self.config['crawling'].get('max_website_urls', 10)
             crawled_count = 0
-            for url, source, keywords in urls_to_crawl:
-                if crawled_count >= self.config['crawling'].get('urls_run_limit', 500):
-                    self.logger.info(f"Reached URL limit ({crawled_count})")
-                    break
+
+            # Queue-based crawling: (url, source, keywords, parent_url, current_depth)
+            crawl_queue = [(url, source, keywords, '', 0) for url, source, keywords in urls_to_crawl]
+
+            while crawl_queue and crawled_count < self.config['crawling'].get('urls_run_limit', 500):
+                url, source, keywords, parent_url, current_depth = crawl_queue.pop(0)
 
                 # Skip already visited
                 if url in self.visited_urls:
@@ -711,13 +722,22 @@ class GeneralScraper(BaseScraper):
                 self.visited_urls.add(url)
                 crawled_count += 1
 
-                self.logger.info(f"Crawling [{crawled_count}/{len(urls_to_crawl)}]: {url}")
+                depth_indicator = f"[Level {current_depth}]" if parent_url else "[Root]"
+                self.logger.info(f"Crawling {depth_indicator} [{crawled_count}/{self.config['crawling'].get('urls_run_limit', 500)}]: {url}")
 
                 try:
-                    events_df, new_links = await self._crawl_url_with_playwright(url, '', source, keywords)
+                    events_df, new_links = await self._crawl_url_with_playwright(url, parent_url, source, keywords)
                     if not events_df.empty:
                         all_events.append(events_df)
                         self.logger.info(f"Extracted {len(events_df)} events from {url}")
+
+                    # If we haven't reached depth limit, queue discovered links for crawling
+                    if current_depth < depth_limit and new_links:
+                        for link in new_links[:max_links_per_page]:
+                            if link not in self.visited_urls:
+                                self.logger.debug(f"Queuing discovered link at depth {current_depth + 1}: {link}")
+                                crawl_queue.append((link, source, keywords, url, current_depth + 1))
+
                 except Exception as e:
                     self.logger.debug(f"Error crawling URL {url}: {e}")
 
