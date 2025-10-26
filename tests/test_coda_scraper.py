@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 load_dotenv('src/.env')
 
 from logging_config import setup_logging
-from rd_ext import ReadExtract
+from rd_ext_v2 import ReadExtractV2
 from llm import LLMHandler
 from db import DatabaseHandler
 import yaml
@@ -56,7 +56,7 @@ async def test_coda_scraper():
     print("\n" + "=" * 80)
 
     # Initialize handlers
-    read_extract = ReadExtract(config_path=str(config_path))
+    read_extract = ReadExtractV2(config_path=str(config_path))
     llm_handler = LLMHandler(config)
     db_handler = llm_handler.db_handler
 
