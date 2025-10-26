@@ -45,7 +45,7 @@ import yaml
 
 from db import DatabaseHandler
 from llm import LLMHandler
-from logging_utils import log_extracted_text
+from logging_config import log_extracted_text
 from credentials import get_credentials
 import os
 

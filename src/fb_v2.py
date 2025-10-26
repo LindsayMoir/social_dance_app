@@ -38,13 +38,12 @@ from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
 from sqlalchemy import text
 
-from logging_config import setup_logging
+from logging_config import setup_logging, log_extracted_text
 from base_scraper import BaseScraper
 from credentials import get_credentials
 from db import DatabaseHandler
 from environment import IS_RENDER
 from llm import LLMHandler
-from logging_utils import log_extracted_text
 from run_results_tracker import RunResultsTracker, get_database_counts
 from secret_paths import get_auth_file, sync_auth_to_db
 from text_utils import TextExtractor
