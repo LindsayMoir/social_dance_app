@@ -27,7 +27,7 @@ Dependencies:
     - sys
     - yaml
     - db (DatabaseHandler)
-    - rd_ext (ReadExtract)
+    - rd_ext_v2 (ReadExtractV2)
     - llm (LLMHandler)
 
 Configuration:
@@ -61,7 +61,7 @@ from db import DatabaseHandler
 from environment import IS_RENDER
 from llm import LLMHandler
 from logging_config import setup_logging
-from rd_ext import ReadExtract
+from rd_ext_v2 import ReadExtractV2
 from run_results_tracker import RunResultsTracker, get_database_counts
 from scraper_utils import check_keywords, get_random_timeout, ScraperStats
 
@@ -73,7 +73,7 @@ class EventbriteScraper:
 
         Args:
             config (dict): Configuration dictionary.
-            read_extract (ReadExtract): Instance of ReadExtract for text extraction.
+            read_extract (ReadExtract): Instance of ReadExtractV2 for text extraction.
             db_handler (DatabaseHandler): Instance to handle database operations.
             llm_handler (LLMHandler): Instance to handle LLM processing.
         """
@@ -512,7 +512,7 @@ async def main():
         logging.info("__main__: LOCAL MODE - Scraping Eventbrite and exporting to CSV")
 
         # Initialize the scraper components
-        read_extract = ReadExtract(config_path='config/config.yaml')
+        read_extract = ReadExtractV2(config_path='config/config.yaml')
         ebs_instance = EventbriteScraper(
             config=config,
             read_extract=read_extract,

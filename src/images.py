@@ -25,7 +25,7 @@ import yaml
 
 from db import DatabaseHandler
 from llm import LLMHandler
-from rd_ext import ReadExtract
+from rd_ext_v2 import ReadExtractV2
 from secret_paths import get_auth_file
 from scraper_utils import check_keywords
 
@@ -79,7 +79,7 @@ class ImageScraper:
         asyncio.set_event_loop(self.loop)
 
         # Initialize ReadExtract and login
-        self.read_extract = ReadExtract(config_path=str(config_path))
+        self.read_extract = ReadExtractV2(config_path=str(config_path))
         self.loop.run_until_complete(self.read_extract.init_browser())
         if not self.loop.run_until_complete(self._login_to_instagram()):
             self.logger.error("Instagram login failed. Exiting.")
