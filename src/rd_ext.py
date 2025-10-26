@@ -60,6 +60,9 @@ class ReadExtract:
         self.context = None
         self.page = None
         self.logged_in = False
+        # Track login state per organization to support multiple logins in single program run
+        # Maps organization name -> boolean (e.g., {'eventbrite': True, 'facebook': False})
+        self.logged_in_orgs = {}
         
 
     def extract_text_with_playwright(self, url):
@@ -114,6 +117,11 @@ class ReadExtract:
         # Use Render secret path if available, otherwise local path
         storage = get_auth_file(organization.lower())
 
+        # ──────────── Quick bail if already logged in to this organization ────────────
+        if self.logged_in_orgs.get(organization.lower(), False):
+            logging.info(f"login_to_facebook(): Already logged in to {organization}, reusing session.")
+            return True
+
         # Tear down old page
         if self.page:
             await self.page.close()
@@ -124,6 +132,8 @@ class ReadExtract:
             self.page = await ctx.new_page()
             await self.page.goto("https://www.facebook.com/", timeout=60000)
             if "login" not in self.page.url.lower():
+                self.logged_in = True
+                self.logged_in_orgs[organization.lower()] = True
                 logging.info("login_to_facebook: reused session, already logged in.")
                 return True
         except Exception:
@@ -156,6 +166,8 @@ class ReadExtract:
         except Exception as e:
             logging.warning(f"login_to_facebook: could not save session: {e}")
 
+        self.logged_in = True
+        self.logged_in_orgs[organization.lower()] = True
         return True
 
 
@@ -176,8 +188,8 @@ class ReadExtract:
         # Use Render secret path if available, otherwise local path
         storage_path = get_auth_file(organization.lower())
 
-        # ──────────── Quick bail if already logged in ────────────
-        if self.logged_in:
+        # ──────────── Quick bail if already logged in to this organization ────────────
+        if self.logged_in_orgs.get(organization.lower(), False):
             logging.info(f"login_to_website(): Already logged in to {organization}, reusing session.")
             return True
 
@@ -191,6 +203,7 @@ class ReadExtract:
                 self.context = ctx
                 self.page = page
                 self.logged_in = True
+                self.logged_in_orgs[organization.lower()] = True
                 logging.info(f"login_to_website(): Reused session for {organization}.")
                 return True
             # Otherwise, close and do fresh login
@@ -216,6 +229,7 @@ class ReadExtract:
         except PlaywrightTimeoutError:
             logging.info(f"login_to_website(): No login form for {organization}; assuming no login needed.")
             self.logged_in = True
+            self.logged_in_orgs[organization.lower()] = True
             return True
 
         # ──────────── 4) Eventbrite‐specific flow ────────────
@@ -265,6 +279,7 @@ class ReadExtract:
                 logging.warning(f"login_to_website(): Could not save Eventbrite session: {e}")
 
             self.logged_in = True
+            self.logged_in_orgs[organization.lower()] = True
             return True
 
         # ──────────── 5) Generic login flow ────────────
@@ -295,6 +310,7 @@ class ReadExtract:
             logging.warning(f"login_to_website(): Could not save session state: {e}")
 
         self.logged_in = True
+        self.logged_in_orgs[organization.lower()] = True
         logging.info(f"login_to_website(): Login to {organization} succeeded.")
         return True
 
@@ -303,6 +319,9 @@ class ReadExtract:
         """
         Determines if the URL belongs to Facebook, Google, allevents, or Eventbrite.
         If so, calls the corresponding login method. Otherwise, returns True (no login needed).
+
+        IMPORTANT: Uses per-organization tracked login state to prevent repeated logins
+        during the lifetime of the program. Login happens only once per organization per program run.
         """
         url_lower = url.lower()
 
@@ -312,6 +331,10 @@ class ReadExtract:
 
         # If it's Google
         elif "google" in url_lower:
+            # Check if already logged in to Google
+            if self.logged_in_orgs.get("google", False):
+                logging.info("login_if_required(): Already logged in to Google, skipping login.")
+                return True
             return await self.login_to_website(
                 organization="Google",
                 login_url="https://accounts.google.com/signin",
@@ -322,6 +345,10 @@ class ReadExtract:
 
         # If it's Allevents
         elif "allevents" in url_lower:
+            # Check if already logged in to Allevents
+            if self.logged_in_orgs.get("allevents", False):
+                logging.info("login_if_required(): Already logged in to Allevents, skipping login.")
+                return True
             return await self.login_to_website(
                 organization="allevents",
                 login_url="https://www.allevents.in/login",
@@ -332,6 +359,10 @@ class ReadExtract:
 
         # If it's Eventbrite
         elif "eventbrite" in url_lower:
+            # Check if already logged in to Eventbrite
+            if self.logged_in_orgs.get("eventbrite", False):
+                logging.info("login_if_required(): Already logged in to Eventbrite, skipping login.")
+                return True
             return await self.login_to_website(
                 organization="eventbrite",
                 login_url="https://www.eventbrite.com/signin/",
