@@ -659,6 +659,27 @@ class GeneralScraper(BaseScraper):
 
             self.logger.info(f"Starting crawl of {len(urls_to_crawl)} URLs")
 
+            # Load historical URL data for should_process_url() checks
+            urls_df = None
+            urls_gb = None
+            try:
+                conn = self.llm_handler.db_handler.get_db_connection()
+                if conn:
+                    # Load all URL history for decision making
+                    urls_df = pd.read_sql_query("SELECT * FROM urls", conn)
+
+                    # Group by URL to get hit_ratio and crawl_try statistics
+                    urls_gb = urls_df.groupby('link').agg({
+                        'relevant': ['sum', 'count'],
+                        'crawl_try': 'max'
+                    }).reset_index()
+                    urls_gb.columns = ['link', 'hit_count', 'total_attempts', 'crawl_try']
+                    urls_gb['hit_ratio'] = urls_gb['hit_count'] / urls_gb['total_attempts']
+
+                    self.logger.info(f"Loaded URL history: {len(urls_df)} records from urls table")
+            except Exception as e:
+                self.logger.debug(f"Could not load URL history for should_process_url checks: {e}")
+
             # Crawl URLs
             crawled_count = 0
             for url, source, keywords in urls_to_crawl:
@@ -680,6 +701,12 @@ class GeneralScraper(BaseScraper):
                 if any(domain in url.lower() for domain in ['facebook.com', 'instagram.com']):
                     self.logger.debug(f"Skipping social media URL: {url}")
                     continue
+
+                # Check historical relevancy - skip URLs that have consistently been irrelevant
+                if hasattr(self.llm_handler.db_handler, 'should_process_url'):
+                    if not self.llm_handler.db_handler.should_process_url(url, urls_df=urls_df, urls_gb=urls_gb):
+                        self.logger.info(f"Skipping URL {url} based on historical relevancy")
+                        continue
 
                 self.visited_urls.add(url)
                 crawled_count += 1
