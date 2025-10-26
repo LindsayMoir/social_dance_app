@@ -355,3 +355,247 @@ class CircuitBreaker:
         self.last_failure_time = None
         self.state = "closed"
         self.logger.info("Circuit breaker reset to closed")
+
+
+# Decorator Functions for Common Resilience Patterns
+
+def http_retry(max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 60.0,
+               strategy: RetryStrategy = RetryStrategy.EXPONENTIAL_WITH_JITTER,
+               retriable_statuses: Optional[List[int]] = None):
+    """
+    Decorator for retrying HTTP requests with exponential backoff.
+
+    Handles common HTTP errors (connection, timeout, retriable status codes).
+    Useful for web scraping, API calls, and other HTTP operations.
+
+    Args:
+        max_retries (int): Maximum number of retry attempts (default: 3)
+        base_delay (float): Base delay in seconds (default: 1.0)
+        max_delay (float): Maximum delay in seconds (default: 60.0)
+        strategy (RetryStrategy): Retry strategy to use (default: EXPONENTIAL_WITH_JITTER)
+        retriable_statuses (List[int], optional): HTTP status codes to retry on
+                                                  (default: 408, 429, 500, 502, 503, 504)
+
+    Returns:
+        Callable: Decorated function with HTTP retry logic
+
+    Example:
+        @http_retry(max_retries=3, base_delay=2.0)
+        def fetch_data(url):
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            return response.json()
+    """
+    if retriable_statuses is None:
+        retriable_statuses = [408, 429, 500, 502, 503, 504]
+
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        logger = logging.getLogger(func.__module__)
+
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> T:
+            manager = RetryManager(max_retries, base_delay, max_delay, strategy, logger)
+            last_exception = None
+
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+
+                except Exception as e:
+                    last_exception = e
+                    error_name = e.__class__.__name__
+
+                    # Check if it's an HTTP error with status code
+                    should_retry = False
+                    if hasattr(e, 'response') and hasattr(e.response, 'status_code'):
+                        should_retry = e.response.status_code in retriable_statuses
+                    elif isinstance(e, (ConnectionError, TimeoutError, OSError, IOError)):
+                        should_retry = True
+
+                    if should_retry and attempt < max_retries - 1:
+                        delay = manager.calculate_delay(attempt)
+                        logger.warning(
+                            f"HTTP request failed (attempt {attempt + 1}/{max_retries}): {error_name}. "
+                            f"Retrying in {delay:.2f}s..."
+                        )
+                        time.sleep(delay)
+                    elif attempt == max_retries - 1:
+                        logger.error(
+                            f"HTTP request failed after {max_retries} attempts: {error_name}: {e}"
+                        )
+                        raise
+
+            raise last_exception or RuntimeError(f"Failed to execute {func.__name__}")
+
+        return wrapper
+    return decorator
+
+
+def with_timeout(timeout_seconds: float, on_timeout: Optional[Callable] = None):
+    """
+    Decorator for adding timeout to synchronous functions.
+
+    Useful for operations that might hang indefinitely (web requests, network I/O).
+    Can execute a callback when timeout occurs.
+
+    Args:
+        timeout_seconds (float): Timeout in seconds
+        on_timeout (Callable, optional): Callback function to execute on timeout.
+                                        Receives the function name as argument.
+
+    Returns:
+        Callable: Decorated function with timeout
+
+    Example:
+        @with_timeout(timeout_seconds=30, on_timeout=lambda fname: logger.warning(f'{fname} timed out'))
+        def long_running_operation():
+            # This will timeout after 30 seconds
+            result = requests.get(url, timeout=30)
+            return result.json()
+
+    Note:
+        For async functions, use @async_timeout instead.
+    """
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        logger = logging.getLogger(func.__module__)
+
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> T:
+            import signal
+
+            def timeout_handler(signum, frame):
+                if on_timeout:
+                    on_timeout(func.__name__)
+                raise TimeoutError(f"{func.__name__} exceeded timeout of {timeout_seconds}s")
+
+            # Set signal handler and alarm
+            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(int(timeout_seconds) + 1)  # +1 to let function's timeout trigger first
+
+            try:
+                logger.debug(f"Starting {func.__name__} with {timeout_seconds}s timeout")
+                result = func(*args, **kwargs)
+                signal.alarm(0)  # Disable alarm
+                return result
+            except TimeoutError as e:
+                logger.error(f"Timeout in {func.__name__}: {e}")
+                raise
+            finally:
+                signal.alarm(0)  # Disable alarm
+                signal.signal(signal.SIGALRM, old_handler)  # Restore old handler
+
+        return wrapper
+    return decorator
+
+
+def async_timeout(timeout_seconds: float, on_timeout: Optional[Callable] = None):
+    """
+    Decorator for adding timeout to asynchronous functions.
+
+    Useful for async operations that might hang indefinitely (async web requests, async I/O).
+    Can execute a callback when timeout occurs.
+
+    Args:
+        timeout_seconds (float): Timeout in seconds
+        on_timeout (Callable, optional): Async or sync callback function to execute on timeout.
+                                        Receives the function name as argument.
+
+    Returns:
+        Callable: Decorated async function with timeout
+
+    Example:
+        @async_timeout(timeout_seconds=30, on_timeout=lambda fname: logger.warning(f'{fname} timed out'))
+        async def fetch_data(url):
+            # This will timeout after 30 seconds
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    return await response.json()
+    """
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        logger = logging.getLogger(func.__module__)
+
+        @wraps(func)
+        async def wrapper(*args, **kwargs) -> Any:
+            import asyncio
+
+            try:
+                logger.debug(f"Starting async {func.__name__} with {timeout_seconds}s timeout")
+                result = await asyncio.wait_for(func(*args, **kwargs), timeout=timeout_seconds)
+                return result
+            except asyncio.TimeoutError as e:
+                if on_timeout:
+                    if asyncio.iscoroutinefunction(on_timeout):
+                        await on_timeout(func.__name__)
+                    else:
+                        on_timeout(func.__name__)
+                logger.error(f"Async timeout in {func.__name__}: exceeded {timeout_seconds}s")
+                raise TimeoutError(f"{func.__name__} exceeded timeout of {timeout_seconds}s") from e
+
+        return wrapper
+    return decorator
+
+
+def resilient_execution(max_retries: int = 3, base_delay: float = 1.0,
+                        max_delay: float = 60.0, strategy: RetryStrategy = RetryStrategy.EXPONENTIAL_WITH_JITTER,
+                        catch_exceptions: Optional[tuple] = None):
+    """
+    Decorator for generic resilient execution with retry and error handling.
+
+    Consolidates retry logic with configurable error handling for any callable.
+    Useful for database operations, file operations, or any fallible operation.
+
+    Args:
+        max_retries (int): Maximum number of retry attempts (default: 3)
+        base_delay (float): Base delay in seconds (default: 1.0)
+        max_delay (float): Maximum delay in seconds (default: 60.0)
+        strategy (RetryStrategy): Retry strategy to use (default: EXPONENTIAL_WITH_JITTER)
+        catch_exceptions (tuple, optional): Specific exceptions to catch and retry on.
+                                           (default: ConnectionError, TimeoutError, OSError, IOError)
+
+    Returns:
+        Callable: Decorated function with resilient execution
+
+    Example:
+        @resilient_execution(max_retries=5, catch_exceptions=(sqlite3.OperationalError, TimeoutError))
+        def query_database(query):
+            return db.execute(query)
+    """
+    if catch_exceptions is None:
+        catch_exceptions = (ConnectionError, TimeoutError, OSError, IOError)
+
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        logger = logging.getLogger(func.__module__)
+
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> T:
+            manager = RetryManager(max_retries, base_delay, max_delay, strategy, logger)
+            last_exception = None
+
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+
+                except catch_exceptions as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        delay = manager.calculate_delay(attempt)
+                        logger.warning(
+                            f"{func.__name__} failed (attempt {attempt + 1}/{max_retries}): {e.__class__.__name__}. "
+                            f"Retrying in {delay:.2f}s..."
+                        )
+                        time.sleep(delay)
+                    else:
+                        logger.error(
+                            f"{func.__name__} failed after {max_retries} attempts: {e.__class__.__name__}: {e}"
+                        )
+                        raise
+
+                except Exception as e:
+                    # Non-retriable error
+                    logger.error(f"Non-retriable error in {func.__name__}: {e.__class__.__name__}: {e}")
+                    raise
+
+            raise last_exception or RuntimeError(f"Failed to execute {func.__name__} after {max_retries} attempts")
+
+        return wrapper
+    return decorator
