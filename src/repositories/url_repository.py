@@ -195,7 +195,8 @@ class URLRepository:
             # In case of any error, default to True (safer to re-process)
             return True
 
-    def normalize_url(self, url: str) -> str:
+    @staticmethod
+    def normalize_url(url: str) -> str:
         """
         Normalize URLs by removing dynamic cache parameters that don't affect the underlying content.
 
