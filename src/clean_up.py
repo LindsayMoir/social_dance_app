@@ -2103,11 +2103,6 @@ async def main():
     # Count events and urls before cleanup
     start_df = db_handler.count_events_urls_start(file_name)
 
-    # Run fuzzy duplicate detection and removal early in the process
-    logging.info("Running fuzzy duplicate detection and removal...")
-    db_handler.fuzzy_duplicates()
-    logging.info("Fuzzy duplicate removal completed.")
-
     # Fix duplicate rows in the address table
 
     # First, clean up any existing 'null' strings in the database
