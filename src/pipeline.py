@@ -173,8 +173,8 @@ def copy_log_files():
 def copy_drop_create_events():
     # Use the centralized database configuration
     sys.path.insert(0, 'src')
-    from db_config import get_database_config
-    db_conn_str, env_name = get_database_config()
+    from config_manager import ConfigManager # Consolidated database config get_database_config
+    db_conn_str, env_name = ConfigManager.get_database_config()
     logger.info(f"def copy_drop_create_events(): Using database: {env_name}")
     
     # Compose the multi-statement SQL command.
@@ -368,8 +368,8 @@ def sync_address_sequence():
     """Synchronizes the address sequence with the current maximum address_id to prevent unique constraint violations."""
     # Use the centralized database configuration
     sys.path.insert(0, 'src')
-    from db_config import get_database_config
-    db_conn_str, env_name = get_database_config()
+    from config_manager import ConfigManager # Consolidated database config get_database_config
+    db_conn_str, env_name = ConfigManager.get_database_config()
     logger.info(f"def sync_address_sequence(): Using database: {env_name}")
     
     # SQL to sync the sequence with current maximum address_id
@@ -809,8 +809,8 @@ def read_pdfs_step():
 def backup_db_step():
     # Use the centralized database configuration
     sys.path.insert(0, 'src')
-    from db_config import get_database_config
-    db_conn_str, env_name = get_database_config()
+    from config_manager import ConfigManager # Consolidated database config get_database_config
+    db_conn_str, env_name = ConfigManager.get_database_config()
     logger.info(f"def backup_db_step(): Using database: {env_name}")
 
     # Parse connection string to extract components
@@ -1048,17 +1048,17 @@ def copy_dev_db_to_prod_db_step():
     This means you never need to change DATABASE_TARGET - just set it to where
     you're working (local or render_dev) and this step will copy to production.
     """
-    from db_config import get_database_config, get_production_database_url
+    from config_manager import ConfigManager # Consolidated database config get_database_config, get_production_database_url
     from urllib.parse import urlparse
 
     logger.info("def copy_dev_db_to_prod_db_step(): Starting table copy to production.")
 
     # Get source database based on current DATABASE_TARGET
-    source_conn_str, source_env_name = get_database_config()
+    source_conn_str, source_env_name = ConfigManager.get_database_config()
     parsed_source = urlparse(source_conn_str)
 
     # Get production database (always the target)
-    prod_conn_str = get_production_database_url()
+    prod_conn_str = ConfigManager.get_production_database_url()
     parsed_prod = urlparse(prod_conn_str)
 
     # Check if source and target are the same

@@ -72,9 +72,9 @@ def get_secret_path(filename: str, local_path: str = None) -> str:
 def _get_db_connection():
     """Get database connection using centralized db_config."""
     try:
-        from db_config import get_database_config
+        from config_manager import ConfigManager # Consolidated database config get_database_config
         from sqlalchemy import create_engine
-        connection_string, _ = get_database_config()
+        connection_string, _ = ConfigManager.get_database_config()
         return create_engine(connection_string)
     except Exception as e:
         logging.warning(f"Could not connect to database for auth storage: {e}")

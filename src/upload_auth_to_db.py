@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 env_path = Path(__file__).parent / '.env'
 load_dotenv(env_path)
 
-from db_config import get_database_config
+from config_manager import ConfigManager # Consolidated database config get_database_config
 from sqlalchemy import create_engine, text
 
 # Setup centralized logging
@@ -66,7 +66,7 @@ def upload_auth_file(engine, service_name: str, file_path: str):
 def main():
     """Find and upload all *_auth.json files to database."""
     # Get database connection
-    connection_string, env_name = get_database_config()
+    connection_string, env_name = ConfigManager.get_database_config()
     logger.info(f"Connecting to: {env_name}")
     engine = create_engine(connection_string)
 

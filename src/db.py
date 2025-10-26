@@ -29,12 +29,11 @@ import sys
 import yaml
 import warnings
 
-# Import database configuration utility
-from db_config import get_database_config
+# Import database configuration from ConfigManager (consolidated from db_config.py)
+from config_manager import ConfigManager
 
 # Import new utilities
 from utils.fuzzy_utils import FuzzyMatcher
-from config_manager import ConfigManager
 from repositories.address_repository import AddressRepository
 from repositories.url_repository import URLRepository
 from repositories.event_repository import EventRepository
@@ -70,7 +69,7 @@ class DatabaseHandler():
 
         # Get database configuration using centralized utility
         # This automatically handles local, render_dev, and render_prod environments
-        connection_string, env_name = get_database_config()
+        connection_string, env_name = ConfigManager.get_database_config()
         self.conn = create_engine(connection_string, isolation_level="AUTOCOMMIT")
         logging.info(f"def __init__(): Database connection established: {env_name}")
 
@@ -88,8 +87,7 @@ class DatabaseHandler():
         self.google_api_key = os.getenv("GOOGLE_KEY_PW")
 
         # Create df from urls table (only if not on production - production doesn't have urls table)
-        from db_config import is_production_target
-        if not is_production_target():
+        if not ConfigManager.is_production_target():
             self.urls_df = self.create_urls_df()
             logging.info("__init__(): URLs DataFrame created with %d rows.", len(self.urls_df))
         else:
@@ -139,7 +137,7 @@ class DatabaseHandler():
             return 1.0
 
         # Create a groupby that gives a hit_ratio and a sum of crawl_try for how useful the URL is
-        if not is_production_target():
+        if not ConfigManager.is_production_target():
             self.urls_gb = (
                 self.urls_df
                 .groupby('link')
@@ -210,7 +208,7 @@ class DatabaseHandler():
         """
         try:
             # Use centralized database configuration
-            connection_string, env_name = get_database_config()
+            connection_string, env_name = ConfigManager.get_database_config()
             logging.info(f"get_db_connection(): Connecting to {env_name}")
 
             # Create and return the SQLAlchemy engine
