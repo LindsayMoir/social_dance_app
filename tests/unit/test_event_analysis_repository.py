@@ -211,11 +211,14 @@ class TestEventAnalysisRepository:
                     # Should be called with index=False for new file
                     mock_to_csv.assert_called_once()
 
-    @patch('os.getenv', return_value='true')
     def test_count_events_urls_end_no_csv_on_render(
-        self, mock_getenv, event_analysis_repo, mock_db_handler
+        self, event_analysis_repo, mock_db_handler, monkeypatch
     ):
         """Test that CSV is not written on Render (ephemeral filesystem)."""
+        # Patch IS_RENDER to True in the event_analysis_repository module
+        from src.repositories import event_analysis_repository
+        monkeypatch.setattr(event_analysis_repository, 'IS_RENDER', True)
+
         start_df = pd.DataFrame({
             'file_name': ['crawler.py'],
             'start_time': [datetime.now()],

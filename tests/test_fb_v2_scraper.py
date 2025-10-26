@@ -447,6 +447,7 @@ class TestBasicIntegration:
 class TestRefactoringMaintenance:
     """Test that refactoring maintains original functionality."""
 
+    @pytest.mark.skip(reason="fb.py was deleted in Phase 2 consolidation - v1 scrapers removed")
     def test_fb_v2_matches_original_interface(self):
         """Test that fb_v2 has same public interface as original."""
         from fb_v2 import FacebookScraperV2
@@ -474,6 +475,7 @@ class TestRefactoringMaintenance:
 
         logger.info(f"✓ Interface compatibility: all {len(core_methods)} core methods present")
 
+    @pytest.mark.skip(reason="fb.py was deleted in Phase 2 consolidation - v1 scrapers removed")
     def test_original_fb_still_works(self):
         """Test that original fb.py is unchanged and importable."""
         from fb import FacebookEventScraper
