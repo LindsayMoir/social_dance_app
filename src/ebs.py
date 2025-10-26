@@ -58,6 +58,7 @@ import sys
 import yaml
 
 from db import DatabaseHandler
+from environment import IS_RENDER
 from llm import LLMHandler
 from logging_config import setup_logging
 from rd_ext import ReadExtract
@@ -495,16 +496,12 @@ async def main():
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
-    # Check if running on Render
-    is_render = os.getenv('RENDER') == 'true'
-    logging.info(f"__main__: Running on Render: {is_render}")
-
     # Initialize handlers needed for both modes
     llm_handler = LLMHandler(config_path='config/config.yaml')
     db_handler = llm_handler.db_handler
     file_name = os.path.basename(__file__)
 
-    if is_render:
+    if IS_RENDER:
         # RENDER MODE: Import events from CSV instead of scraping
         logging.info("__main__: RENDER MODE - Importing events from CSV")
         start_df = db_handler.count_events_urls_start(file_name)

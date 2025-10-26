@@ -17,6 +17,7 @@ import os
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from environment import IS_RENDER
 from utils.fuzzy_utils import FuzzyMatcher
 
 
@@ -114,7 +115,7 @@ class EventRepository:
                 return False
 
             # Write debug CSV (only locally, not on Render)
-            if os.getenv('RENDER') != 'true':
+            if not IS_RENDER:
                 os.makedirs('output', exist_ok=True)
                 df.to_csv('output/cleaned_events.csv', index=False)
 

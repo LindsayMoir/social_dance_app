@@ -243,5 +243,6 @@ def is_render_environment() -> bool:
     Returns:
         True if running on Render, False otherwise
     """
-    # Render sets RENDER=true environment variable
-    return os.getenv('RENDER') == 'true'
+    # Use centralized environment constant
+    from environment import IS_RENDER
+    return IS_RENDER

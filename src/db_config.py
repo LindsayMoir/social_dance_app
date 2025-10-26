@@ -37,6 +37,13 @@ Usage:
 import os
 import logging
 from typing import Tuple
+try:
+    from environment import IS_RENDER
+except ImportError:
+    # Fallback for import paths that don't have src as root
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from environment import IS_RENDER
 
 
 def get_database_config() -> Tuple[str, str]:
@@ -63,7 +70,7 @@ def get_database_config() -> Tuple[str, str]:
     # Auto-detect if running on Render platform
     # Render automatically sets these environment variables
     is_render = (
-        os.getenv('RENDER') == 'true' or
+        IS_RENDER or
         os.getenv('RENDER_SERVICE_NAME') is not None or
         os.getenv('RENDER_INSTANCE_ID') is not None or
         'render.com' in os.getenv('HOSTNAME', '')

@@ -80,6 +80,7 @@ import yaml
 # Import other classes
 from credentials import get_credentials
 from db import DatabaseHandler
+from environment import IS_RENDER
 from llm import LLMHandler
 from logging_utils import log_extracted_text
 from run_results_tracker import RunResultsTracker, get_database_counts
@@ -720,7 +721,7 @@ class FacebookEventScraper():
 
             # Checkpoint the keywords (only locally, not on Render)
             keywords_df.loc[idx, 'processed'] = True
-            if os.getenv('RENDER') != 'true':
+            if not IS_RENDER:
                 keywords_df.to_csv(self.config['checkpoint']['fb_search'], index=False)
                 logging.info(f"def driver_fb_search(): Keywords checkpoint updated.")
             else:
@@ -735,7 +736,7 @@ class FacebookEventScraper():
         """
         # 1) Load or initialize the checkpoint dataframe
         # On Render, always query database fresh (no checkpointing)
-        if os.getenv('RENDER') == 'true':
+        if IS_RENDER:
             query = text("""
                 SELECT *
                 FROM urls
@@ -759,7 +760,7 @@ class FacebookEventScraper():
         # 2) Add checkpoint columns
         fb_urls_df['processed'] = False
         fb_urls_df['events_processed'] = False
-        if os.getenv('RENDER') != 'true':
+        if not IS_RENDER:
             fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
 
         # 3) Iterate each base Facebook URL
@@ -786,7 +787,7 @@ class FacebookEventScraper():
 
                 # Mark as processed
                 fb_urls_df.loc[fb_urls_df['link'] == base_url, 'processed'] = True
-                if os.getenv('RENDER') != 'true':
+                if not IS_RENDER:
                     fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
                     logging.info(f"def driver_fb_urls(): Base URL marked processed: {base_url}")
                 else:
@@ -829,7 +830,7 @@ class FacebookEventScraper():
                         fb_urls_df.loc[fb_urls_df['link'] == event_url, 'processed'] = True
                         fb_urls_df.loc[fb_urls_df['link'] == event_url, 'events_processed'] = True
 
-                    if os.getenv('RENDER') != 'true':
+                    if not IS_RENDER:
                         fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
                         logging.info(f"def driver_fb_urls(): Event URL marked processed: {event_url}")
                     else:
@@ -840,7 +841,7 @@ class FacebookEventScraper():
 
                 # 6) Finally mark that we've scraped events for the base URL
                 fb_urls_df.loc[fb_urls_df['link'] == base_url, 'events_processed'] = True
-                if os.getenv('RENDER') != 'true':
+                if not IS_RENDER:
                     fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
                     logging.info(f"def driver_fb_urls(): Events_scraped flag set for base URL: {base_url}")
                 else:

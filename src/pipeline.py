@@ -21,8 +21,11 @@ import yaml
 from logging_config import setup_logging
 setup_logging('pipeline')
 
+# Import environment constant
+from environment import IS_RENDER
+
 # Configure Prefect based on environment
-if os.getenv('RENDER') == 'true':
+if IS_RENDER:
     # On Render: Use Prefect Cloud for remote monitoring
     # The PREFECT_API_CLOUD_URL and PREFECT_API_KEY from .env will be used
     os.environ['PREFECT_API_URL'] = os.getenv('PREFECT_API_CLOUD_URL', '')
@@ -1220,7 +1223,7 @@ def download_render_logs_step():
     Saves logs to: logs/render_logs/cron_job_log_<timestamp>.txt
     """
     # Only run this step when on Render
-    if not os.getenv('RENDER'):
+    if not IS_RENDER:
         logger.info("def download_render_logs_step(): Not running on Render, skipping log download.")
         return True
 

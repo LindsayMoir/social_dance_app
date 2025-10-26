@@ -16,6 +16,12 @@ from typing import Optional, Dict, Any
 import logging
 import pandas as pd
 from datetime import datetime
+import os
+import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from environment import IS_RENDER
 
 
 class EventAnalysisRepository:
@@ -270,8 +276,7 @@ class EventAnalysisRepository:
             )
 
             # Write to CSV (only on local, not on Render ephemeral filesystem)
-            import os
-            if os.getenv('RENDER') != 'true':
+            if not IS_RENDER:
                 try:
                     output_file = self.db.config['output']['events_urls_diff']
                     os.makedirs(os.path.dirname(output_file), exist_ok=True)
