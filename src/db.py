@@ -1461,21 +1461,6 @@ class DatabaseHandler():
             logging.info("is_foreign(): Deleted %d events from the database.", len(event_ids))
 
         return foreign_events_df
-    
-
-    def groupby_source(self):
-        """
-        Executes a SQL query to aggregate and count the number of events per source in the events table.
-
-        Returns:
-            pandas.DataFrame: A DataFrame containing two columns:
-                - 'source': The source of each event.
-                - 'counted': The number of events associated with each source, sorted in descending order.
-        """
-        query = "SELECT source, COUNT(*) AS counted FROM events GROUP BY source ORDER BY counted DESC"
-        groupby_df = pd.read_sql_query(query, self.conn)
-        logging.info(f"def groupby_source(): Retrieved groupby results from events table.")
-        return groupby_df
 
 
     def count_events_urls_start(self, file_name):
