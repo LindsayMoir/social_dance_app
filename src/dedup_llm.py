@@ -890,7 +890,14 @@ class DeduplicationHandler:
 
         string_cols = df.select_dtypes(include='object').columns
         df[string_cols] = df[string_cols].fillna('')
-        df['start_datetime'] = pd.to_datetime(df['start_date'].astype(str) + ' ' + df['start_time'].astype(str))
+        # Strip whitespace from start_time to handle empty/whitespace-only values
+        df['start_time'] = df['start_time'].str.strip()
+        # Combine date and time, using coerce to handle missing time values
+        df['start_datetime'] = pd.to_datetime(
+            df['start_date'].astype(str) + ' ' + df['start_time'].astype(str),
+            format='mixed',
+            errors='coerce'
+        )
 
         address_query = "SELECT address_id, postal_code FROM address"
         address_df = pd.read_sql(address_query, self.engine)
