@@ -1733,34 +1733,6 @@ Examples:
         return True
     
 
-    def submit_to_llm_and_log(self, subcluster, cluster_index, log_file_path):
-        df = pd.DataFrame(subcluster)
-        prompt_path = "prompts/fix_dup_addresses.txt"
-        with open(prompt_path) as f:
-            template = f.read()
-
-        columns = [
-            "address_id", "full_address", "building_name", "street_number", "street_name",
-            "street_type", "direction", "city", "met_area", "province_or_state", "postal_code",
-            "country_id", "time_stamp"
-        ]
-        df = df[columns].fillna("")
-        table = tabulate(df.values.tolist(), headers=columns, tablefmt="github")
-        prompt = f"""{template}\n\n{table}\n"""
-
-        logging.info(f"Sending cluster {cluster_index + 1} to LLM...")
-        response = self.llm_handler.query_llm("address_dedup", prompt)
-
-        with open(log_file_path, "a") as f:
-            f.write("--- PROMPT ---\n")
-            f.write(f"{prompt_path}\n\n")
-            f.write(f"{table}\n")
-            f.write("--- RESPONSE ---\n")
-            f.write(json.dumps(response, indent=2))
-            f.write("\n")
-
-        return response
-
     def cluster_addresses_semantically(self, df: pd.DataFrame, eps: float = 0.1, min_samples: int = 2) -> List[List[int]]:
         model = SentenceTransformer('all-MiniLM-L6-v2')
         texts = df['full_address'].astype(str).tolist()
