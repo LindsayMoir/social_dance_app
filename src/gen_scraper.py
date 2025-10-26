@@ -687,59 +687,110 @@ class GeneralScraper(BaseScraper):
             except Exception as e:
                 self.logger.debug(f"Could not load URL history for should_process_url checks: {e}")
 
-            # Crawl URLs with depth tracking for recursive link following
+            # Crawl URLs with depth tracking and concurrent processing
             depth_limit = self.config['crawling'].get('depth_limit', 2)
             max_links_per_page = self.config['crawling'].get('max_website_urls', 10)
+            max_concurrent_crawls = self.config['crawling'].get('max_concurrent_crawls', 5)
+            urls_run_limit = self.config['crawling'].get('urls_run_limit', 500)
             crawled_count = 0
 
-            # Queue-based crawling: (url, source, keywords, parent_url, current_depth)
-            crawl_queue = [(url, source, keywords, '', 0) for url, source, keywords in urls_to_crawl]
+            # Initialize current depth level with root URLs
+            current_depth_urls = [(url, source, keywords, '', 0) for url, source, keywords in urls_to_crawl]
 
-            while crawl_queue and crawled_count < self.config['crawling'].get('urls_run_limit', 500):
-                url, source, keywords, parent_url, current_depth = crawl_queue.pop(0)
+            # Process URLs level-by-level (BFS with concurrent processing per level)
+            for current_depth in range(depth_limit + 1):
+                if not current_depth_urls or crawled_count >= urls_run_limit:
+                    break
 
-                # Skip already visited
-                if url in self.visited_urls:
-                    continue
+                self.logger.info(f"\n=== Processing Depth Level {current_depth} ({len(current_depth_urls)} URLs) ===")
 
-                # Skip blacklisted domains
-                if hasattr(self.llm_handler.db_handler, 'avoid_domains'):
-                    if self.llm_handler.db_handler.avoid_domains(url):
-                        self.logger.debug(f"Skipping blacklisted URL: {url}")
+                # Filter URLs for validity (visited, blacklist, social media, relevancy)
+                valid_urls = []
+                for url, source, keywords, parent_url, depth in current_depth_urls:
+                    # Skip already visited
+                    if url in self.visited_urls:
+                        self.logger.debug(f"Already visited: {url}")
                         continue
 
-                # Skip social media
-                if any(domain in url.lower() for domain in ['facebook.com', 'instagram.com']):
-                    self.logger.debug(f"Skipping social media URL: {url}")
-                    continue
+                    # Skip blacklisted domains
+                    if hasattr(self.llm_handler.db_handler, 'avoid_domains'):
+                        if self.llm_handler.db_handler.avoid_domains(url):
+                            self.logger.debug(f"Skipping blacklisted URL: {url}")
+                            continue
 
-                # Check historical relevancy - skip URLs that have consistently been irrelevant
-                if hasattr(self.llm_handler.db_handler, 'should_process_url'):
-                    if not self.llm_handler.db_handler.should_process_url(url, urls_df=urls_df, urls_gb=urls_gb):
-                        self.logger.info(f"Skipping URL {url} based on historical relevancy")
+                    # Skip social media
+                    if any(domain in url.lower() for domain in ['facebook.com', 'instagram.com']):
+                        self.logger.debug(f"Skipping social media URL: {url}")
                         continue
 
-                self.visited_urls.add(url)
-                crawled_count += 1
+                    # Check historical relevancy
+                    if hasattr(self.llm_handler.db_handler, 'should_process_url'):
+                        if not self.llm_handler.db_handler.should_process_url(url, urls_df=urls_df, urls_gb=urls_gb):
+                            self.logger.info(f"Skipping URL {url} based on historical relevancy")
+                            continue
 
-                depth_indicator = f"[Level {current_depth}]" if parent_url else "[Root]"
-                self.logger.info(f"Crawling {depth_indicator} [{crawled_count}/{self.config['crawling'].get('urls_run_limit', 500)}]: {url}")
+                    self.visited_urls.add(url)
+                    valid_urls.append((url, source, keywords, parent_url, depth))
 
-                try:
-                    events_df, new_links = await self._crawl_url_with_playwright(url, parent_url, source, keywords)
-                    if not events_df.empty:
-                        all_events.append(events_df)
-                        self.logger.info(f"Extracted {len(events_df)} events from {url}")
+                if not valid_urls:
+                    self.logger.info(f"No valid URLs to process at depth level {current_depth}")
+                    break
 
-                    # If we haven't reached depth limit, queue discovered links for crawling
-                    if current_depth < depth_limit and new_links:
-                        for link in new_links[:max_links_per_page]:
-                            if link not in self.visited_urls:
-                                self.logger.debug(f"Queuing discovered link at depth {current_depth + 1}: {link}")
-                                crawl_queue.append((link, source, keywords, url, current_depth + 1))
+                # Process valid URLs concurrently in batches
+                next_depth_urls = []
 
-                except Exception as e:
-                    self.logger.debug(f"Error crawling URL {url}: {e}")
+                for batch_start in range(0, len(valid_urls), max_concurrent_crawls):
+                    batch_end = min(batch_start + max_concurrent_crawls, len(valid_urls))
+                    url_batch = valid_urls[batch_start:batch_end]
+
+                    if crawled_count >= urls_run_limit:
+                        break
+
+                    # Create concurrent tasks for this batch
+                    batch_tasks = []
+                    for url, source, keywords, parent_url, depth in url_batch:
+                        if crawled_count >= urls_run_limit:
+                            break
+                        crawled_count += 1
+                        batch_tasks.append((url, source, keywords, parent_url, depth))
+
+                    self.logger.info(f"Processing batch of {len(batch_tasks)} concurrent crawls (URLs {crawled_count - len(batch_tasks) + 1}-{crawled_count}/{urls_run_limit})")
+
+                    # Execute batch concurrently
+                    try:
+                        tasks = [
+                            self._crawl_url_with_playwright(url, parent_url, source, keywords)
+                            for url, source, keywords, parent_url, depth in batch_tasks
+                        ]
+
+                        # Gather results from concurrent execution
+                        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                        # Process results and collect discovered links
+                        for (url, source, keywords, parent_url, depth), result in zip(batch_tasks, batch_results):
+                            if isinstance(result, Exception):
+                                self.logger.debug(f"Error crawling URL {url}: {result}")
+                                continue
+
+                            events_df, new_links = result
+
+                            if not events_df.empty:
+                                all_events.append(events_df)
+                                self.logger.info(f"Extracted {len(events_df)} events from {url}")
+
+                            # If we haven't reached depth limit, queue discovered links for next level
+                            if current_depth < depth_limit and new_links:
+                                for link in new_links[:max_links_per_page]:
+                                    if link not in self.visited_urls:
+                                        self.logger.debug(f"Queuing discovered link at depth {current_depth + 1}: {link}")
+                                        next_depth_urls.append((link, source, keywords, url, current_depth + 1))
+
+                    except Exception as e:
+                        self.logger.error(f"Error processing batch at depth {current_depth}: {e}")
+
+                # Move to next depth level
+                current_depth_urls = next_depth_urls
+                self.logger.info(f"Depth level {current_depth} complete. Found {len(next_depth_urls)} URLs for next level.")
 
             # Combine results
             if all_events:
