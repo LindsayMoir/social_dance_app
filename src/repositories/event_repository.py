@@ -92,10 +92,7 @@ class EventRepository:
             # Clean day_of_week field
             df = self._clean_day_of_week_field(df)
 
-            # Basic location cleanup
-            df = self.db.clean_up_address_basic(df)
-
-            # Resolve structured addresses
+            # Resolve structured addresses (includes cache lookup, quick lookup, LLM processing)
             updated_rows = []
             for i, row in df.iterrows():
                 event_dict = row.to_dict()

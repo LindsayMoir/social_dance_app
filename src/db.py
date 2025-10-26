@@ -544,30 +544,7 @@ class DatabaseHandler():
             'postal_code': postal_code,
             'country_id': country_id
         }
-    
 
-    def clean_up_address_basic(self, events_df):
-        """
-        Cleans events using only local DB and regex methods (no Foursquare).
-        """
-        logging.info("clean_up_address_basic(): Starting with shape %s", events_df.shape)
-
-        address_df = pd.read_sql("SELECT * FROM address", self.conn)
-
-        for index, row in events_df.iterrows():
-            event_id = row.get('event_id')
-            location = row.get('location')
-
-            address_id, new_location = self.try_resolve_address(
-                event_id, location, address_df=address_df, use_foursquare=False
-            )
-
-            if address_id:
-                events_df.at[index, 'address_id'] = address_id
-                events_df.at[index, 'location'] = new_location
-
-        return events_df
-    
 
     def try_resolve_address(self, event_id, location, address_df=None, use_foursquare=False):
         """
