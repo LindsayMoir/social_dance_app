@@ -61,26 +61,34 @@ logger.info("\n\nStarting images.py ...")
 
 class ImageScraper:
     def __init__(self, config: dict):
+        """
+        Initialize ImageScraper with consolidated handler management.
+
+        Consolidates handler initialization that was previously scattered
+        across LLMHandler, ReadExtractV2, and direct instantiation.
+        """
         self.config = config
         self.logger = logging.getLogger(f"{__name__}.ImageScraper")
         self.urls_visited = set()
 
-        # Handlers
+        # Initialize LLM handler (includes DatabaseHandler internally)
         self.llm_handler = LLMHandler(config)
-        self.db_handler = self.llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
+        self.db_handler = self.llm_handler.db_handler
         self.keywords_list = self.llm_handler.get_keywords()
 
         # Directories
         self.download_dir = Path(config.get("image_download_dir", "images/"))
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
-        # Async event loop for Playwright
+        # Async event loop for Playwright (specialized for Instagram auth flow)
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
 
-        # Initialize ReadExtract and login
+        # Initialize ReadExtract for browser automation and Instagram authentication
         self.read_extract = ReadExtractV2(config_path=str(config_path))
         self.loop.run_until_complete(self.read_extract.init_browser())
+
+        # Perform Instagram login with retries
         if not self.loop.run_until_complete(self._login_to_instagram()):
             self.logger.error("Instagram login failed. Exiting.")
             sys.exit(1)
