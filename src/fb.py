@@ -71,7 +71,6 @@ from openpyxl import load_workbook
 import os
 import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
-import random
 import re
 from sqlalchemy import text
 import time
@@ -85,6 +84,7 @@ from llm import LLMHandler
 from logging_utils import log_extracted_text
 from run_results_tracker import RunResultsTracker, get_database_counts
 from secret_paths import get_auth_file
+from scraper_utils import check_keywords, get_random_timeout, get_random_delay
 
 # Get config
 with open('config/config.yaml', 'r') as file:
@@ -157,7 +157,7 @@ class FacebookEventScraper():
             page.goto(
                 "https://www.facebook.com/login",
                 wait_until="networkidle",
-                timeout=random.randint(20000 // 2, int(20000 * 1.5))
+                timeout=get_random_timeout(base_ms=20000)
             )
         except PlaywrightTimeoutError:
             logging.warning("login_to_facebook: login page load timed out; proceeding.")
@@ -268,7 +268,7 @@ class FacebookEventScraper():
         # If this is a login redirect, try it first to trigger login flow
         if 'facebook.com/login/' in incoming_url:
             try:
-                t = random.randint(20000//2, int(20000 * 1.5))
+                t = get_random_timeout(base_ms=20000)
                 page.goto(incoming_url, wait_until="domcontentloaded", timeout=t)
             except PlaywrightTimeoutError:
                 logging.warning(f"navigate_and_maybe_login: timeout on login redirect {incoming_url}")
@@ -278,7 +278,7 @@ class FacebookEventScraper():
             if 'temporarily blocked' in content or 'misusing this feature' in content:
                 logging.warning(f"navigate_and_maybe_login: blocked on login redirect. Falling back to {real_url}")
                 try:
-                    t = random.randint(20000//2, int(20000 * 1.5))
+                    t = get_random_timeout(base_ms=20000)
                     page.goto(real_url, wait_until="domcontentloaded", timeout=t)
                 except PlaywrightTimeoutError:
                     logging.error(f"navigate_and_maybe_login: timeout loading fallback {real_url}")
@@ -292,7 +292,7 @@ class FacebookEventScraper():
 
             # After login, go to real URL
             try:
-                t = random.randint(20000//2, int(20000 * 1.5))
+                t = get_random_timeout(base_ms=20000)
                 page.goto(real_url, wait_until="domcontentloaded", timeout=t)
             except PlaywrightTimeoutError:
                 logging.error(f"navigate_and_maybe_login: timeout loading real URL {real_url}")
@@ -302,7 +302,7 @@ class FacebookEventScraper():
 
         # Non-login URLs: direct navigation
         try:
-            t = random.randint(20000//2, int(20000 * 1.5))
+            t = get_random_timeout(base_ms=20000)
             page.goto(real_url, wait_until="domcontentloaded", timeout=t)
         except PlaywrightTimeoutError:
             logging.warning(f"navigate_and_maybe_login: timeout on {real_url}")
@@ -312,7 +312,7 @@ class FacebookEventScraper():
             if not self.login_to_facebook():
                 return False
             try:
-                t = random.randint(20000//2, int(20000 * 1.5))
+                t = get_random_timeout(base_ms=20000)
                 page.goto(real_url, wait_until="domcontentloaded", timeout=t)
             except PlaywrightTimeoutError:
                 logging.error(f"navigate_and_maybe_login: timeout after login for {real_url}")
@@ -350,7 +350,7 @@ class FacebookEventScraper():
         logging.info(f"extract_event_links(): Navigating to {norm_url}")
 
         try:
-            t = random.randint(20000//2, int(20000 * 1.5))
+            t = get_random_timeout(base_ms=20000)
             self.logged_in_page.goto(norm_url, wait_until="domcontentloaded", timeout=t)
         except Exception as e:
             logging.error(f"extract_event_links(): error loading {norm_url}: {e}")
@@ -397,7 +397,7 @@ class FacebookEventScraper():
         if not page or page.url == "about:blank":
             page = self.context.new_page()
             self.logged_in_page = page
-        timeout_value = random.randint(10000, 15000)
+        timeout_value = get_random_timeout(base_ms=12500)
         logging.info(f"extract_event_text: Navigating to {link} ({timeout_value} ms)")
 
         try:
@@ -406,15 +406,15 @@ class FacebookEventScraper():
             logging.error(f"extract_event_text: timeout on {link}")
             return None
         
-        page.wait_for_timeout(random.randint(4000, 7000))
+        page.wait_for_timeout(int(get_random_delay(base_seconds=5.5) * 1000))
         for btn in page.query_selector_all("text=/See more/i"):
             try:
                 btn.click()
-                page.wait_for_timeout(random.randint(3000, 6000))
+                page.wait_for_timeout(int(get_random_delay(base_seconds=4.5) * 1000))
             except:
                 break
 
-        page.wait_for_timeout(random.randint(3000, 5000))
+        page.wait_for_timeout(int(get_random_delay(base_seconds=4.0) * 1000))
         html = page.content()
         soup = BeautifulSoup(html, 'html.parser')
         full_text = ' '.join(soup.stripped_strings)
@@ -559,7 +559,7 @@ class FacebookEventScraper():
                         self.urls_with_extracted_text += 1  # Increment URLs with extracted text
 
                         # Check for keywords in the extracted text
-                        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+                        found_keywords = check_keywords(extracted_text, self.keywords_list)
                         if found_keywords:
                             self.urls_with_found_keywords += 1  # Increment URLs with found keywords
                             logging.info(f"def scrape_events(): Keywords: {found_keywords}: found in text for URL: {link}.")
@@ -618,7 +618,7 @@ class FacebookEventScraper():
         self.urls_with_extracted_text += 1
 
         # 3) Check for keywords
-        keywords_found = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+        keywords_found = check_keywords(extracted_text, self.keywords_list)
         if not keywords_found:
             logging.info(f"process_fb_url: no keywords in {url}")
             db_handler.url_repo.write_url_to_db(url_row)
@@ -691,7 +691,7 @@ class FacebookEventScraper():
                     return
 
                 # Check for keywords in the extracted text
-                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+                found_keywords = check_keywords(extracted_text, self.keywords_list)
                 found_keywords = ', '.join(found_keywords)
                 if found_keywords:
                     logging.info(f"def driver_fb_search(): Keywords found in text for {url}.")
@@ -879,7 +879,7 @@ class FacebookEventScraper():
                 relevant_text = extracted_text
 
             # skip anything with no keywords
-            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+            found_keywords = check_keywords(extracted_text, self.keywords_list)
             if not found_keywords:
                 logging.info(f"checkpoint_events(): No keywords found in extracted text for URL: {url}.")
                 continue

@@ -52,7 +52,6 @@ import logging
 import os
 import pandas as pd
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-import random
 import re
 from sqlalchemy import text
 import sys
@@ -63,6 +62,7 @@ from llm import LLMHandler
 from logging_config import setup_logging
 from rd_ext import ReadExtract
 from run_results_tracker import RunResultsTracker, get_database_counts
+from scraper_utils import check_keywords, get_random_timeout, ScraperStats
 
 
 class EventbriteScraper:
@@ -89,11 +89,8 @@ class EventbriteScraper:
         events_count, urls_count = get_database_counts(db_handler)
         self.run_results_tracker.initialize(events_count, urls_count)
 
-        # Run statistics tracking
-        self.urls_contacted = 0
-        self.urls_with_extracted_text = 0
-        self.urls_with_found_keywords = 0
-        self.events_written_to_db = 0
+        # Run statistics tracking using shared utilities
+        self.stats = ScraperStats('ebs')
 
 
     async def eventbrite_search(self, query, source, keywords_list, prompt_type):
@@ -131,7 +128,7 @@ class EventbriteScraper:
         event_urls = []
 
         # Navigate to Eventbrite (wait only for DOM, with longer timeout)
-        to = random.randint(6000//2, int(6000 * 1.5))
+        to = get_random_timeout(base_ms=6000)
         try:
             await self.read_extract.page.goto(
                 "https://www.eventbrite.com/",
@@ -202,7 +199,6 @@ class EventbriteScraper:
 
             logging.info(f"def eventbrite_search(): Processing URL {event_url}")
             self.visited_urls.add(event_url)
-            self.urls_contacted += 1
             counter += 1
             parent_url = query
             await self.process_event(event_url, parent_url, source, keywords_list, prompt_type, counter)
@@ -218,7 +214,7 @@ class EventbriteScraper:
 
         for attempt in range(1, max_retries + 1):
             try:
-                to = random.randint(20000 // 2, int(20000 * 1.5))
+                to = get_random_timeout(base_ms=20000)
                 await self.read_extract.page.wait_for_selector(search_selector, timeout=to)
                 search_box = await self.read_extract.page.query_selector(search_selector)
 
@@ -245,7 +241,7 @@ class EventbriteScraper:
                         raise fill_error
                 logging.info(f"def perform_search(): Performed search '{query}' (attempt {attempt}).")
 
-                to = random.randint(15000 // 2, int(15000 * 1.5))
+                to = get_random_timeout(base_ms=15000)
                 await self.read_extract.page.wait_for_load_state("networkidle", timeout=to)
                 return  # success
 
@@ -345,12 +341,12 @@ class EventbriteScraper:
         extracted_text = await self.read_extract.extract_event_text(event_url)
 
         if extracted_text:
-            self.urls_with_extracted_text += 1  # Count extracted text URLs
+            self.stats.record_text_extracted()  # Count extracted text URLs
 
             # Check for keywords in the extracted text
-            found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+            found_keywords = check_keywords(extracted_text, self.keywords_list)
             if found_keywords:
-                self.urls_with_found_keywords += 1  # Count URLs with found keywords
+                self.stats.record_keywords_found()  # Count URLs with found keywords
                 logging.info(f"def process_event(): Found keywords in text for URL {event_url}: {found_keywords}")
 
                 # Process the extracted text with the LLM for event extraction (not relevance checking)
@@ -359,7 +355,7 @@ class EventbriteScraper:
                 response = self.llm_handler.process_llm_response(event_url, parent_url, extracted_text, source, found_keywords, event_extraction_prompt_type)
 
                 if response:
-                    self.events_written_to_db += 1  # Count events written to the database
+                    self.stats.record_event_written()  # Count events written to the database
             else:
                 logging.info(f"def process_event(): No keywords found in text for: {event_url}")
         else:
@@ -397,6 +393,10 @@ class EventbriteScraper:
             df_row.to_csv(output_path, mode="a", header=write_header, index=False)
 
         logging.info(f"driver(): Completed processing {len(self.visited_urls)} unique URLs.")
+
+        # Finalize statistics
+        self.stats.finalize()
+        self.stats.log_summary()
 
         # Finalize and write run results
         events_count, urls_count = get_database_counts(self.db_handler)

@@ -27,6 +27,7 @@ from db import DatabaseHandler
 from llm import LLMHandler
 from rd_ext import ReadExtract
 from secret_paths import get_auth_file
+from scraper_utils import check_keywords
 
 # Constants
 IMAGE_EXTENSIONS = {
@@ -572,7 +573,7 @@ class ImageScraper:
             return
 
         # keyword filtering
-        found = [kw for kw in self.keywords_list if kw.lower() in text.lower()]
+        found = check_keywords(text, self.keywords_list)
         if not found:
             self.logger.info(f"process_webpage_url(): No keywords found in {page_url}")
             self.db_handler.url_repo.write_url_to_db(url_row)
@@ -702,7 +703,7 @@ class ImageScraper:
         self.logger.info(f"process_image_url(): Extracted text: \n{text}")
 
         # Keyword filtering
-        found = [kw for kw in self.keywords_list if kw.lower() in text.lower()]
+        found = check_keywords(text, self.keywords_list)
         if not found:
             self.logger.info(f"process_image_url(): No relevant keywords in OCR text for {image_url}")
             self.db_handler.url_repo.write_url_to_db(url_row)
