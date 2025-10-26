@@ -52,6 +52,9 @@ class ReadExtractV2(BaseScraper):
         """
         super().__init__(config_path)
         self.logged_in = False
+        # Track login state per organization to support multiple logins in single program run
+        # Maps organization name -> boolean (e.g., {'facebook': True, 'eventbrite': False})
+        self.logged_in_orgs = {}
         self.llm_handler = LLMHandler(config_path)
 
         # Set up database writer with LLM's database handler
@@ -92,8 +95,9 @@ class ReadExtractV2(BaseScraper):
         Returns:
             bool: True if login successful, False otherwise
         """
-        if self.logged_in:
-            self.logger.info(f"Already logged in to Facebook")
+        # Check if already logged in to this specific organization
+        if self.logged_in_orgs.get(organization.lower(), False):
+            self.logger.info(f"Already logged in to {organization}")
             return True
 
         try:
@@ -106,6 +110,7 @@ class ReadExtractV2(BaseScraper):
 
             if success:
                 self.logged_in = True
+                self.logged_in_orgs[organization.lower()] = True
                 self.logger.info(f"Successfully logged in to Facebook for {organization}")
             else:
                 self.logger.warning(f"Failed to log in to Facebook for {organization}")
