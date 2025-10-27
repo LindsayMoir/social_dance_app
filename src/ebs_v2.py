@@ -26,6 +26,7 @@ import random
 import re
 from sqlalchemy import text
 import yaml
+from bs4 import BeautifulSoup
 
 # Add parent directory to path for imports when run as subprocess
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -204,21 +205,30 @@ class EventbriteScraperV2(BaseScraper):
 
     async def extract_event_urls(self):
         """
-        Extract individual event URLs from search results.
+        Extract individual event URLs from search results using BeautifulSoup.
 
-        Uses the same selector as original ebs.py: a[href*='/e/'] to find event links.
+        Parses the page HTML directly to find all links containing '/e/' in the path,
+        which is the Eventbrite event URL pattern.
 
         Returns:
             list: List of event URLs
         """
         try:
-            # Get all event links (Eventbrite event URLs contain '/e/' in the path)
-            event_links = await self.page.query_selector_all("a[href*='/e/']")
+            # Get the page content as HTML
+            html_content = await self.page.content()
+
+            # Parse with BeautifulSoup
+            soup = BeautifulSoup(html_content, 'html.parser')
+
+            # Find all links that contain '/e/' in href (Eventbrite event pattern)
+            event_links = soup.find_all('a', href=re.compile(r'/e/'))
+
+            self.logger.info(f"Found {len(event_links)} potential event links in HTML")
 
             # Extract and validate URLs
             valid_urls = []
             for link in event_links:
-                href = await link.get_attribute("href")
+                href = link.get('href')
                 if href:
                     # Ensure absolute URL
                     href = self.ensure_absolute_url(href)
@@ -232,11 +242,11 @@ class EventbriteScraperV2(BaseScraper):
                             self.visited_urls.add(normalized)
                             self.logger.debug(f"Found event URL: {normalized}")
 
-            self.logger.info(f"Extracted {len(valid_urls)} valid event URLs")
+            self.logger.info(f"Extracted {len(valid_urls)} valid event URLs from {len(event_links)} potential links")
             return valid_urls
 
         except Exception as e:
-            self.logger.error(f"Error extracting event URLs: {e}")
+            self.logger.error(f"Error extracting event URLs: {e}", exc_info=True)
             return []
 
     def ensure_absolute_url(self, href):
