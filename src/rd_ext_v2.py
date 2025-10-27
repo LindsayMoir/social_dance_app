@@ -72,11 +72,10 @@ class ReadExtractV2(BaseScraper):
         """
         try:
             # Use browser_manager from BaseScraper
-            self.playwright = await self.browser_manager.playwright
-            self.browser = await self.browser_manager.browser
+            self.browser = await self.browser_manager.launch_browser_async()
 
             # Create context with standard configuration
-            self.context = await self.browser_manager.new_context()
+            self.context = await self.browser.new_context()
             self.page = await self.context.new_page()
 
             self.logger.info("Browser initialized successfully")
@@ -347,8 +346,6 @@ class ReadExtractV2(BaseScraper):
                 await self.context.close()
             if self.browser:
                 await self.browser.close()
-            if self.playwright:
-                await self.playwright.stop()
 
             self.logger.info("Browser closed successfully")
         except Exception as e:

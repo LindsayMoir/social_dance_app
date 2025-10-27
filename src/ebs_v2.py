@@ -293,7 +293,6 @@ class EventbriteScraperV2(BaseScraper):
             # Use browser_manager from BaseScraper
             if not self.page:
                 # Initialize async browser
-                self.playwright = await self.browser_manager.playwright
                 self.browser = await self.browser_manager.launch_browser_async()
                 self.context = await self.browser.new_context()
                 self.page = await self.context.new_page()
@@ -370,8 +369,6 @@ class EventbriteScraperV2(BaseScraper):
                 await self.context.close()
             if self.browser:
                 await self.browser.close()
-            if self.playwright:
-                await self.playwright.stop()
 
             self.logger.info("Eventbrite scraper closed successfully")
         except Exception as e:

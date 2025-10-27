@@ -111,23 +111,9 @@ class FacebookScraperV2(BaseScraper):
         # Get database handler from LLM handler
         self.db_handler = self.llm_handler.db_handler
 
-        # Set up browser and context from PlaywrightManager
-        self.playwright = self.browser_manager.playwright
-        self.browser = self.browser_manager.browser
-
-        # Create Facebook-specific context with auth state persistence
-        self.facebook_auth_path = get_auth_file('facebook')
-        self.context = self.browser.new_context(
-            storage_state=self.facebook_auth_path
-        )
-        self.page = self.context.new_page()
-        self.logged_in_page = self.page  # Keep stable reference for reuse
-
-        # Attempt Facebook login
-        if self.login_to_facebook():
-            self.logger.info("✓ Facebook login successful")
-        else:
-            self.logger.error("✗ Facebook login failed")
+        # Browser, context, and page will be initialized when needed
+        # (deferred initialization to avoid sync API in async context)
+        self.logged_in_page = None  # Will be set after login
 
         # Initialize run results tracker
         file_name = 'fb_v2.py'
