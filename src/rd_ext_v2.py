@@ -19,7 +19,11 @@ from datetime import date, datetime, timedelta
 import logging
 import pandas as pd
 import os
+import sys
 from urllib.parse import urljoin, urlparse
+
+# Add parent directory to path for imports when run as subprocess
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from llm import LLMHandler
 from credentials import get_credentials

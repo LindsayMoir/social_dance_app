@@ -26,6 +26,7 @@ Maintains all Facebook-specific functionality including:
 
 import logging
 import os
+import sys
 import pandas as pd
 import re
 from datetime import datetime
@@ -37,6 +38,9 @@ from openpyxl import load_workbook
 from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
 from sqlalchemy import text
+
+# Add parent directory to path for imports when run as subprocess
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from logging_config import setup_logging, log_extracted_text
 from base_scraper import BaseScraper

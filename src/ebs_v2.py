@@ -19,12 +19,16 @@ from dotenv import load_dotenv
 load_dotenv()
 import logging
 import os
+import sys
 import pandas as pd
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 import random
 import re
 from sqlalchemy import text
 import yaml
+
+# Add parent directory to path for imports when run as subprocess
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from llm import LLMHandler
 from logging_config import setup_logging
