@@ -212,9 +212,9 @@ class ReadExtractV2(BaseScraper):
 
         # Use retry_manager for resilient extraction
         try:
-            return await self.retry_manager.execute_with_retry(_extract, max_retries)
+            return await self.retry_manager.retry_async(_extract)
         except Exception as e:
-            self.logger.error(f"Failed to extract text from {link} after {max_retries} retries")
+            self.logger.error(f"Failed to extract text from {link} after retries")
             return None
 
     async def extract_from_url(self, url: str, multiple: bool = False):

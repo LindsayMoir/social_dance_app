@@ -96,10 +96,7 @@ class EventbriteScraperV2(BaseScraper):
             async def _search():
                 return await self.perform_search(query)
 
-            search_results = await self.retry_manager.execute_with_retry(
-                _search,
-                max_retries=3
-            )
+            search_results = await self.retry_manager.retry_async(_search)
 
             if not search_results:
                 self.logger.warning(f"No results found for: {query}")
@@ -265,7 +262,7 @@ class EventbriteScraperV2(BaseScraper):
                 text = self.text_extractor.extract_from_html(content)
                 return text
 
-            extracted_text = await self.retry_manager.execute_with_retry(_extract)
+            extracted_text = await self.retry_manager.retry_async(_extract)
 
             if not extracted_text:
                 self.logger.warning(f"Failed to extract text from {event_url}")
