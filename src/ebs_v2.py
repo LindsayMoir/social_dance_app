@@ -130,7 +130,10 @@ class EventbriteScraperV2(BaseScraper):
 
     async def perform_search(self, query):
         """
-        Perform actual Eventbrite search query.
+        Perform actual Eventbrite search query by filling in the search box.
+
+        Uses the same approach as the original ebs.py - navigate to Eventbrite,
+        find the search box, fill it with the query, and press Enter.
 
         Args:
             query (str): Search query
@@ -143,59 +146,90 @@ class EventbriteScraperV2(BaseScraper):
                 self.logger.warning("Page not initialized, initializing now")
                 await self.init_page()
 
-            # Construct Eventbrite search URL
-            search_url = f"https://www.eventbrite.com/d/{query}/all-events/"
-
-            # Navigate with retry logic via browser_manager
+            # Navigate to Eventbrite home page
+            search_page_url = "https://www.eventbrite.com/"
             success = await self.browser_manager.navigate_safe_async(
-                self.page, search_url, max_retries=3
+                self.page, search_page_url, max_retries=3
             )
 
             if not success:
-                self.logger.error(f"Failed to navigate to {search_url}")
+                self.logger.error(f"Failed to navigate to {search_page_url}")
                 return []
 
-            # Wait for search results to load
+            # Wait for search box to appear
+            search_selector = "input#search-autocomplete-input"
+            try:
+                await self.page.wait_for_selector(search_selector, timeout=15000)
+            except PlaywrightTimeoutError:
+                self.logger.error(f"Search box not found after timeout for query: {query}")
+                return []
+
+            # Fill search box and press Enter
+            try:
+                search_box = await self.page.query_selector(search_selector)
+                if not search_box:
+                    self.logger.error(f"Search box selector found but element is None for query: {query}")
+                    return []
+
+                await search_box.fill(query)
+                await search_box.press("Enter")
+                self.logger.info(f"Performed search for: {query}")
+
+                # Wait for search results to load
+                await self.page.wait_for_load_state("networkidle", timeout=15000)
+
+            except Exception as e:
+                self.logger.error(f"Error filling search box for query '{query}': {e}")
+                return []
+
+            # Wait for event cards to appear
             try:
                 await self.page.wait_for_selector(
                     "div[data-testid='event-card']",
                     timeout=10000
                 )
             except PlaywrightTimeoutError:
-                self.logger.warning("No event cards found after timeout")
+                self.logger.warning(f"No event cards found for query: {query}")
                 return []
 
-            # Extract event URLs using url_navigator
+            # Extract event URLs
             event_urls = await self.extract_event_urls()
-            self.logger.info(f"Found {len(event_urls)} events")
+            self.logger.info(f"Found {len(event_urls)} events for query: {query}")
             return event_urls
 
         except Exception as e:
-            self.logger.error(f"Error in perform_search: {e}")
+            self.logger.error(f"Error in perform_search for query '{query}': {e}")
             return []
 
     async def extract_event_urls(self):
         """
         Extract individual event URLs from search results.
 
+        Uses the same selector as original ebs.py: a[href*='/e/'] to find event links.
+
         Returns:
             list: List of event URLs
         """
         try:
-            # Get all event card links
-            event_links = await self.page.eval_on_selector_all(
-                "a[data-testid='event-card-link']",
-                "elements => elements.map(e => e.href)"
-            )
+            # Get all event links (Eventbrite event URLs contain '/e/' in the path)
+            event_links = await self.page.query_selector_all("a[href*='/e/']")
 
-            # Validate and normalize URLs using url_navigator
+            # Extract and validate URLs
             valid_urls = []
             for link in event_links:
-                if self.url_navigator.is_valid_url(link):
-                    normalized = self.url_navigator.normalize_url(link)
-                    if normalized not in self.visited_urls:
-                        valid_urls.append(normalized)
-                        self.visited_urls.add(normalized)
+                href = await link.get_attribute("href")
+                if href:
+                    # Ensure absolute URL
+                    href = self.ensure_absolute_url(href)
+
+                    # Extract unique ID to validate it's a real event
+                    unique_id = self.extract_unique_id(href)
+                    if unique_id:
+                        normalized = self.url_navigator.normalize_url(href)
+                        if normalized not in self.visited_urls:
+                            valid_urls.append(normalized)
+                            self.visited_urls.add(normalized)
+                            self.logger.debug(f"Found event URL: {normalized}")
 
             self.logger.info(f"Extracted {len(valid_urls)} valid event URLs")
             return valid_urls
