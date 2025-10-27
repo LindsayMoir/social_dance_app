@@ -130,10 +130,10 @@ class EventbriteScraperV2(BaseScraper):
 
     async def perform_search(self, query):
         """
-        Perform actual Eventbrite search query by filling in the search box.
+        Perform Eventbrite search using direct URL with location.
 
-        Uses the same approach as the original ebs.py - navigate to Eventbrite,
-        find the search box, fill it with the query, and press Enter.
+        Eventbrite uses URLs in the format:
+        https://www.eventbrite.ca/d/{location}/{query-with-hyphens}/
 
         Args:
             query (str): Search query
@@ -146,49 +146,41 @@ class EventbriteScraperV2(BaseScraper):
                 self.logger.warning("Page not initialized, initializing now")
                 await self.init_page()
 
-            # Navigate to Eventbrite home page
-            search_page_url = "https://www.eventbrite.com/"
+            # Format query for Eventbrite URL (replace spaces with hyphens)
+            formatted_query = query.lower().replace(" ", "-")
+
+            # Use Canadian Eventbrite with Victoria location
+            search_url = f"https://www.eventbrite.ca/d/canada--victoria/{formatted_query}/"
+
+            self.logger.info(f"Navigating to search URL: {search_url}")
+
+            # Navigate to the search results page
             success = await self.browser_manager.navigate_safe_async(
-                self.page, search_page_url, max_retries=3
+                self.page, search_url, max_retries=3
             )
 
             if not success:
-                self.logger.error(f"Failed to navigate to {search_page_url}")
+                self.logger.error(f"Failed to navigate to {search_url}")
                 return []
 
-            # Wait for search box to appear
-            search_selector = "input#search-autocomplete-input"
-            try:
-                await self.page.wait_for_selector(search_selector, timeout=15000)
-            except PlaywrightTimeoutError:
-                self.logger.error(f"Search box not found after timeout for query: {query}")
-                return []
+            # Wait for event cards to load - use different selectors as fallback
+            event_card_found = False
+            selectors = [
+                "div[data-testid='event-card']",  # Primary selector
+                "a[href*='/e/']",  # Fallback: any event link
+            ]
 
-            # Fill search box and press Enter
-            try:
-                search_box = await self.page.query_selector(search_selector)
-                if not search_box:
-                    self.logger.error(f"Search box selector found but element is None for query: {query}")
-                    return []
+            for selector in selectors:
+                try:
+                    await self.page.wait_for_selector(selector, timeout=10000)
+                    event_card_found = True
+                    self.logger.info(f"Event cards found using selector: {selector}")
+                    break
+                except PlaywrightTimeoutError:
+                    self.logger.debug(f"Selector '{selector}' not found, trying next...")
+                    continue
 
-                await search_box.fill(query)
-                await search_box.press("Enter")
-                self.logger.info(f"Performed search for: {query}")
-
-                # Wait for search results to load
-                await self.page.wait_for_load_state("networkidle", timeout=15000)
-
-            except Exception as e:
-                self.logger.error(f"Error filling search box for query '{query}': {e}")
-                return []
-
-            # Wait for event cards to appear
-            try:
-                await self.page.wait_for_selector(
-                    "div[data-testid='event-card']",
-                    timeout=10000
-                )
-            except PlaywrightTimeoutError:
+            if not event_card_found:
                 self.logger.warning(f"No event cards found for query: {query}")
                 return []
 
