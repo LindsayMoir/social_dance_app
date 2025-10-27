@@ -163,11 +163,13 @@ class EventbriteScraperV2(BaseScraper):
                 self.logger.error(f"Failed to navigate to {search_url}")
                 return []
 
-            # Wait for event cards to load - use different selectors as fallback
+            # Wait for event cards to load - try multiple selectors
             event_card_found = False
             selectors = [
                 "div[data-testid='event-card']",  # Primary selector
-                "a[href*='/e/']",  # Fallback: any event link
+                "div[class*='EventCard']",  # Class-based selector
+                "article",  # Article tags often contain event cards
+                "a[href*='/e/']",  # Any event link
             ]
 
             for selector in selectors:
@@ -181,8 +183,15 @@ class EventbriteScraperV2(BaseScraper):
                     continue
 
             if not event_card_found:
-                self.logger.warning(f"No event cards found for query: {query}")
-                return []
+                # Try to wait for page to fully load before giving up
+                try:
+                    await self.page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
+
+            # Don't return empty - let extract_event_urls try to find links anyway
+            # The page may have loaded but selectors may not match
+            self.logger.info(f"Proceeding to extract event URLs for query: {query}")
 
             # Extract event URLs
             event_urls = await self.extract_event_urls()
