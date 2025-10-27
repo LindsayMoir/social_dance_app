@@ -556,11 +556,11 @@ def pre_process_ebs():
 @task
 def run_ebs_script():
     try:
-        result = subprocess.run([sys.executable, "src/ebs.py"], check=True)
-        logger.info("def run_ebs_script(): ebs.py executed successfully.")
+        result = subprocess.run([sys.executable, "src/ebs_v2.py"], check=True)
+        logger.info("def run_ebs_script(): ebs_v2.py executed successfully.")
         return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"ebs.py failed with return code: {e.returncode}"
+        error_message = f"ebs_v2.py failed with return code: {e.returncode}"
         logger.error(f"def run_ebs_script(): {error_message}")
         raise Exception(error_message)
 
@@ -642,11 +642,11 @@ def pre_process_rd_ext():
 @task
 def run_rd_ext_script():
     try:
-        result = subprocess.run([sys.executable, "src/rd_ext.py"], check=True)
-        logger.info("def run_rd_ext_script(): rd_ext.py executed successfully.")
+        result = subprocess.run([sys.executable, "src/rd_ext_v2.py"], check=True)
+        logger.info("def run_rd_ext_script(): rd_ext_v2.py executed successfully.")
         return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"rd_ext.py failed with return code: {e.returncode}"
+        error_message = f"rd_ext_v2.py failed with return code: {e.returncode}"
         logger.error(f"def run_rd_ext_script(): {error_message}")
         raise Exception(error_message)
 
@@ -680,11 +680,11 @@ def rd_ext_step():
 @task
 def run_fb_script():
     try:
-        result = subprocess.run([sys.executable, "src/fb.py"], check=True)
-        logger.info("def run_fb_script(): fb.py executed successfully.")
+        result = subprocess.run([sys.executable, "src/fb_v2.py"], check=True)
+        logger.info("def run_fb_script(): fb_v2.py executed successfully.")
         return "Script completed successfully"
     except subprocess.CalledProcessError as e:
-        error_message = f"fb.py failed with return code: {e.returncode}"
+        error_message = f"fb_v2.py failed with return code: {e.returncode}"
         logger.error(f"def run_fb_script(): {error_message}")
         raise Exception(error_message)
 
