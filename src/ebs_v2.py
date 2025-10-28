@@ -23,7 +23,6 @@ import sys
 import pandas as pd
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 import random
-import re
 from sqlalchemy import text
 import yaml
 
@@ -232,8 +231,8 @@ class EventbriteScraperV2(BaseScraper):
                     event_link_count += 1
                     self.logger.debug(f"Found potential event URL: {url}")
 
-                    # Extract unique ID to validate it's a real event
-                    unique_id = self.extract_unique_id(url)
+                    # Extract unique ID using centralized BaseScraper method
+                    unique_id = self.extract_id_from_url(url, platform="eventbrite")
                     if unique_id:
                         normalized = self.url_navigator.normalize_url(url)
                         if normalized not in self.visited_urls:
@@ -272,24 +271,6 @@ class EventbriteScraperV2(BaseScraper):
             return f"https://www.eventbrite.com{href}"
         else:
             return f"https://www.eventbrite.com/{href}"
-
-    def extract_unique_id(self, url):
-        """
-        Extract unique event ID from URL.
-
-        Args:
-            url (str): Event URL
-
-        Returns:
-            str: Event ID or None
-        """
-        try:
-            # Extract ID from Eventbrite URL pattern
-            match = re.search(r'/(\d+)\D*$', url)
-            return match.group(1) if match else None
-        except Exception as e:
-            self.logger.error(f"Error extracting ID from {url}: {e}")
-            return None
 
     async def process_event(self, event_url, parent_url, source, keywords_list,
                           prompt_type, counter):

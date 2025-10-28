@@ -232,6 +232,55 @@ class BaseScraper(ABC):
         """
         return self.text_extractor.extract_links_from_html(html, base_url)
 
+    def extract_id_from_url(self, url: str, platform: str = "eventbrite") -> Optional[str]:
+        """
+        Extract unique ID from platform-specific URL.
+
+        Supports extracting IDs from various event platforms:
+        - eventbrite: /e/{event-name}-{numeric-id}?params
+        - facebook: /events/{numeric-id}/
+        - generic: attempts to extract numeric ID from path
+
+        Args:
+            url (str): URL to extract ID from
+            platform (str): Platform identifier (eventbrite, facebook, generic)
+
+        Returns:
+            Optional[str]: Extracted ID or None if not found
+        """
+        import re
+
+        try:
+            if platform == "eventbrite":
+                # Eventbrite URLs: /e/event-name-12345678?params
+                # Match event name part (lazy), then numeric ID, then either ? or end of string
+                match = re.search(r'/e/[a-z0-9\-]*?(\d+)(?:\?|$)', url, re.IGNORECASE)
+                if match:
+                    return match.group(1)
+
+            elif platform == "facebook":
+                # Facebook URLs: /events/123456789/ or ?event_id=123456789
+                # Try both patterns
+                match = re.search(r'/events/(\d+)', url)
+                if match:
+                    return match.group(1)
+                match = re.search(r'event_id=(\d+)', url)
+                if match:
+                    return match.group(1)
+
+            elif platform == "generic":
+                # Generic numeric ID extraction from any URL path
+                match = re.search(r'(\d+)', url.split('?')[0])
+                if match:
+                    return match.group(1)
+
+            self.logger.debug(f"No ID found in URL {url} for platform {platform}")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error extracting ID from {url} (platform: {platform}): {e}")
+            return None
+
     def write_events_to_db(self, events: List[Dict[str, Any]]) -> bool:
         """
         Write events to database.
