@@ -104,8 +104,9 @@ class EventbriteScraperV2(BaseScraper):
             # Process each event found
             counter = 0
             for event_url in search_results:
-                # Check if we've reached the overall URL processing limit (centralized in BaseScraper)
-                if self.has_reached_url_limit():
+                # Check if we've reached the overall valid URL processing limit (centralized in BaseScraper)
+                # Pass the count of valid event URLs extracted so far
+                if self.has_reached_url_limit(valid_urls_count=len(self.visited_urls)):
                     break
 
                 if not self.circuit_breaker.can_execute():
@@ -210,8 +211,8 @@ class EventbriteScraperV2(BaseScraper):
         Extract individual event URLs from search results.
 
         Uses the BaseScraper's extract_links() method which leverages the
-        shared text_extractor to parse HTML and find all event URLs, respecting
-        the max_website_urls config limit.
+        shared text_extractor to parse HTML and find all event URLs. Limits
+        valid event URLs to max_website_urls config setting.
 
         Returns:
             list: List of event URLs (Eventbrite event URLs contain '/e/' in path)
@@ -221,16 +222,24 @@ class EventbriteScraperV2(BaseScraper):
             html_content = await self.page.content()
 
             # Use BaseScraper's extract_links method (centralized, reusable code)
-            # This parses the HTML and extracts all absolute URLs, respecting max_website_urls limit
+            # This parses the HTML and extracts all absolute URLs
             all_links = self.extract_links(html_content, base_url="https://www.eventbrite.ca")
 
-            self.logger.info(f"Found {len(all_links)} links in HTML (limited to max_website_urls config)")
+            self.logger.info(f"Found {len(all_links)} total links in HTML")
+
+            # Get max_website_urls limit for valid event URLs (from centralized BaseScraper)
+            max_urls = self.get_max_website_urls()
 
             # Filter for event URLs (must contain '/e/' in the path)
             valid_urls = []
             event_link_count = 0
 
             for url in all_links:
+                # Stop if we've reached the max number of valid event URLs
+                if len(valid_urls) >= max_urls:
+                    self.logger.info(f"Reached max_website_urls limit of {max_urls} valid event URLs")
+                    break
+
                 # Check if it's an event URL (contains '/e/' pattern)
                 if '/e/' in url:
                     event_link_count += 1
@@ -248,7 +257,7 @@ class EventbriteScraperV2(BaseScraper):
                         self.logger.debug(f"Could not extract ID from: {url}")
 
             self.logger.info(f"Found {event_link_count} event links with '/e/' pattern")
-            self.logger.info(f"Extracted {len(valid_urls)} valid event URLs")
+            self.logger.info(f"Extracted {len(valid_urls)} valid event URLs from {len(all_links)} total links (max: {max_urls})")
 
             # Log sample URLs for debugging
             if all_links:

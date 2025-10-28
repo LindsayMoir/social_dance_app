@@ -145,19 +145,24 @@ class BaseScraper(ABC):
             return False
         return True
 
-    def has_reached_url_limit(self) -> bool:
+    def has_reached_url_limit(self, valid_urls_count: int = None) -> bool:
         """
         Check if the overall URL processing limit has been reached.
 
         Uses config['crawling']['urls_run_limit'] (default 500) to determine
-        if the scraper should stop processing more URLs.
+        if the scraper should stop processing more valid URLs.
+
+        Args:
+            valid_urls_count (int, optional): Number of valid URLs processed so far.
+                                             If not provided, uses len(visited_urls).
 
         Returns:
             bool: True if limit reached, False otherwise
         """
         urls_run_limit = self.get_config('crawling.urls_run_limit', default=500)
-        if len(self.visited_urls) >= urls_run_limit:
-            self.logger.info(f"URL processing limit reached: {len(self.visited_urls)}/{urls_run_limit}")
+        count = valid_urls_count if valid_urls_count is not None else len(self.visited_urls)
+        if count >= urls_run_limit:
+            self.logger.info(f"Valid URLs limit reached: {count}/{urls_run_limit}")
             return True
         return False
 
@@ -235,33 +240,27 @@ class BaseScraper(ABC):
         """
         return self.text_extractor.extract_from_html(html, min_length)
 
-    def extract_links(self, html: str, base_url: Optional[str] = None, limit: Optional[int] = None) -> Set[str]:
+    def extract_links(self, html: str, base_url: Optional[str] = None) -> Set[str]:
         """
-        Extract links from HTML, respecting max_website_urls config limit.
+        Extract all links from HTML.
 
         Args:
             html (str): HTML content
             base_url (str, optional): Base URL for relative links
-            limit (int, optional): Maximum number of links to return. If not provided,
-                                  uses config['crawling']['max_website_urls']
 
         Returns:
-            Set[str]: Set of absolute URLs (limited to max_website_urls)
+            Set[str]: Set of absolute URLs
         """
-        # Get all links from HTML
-        all_links = self.text_extractor.extract_links_from_html(html, base_url)
+        return self.text_extractor.extract_links_from_html(html, base_url)
 
-        # Apply limit from parameter or config
-        if limit is None:
-            limit = self.get_config('crawling.max_website_urls', default=10)
+    def get_max_website_urls(self) -> int:
+        """
+        Get the max_website_urls configuration limit.
 
-        # Return limited set of links
-        if len(all_links) > limit:
-            limited_links = set(list(all_links)[:limit])
-            self.logger.debug(f"Limited links from {len(all_links)} to {limit} per max_website_urls config")
-            return limited_links
-
-        return all_links
+        Returns:
+            int: Maximum number of valid URLs to extract from a single page
+        """
+        return self.get_config('crawling.max_website_urls', default=10)
 
     def extract_id_from_url(self, url: str, platform: str = "eventbrite") -> Optional[str]:
         """
