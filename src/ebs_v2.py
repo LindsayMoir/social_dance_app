@@ -206,7 +206,8 @@ class EventbriteScraperV2(BaseScraper):
         Extract individual event URLs from search results.
 
         Uses the BaseScraper's extract_links() method which leverages the
-        shared text_extractor to parse HTML and find all event URLs.
+        shared text_extractor to parse HTML and find all event URLs, respecting
+        the max_website_urls config limit.
 
         Returns:
             list: List of event URLs (Eventbrite event URLs contain '/e/' in path)
@@ -216,10 +217,10 @@ class EventbriteScraperV2(BaseScraper):
             html_content = await self.page.content()
 
             # Use BaseScraper's extract_links method (centralized, reusable code)
-            # This parses the HTML and extracts all absolute URLs
+            # This parses the HTML and extracts all absolute URLs, respecting max_website_urls limit
             all_links = self.extract_links(html_content, base_url="https://www.eventbrite.ca")
 
-            self.logger.info(f"Found {len(all_links)} total links in HTML")
+            self.logger.info(f"Found {len(all_links)} links in HTML (limited to max_website_urls config)")
 
             # Filter for event URLs (must contain '/e/' in the path)
             valid_urls = []
@@ -243,7 +244,7 @@ class EventbriteScraperV2(BaseScraper):
                         self.logger.debug(f"Could not extract ID from: {url}")
 
             self.logger.info(f"Found {event_link_count} event links with '/e/' pattern")
-            self.logger.info(f"Extracted {len(valid_urls)} valid event URLs from {len(all_links)} total links")
+            self.logger.info(f"Extracted {len(valid_urls)} valid event URLs")
 
             # Log sample URLs for debugging
             if all_links:

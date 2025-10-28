@@ -219,18 +219,33 @@ class BaseScraper(ABC):
         """
         return self.text_extractor.extract_from_html(html, min_length)
 
-    def extract_links(self, html: str, base_url: Optional[str] = None) -> Set[str]:
+    def extract_links(self, html: str, base_url: Optional[str] = None, limit: Optional[int] = None) -> Set[str]:
         """
-        Extract all links from HTML.
+        Extract links from HTML, respecting max_website_urls config limit.
 
         Args:
             html (str): HTML content
             base_url (str, optional): Base URL for relative links
+            limit (int, optional): Maximum number of links to return. If not provided,
+                                  uses config['crawling']['max_website_urls']
 
         Returns:
-            Set[str]: Set of absolute URLs
+            Set[str]: Set of absolute URLs (limited to max_website_urls)
         """
-        return self.text_extractor.extract_links_from_html(html, base_url)
+        # Get all links from HTML
+        all_links = self.text_extractor.extract_links_from_html(html, base_url)
+
+        # Apply limit from parameter or config
+        if limit is None:
+            limit = self.get_config('crawling.max_website_urls', default=10)
+
+        # Return limited set of links
+        if len(all_links) > limit:
+            limited_links = set(list(all_links)[:limit])
+            self.logger.debug(f"Limited links from {len(all_links)} to {limit} per max_website_urls config")
+            return limited_links
+
+        return all_links
 
     def extract_id_from_url(self, url: str, platform: str = "eventbrite") -> Optional[str]:
         """
