@@ -455,6 +455,94 @@ class BaseScraper(ABC):
         if stats['errors'] > 0:
             self.logger.warning(f"Errors encountered: {stats['errors']}")
 
+    async def crawl_url_async(self, url: str, parent_url: str = '', source: str = '',
+                             keywords: List[str] = None) -> tuple:
+        """
+        Unified async web crawling method for all scrapers.
+
+        Handles common web crawling operations:
+        - Browser page navigation with error handling
+        - Text extraction from page content
+        - Keyword matching for relevance
+        - Link extraction with max_website_urls limit
+        - URL tracking and limiting via circuit breaker
+
+        Args:
+            url (str): URL to crawl
+            parent_url (str): Parent URL for context
+            source (str): Source identifier
+            keywords (List[str]): Keywords to search for in content
+
+        Returns:
+            tuple: (extracted_text, new_links) where:
+                - extracted_text (str): Cleaned text from page, or None if failed
+                - new_links (List[str]): List of discovered links (limited to max_website_urls)
+        """
+        import asyncio
+
+        if keywords is None:
+            keywords = []
+
+        extracted_text = None
+        new_links = []
+
+        try:
+            # Check URL limits before proceeding
+            if self.has_reached_url_limit(len(self.visited_urls)):
+                self.logger.info(f"crawl_url_async: URL limit reached, skipping {url}")
+                return extracted_text, new_links
+
+            # Check circuit breaker
+            if not self.circuit_breaker.can_execute():
+                self.logger.warning(f"crawl_url_async: Circuit breaker open, skipping {url}")
+                return extracted_text, new_links
+
+            # Check if already visited
+            if self.is_visited(url):
+                self.logger.debug(f"crawl_url_async: URL already visited: {url}")
+                return extracted_text, new_links
+
+            # Ensure page exists
+            if not self.page:
+                self.logger.error("crawl_url_async: Page not initialized")
+                return extracted_text, new_links
+
+            # Navigate to URL with timeout handling
+            try:
+                await self.page.goto(url, wait_until='domcontentloaded', timeout=60000)
+            except asyncio.TimeoutError:
+                self.logger.warning(f"crawl_url_async: Timeout loading {url}")
+                self.record_failure()
+                return extracted_text, new_links
+
+            # Extract and clean HTML content
+            html_content = await self.page.content()
+            extracted_text = self.text_extractor.extract_from_html(html_content)
+
+            if not extracted_text:
+                self.logger.debug(f"crawl_url_async: No text extracted from {url}")
+                self.add_failed_url(url)
+                return None, new_links
+
+            # Track visited URL
+            self.add_visited_url(url)
+            self.record_success()
+
+            # Extract links with max_website_urls limit
+            links = self.extract_links(html_content, base_url=url)
+            max_urls = self.get_max_website_urls()
+            new_links = list(links)[:max_urls]
+
+            self.logger.debug(f"crawl_url_async: Extracted {len(new_links)} links from {url}")
+
+            return extracted_text, new_links
+
+        except Exception as e:
+            self.logger.error(f"crawl_url_async: Error crawling {url}: {e}")
+            self.record_failure(e)
+            self.add_failed_url(url)
+            return None, new_links
+
     def cleanup(self) -> None:
         """Clean up resources (browser, connections, etc.)."""
         try:
