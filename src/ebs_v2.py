@@ -224,9 +224,14 @@ class EventbriteScraperV2(BaseScraper):
 
             # Filter for event URLs (must contain '/e/' in the path)
             valid_urls = []
+            event_link_count = 0
+
             for url in all_links:
                 # Check if it's an event URL (contains '/e/' pattern)
                 if '/e/' in url:
+                    event_link_count += 1
+                    self.logger.debug(f"Found potential event URL: {url}")
+
                     # Extract unique ID to validate it's a real event
                     unique_id = self.extract_unique_id(url)
                     if unique_id:
@@ -234,9 +239,17 @@ class EventbriteScraperV2(BaseScraper):
                         if normalized not in self.visited_urls:
                             valid_urls.append(normalized)
                             self.visited_urls.add(normalized)
-                            self.logger.debug(f"Found event URL: {normalized}")
+                            self.logger.debug(f"Found valid event URL: {normalized}")
+                    else:
+                        self.logger.debug(f"Could not extract ID from: {url}")
 
+            self.logger.info(f"Found {event_link_count} event links with '/e/' pattern")
             self.logger.info(f"Extracted {len(valid_urls)} valid event URLs from {len(all_links)} total links")
+
+            # Log sample URLs for debugging
+            if all_links:
+                self.logger.debug(f"Sample URLs from extraction: {list(all_links)[:5]}")
+
             return valid_urls
 
         except Exception as e:
