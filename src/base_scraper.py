@@ -145,6 +145,22 @@ class BaseScraper(ABC):
             return False
         return True
 
+    def has_reached_url_limit(self) -> bool:
+        """
+        Check if the overall URL processing limit has been reached.
+
+        Uses config['crawling']['urls_run_limit'] (default 500) to determine
+        if the scraper should stop processing more URLs.
+
+        Returns:
+            bool: True if limit reached, False otherwise
+        """
+        urls_run_limit = self.get_config('crawling.urls_run_limit', default=500)
+        if len(self.visited_urls) >= urls_run_limit:
+            self.logger.info(f"URL processing limit reached: {len(self.visited_urls)}/{urls_run_limit}")
+            return True
+        return False
+
     def record_success(self) -> None:
         """Record a successful operation for circuit breaker."""
         self.circuit_breaker.record_success()

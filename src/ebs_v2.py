@@ -104,6 +104,10 @@ class EventbriteScraperV2(BaseScraper):
             # Process each event found
             counter = 0
             for event_url in search_results:
+                # Check if we've reached the overall URL processing limit (centralized in BaseScraper)
+                if self.has_reached_url_limit():
+                    break
+
                 if not self.circuit_breaker.can_execute():
                     self.logger.warning("Circuit breaker open, stopping search")
                     break
