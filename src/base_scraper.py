@@ -262,6 +262,37 @@ class BaseScraper(ABC):
         """
         return self.get_config('crawling.max_website_urls', default=10)
 
+    def is_valid_page(self, response, html_content: str) -> bool:
+        """
+        Check if a page loaded successfully and is not an error page.
+
+        Validates HTTP status code and checks for common error indicators
+        (404 pages, timeout pages, etc).
+
+        Args:
+            response: Playwright response object from page.goto()
+            html_content (str): HTML content of the page
+
+        Returns:
+            bool: True if page is valid, False if error page
+        """
+        # Check HTTP status code
+        if response and response.status >= 400:
+            self.logger.warning(f"Page returned {response.status} status")
+            return False
+
+        # Check for Eventbrite 404 error message
+        if "Whoops, the page or event you are looking for was not found" in html_content:
+            self.logger.warning("Page returned Eventbrite 404 error")
+            return False
+
+        # Check for other common error indicators
+        if "404" in html_content and "not found" in html_content.lower():
+            self.logger.warning("Page appears to be a 404 error page")
+            return False
+
+        return True
+
     def extract_id_from_url(self, url: str, platform: str = "eventbrite") -> Optional[str]:
         """
         Extract unique ID from platform-specific URL.

@@ -304,8 +304,14 @@ class EventbriteScraperV2(BaseScraper):
 
             # Extract text from event page
             async def _extract():
-                await self.page.goto(event_url, timeout=15000, wait_until="domcontentloaded")
+                response = await self.page.goto(event_url, timeout=15000, wait_until="domcontentloaded")
                 content = await self.page.content()
+
+                # Use centralized page validation (checks for 404s, error pages, etc)
+                if not self.is_valid_page(response, content):
+                    self.logger.warning(f"Event page is invalid or error page: {event_url}")
+                    return None
+
                 text = self.text_extractor.extract_from_html(content)
                 return text
 
