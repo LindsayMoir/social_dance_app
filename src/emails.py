@@ -76,6 +76,12 @@ class GmailProcessor:
         self.client_secret_path = get_secret_path("desktop_client_secret.json", local_client_secret)
         self.token_path = get_secret_path("desktop_client_secret_token.json", local_token)
 
+        # Check if client secret file exists before attempting authentication
+        if not os.path.exists(self.client_secret_path):
+            logging.warning(f"Gmail client secret file not found at {self.client_secret_path}. Will use CSV file instead of Gmail API.")
+            self.service = None
+            return
+
         self.scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
         self.service = self.authenticate_gmail()
 
@@ -156,6 +162,7 @@ class GmailProcessor:
 
         On Render: Reads events from output/email_events.csv and writes to database
         Locally: Processes emails from Gmail and writes to BOTH database AND output/email_events.csv
+        If Gmail credentials unavailable: Falls back to CSV file instead of Gmail API
 
         :param csv_path: Path to the CSV file with columns: email, source, keywords, prompt.
         """
@@ -164,6 +171,11 @@ class GmailProcessor:
 
         # RENDER MODE: Read from CSV and load into database
         if self.is_render:
+            return self._process_from_csv(db_handler)
+
+        # LOCAL MODE: If Gmail service not available, fall back to CSV
+        if not self.service:
+            logging.info("Gmail service not available - falling back to CSV file instead of Gmail API")
             return self._process_from_csv(db_handler)
 
         # LOCAL MODE: Process emails and write to both database and CSV
