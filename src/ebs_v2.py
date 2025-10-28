@@ -26,7 +26,6 @@ import random
 import re
 from sqlalchemy import text
 import yaml
-from bs4 import BeautifulSoup
 
 # Add parent directory to path for imports when run as subprocess
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -205,44 +204,39 @@ class EventbriteScraperV2(BaseScraper):
 
     async def extract_event_urls(self):
         """
-        Extract individual event URLs from search results using BeautifulSoup.
+        Extract individual event URLs from search results.
 
-        Parses the page HTML directly to find all links containing '/e/' in the path,
-        which is the Eventbrite event URL pattern.
+        Uses the BaseScraper's extract_links() method which leverages the
+        shared text_extractor to parse HTML and find all event URLs.
 
         Returns:
-            list: List of event URLs
+            list: List of event URLs (Eventbrite event URLs contain '/e/' in path)
         """
         try:
             # Get the page content as HTML
             html_content = await self.page.content()
 
-            # Parse with BeautifulSoup
-            soup = BeautifulSoup(html_content, 'html.parser')
+            # Use BaseScraper's extract_links method (centralized, reusable code)
+            # This parses the HTML and extracts all absolute URLs
+            all_links = self.extract_links(html_content, base_url="https://www.eventbrite.ca")
 
-            # Find all links that contain '/e/' in href (Eventbrite event pattern)
-            event_links = soup.find_all('a', href=re.compile(r'/e/'))
+            self.logger.info(f"Found {len(all_links)} total links in HTML")
 
-            self.logger.info(f"Found {len(event_links)} potential event links in HTML")
-
-            # Extract and validate URLs
+            # Filter for event URLs (must contain '/e/' in the path)
             valid_urls = []
-            for link in event_links:
-                href = link.get('href')
-                if href:
-                    # Ensure absolute URL
-                    href = self.ensure_absolute_url(href)
-
+            for url in all_links:
+                # Check if it's an event URL (contains '/e/' pattern)
+                if '/e/' in url:
                     # Extract unique ID to validate it's a real event
-                    unique_id = self.extract_unique_id(href)
+                    unique_id = self.extract_unique_id(url)
                     if unique_id:
-                        normalized = self.url_navigator.normalize_url(href)
+                        normalized = self.url_navigator.normalize_url(url)
                         if normalized not in self.visited_urls:
                             valid_urls.append(normalized)
                             self.visited_urls.add(normalized)
                             self.logger.debug(f"Found event URL: {normalized}")
 
-            self.logger.info(f"Extracted {len(valid_urls)} valid event URLs from {len(event_links)} potential links")
+            self.logger.info(f"Extracted {len(valid_urls)} valid event URLs from {len(all_links)} total links")
             return valid_urls
 
         except Exception as e:
