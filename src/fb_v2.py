@@ -578,8 +578,7 @@ class FacebookScraperV2(BaseScraper):
 
                     self.stats['unique_urls'] = len(self.unique_urls)
 
-                    if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                        self.logger.info("scrape_events(): Reached the URL visit limit")
+                    if self.has_reached_url_limit(len(self.urls_visited)):
                         return search_url, events_processed
 
                     extracted_text = self.extract_event_text(link)
@@ -721,8 +720,7 @@ class FacebookScraperV2(BaseScraper):
                 """Callback to process each event immediately as it's extracted."""
                 self.logger.info(f"driver_fb_search(): Processing Facebook URL: {url}")
 
-                if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
-                    self.logger.info("driver_fb_search(): Reached crawl limit")
+                if self.has_reached_url_limit(len(self.urls_visited)):
                     return
 
                 # Check for keywords in extracted text
@@ -831,7 +829,7 @@ class FacebookScraperV2(BaseScraper):
                     self.logger.info(f"driver_fb_urls(): Base URL marked processed: {base_url}")
 
                 # Honor the run limit
-                if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                if self.has_reached_url_limit(len(self.urls_visited)):
                     break
 
                 # Scrape event links by auto-navigating to /events/
@@ -871,7 +869,7 @@ class FacebookScraperV2(BaseScraper):
                         fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
                         self.logger.info(f"driver_fb_urls(): Event URL marked processed: {event_url}")
 
-                    if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                    if self.has_reached_url_limit(len(self.urls_visited)):
                         break
 
                 # Mark that we've scraped events for the base URL
