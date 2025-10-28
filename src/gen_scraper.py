@@ -521,79 +521,78 @@ class GeneralScraper(BaseScraper):
         new_links = []
 
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=self.config['crawling'].get('headless', True))
-                page = await browser.new_page()
-                page.set_default_timeout(60000)  # 60 second timeout
+            # Use BaseScraper's browser manager instead of creating own browser
+            browser = await self.browser_manager.launch_browser_async()
+            page = await browser.new_page()
+            page.set_default_timeout(60000)  # 60 second timeout
 
-                try:
-                    await page.goto(url, wait_until='domcontentloaded', timeout=60000)
-                    extracted_text = await page.content()
+            try:
+                await page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                # Use BaseScraper's text extractor for consistent HTML parsing
+                html_content = await page.content()
+                extracted_text = self.text_extractor.extract_from_html(html_content)
 
-                    # Check for relevant keywords
-                    found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+                # Check for relevant keywords
+                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
 
-                    # Record URL in database with relevance status
-                    url_row = [url, parent_url, source, found_keywords, len(found_keywords) > 0, 1, datetime.now()]
-                    if hasattr(self.llm_handler.db_handler, 'url_repo'):
+                # Record URL in database with relevance status
+                url_row = [url, parent_url, source, found_keywords, len(found_keywords) > 0, 1, datetime.now()]
+                if hasattr(self.llm_handler.db_handler, 'url_repo'):
+                    try:
+                        self.llm_handler.db_handler.url_repo.write_url_to_db(url_row)
+                    except Exception as e:
+                        self.logger.debug(f"Failed to record URL: {e}")
+
+                # Process keywords with LLM if found
+                if found_keywords:
+                    try:
+                        llm_status = self.llm_handler.process_llm_response(
+                            url, parent_url, extracted_text, source, found_keywords, 'default'
+                        )
+                        self.logger.info(f"URL {url} marked as {'relevant' if llm_status else 'irrelevant'} by LLM")
+                    except Exception as e:
+                        self.logger.debug(f"LLM processing error: {e}")
+
+                # Extract links from page using BaseScraper's centralized method with max limit
+                links = self.extract_links(html_content, base_url=url)
+                max_urls = self.get_max_website_urls()
+                new_links = list(links)[:max_urls]
+
+                # Extract Google Calendar iframes and emails
+                calendar_elements = await page.evaluate('''() => {
+                    const cals = [];
+                    document.querySelectorAll('iframe').forEach(iframe => {
+                        if (iframe.src) cals.push(iframe.src);
+                    });
+                    return cals;
+                }''')
+
+                for cal_url in calendar_elements:
+                    calendar_ids = self._extract_calendar_ids(cal_url)
+                    if not calendar_ids:
+                        if self._is_valid_calendar_id(cal_url):
+                            calendar_ids = [cal_url]
+                        else:
+                            decoded = self._decode_calendar_id(cal_url)
+                            if decoded:
+                                calendar_ids = [decoded]
+
+                    for calendar_id in calendar_ids:
                         try:
-                            self.llm_handler.db_handler.url_repo.write_url_to_db(url_row)
+                            cal_events = await self._fetch_google_calendar_events(calendar_id)
+                            if not cal_events.empty:
+                                events.append(cal_events)
+                                self.logger.info(f"Extracted {len(cal_events)} events from calendar {calendar_id}")
                         except Exception as e:
-                            self.logger.debug(f"Failed to record URL: {e}")
+                            self.logger.debug(f"Error processing calendar {calendar_id}: {e}")
 
-                    # Process keywords with LLM if found
-                    if found_keywords:
-                        try:
-                            llm_status = self.llm_handler.process_llm_response(
-                                url, parent_url, extracted_text, source, found_keywords, 'default'
-                            )
-                            self.logger.info(f"URL {url} marked as {'relevant' if llm_status else 'irrelevant'} by LLM")
-                        except Exception as e:
-                            self.logger.debug(f"LLM processing error: {e}")
-
-                    # Extract links from page
-                    links = await page.evaluate('''() => {
-                        return Array.from(document.querySelectorAll('a'))
-                            .map(a => a.href)
-                            .filter(href => href && (href.startsWith('http://') || href.startsWith('https://')))
-                    }''')
-                    new_links = list(set(links))[:self.config['crawling'].get('max_website_urls', 10)]
-
-                    # Extract Google Calendar iframes and emails
-                    calendar_elements = await page.evaluate('''() => {
-                        const cals = [];
-                        document.querySelectorAll('iframe').forEach(iframe => {
-                            if (iframe.src) cals.push(iframe.src);
-                        });
-                        return cals;
-                    }''')
-
-                    for cal_url in calendar_elements:
-                        calendar_ids = self._extract_calendar_ids(cal_url)
-                        if not calendar_ids:
-                            if self._is_valid_calendar_id(cal_url):
-                                calendar_ids = [cal_url]
-                            else:
-                                decoded = self._decode_calendar_id(cal_url)
-                                if decoded:
-                                    calendar_ids = [decoded]
-
-                        for calendar_id in calendar_ids:
-                            try:
-                                cal_events = await self._fetch_google_calendar_events(calendar_id)
-                                if not cal_events.empty:
-                                    events.append(cal_events)
-                                    self.logger.info(f"Extracted {len(cal_events)} events from calendar {calendar_id}")
-                            except Exception as e:
-                                self.logger.debug(f"Error processing calendar {calendar_id}: {e}")
-
-                except asyncio.TimeoutError:
-                    self.logger.warning(f"Timeout loading page: {url}")
-                except Exception as e:
-                    self.logger.debug(f"Error processing page {url}: {e}")
-                finally:
-                    await page.close()
-                    await browser.close()
+            except asyncio.TimeoutError:
+                self.logger.warning(f"Timeout loading page: {url}")
+            except Exception as e:
+                self.logger.debug(f"Error processing page {url}: {e}")
+            finally:
+                await page.close()
+                await browser.close()
 
         except Exception as e:
             self.logger.debug(f"Error in Playwright crawl for {url}: {e}")

@@ -456,7 +456,7 @@ class BaseScraper(ABC):
             self.logger.warning(f"Errors encountered: {stats['errors']}")
 
     async def crawl_url_async(self, url: str, parent_url: str = '', source: str = '',
-                             keywords: List[str] = None) -> tuple:
+                             keywords: List[str] = None, extract_calendar_events=None) -> tuple:
         """
         Unified async web crawling method for all scrapers.
 
@@ -465,6 +465,7 @@ class BaseScraper(ABC):
         - Text extraction from page content
         - Keyword matching for relevance
         - Link extraction with max_website_urls limit
+        - Google Calendar event extraction (if callable provided)
         - URL tracking and limiting via circuit breaker
 
         Args:
@@ -472,11 +473,14 @@ class BaseScraper(ABC):
             parent_url (str): Parent URL for context
             source (str): Source identifier
             keywords (List[str]): Keywords to search for in content
+            extract_calendar_events (callable): Optional async function to extract Google Calendar events.
+                Should accept (calendar_url, url, source) and return DataFrame or empty DataFrame
 
         Returns:
-            tuple: (extracted_text, new_links) where:
+            tuple: (extracted_text, new_links, calendar_events_list) where:
                 - extracted_text (str): Cleaned text from page, or None if failed
                 - new_links (List[str]): List of discovered links (limited to max_website_urls)
+                - calendar_events_list (list): List of DataFrames with extracted calendar events (empty if none)
         """
         import asyncio
 
@@ -485,27 +489,28 @@ class BaseScraper(ABC):
 
         extracted_text = None
         new_links = []
+        calendar_events_list = []
 
         try:
             # Check URL limits before proceeding
             if self.has_reached_url_limit(len(self.visited_urls)):
                 self.logger.info(f"crawl_url_async: URL limit reached, skipping {url}")
-                return extracted_text, new_links
+                return extracted_text, new_links, calendar_events_list
 
             # Check circuit breaker
             if not self.circuit_breaker.can_execute():
                 self.logger.warning(f"crawl_url_async: Circuit breaker open, skipping {url}")
-                return extracted_text, new_links
+                return extracted_text, new_links, calendar_events_list
 
             # Check if already visited
             if self.is_visited(url):
                 self.logger.debug(f"crawl_url_async: URL already visited: {url}")
-                return extracted_text, new_links
+                return extracted_text, new_links, calendar_events_list
 
             # Ensure page exists
             if not self.page:
                 self.logger.error("crawl_url_async: Page not initialized")
-                return extracted_text, new_links
+                return extracted_text, new_links, calendar_events_list
 
             # Navigate to URL with timeout handling
             try:
@@ -513,7 +518,7 @@ class BaseScraper(ABC):
             except asyncio.TimeoutError:
                 self.logger.warning(f"crawl_url_async: Timeout loading {url}")
                 self.record_failure()
-                return extracted_text, new_links
+                return extracted_text, new_links, calendar_events_list
 
             # Extract and clean HTML content
             html_content = await self.page.content()
@@ -522,7 +527,7 @@ class BaseScraper(ABC):
             if not extracted_text:
                 self.logger.debug(f"crawl_url_async: No text extracted from {url}")
                 self.add_failed_url(url)
-                return None, new_links
+                return None, new_links, calendar_events_list
 
             # Track visited URL
             self.add_visited_url(url)
@@ -535,13 +540,38 @@ class BaseScraper(ABC):
 
             self.logger.debug(f"crawl_url_async: Extracted {len(new_links)} links from {url}")
 
-            return extracted_text, new_links
+            # Extract Google Calendar events if callback provided
+            if extract_calendar_events and callable(extract_calendar_events):
+                try:
+                    # Extract Google Calendar iframe URLs from page
+                    calendar_urls = await self.page.evaluate('''() => {
+                        const cals = [];
+                        document.querySelectorAll('iframe').forEach(iframe => {
+                            if (iframe.src) cals.push(iframe.src);
+                        });
+                        return cals;
+                    }''')
+
+                    # Process each calendar URL
+                    for cal_url in calendar_urls:
+                        try:
+                            cal_events = await extract_calendar_events(cal_url, url, source)
+                            if cal_events is not None and not (hasattr(cal_events, 'empty') and cal_events.empty):
+                                calendar_events_list.append(cal_events)
+                                if hasattr(cal_events, '__len__'):
+                                    self.logger.info(f"crawl_url_async: Extracted {len(cal_events)} events from calendar {cal_url}")
+                        except Exception as e:
+                            self.logger.debug(f"crawl_url_async: Error processing calendar {cal_url}: {e}")
+                except Exception as e:
+                    self.logger.debug(f"crawl_url_async: Error extracting calendar events from {url}: {e}")
+
+            return extracted_text, new_links, calendar_events_list
 
         except Exception as e:
             self.logger.error(f"crawl_url_async: Error crawling {url}: {e}")
             self.record_failure(e)
             self.add_failed_url(url)
-            return None, new_links
+            return None, new_links, calendar_events_list
 
     def cleanup(self) -> None:
         """Clean up resources (browser, connections, etc.)."""
