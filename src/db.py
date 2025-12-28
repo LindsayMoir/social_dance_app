@@ -800,6 +800,9 @@ class DatabaseHandler():
                 "street_number": street_number
             })
 
+            # CRITICAL FIX: Count matches to prevent cache corruption
+            postal_match_count = len(postal_matches) if postal_matches else 0
+
             for addr_id, b_name, s_num, s_name, p_code in postal_matches or []:
                 if building_name and b_name:
                     # Use multiple fuzzy matching algorithms
@@ -812,9 +815,11 @@ class DatabaseHandler():
                         logging.debug(f"Postal+street+fuzzy building match → address_id={addr_id}")
                         logging.debug(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
                         return addr_id
-                else:
-                    # Same postal code + street number is very likely the same location
-                    logging.debug(f"Postal+street match (no building comparison) → address_id={addr_id}")
+                elif not building_name and not b_name and postal_match_count == 1:
+                    # CRITICAL: Only match without building name if there's exactly ONE address
+                    # This prevents cache corruption where different buildings at same address
+                    # get incorrectly matched to the first result
+                    logging.debug(f"Postal+street match (no building comparison, single match) → address_id={addr_id}")
                     return addr_id
 
         # Step 2: Street number + street name match with improved building name fuzzy matching
@@ -834,6 +839,9 @@ class DatabaseHandler():
                 "street_name_alt": street_name_alt
             })
 
+            # CRITICAL FIX: Count matches to prevent cache corruption
+            street_match_count = len(street_matches) if street_matches else 0
+
             for addr_id, b_name, s_num, s_name, p_code in street_matches or []:
                 if building_name and b_name:
                     # Multiple fuzzy algorithms
@@ -845,8 +853,11 @@ class DatabaseHandler():
                         logging.debug(f"Street+fuzzy building match → address_id={addr_id}")
                         logging.debug(f"  Scores: ratio={ratio_score}, partial={partial_score}, token_set={token_set_score}")
                         return addr_id
-                else:
-                    logging.debug(f"Street match (no building name) → address_id={addr_id}")
+                elif not building_name and not b_name and street_match_count == 1:
+                    # CRITICAL: Only match without building name if there's exactly ONE address
+                    # This prevents cache corruption where different buildings at same address
+                    # get incorrectly matched to the first result
+                    logging.debug(f"Street match (no building comparison, single match) → address_id={addr_id}")
                     return addr_id
         else:
             logging.debug("resolve_or_insert_address: Missing street_number or street_name; skipping street match")
@@ -1298,7 +1309,7 @@ class DatabaseHandler():
         if missing_cols:
             logging.warning(f"_filter_events: Missing important columns: {missing_cols}")
         
-        df[important_cols] = df[important_cols].replace(r'^\s*$', pd.NA, regex=True)
+        df[important_cols] = df[important_cols].replace(r'^\s*$', pd.NA, regex=True).infer_objects(copy=False)
         rows_before_dropna = len(df)
         df = df.dropna(subset=important_cols, how='all')
         rows_after_dropna = len(df)
