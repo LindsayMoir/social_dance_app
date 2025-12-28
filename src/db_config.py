@@ -38,6 +38,9 @@ import os
 import logging
 from typing import Tuple
 
+# Module-level flag to ensure database configuration is only logged once
+_config_logged = False
+
 
 def get_database_config() -> Tuple[str, str]:
     """
@@ -60,6 +63,8 @@ def get_database_config() -> Tuple[str, str]:
            - RENDER=false/unset → local
         3. Choose INTERNAL vs EXTERNAL URL based on RENDER variable
     """
+    global _config_logged
+
     # Auto-detect if running on Render platform
     # Render automatically sets these environment variables
     is_render = (
@@ -78,22 +83,27 @@ def get_database_config() -> Tuple[str, str]:
             # Running on Render - default to render_dev (safe for CRON jobs)
             # Production web services should set DATABASE_TARGET=render_prod explicitly
             target = 'render_dev'
-            logging.info(f"Auto-detected: Running on Render → DATABASE_TARGET='render_dev'")
+            if not _config_logged:
+                logging.info(f"Auto-detected: Running on Render → DATABASE_TARGET='render_dev'")
         else:
             # Running locally (your machine) - use local database
             target = 'local'
-            logging.info(f"Auto-detected: Running locally → DATABASE_TARGET='local'")
+            if not _config_logged:
+                logging.info(f"Auto-detected: Running locally → DATABASE_TARGET='local'")
     else:
         # If DATABASE_TARGET is explicitly set but empty/whitespace, still auto-detect
         if target == '':
             if is_render:
                 target = 'render_dev'
-                logging.info(f"DATABASE_TARGET empty, auto-detected: Running on Render → 'render_dev'")
+                if not _config_logged:
+                    logging.info(f"DATABASE_TARGET empty, auto-detected: Running on Render → 'render_dev'")
             else:
                 target = 'local'
-                logging.info(f"DATABASE_TARGET empty, auto-detected: Running locally → 'local'")
+                if not _config_logged:
+                    logging.info(f"DATABASE_TARGET empty, auto-detected: Running locally → 'local'")
         else:
-            logging.info(f"DATABASE_TARGET explicitly set: {target}")
+            if not _config_logged:
+                logging.info(f"DATABASE_TARGET explicitly set: {target}")
 
     # Map target to connection string
     # Use INTERNAL URLs when running on Render (faster), EXTERNAL from local machine
@@ -131,13 +141,15 @@ def get_database_config() -> Tuple[str, str]:
             f"Running on Render: {is_render}"
         )
 
-    # Log configuration for debugging
-    logging.info(f"=== Database Configuration ===")
-    logging.info(f"  Target: {target}")
-    logging.info(f"  Environment: {env_name}")
-    logging.info(f"  Running on: {'Render' if is_render else 'Local Machine'}")
-    logging.info(f"  URL Type: {'INTERNAL' if is_render else 'EXTERNAL'}")
-    logging.info(f"==============================")
+    # Log configuration for debugging (only once per program run)
+    if not _config_logged:
+        logging.info(f"=== Database Configuration ===")
+        logging.info(f"  Target: {target}")
+        logging.info(f"  Environment: {env_name}")
+        logging.info(f"  Running on: {'Render' if is_render else 'Local Machine'}")
+        logging.info(f"  URL Type: {'INTERNAL' if is_render else 'EXTERNAL'}")
+        logging.info(f"==============================")
+        _config_logged = True
 
     return connection_string, env_name
 
