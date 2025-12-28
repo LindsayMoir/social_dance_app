@@ -284,6 +284,11 @@ class FacebookScraperV2(BaseScraper):
         real_url = self.normalize_facebook_url(incoming_url)
         page = self.logged_in_page
 
+        # Ensure we have a valid page
+        if not page or page.url == "about:blank":
+            page = self.context.new_page()
+            self.logged_in_page = page
+
         # If this is a login redirect, try it first to trigger login flow
         if 'facebook.com/login/' in incoming_url:
             try:
@@ -932,8 +937,17 @@ class FacebookScraperV2(BaseScraper):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
-        pass
+        """Context manager exit - cleanup resources."""
+        try:
+            # Close the logged-in page if it exists
+            if self.logged_in_page:
+                try:
+                    self.logged_in_page.close()
+                except Exception as e:
+                    self.logger.warning(f"Error closing logged_in_page: {e}")
+        finally:
+            # Call parent cleanup to close browser, context, and playwright
+            super().__exit__(exc_type, exc_val, exc_tb)
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────

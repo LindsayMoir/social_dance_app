@@ -273,12 +273,12 @@ class GeneralScraper(BaseScraper):
 
     async def extract_from_calendars_async(self) -> pd.DataFrame:
         """
-        Extract events from calendar websites using ReadExtractV2.
+        Extract events from calendar websites by crawling them with Playwright.
 
-        Calls ReadExtractV2.scrape() which handles browser automation,
-        Facebook login, and calendar event extraction with proper error handling.
+        Processes calendar URLs from calendar_urls.csv, crawls each page to find
+        Google Calendar iframes, extracts calendar IDs, and fetches events via API.
 
-        Includes performance timing and error recovery with circuit breaker.
+        Reuses _crawl_url_with_playwright() which contains the Google Calendar extraction logic.
 
         Returns:
             pd.DataFrame: Calendar events with all required fields
@@ -287,8 +287,45 @@ class GeneralScraper(BaseScraper):
         try:
             self.logger.info("Starting calendar website extraction (ReadExtractV2)...")
 
-            # Call the actual scrape method which handles all event extraction
-            df = await self.read_extract.scrape()
+            all_events = []
+
+            # Load calendar URLs from config
+            calendar_urls_file = self.config.get('input', {}).get('calendar_urls', 'data/other/calendar_urls.csv')
+            if not os.path.exists(calendar_urls_file):
+                self.logger.warning(f"Calendar URLs file not found: {calendar_urls_file}")
+                return pd.DataFrame()
+
+            calendar_df = pd.read_csv(calendar_urls_file)
+            if calendar_df.empty:
+                self.logger.warning("Calendar URLs file is empty")
+                return pd.DataFrame()
+
+            self.logger.info(f"Processing {len(calendar_df)} calendar URLs")
+
+            # Process each calendar URL using existing crawl logic
+            for idx, row in calendar_df.iterrows():
+                try:
+                    url = row['link']
+                    source = row.get('source', 'Unknown')
+                    keywords = row.get('keywords', '').split(',') if 'keywords' in row else []
+
+                    self.logger.info(f"[{idx+1}/{len(calendar_df)}] Processing {source}: {url}")
+
+                    # Use existing _crawl_url_with_playwright which already extracts Google Calendars
+                    events_df, _ = await self._crawl_url_with_playwright(url, parent_url='', source=source, keywords=keywords)
+
+                    if not events_df.empty:
+                        all_events.append(events_df)
+                        self.logger.info(f"  ✓ Extracted {len(events_df)} events from {source}")
+                    else:
+                        self.logger.warning(f"  No events found at {url}")
+
+                except Exception as e:
+                    self.logger.error(f"Error processing calendar {row.get('source', url)}: {e}")
+                    continue
+
+            # Combine all calendar events
+            df = pd.concat(all_events, ignore_index=True) if all_events else pd.DataFrame()
 
             elapsed_time = time.time() - start_time
             event_count = len(df) if not df.empty else 0
@@ -724,7 +761,7 @@ class GeneralScraper(BaseScraper):
 
                     # Check historical relevancy
                     if hasattr(self.llm_handler.db_handler, 'should_process_url'):
-                        if not self.llm_handler.db_handler.should_process_url(url, urls_df=urls_df, urls_gb=urls_gb):
+                        if not self.llm_handler.db_handler.should_process_url(url):
                             self.logger.info(f"Skipping URL {url} based on historical relevancy")
                             continue
 
