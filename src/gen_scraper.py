@@ -432,7 +432,7 @@ class GeneralScraper(BaseScraper):
         return bool(pattern.fullmatch(calendar_id))
 
     async def _fetch_google_calendar_events(self, calendar_id: str) -> pd.DataFrame:
-        """Fetch events from a Google Calendar."""
+        """Fetch events from a Google Calendar using async HTTP."""
         try:
             _, api_key, _ = get_credentials('Google')
             days_ahead = self.config['date_range']['days_ahead']
@@ -448,8 +448,15 @@ class GeneralScraper(BaseScraper):
             }
 
             all_events = []
-            while True:
-                response = requests.get(api_url, params=params, timeout=30)
+            max_pages = 10  # Prevent infinite pagination loops
+            page_count = 0
+
+            # Use asyncio.to_thread to run blocking requests.get in thread pool
+            while page_count < max_pages:
+                page_count += 1
+                response = await asyncio.to_thread(
+                    requests.get, api_url, params=params, timeout=30
+                )
                 if response.status_code == 200:
                     data = response.json()
                     all_events.extend(data.get("items", []))
