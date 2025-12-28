@@ -40,6 +40,7 @@ from repositories.event_repository import EventRepository
 from repositories.event_management_repository import EventManagementRepository
 from repositories.event_analysis_repository import EventAnalysisRepository
 from repositories.address_resolution_repository import AddressResolutionRepository
+from repositories.location_cache_repository import LocationCacheRepository
 
 
 class DatabaseHandler():
@@ -120,6 +121,10 @@ class DatabaseHandler():
         # Initialize AddressResolutionRepository for LLM-based address resolution
         self.address_resolution_repo = AddressResolutionRepository(self, self.llm_handler)
         logging.info("__init__(): AddressResolutionRepository initialized")
+
+        # Initialize LocationCacheRepository for location lookup caching
+        self.location_cache_repo = LocationCacheRepository(self)
+        logging.info("__init__(): LocationCacheRepository initialized")
 
         def _compute_hit_ratio(x):
             true_count = x.sum()
@@ -639,6 +644,18 @@ class DatabaseHandler():
             pd.DataFrame: A DataFrame with columns renamed to standardized names.
         """
         return self.event_repo._rename_google_calendar_columns(df)
+
+    def _get_building_name_dictionary(self):
+        """
+        Wrapper delegating to LocationCacheRepository._get_building_name_dictionary().
+
+        Returns a cached dictionary mapping building names to address IDs.
+        This method is maintained for backward compatibility.
+
+        Returns:
+            Dict[str, int]: Dictionary mapping building names to address_ids
+        """
+        return self.location_cache_repo._get_building_name_dictionary()
 
     def _convert_datetime_fields(self, df):
         """

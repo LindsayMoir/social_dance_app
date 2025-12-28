@@ -312,7 +312,8 @@ class GeneralScraper(BaseScraper):
                     self.logger.info(f"[{idx+1}/{len(calendar_df)}] Processing {source}: {url}")
 
                     # Use existing _crawl_url_with_playwright which already extracts Google Calendars
-                    events_df, _ = await self._crawl_url_with_playwright(url, parent_url='', source=source, keywords=keywords)
+                    # calendar_only=True skips text extraction, keyword matching, and LLM processing
+                    events_df, _ = await self._crawl_url_with_playwright(url, parent_url='', source=source, keywords=keywords, calendar_only=True)
 
                     if not events_df.empty:
                         all_events.append(events_df)
@@ -544,9 +545,19 @@ class GeneralScraper(BaseScraper):
             return pd.DataFrame()
 
     async def _crawl_url_with_playwright(self, url: str, parent_url: str = '',
-                                        source: str = '', keywords: List[str] = None) -> Tuple[pd.DataFrame, List[str]]:
+                                        source: str = '', keywords: List[str] = None,
+                                        skip_llm: bool = False,
+                                        calendar_only: bool = False) -> Tuple[pd.DataFrame, List[str]]:
         """
         Crawl a single URL with Playwright and extract relevant information.
+
+        Args:
+            url: URL to crawl
+            parent_url: Parent URL that linked to this one
+            source: Source name for the URL
+            keywords: Keywords to search for
+            skip_llm: If True, skip LLM relevance checking (useful for known-relevant URLs like calendars)
+            calendar_only: If True, only extract Google Calendar events (skip text/keyword processing)
 
         Returns:
             Tuple[pd.DataFrame, List[str]]: (events_found, new_links)
@@ -565,35 +576,41 @@ class GeneralScraper(BaseScraper):
 
             try:
                 await page.goto(url, wait_until='domcontentloaded', timeout=60000)
-                # Use BaseScraper's text extractor for consistent HTML parsing
-                html_content = await page.content()
-                extracted_text = self.text_extractor.extract_from_html(html_content)
 
-                # Check for relevant keywords
-                found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+                # For calendar-only mode, skip text extraction and keyword processing
+                if not calendar_only:
+                    # Use BaseScraper's text extractor for consistent HTML parsing
+                    html_content = await page.content()
+                    extracted_text = self.text_extractor.extract_from_html(html_content)
 
-                # Record URL in database with relevance status
-                url_row = [url, parent_url, source, found_keywords, len(found_keywords) > 0, 1, datetime.now()]
-                if hasattr(self.llm_handler.db_handler, 'url_repo'):
-                    try:
-                        self.llm_handler.db_handler.url_repo.write_url_to_db(url_row)
-                    except Exception as e:
-                        self.logger.debug(f"Failed to record URL: {e}")
+                    # Check for relevant keywords
+                    found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
 
-                # Process keywords with LLM if found
-                if found_keywords:
-                    try:
-                        llm_status = self.llm_handler.process_llm_response(
-                            url, parent_url, extracted_text, source, found_keywords, 'default'
-                        )
-                        self.logger.info(f"URL {url} marked as {'relevant' if llm_status else 'irrelevant'} by LLM")
-                    except Exception as e:
-                        self.logger.debug(f"LLM processing error: {e}")
+                    # Record URL in database with relevance status
+                    url_row = [url, parent_url, source, found_keywords, len(found_keywords) > 0, 1, datetime.now()]
+                    if hasattr(self.llm_handler.db_handler, 'url_repo'):
+                        try:
+                            self.llm_handler.db_handler.url_repo.write_url_to_db(url_row)
+                        except Exception as e:
+                            self.logger.debug(f"Failed to record URL: {e}")
 
-                # Extract links from page using BaseScraper's centralized method with max limit
-                links = self.extract_links(html_content, base_url=url)
-                max_urls = self.get_max_website_urls()
-                new_links = list(links)[:max_urls]
+                    # Process keywords with LLM if found (skip for calendar URLs)
+                    if found_keywords and not skip_llm:
+                        try:
+                            llm_status = self.llm_handler.process_llm_response(
+                                url, parent_url, extracted_text, source, found_keywords, 'default'
+                            )
+                            self.logger.info(f"URL {url} marked as {'relevant' if llm_status else 'irrelevant'} by LLM")
+                        except Exception as e:
+                            self.logger.debug(f"LLM processing error: {e}")
+
+                    # Extract links from page using BaseScraper's centralized method with max limit
+                    links = self.extract_links(html_content, base_url=url)
+                    max_urls = self.get_max_website_urls()
+                    new_links = list(links)[:max_urls]
+                else:
+                    # Calendar-only mode: no text extraction or keyword matching needed
+                    html_content = await page.content()
 
                 # Extract Google Calendar iframes and emails
                 calendar_elements = await page.evaluate('''() => {

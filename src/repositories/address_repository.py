@@ -86,6 +86,9 @@ class AddressRepository:
                 "street_number": street_number
             })
 
+            # Count total matches to avoid false positives
+            postal_match_count = len(postal_matches) if postal_matches else 0
+
             for addr_id, b_name, s_num, s_name, p_code in postal_matches or []:
                 if building_name and b_name:
                     # Use FuzzyMatcher for consistent fuzzy matching
@@ -94,12 +97,13 @@ class AddressRepository:
                             f"Postal+street+fuzzy building match → address_id={addr_id}"
                         )
                         return addr_id
-                else:
-                    # Same postal code + street number is very likely the same location
+                elif not building_name and not b_name and postal_match_count == 1:
+                    # Only match without building name if there's exactly ONE address at this postal+street
                     self.logger.debug(
-                        f"Postal+street match (no building comparison) → address_id={addr_id}"
+                        f"Postal+street match (single address, no building names) → address_id={addr_id}"
                     )
                     return addr_id
+                # If building names don't match or there are multiple addresses, don't match
 
         # Step 2: Street number + street name match with improved building name fuzzy matching
         if street_number and street_name:
@@ -118,6 +122,9 @@ class AddressRepository:
                 "street_name_alt": street_name_alt
             })
 
+            # Count total matches to avoid false positives
+            match_count = len(street_matches) if street_matches else 0
+
             for addr_id, b_name, s_num, s_name, p_code in street_matches or []:
                 if building_name and b_name:
                     # Use FuzzyMatcher for consistent fuzzy matching
@@ -126,11 +133,13 @@ class AddressRepository:
                             f"Street+fuzzy building match → address_id={addr_id}"
                         )
                         return addr_id
-                else:
+                elif not building_name and not b_name and match_count == 1:
+                    # Only match on street alone if there's exactly ONE address at that location
                     self.logger.debug(
-                        f"Street match (no building name) → address_id={addr_id}"
+                        f"Street match (single address, no building names) → address_id={addr_id}"
                     )
                     return addr_id
+                # If building names don't match or there are multiple addresses, don't match
         else:
             self.logger.debug(
                 "resolve_or_insert_address: Missing street_number or street_name; "

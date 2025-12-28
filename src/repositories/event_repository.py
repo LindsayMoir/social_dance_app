@@ -400,18 +400,22 @@ class EventRepository:
         important_cols = ['start_date', 'end_date', 'start_time', 'end_time', 'location', 'description']
         for col in important_cols:
             if col in df.columns:
-                df[col] = df[col].replace(r'^\s*$', np.nan, regex=True)
+                df[col] = df[col].replace(r'^\s*$', np.nan, regex=True).infer_objects(copy=False)
 
         # Drop rows where all important columns are missing
         df = df.dropna(subset=important_cols, how='all')
 
         # Remove old events
         try:
-            df['end_date'] = pd.to_datetime(df['end_date'], errors='coerce').dt.date
+            # Convert to datetime but keep as datetime64 for comparison (not .date)
+            df['end_date'] = pd.to_datetime(df['end_date'], errors='coerce')
             days_threshold = int(self.db.config['clean_up']['old_events'])
-            cutoff_date = pd.Timestamp.now().date() - pd.Timedelta(days=days_threshold)
+            cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=days_threshold)
+            # Filter: keep only events with valid end_date >= cutoff
             df = df[df['end_date'] >= cutoff_date]
-            self.logger.info(f"_filter_events: Filtered out old events (older than {cutoff_date})")
+            # Now convert to date objects for storage
+            df['end_date'] = df['end_date'].dt.date
+            self.logger.info(f"_filter_events: Filtered out old events (older than {cutoff_date.date()})")
         except Exception as e:
             self.logger.warning(f"_filter_events: Could not filter by end_date: {e}")
 
