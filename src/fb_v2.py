@@ -36,6 +36,7 @@ import random
 from openpyxl import load_workbook
 
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 from rapidfuzz import fuzz
 from sqlalchemy import text
 
@@ -933,7 +934,19 @@ class FacebookScraperV2(BaseScraper):
         return pd.DataFrame()
 
     def __enter__(self):
-        """Context manager entry."""
+        """Context manager entry - initialize browser and context."""
+        # Initialize browser using PlaywrightManager
+        self.playwright = sync_playwright().start()
+        self.browser = self.browser_manager.launch_browser_sync()
+
+        # Create browser context with Facebook auth if available
+        storage_state = self.facebook_auth_path if os.path.exists(self.facebook_auth_path) else None
+        self.context = self.browser_manager.create_browser_context(
+            self.browser,
+            storage_state=storage_state
+        )
+
+        self.logger.info("Browser and context initialized")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
