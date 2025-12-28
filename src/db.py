@@ -938,7 +938,7 @@ class DatabaseHandler():
         parsed_address["time_stamp"] = datetime.now().isoformat()
 
         # FINAL DEDUPLICATION CHECK: Before inserting, check if building_name already exists
-        building_name = parsed_address.get("building_name", "").strip()
+        building_name = (parsed_address.get("building_name") or "").strip()
         if building_name and len(building_name) > 2:
             # Try to find existing address with same building name
             existing_addr_id = self.find_address_by_building_name(building_name, threshold=80)
@@ -1601,7 +1601,7 @@ class DatabaseHandler():
         prompt, schema_type = self.llm_handler.generate_prompt(event.get("url", "address_fix"), location, "address_internet_fix")
 
         # Query the LLM
-        llm_response = self.llm_handler.query_llm(event.get("url", "").strip(), prompt, schema_type)
+        llm_response = self.llm_handler.query_llm((event.get("url") or "").strip(), prompt, schema_type)
 
         # Parse the LLM response into a usable dict
         parsed_results = self.llm_handler.extract_and_parse_json(llm_response, "address_fix", schema_type)
