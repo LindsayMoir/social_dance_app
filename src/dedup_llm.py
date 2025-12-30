@@ -181,7 +181,7 @@ class DeduplicationHandler:
         df = self.filter_valid_duplicates(df)
 
         if df.empty:
-            logging.warning("def process_duplicates(): No valid duplicates found. Exiting.")
+            logging.info("def process_duplicates(): No valid duplicates found. Exiting.")
             return 0
 
         response_dfs = self.process_in_chunks(df, chunk_size=50)
@@ -201,13 +201,13 @@ class DeduplicationHandler:
             pandas.DataFrame: A DataFrame containing only the rows from groups with more than one member.
         """
         if df.empty:
-            logging.warning("def filter_valid_duplicates(): No duplicates found.")
+            logging.info("def filter_valid_duplicates(): No duplicates found.")
             return df
 
         df = df.groupby('group_id').filter(lambda x: len(x) > 1)
 
         if df.empty:
-            logging.warning("def filter_valid_duplicates(): No groups have more than 1 row.")
+            logging.info("def filter_valid_duplicates(): No groups have more than 1 row.")
         
         logging.info(f"def filter_valid_duplicates(): Number of rows after filtering: {len(df)}")
         return df
@@ -229,7 +229,7 @@ class DeduplicationHandler:
             chunk = df.iloc[i:i + chunk_size]
 
             if chunk.empty:
-                logging.warning(f"def process_in_chunks(): Skipping empty chunk {i}.")
+                logging.info(f"def process_in_chunks(): Skipping empty chunk {i}.")
                 continue
 
             response_df = self.process_chunk_with_llm(chunk, i)
