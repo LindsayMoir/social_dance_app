@@ -5,10 +5,6 @@ import logging
 # Load environment variables from .env file
 load_dotenv()
 
-# Set up centralized logging
-from logging_config import setup_logging
-setup_logging('credentials')
-
 def get_credentials(organization):
     """
     Retrieves credentials for a given organization from environment variables.
@@ -36,6 +32,10 @@ def get_credentials(organization):
     return appid_uid, key_pw, cse_id
 
 if __name__ == "__main__":
+    # Only set up logging when running this script directly (for testing)
+    from logging_config import setup_logging
+    setup_logging('credentials')
+
     # Test the function by retrieving credentials for an organization
     appid_uid, key_pw, cse_id = get_credentials('Google')
     print(appid_uid, key_pw, cse_id)

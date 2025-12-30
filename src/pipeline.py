@@ -45,6 +45,11 @@ else:
     # Local: Use local Prefect server
     logging.info("Prefect configured for local server")
 
+# Suppress verbose HTTP logging in all environments (local and Render)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('openai').setLevel(logging.INFO)  # Only show INFO and above from OpenAI SDK
+
 from prefect import flow, task
 
 

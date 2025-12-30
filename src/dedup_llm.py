@@ -874,7 +874,8 @@ class DeduplicationHandler:
             - Requires pandas, scikit-learn, and other standard libraries.
         """
         logging.info("Starting embedding-based deduplication...")
-        model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Force CPU usage to avoid CUDA issues on WSL2
+        model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
         query = """
             SELECT event_id, event_name, dance_style, description, day_of_week,
                    start_date, end_date, start_time, end_time, source, location,
