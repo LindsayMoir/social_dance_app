@@ -891,7 +891,31 @@ class DeduplicationHandler:
 
         string_cols = df.select_dtypes(include='object').columns
         df[string_cols] = df[string_cols].fillna('')
-        df['start_datetime'] = pd.to_datetime(df['start_date'].astype(str) + ' ' + df['start_time'].astype(str))
+
+        # Filter out events without valid start_time BEFORE deduplication
+        # Events without times should not be processed or deleted
+        initial_count = len(df)
+        df = df[df['start_time'].notna() & (df['start_time'].astype(str).str.strip() != '')]
+
+        if len(df) < initial_count:
+            skipped = initial_count - len(df)
+            logging.warning(f"Skipped {skipped} events with missing or empty start_time - these will not be deduplicated")
+
+        if df.empty:
+            logging.info("No events with valid start_time found for deduplication.")
+            return
+
+        # Now safely parse datetime
+        df['start_datetime'] = pd.to_datetime(
+            df['start_date'].astype(str) + ' ' + df['start_time'].astype(str),
+            errors='coerce'  # Convert any parsing errors to NaT
+        )
+
+        # Drop any events where datetime parsing failed
+        before_drop = len(df)
+        df = df.dropna(subset=['start_datetime'])
+        if len(df) < before_drop:
+            logging.warning(f"Dropped {before_drop - len(df)} events with unparseable datetime")
 
         address_query = "SELECT address_id, postal_code FROM address"
         address_df = pd.read_sql(address_query, self.engine)
