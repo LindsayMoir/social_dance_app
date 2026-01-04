@@ -287,29 +287,53 @@ def validate_credentials(headless=False, check_timeout_seconds=60):
     return results
 
 
-if __name__ == "__main__":
+def main():
     """
-    Test the credential validator independently.
+    Main function to run credential validation as a standalone script.
+    Called when pipeline.py executes this file as a subprocess.
     """
     from logging_config import setup_logging
     setup_logging('credential_validator')
 
-    logging.info("Starting credential validation test...")
+    logging.info("\n\nStarting credential validator...")
+    logging.info("=" * 70)
+    logging.info("CREDENTIAL VALIDATION")
+    logging.info("=" * 70)
 
-    # Run validation with headless=False to allow user interaction
-    results = validate_credentials(headless=False, check_timeout_seconds=60)
+    # Check if running on Render
+    is_render = os.getenv('RENDER') == 'true'
+    if is_render:
+        logging.info("Running on Render - skipping credential validation")
+        return 0
 
-    # Print results
-    print("\n" + "=" * 70)
-    print("VALIDATION RESULTS:")
-    print("=" * 70)
-    for service, result in results.items():
-        status = "✓ VALID" if result['valid'] else "✗ INVALID"
-        print(f"{service.upper()}: {status}")
-        if result['error']:
-            print(f"  Error: {result['error']}")
-    print("=" * 70)
+    try:
+        # Run validation with headless=False to allow user interaction
+        results = validate_credentials(headless=False, check_timeout_seconds=60)
 
-    # Exit with appropriate code
-    all_valid = all(r['valid'] for r in results.values())
-    exit(0 if all_valid else 1)
+        # Check if all validations passed
+        all_valid = all(r['valid'] for r in results.values())
+
+        if not all_valid:
+            failed_services = [k for k, v in results.items() if not v['valid']]
+            logging.error(f"Credential validation failed for: {', '.join(failed_services)}")
+            for service, result in results.items():
+                if not result['valid'] and result['error']:
+                    logging.error(f"  {service}: {result['error']}")
+            return 1
+
+        logging.info("=" * 70)
+        logging.info("ALL CREDENTIALS VALIDATED SUCCESSFULLY")
+        logging.info("Pipeline will continue with headless=True")
+        logging.info("=" * 70)
+        return 0
+
+    except Exception as e:
+        logging.error(f"Error during credential validation: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return 1
+
+
+if __name__ == "__main__":
+    exit_code = main()
+    exit(exit_code)

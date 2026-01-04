@@ -21,9 +21,6 @@ import yaml
 from logging_config import setup_logging
 setup_logging('pipeline')
 
-# Import credential validator
-from credential_validator import validate_credentials
-
 # Configure Prefect based on environment
 if os.getenv('RENDER') == 'true':
     # On Render: Use Prefect Cloud for remote monitoring
@@ -147,40 +144,21 @@ def pre_process_credential_validation():
 def run_credential_validation():
     """
     Validates Gmail, Eventbrite, and Facebook credentials before pipeline execution.
+    Runs credential_validator.py as a subprocess with its own log file.
     Runs with headless=False to allow user interaction for OAuth, 2FA, CAPTCHAs.
-    Returns True if all validations pass, raises Exception otherwise.
+    Returns "Script completed successfully" if all validations pass, raises Exception otherwise.
     """
-    # Skip validation on Render
-    is_render = os.getenv('RENDER') == 'true'
-    if is_render:
-        logger.info("def run_credential_validation(): Running on Render - skipping credential validation")
-        return True
-
-    logger.info("def run_credential_validation(): Starting credential validation...")
-
     try:
-        # Run validation with headless=False (browser visible for user interaction)
-        validation_results = validate_credentials(headless=False, check_timeout_seconds=60)
-
-        # Check if all validations passed
-        all_valid = all(r['valid'] for r in validation_results.values())
-
-        if not all_valid:
-            failed_services = [k for k, v in validation_results.items() if not v['valid']]
-            error_msg = f"Credential validation failed for: {', '.join(failed_services)}"
-            logger.error(f"def run_credential_validation(): {error_msg}")
-            for service, result in validation_results.items():
-                if not result['valid'] and result['error']:
-                    logger.error(f"  {service}: {result['error']}")
-            raise Exception(error_msg)
-
-        logger.info("def run_credential_validation(): All credentials validated successfully")
-        logger.info("def run_credential_validation(): Pipeline will continue with headless=True")
-        return True
-
-    except Exception as e:
-        logger.error(f"def run_credential_validation(): Error during validation: {e}")
-        raise
+        logger.info("def run_credential_validation(): Executing credential_validator.py as subprocess...")
+        result = subprocess.run([sys.executable, "src/credential_validator.py"], check=True)
+        logger.info("def run_credential_validation(): credential_validator.py executed successfully.")
+        logger.info("def run_credential_validation(): All credentials validated - pipeline will continue with headless=True")
+        return "Script completed successfully"
+    except subprocess.CalledProcessError as e:
+        error_message = f"credential_validator.py failed with return code: {e.returncode}"
+        logger.error(f"def run_credential_validation(): {error_message}")
+        logger.error("def run_credential_validation(): Check logs/credential_validator_log.txt for details")
+        raise Exception(error_message)
 
 @task
 def post_process_credential_validation():
