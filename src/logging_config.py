@@ -77,6 +77,12 @@ def setup_logging(script_name: str, level=logging.INFO):
         )
         logging.info(f"Logging configured for local development (file: {log_file})")
 
+    # Suppress verbose HTTP logging from third-party libraries
+    # This prevents DEBUG logs from httpx, httpcore, and openai from cluttering logs
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('httpcore').setLevel(logging.WARNING)
+    logging.getLogger('openai').setLevel(logging.INFO)
+
 
 def get_logger(name: str):
     """

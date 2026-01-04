@@ -294,12 +294,6 @@ def main():
     """
     from logging_config import setup_logging
     setup_logging('credential_validator')
-
-    # Suppress verbose HTTP logging (matches pipeline.py configuration)
-    logging.getLogger('httpx').setLevel(logging.WARNING)
-    logging.getLogger('httpcore').setLevel(logging.WARNING)
-    logging.getLogger('openai').setLevel(logging.INFO)
-
     logging.info("\n\nStarting credential validator...")
     logging.info("=" * 70)
     logging.info("CREDENTIAL VALIDATION")
