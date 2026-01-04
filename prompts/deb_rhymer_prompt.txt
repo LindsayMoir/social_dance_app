@@ -1,7 +1,10 @@
 Context:
-I am building an application to save users time when searching for social dance and live music events. 
-Extract relevant event details from the webpage's text (extracted_text) according to the instructions below. 
+I am building an application to save users time when searching for social dance and live music events.
+Extract relevant event details from the webpage's text (extracted_text) according to the instructions below.
 The extracted_text is at the bottom of these instructions under the heading extracted_text
+
+IMPORTANT: The "Blues Jam" (also known as "Sunday Blues Services") is a RECURRING WEEKLY event that happens EVERY SUNDAY.
+You MUST create separate event entries for ALL Sundays within the next 12 months from today's date.
 ________________________________________
 1. Event Fields to Extract:
 For each identified event, provide the following details in JSON format.
@@ -72,9 +75,11 @@ _____________________________________
 _____________________________________
 4. Recurring Events:
 •	For recurring events (e.g., "every Saturday" or "1st and 3rd Tuesdays"), compute all occurrences within 12 months from today's date unless an end date is explicitly mentioned.
+•	CRITICAL: The Blues Jam is a WEEKLY RECURRING event. Even if the webpage doesn't explicitly say "every Sunday", you MUST generate entries for ALL Sundays in the next 12 months.
 •	For example:
 	o	The 1st Tuesday in 2025 is January 7, 2025.
 	o	Saturdays in February 2025 are February 1, 8, 15, and 22.
+	o	For the Blues Jam on Sundays: If today is December 29, 2024, create entries for January 5, 12, 19, 26, February 2, 9, 16, 23, etc. through December 2025.
 ________________________________________
 5. Outdated Pages:
 •	Events explicitly marked as "canceled" or "postponed" should have that wording put in their "description" field.
