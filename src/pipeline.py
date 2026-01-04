@@ -135,6 +135,83 @@ def dummy_post_process(step: str) -> bool:
     return True
 
 # ------------------------
+# TASKS FOR CREDENTIAL VALIDATION STEP
+# ------------------------
+@task
+def pre_process_credential_validation():
+    """Pre-process for credential validation - always returns True (no prerequisites)."""
+    logger.info("def pre_process_credential_validation(): No prerequisites required.")
+    return True
+
+@task
+def run_credential_validation():
+    """
+    Validates Gmail, Eventbrite, and Facebook credentials before pipeline execution.
+    Runs with headless=False to allow user interaction for OAuth, 2FA, CAPTCHAs.
+    Returns True if all validations pass, raises Exception otherwise.
+    """
+    # Skip validation on Render
+    is_render = os.getenv('RENDER') == 'true'
+    if is_render:
+        logger.info("def run_credential_validation(): Running on Render - skipping credential validation")
+        return True
+
+    logger.info("def run_credential_validation(): Starting credential validation...")
+
+    try:
+        # Run validation with headless=False (browser visible for user interaction)
+        validation_results = validate_credentials(headless=False, check_timeout_seconds=60)
+
+        # Check if all validations passed
+        all_valid = all(r['valid'] for r in validation_results.values())
+
+        if not all_valid:
+            failed_services = [k for k, v in validation_results.items() if not v['valid']]
+            error_msg = f"Credential validation failed for: {', '.join(failed_services)}"
+            logger.error(f"def run_credential_validation(): {error_msg}")
+            for service, result in validation_results.items():
+                if not result['valid'] and result['error']:
+                    logger.error(f"  {service}: {result['error']}")
+            raise Exception(error_msg)
+
+        logger.info("def run_credential_validation(): All credentials validated successfully")
+        logger.info("def run_credential_validation(): Pipeline will continue with headless=True")
+        return True
+
+    except Exception as e:
+        logger.error(f"def run_credential_validation(): Error during validation: {e}")
+        raise
+
+@task
+def post_process_credential_validation():
+    """Post-process for credential validation - always returns True."""
+    logger.info("def post_process_credential_validation(): Credential validation completed successfully.")
+    return True
+
+@flow(name="Credential Validation Step")
+def credential_validation_step():
+    """
+    Pipeline step for validating credentials before execution.
+    NOTE: This step does NOT use COMMON_CONFIG_UPDATES because it needs headless=False,
+    while the rest of the pipeline uses headless=True.
+    """
+    logger.info("=" * 70)
+    logger.info("CREDENTIAL VALIDATION STEP")
+    logger.info("Validating Gmail, Eventbrite, and Facebook credentials")
+    logger.info("Browser will open for user interaction if needed")
+    logger.info("=" * 70)
+
+    if not pre_process_credential_validation():
+        raise Exception("Credential validation pre-processing failed. Pipeline stopped.")
+
+    run_credential_validation()
+
+    if not post_process_credential_validation():
+        raise Exception("Credential validation post-processing failed. Pipeline stopped.")
+
+    return True
+
+# ------------------------
 # TASK: COPY LOG FILES
 # ------------------------
 @task
@@ -1275,6 +1352,7 @@ def send_text_message(message: str):
 # PIPELINE EXECUTION
 # ------------------------
 PIPELINE_STEPS = [
+    ("credential_validation", credential_validation_step),
     ("copy_log_files", copy_log_files),
     ("copy_drop_create_events", copy_drop_create_events),
     ("sync_address_sequence", sync_address_sequence),
@@ -1404,49 +1482,6 @@ def move_temp_files_back():
         logger.error(f"move_temp_files_back(): Failed to move temp files back: {e}")
 
 def main():
-    # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 0: CREDENTIAL VALIDATION (Local environment only)
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Validate credentials before pipeline execution to prevent mid-run failures
-    # Runs with headless=False to allow user interaction for OAuth, 2FA, CAPTCHAs
-    # After validation, pipeline continues with headless=True (normal operation)
-
-    is_render = os.getenv('RENDER') == 'true'
-
-    if not is_render:
-        logger.info("\n" + "=" * 70)
-        logger.info("STEP 0: CREDENTIAL VALIDATION")
-        logger.info("=" * 70)
-
-        try:
-            # Run validation with headless=False (browser visible for user interaction)
-            validation_results = validate_credentials(headless=False, check_timeout_seconds=60)
-
-            # Check if all validations passed
-            all_valid = all(r['valid'] for r in validation_results.values())
-
-            if not all_valid:
-                failed_services = [k for k, v in validation_results.items() if not v['valid']]
-                logger.error(f"Credential validation failed for: {', '.join(failed_services)}")
-                logger.error("Please check the credentials and try again")
-                logger.error("Pipeline execution aborted")
-                sys.exit(1)
-
-            logger.info("Credentials validated successfully")
-            logger.info("Pipeline will continue with headless=True")
-            logger.info("=" * 70 + "\n")
-
-        except Exception as e:
-            logger.error(f"Error during credential validation: {e}")
-            logger.error("Pipeline execution aborted")
-            sys.exit(1)
-    else:
-        logger.info("Running on Render - skipping credential validation")
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # PIPELINE ARGUMENT PARSING AND EXECUTION
-    # ═══════════════════════════════════════════════════════════════════════════
-
     parser = argparse.ArgumentParser(description="Run pipeline with command line options or interactive input.")
     parser.add_argument('--mode', choices=['1', '2', '3', '4'],
                         help="Execution mode: 1 (entire pipeline), 2 (one step), 3 (start at a step), 4 (start and stop at specified steps).")
