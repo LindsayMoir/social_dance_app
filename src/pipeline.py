@@ -21,6 +21,9 @@ import yaml
 from logging_config import setup_logging
 setup_logging('pipeline')
 
+# Import credential validator
+from credential_validator import validate_credentials
+
 # Configure Prefect based on environment
 if os.getenv('RENDER') == 'true':
     # On Render: Use Prefect Cloud for remote monitoring
@@ -1401,6 +1404,49 @@ def move_temp_files_back():
         logger.error(f"move_temp_files_back(): Failed to move temp files back: {e}")
 
 def main():
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP 0: CREDENTIAL VALIDATION (Local environment only)
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Validate credentials before pipeline execution to prevent mid-run failures
+    # Runs with headless=False to allow user interaction for OAuth, 2FA, CAPTCHAs
+    # After validation, pipeline continues with headless=True (normal operation)
+
+    is_render = os.getenv('RENDER') == 'true'
+
+    if not is_render:
+        logger.info("\n" + "=" * 70)
+        logger.info("STEP 0: CREDENTIAL VALIDATION")
+        logger.info("=" * 70)
+
+        try:
+            # Run validation with headless=False (browser visible for user interaction)
+            validation_results = validate_credentials(headless=False, check_timeout_seconds=60)
+
+            # Check if all validations passed
+            all_valid = all(r['valid'] for r in validation_results.values())
+
+            if not all_valid:
+                failed_services = [k for k, v in validation_results.items() if not v['valid']]
+                logger.error(f"Credential validation failed for: {', '.join(failed_services)}")
+                logger.error("Please check the credentials and try again")
+                logger.error("Pipeline execution aborted")
+                sys.exit(1)
+
+            logger.info("Credentials validated successfully")
+            logger.info("Pipeline will continue with headless=True")
+            logger.info("=" * 70 + "\n")
+
+        except Exception as e:
+            logger.error(f"Error during credential validation: {e}")
+            logger.error("Pipeline execution aborted")
+            sys.exit(1)
+    else:
+        logger.info("Running on Render - skipping credential validation")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PIPELINE ARGUMENT PARSING AND EXECUTION
+    # ═══════════════════════════════════════════════════════════════════════════
+
     parser = argparse.ArgumentParser(description="Run pipeline with command line options or interactive input.")
     parser.add_argument('--mode', choices=['1', '2', '3', '4'],
                         help="Execution mode: 1 (entire pipeline), 2 (one step), 3 (start at a step), 4 (start and stop at specified steps).")
