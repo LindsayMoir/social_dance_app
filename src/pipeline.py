@@ -201,14 +201,24 @@ def credential_validation_step():
     logger.info("Browser will open for user interaction if needed")
     logger.info("=" * 70)
 
-    if not pre_process_credential_validation():
+    # Pre-process
+    pre_result = pre_process_credential_validation()
+    logger.info(f"credential_validation_step: pre_process returned: {pre_result}")
+    if not pre_result:
         raise Exception("Credential validation pre-processing failed. Pipeline stopped.")
 
-    run_credential_validation()
+    # Main validation - this should BLOCK until complete
+    logger.info("credential_validation_step: About to call run_credential_validation()")
+    validation_result = run_credential_validation()
+    logger.info(f"credential_validation_step: run_credential_validation returned: {validation_result}")
 
-    if not post_process_credential_validation():
+    # Post-process
+    post_result = post_process_credential_validation()
+    logger.info(f"credential_validation_step: post_process returned: {post_result}")
+    if not post_result:
         raise Exception("Credential validation post-processing failed. Pipeline stopped.")
 
+    logger.info("credential_validation_step: Step completed successfully")
     return True
 
 # ------------------------
