@@ -991,6 +991,61 @@ def irrelevant_rows_step():
     return True
 
 # ------------------------
+# VALIDATION STEP
+# Pre-commit validation: scraping health + chatbot quality checks
+# ------------------------
+@task
+def run_validation_tests():
+    """Run pre-commit validation tests (scraping + chatbot)."""
+    try:
+        # Note: No check=True - don't raise on failure (non-blocking)
+        result = subprocess.run(
+            [sys.executable, "tests/validation/test_runner.py"],
+            capture_output=True,
+            text=True,
+            timeout=1800  # 30 min (LLM scoring takes time)
+        )
+
+        if result.returncode == 0:
+            logger.info("def run_validation_tests(): Validation completed successfully")
+            logger.info(result.stdout)
+            return "Validation passed"
+        else:
+            logger.warning(f"def run_validation_tests(): Validation completed with issues (exit code {result.returncode})")
+            logger.warning(result.stderr)
+            logger.warning("def run_validation_tests(): Continuing pipeline despite validation issues")
+            return "Validation completed with warnings"
+
+    except subprocess.TimeoutExpired:
+        logger.error("def run_validation_tests(): Validation tests timed out after 30 minutes")
+        logger.warning("def run_validation_tests(): Continuing pipeline despite timeout")
+        return "Validation timed out"
+    except Exception as e:
+        logger.error(f"def run_validation_tests(): Unexpected error: {e}")
+        logger.warning("def run_validation_tests(): Continuing pipeline despite error")
+        return "Validation encountered error"
+
+@flow(name="Validation Step")
+def validation_step():
+    """
+    Pre-commit validation: scraping health + chatbot quality checks.
+
+    NOTE: This step does NOT use config backup/restore or COMMON_CONFIG_UPDATES
+    because it only reads config and doesn't modify it.
+    """
+    logger.info("=" * 70)
+    logger.info("VALIDATION STEP")
+    logger.info("Pre-commit validation: scraping health + chatbot quality")
+    logger.info("=" * 70)
+
+    # Run validation tests (non-blocking - won't stop pipeline on failure)
+    validation_result = run_validation_tests()
+    logger.info(f"validation_step: run_validation_tests returned: {validation_result}")
+
+    logger.info("validation_step: Step completed")
+    return True
+
+# ------------------------
 # COPY DEV DATABASE TO PRODUCTION DATABASE STEP
 # This step copies the working database (local or render_dev) to production
 # ------------------------
@@ -1352,6 +1407,7 @@ PIPELINE_STEPS = [
     ("clean_up", clean_up_step),
     ("dedup_llm", dedup_llm_step),
     ("irrelevant_rows", irrelevant_rows_step),
+    ("validation", validation_step),  # NEW: Pre-commit validation before prod deployment
     ("copy_dev_to_prod", copy_dev_db_to_prod_db_step),
     ("download_render_logs", download_render_logs_step)
 ]

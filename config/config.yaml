@@ -169,3 +169,21 @@ testing:
   nof_no_url_events: 10
   sql: true
   status: true
+  # Pre-commit validation configuration
+  validation:
+    scraping:
+      days_back: 7  # Check scraping in last N days
+      whitelist_file: data/urls/aaa_urls.csv
+      edge_cases_file: data/other/edge_cases.csv
+      min_hit_ratio: 0.50  # Threshold for "high performer"
+      min_attempts: 3  # Min attempts to establish pattern
+    chatbot:
+      question_templates: tests/data/chatbot_test_questions.yaml
+      llm_evaluation: true
+      fallback_scoring: true
+      score_threshold: 70  # Min average score to pass
+      execution_threshold: 0.90  # Min SQL success rate (90%)
+    reporting:
+      output_dir: tests/output
+      generate_html: true
+      generate_csv: true

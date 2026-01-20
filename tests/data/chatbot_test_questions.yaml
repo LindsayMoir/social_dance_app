@@ -1,0 +1,221 @@
+# Chatbot Test Questions Template
+# Generates ~200+ test questions across 10 categories for systematic coverage
+
+templates:
+  # Category 1: Single dance style queries (40 questions)
+  - category: single_dance_style
+    template: "Show me {dance_style} events {timeframe}"
+    parameters:
+      dance_style:
+        - "salsa"
+        - "bachata"
+        - "west coast swing"
+        - "tango"
+        - "kizomba"
+        - "zouk"
+        - "lindy hop"
+        - "balboa"
+      timeframe:
+        - "tonight"
+        - "tomorrow"
+        - "this weekend"
+        - "next week"
+        - "this week"
+    expected_count: 40  # 8 styles × 5 timeframes
+
+  # Category 2: Venue-specific queries (12 questions)
+  - category: venue_specific
+    template: "What's happening at {venue} {timeframe}?"
+    parameters:
+      venue:
+        - "The Loft"
+        - "Copper Owl"
+        - "Victoria Ballroom"
+        - "Edelweiss Club"
+      timeframe:
+        - "tonight"
+        - "this weekend"
+        - "tomorrow night"
+    expected_count: 12  # 4 venues × 3 timeframes
+
+  # Category 3: Event type queries (30 questions)
+  # Tests individual event types that exist in database
+  - category: event_type
+    template: "Find {event_type} for {dance_style} {timeframe}"
+    parameters:
+      event_type:
+        - "classes"         # DB: class (144 + combinations)
+        - "workshops"       # DB: workshop (15 + combinations)
+        - "social dances"   # DB: social dance (257 + combinations)
+        - "live music"      # DB: live music (322 + combinations)
+        - "rehearsals"      # DB: rehearsal (144)
+      dance_style:
+        - "salsa"
+        - "bachata"
+        - "west coast swing"
+      timeframe:
+        - "this week"
+        - "next week"
+    expected_count: 30  # 5 event types × 3 styles × 2 timeframes
+
+  # Category 4: Multi-criteria queries (12 questions)
+  - category: multi_criteria
+    template: "{dance_style} {event_type} at {venue}"
+    parameters:
+      dance_style:
+        - "salsa"
+        - "bachata"
+        - "tango"
+      event_type:
+        - "classes"
+        - "social dances"
+      venue:
+        - "The Loft"
+        - "Victoria Ballroom"
+    expected_count: 12  # 3 styles × 2 event types × 2 venues
+
+  # Category 5: Live music event queries (15 questions)
+  - category: live_music_events
+    template: "Dance events with live music {timeframe}"
+    parameters:
+      timeframe:
+        - "tonight"
+        - "tomorrow"
+        - "this weekend"
+        - "this week"
+        - "next week"
+    expected_count: 5  # 5 timeframes
+
+  - category: live_music_by_style
+    template: "{dance_style} events with live music {timeframe}"
+    parameters:
+      dance_style:
+        - "salsa"
+        - "swing"
+        - "tango"
+        - "west coast swing"
+        - "lindy hop"
+      timeframe:
+        - "this weekend"
+        - "next week"
+    expected_count: 10  # 5 styles × 2 timeframes
+
+  # Category 6: Festival queries (2 questions)
+  # Note: Only 1 festival in database, but test chatbot handling
+  - category: festival_events
+    template: "Dance festivals {timeframe}"
+    parameters:
+      timeframe:
+        - "this year"
+        - "upcoming"
+    expected_count: 2
+
+  # Category 7: Event type only queries (no dance style filter) (15 questions)
+  # Tests event types that actually exist in database
+  - category: event_type_only
+    template: "Show me {event_type} {timeframe}"
+    parameters:
+      event_type:
+        - "dance classes"      # DB: class
+        - "dance workshops"    # DB: workshop
+        - "social dances"      # DB: social dance
+        - "live music events"  # DB: live music
+        - "dance rehearsals"   # DB: rehearsal
+      timeframe:
+        - "this week"
+        - "this weekend"
+        - "tonight"
+    expected_count: 15  # 5 event types × 3 timeframes
+
+  # Category 7b: Combination event type queries (6 questions)
+  # Tests common combinations that exist in database
+  - category: combination_event_types
+    template: "Find events with {event_combo} {timeframe}"
+    parameters:
+      event_combo:
+        - "classes and social dancing"     # DB: class, social dance (418)
+        - "workshops and social dancing"   # DB: workshop, social dance (17)
+        - "live music and social dancing"  # DB: social dance, live music (66)
+      timeframe:
+        - "this weekend"
+        - "next week"
+    expected_count: 6  # 3 combinations × 2 timeframes
+
+  # Category 8: Day-specific queries (7 questions)
+  - category: day_specific
+    template: "Dance events on {day_of_week}"
+    parameters:
+      day_of_week:
+        - "Monday"
+        - "Tuesday"
+        - "Wednesday"
+        - "Thursday"
+        - "Friday"
+        - "Saturday"
+        - "Sunday"
+    expected_count: 7  # 7 days
+
+  # Category 9: Price queries (8 questions)
+  - category: price_queries
+    template: "Free {dance_style} events {timeframe}"
+    parameters:
+      dance_style:
+        - "salsa"
+        - "bachata"
+        - "west coast swing"
+        - "tango"
+      timeframe:
+        - "this week"
+        - "this weekend"
+    expected_count: 8  # 4 styles × 2 timeframes
+
+  # Category 10: Natural language - EXPANDED (15 questions)
+  - category: natural_language
+    static_questions:
+      # Learning / Classes
+      - "Where can I learn to dance salsa?"
+      - "I'm looking for beginner tango classes"
+      - "What's the best place for west coast swing?"
+      - "Are there any bachata workshops this month?"
+      # Live music
+      - "Are there any dance events with live music this weekend?"
+      - "Show me swing dances with live bands"
+      - "Where can I dance to live salsa music?"
+      # Social dances
+      - "What social dances are happening tonight?"
+      - "Where can I go social dancing this weekend?"
+      # Festivals
+      - "Are there any upcoming dance festivals?"
+      - "What dance festivals are in Victoria this year?"
+      # General / Mixed
+      - "Show me all dance events in Victoria"
+      - "What's happening in the dance scene this weekend?"
+      - "I want to go dancing tonight, what are my options?"
+      # Rehearsals / Practice
+      - "Are there any dance practice sessions this week?"
+    expected_count: 15
+
+# Total: ~161 test questions (aligned with actual database event types)
+# Breakdown by category:
+# 1. single_dance_style: 40
+# 2. venue_specific: 12
+# 3. event_type: 30 (5 types that exist in DB: class, workshop, social dance, live music, rehearsal)
+# 4. multi_criteria: 12
+# 5. live_music_events: 5
+# 5. live_music_by_style: 10
+# 6. festival_events: 2 (only 1 festival in DB currently)
+# 7. event_type_only: 15 (5 event types × 3 timeframes)
+# 7b. combination_event_types: 6 (tests "class, social dance" etc.)
+# 8. day_specific: 7
+# 9. price_queries: 8
+# 10. natural_language: 15
+#
+# Database event types covered:
+# ✓ class (as "classes" in natural language)
+# ✓ social dance (as "social dances")
+# ✓ workshop (as "workshops")
+# ✓ live music (direct match)
+# ✓ rehearsal (as "rehearsals")
+# ✓ festival (limited - only 1 in DB)
+# ✓ Combinations: "class, social dance", "workshop, social dance", "social dance, live music"
+# Note: "other" and "dance, live music" have very few entries (7 and 8) - not explicitly tested
