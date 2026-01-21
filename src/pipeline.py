@@ -1046,6 +1046,70 @@ def validation_step():
     return True
 
 # ------------------------
+# RESULT ANALYZER STEP
+# Analyzes validation test results using LLM to identify patterns and priorities
+# ------------------------
+@task
+def run_result_analyzer():
+    """Run LLM-based analysis of validation test results."""
+    try:
+        # Note: No check=True - don't raise on failure (non-blocking)
+        result = subprocess.run(
+            [sys.executable, "tests/validation/result_analyzer.py"],
+            capture_output=True,
+            text=True,
+            timeout=600  # 10 min (LLM API call for analysis)
+        )
+
+        if result.returncode == 0:
+            logger.info("def run_result_analyzer(): Result analysis completed successfully")
+            # Log the analysis summary (last 50 lines which contain the report)
+            output_lines = result.stdout.strip().split('\n')
+            summary_start = -1
+            for i, line in enumerate(output_lines):
+                if "CHATBOT TEST RESULTS ANALYSIS" in line:
+                    summary_start = i
+                    break
+            if summary_start >= 0:
+                summary = '\n'.join(output_lines[summary_start:])
+                logger.info(f"Analysis summary:\n{summary}")
+            return "Analysis completed successfully"
+        else:
+            logger.warning(f"def run_result_analyzer(): Analysis completed with issues (exit code {result.returncode})")
+            logger.warning(result.stderr)
+            logger.warning("def run_result_analyzer(): Continuing pipeline despite analysis issues")
+            return "Analysis completed with warnings"
+
+    except subprocess.TimeoutExpired:
+        logger.error("def run_result_analyzer(): Result analysis timed out after 10 minutes")
+        logger.warning("def run_result_analyzer(): Continuing pipeline despite timeout")
+        return "Analysis timed out"
+    except Exception as e:
+        logger.error(f"def run_result_analyzer(): Unexpected error: {e}")
+        logger.warning("def run_result_analyzer(): Continuing pipeline despite error")
+        return "Analysis encountered error"
+
+@flow(name="Result Analyzer Step")
+def result_analyzer_step():
+    """
+    Analyze validation test results using LLM to identify patterns and priorities.
+
+    NOTE: This step does NOT use config backup/restore or COMMON_CONFIG_UPDATES
+    because it only reads test results and doesn't modify config.
+    """
+    logger.info("=" * 70)
+    logger.info("RESULT ANALYZER STEP")
+    logger.info("LLM-based analysis of validation test results")
+    logger.info("=" * 70)
+
+    # Run result analyzer (non-blocking - won't stop pipeline on failure)
+    analyzer_result = run_result_analyzer()
+    logger.info(f"result_analyzer_step: run_result_analyzer returned: {analyzer_result}")
+
+    logger.info("result_analyzer_step: Step completed")
+    return True
+
+# ------------------------
 # COPY DEV DATABASE TO PRODUCTION DATABASE STEP
 # This step copies the working database (local or render_dev) to production
 # ------------------------
@@ -1407,7 +1471,8 @@ PIPELINE_STEPS = [
     ("clean_up", clean_up_step),
     ("dedup_llm", dedup_llm_step),
     ("irrelevant_rows", irrelevant_rows_step),
-    ("validation", validation_step),  # NEW: Pre-commit validation before prod deployment
+    ("validation", validation_step),  # Pre-commit validation before prod deployment
+    ("result_analyzer", result_analyzer_step),  # LLM analysis of validation results
     ("copy_dev_to_prod", copy_dev_db_to_prod_db_step),
     ("download_render_logs", download_render_logs_step)
 ]

@@ -246,6 +246,21 @@ class ChatbotTestExecutor:
             if not sql_raw:
                 return self._create_error_result(question_dict, "LLM returned empty response")
 
+            # Check for CLARIFICATION response (valid for subjective queries)
+            if sql_raw.strip().startswith("CLARIFICATION:"):
+                return {
+                    'question': question,
+                    'category': question_dict['category'],
+                    'expected_criteria': question_dict.get('expected_criteria', {}),
+                    'sql_query': sql_raw.strip(),
+                    'sql_syntax_valid': True,  # CLARIFICATION is valid output
+                    'execution_success': True,  # Successfully returned clarification
+                    'result_count': 0,  # No SQL results expected
+                    'sample_results': [],
+                    'timestamp': datetime.now().isoformat(),
+                    'is_clarification': True  # Flag for scorer
+                }
+
             # Sanitize SQL (same logic as main.py lines 369-375)
             sql_query = sql_raw.replace("```sql", "").replace("```", "").strip()
             select_idx = sql_query.upper().find("SELECT")
@@ -447,6 +462,27 @@ Score guidelines:
         Returns:
             dict: Evaluation with score, reasoning, criteria analysis
         """
+        # Handle CLARIFICATION responses (valid for subjective/ambiguous queries)
+        if test_result.get('is_clarification', False):
+            question = test_result['question'].lower()
+            # Check if this is an appropriate clarification (subjective query)
+            if any(word in question for word in ['best', 'recommend', 'where should', 'what should', 'which']):
+                return {
+                    'score': 90,
+                    'reasoning': 'Appropriately requested clarification for subjective query that cannot be answered with SQL alone',
+                    'criteria_matched': ['appropriate_clarification'],
+                    'criteria_missed': [],
+                    'sql_issues': []
+                }
+            else:
+                return {
+                    'score': 50,
+                    'reasoning': 'Returned clarification for a query that should have been answerable with SQL',
+                    'criteria_matched': [],
+                    'criteria_missed': list(test_result['expected_criteria'].keys()),
+                    'sql_issues': ['unnecessary_clarification']
+                }
+
         # Auto-fail if query didn't execute
         if not test_result['execution_success']:
             return {

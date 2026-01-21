@@ -125,15 +125,8 @@ templates:
       - "What's happening at Robson Square this weekend?"
     expected_count: 18
 
-  # Category 7: Festival queries (2 questions)
-  # Note: Only 1 festival in database, but test chatbot handling
-  - category: festival_events
-    template: "Dance festivals {timeframe}"
-    parameters:
-      timeframe:
-        - "this year"
-        - "upcoming"
-    expected_count: 2
+  # Category 7: Festival queries - REMOVED
+  # Festivals should not be in the database as event_type
 
   # Category 8: Event type only queries (no dance style filter) (20 questions)
   # Tests event types that actually exist in database
@@ -272,18 +265,15 @@ templates:
       # Social dances
       - "What social dances are happening tonight?"
       - "Where can I go social dancing this weekend?"
-      # Festivals
-      - "Are there any upcoming dance festivals?"
-      - "What dance festivals are in Victoria this year?"
       # General / Mixed
       - "Show me all dance events in Victoria"
       - "What's happening in the dance scene this weekend?"
       - "I want to go dancing tonight, what are my options?"
       # Rehearsals / Practice
       - "Are there any dance practice sessions this week?"
-    expected_count: 15
+    expected_count: 13
 
-# Total: ~243 test questions (aligned with actual database event types)
+# Total: ~239 test questions (aligned with actual database event types)
 # Breakdown by category:
 # 1. single_dance_style: 48 (added "next month" timeframe)
 # 2. venue_specific: 12
@@ -291,7 +281,7 @@ templates:
 # 4. multi_criteria: 12
 # 5. live_music_events: 12 (expanded with natural language, removed dance-style-specific queries)
 # 6. edge_cases_venues: 18 (tests venues/sources from edge_cases.csv that should be in database)
-# 7. festival_events: 2 (only 1 festival in DB currently)
+# 7. festival_events: REMOVED (festivals should not be event_type)
 # 8. event_type_only: 20 (added "next month" timeframe: 5 event types × 4 timeframes)
 # 9. combination_event_types: 6 (tests "class, social dance" etc.)
 # 10. day_specific: 7
@@ -299,7 +289,7 @@ templates:
 # 12. time_filtering_today_tonight: 16 (tests "today" vs "tonight", "tomorrow" vs "tomorrow night", "[day] night")
 # 13. calendar_week_tests: 10 (tests "this week" and "next week" Mon-Sun calculation)
 # 14. weekend_calculation_tests: 8 (tests "this weekend" vs "next weekend" proper Fri-Sun)
-# 15. natural_language: 15
+# 15. natural_language: 13 (removed festival questions)
 #
 # Database event types covered:
 # ✓ class (as "classes" in natural language)
@@ -307,6 +297,6 @@ templates:
 # ✓ workshop (as "workshops")
 # ✓ live music (direct match)
 # ✓ rehearsal (as "rehearsals")
-# ✓ festival (limited - only 1 in DB)
 # ✓ Combinations: "class, social dance", "workshop, social dance", "social dance, live music"
 # Note: "other" and "dance, live music" have very few entries (7 and 8) - not explicitly tested
+# Note: "festival" is NOT a valid event_type and has been removed from tests

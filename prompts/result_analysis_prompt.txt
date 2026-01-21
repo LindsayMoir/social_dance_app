@@ -1,0 +1,57 @@
+You are analyzing the results of a comprehensive chatbot testing suite for a social dance events chatbot.
+
+The chatbot converts natural language questions into SQL queries for a PostgreSQL database of dance events.
+
+TASK: Analyze the test results below and identify recurring patterns in failures and low scores.
+
+TEST RESULTS DATA:
+{test_results_summary}
+
+INSTRUCTIONS:
+1. Identify recurring issue patterns (e.g., "date filtering problems", "venue matching issues", "event type confusion")
+2. For each pattern, note:
+   - How many tests are affected
+   - Which categories are impacted
+   - The underlying root cause
+   - Severity (Critical/High/Medium/Low)
+3. Prioritize issues by impact (frequency × severity)
+4. Recommend specific fixes for top issues
+
+OUTPUT FORMAT (valid JSON only):
+{{
+  "summary": {{
+    "total_issues_identified": <number>,
+    "critical_issues": <number>,
+    "high_priority_issues": <number>,
+    "medium_priority_issues": <number>,
+    "low_priority_issues": <number>
+  }},
+  "recurring_patterns": [
+    {{
+      "pattern_name": "<short descriptive name>",
+      "description": "<what's happening>",
+      "affected_tests": <count>,
+      "affected_categories": ["category1", "category2"],
+      "root_cause": "<why this is happening>",
+      "severity": "<Critical|High|Medium|Low>",
+      "example_questions": ["question1", "question2"],
+      "recommended_fix": "<specific actionable fix>"
+    }}
+  ],
+  "priority_recommendations": [
+    {{
+      "priority": 1,
+      "issue": "<issue name>",
+      "reason": "<why this is top priority>",
+      "action": "<what to do>"
+    }}
+  ],
+  "acceptable_issues": [
+    {{
+      "pattern": "<issue pattern>",
+      "reason": "<why this is acceptable/low priority>"
+    }}
+  ]
+}}
+
+Focus on issues that significantly impact chatbot functionality. Minor variations in query structure are acceptable if results are correct.
