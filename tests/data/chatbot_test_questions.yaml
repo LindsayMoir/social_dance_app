@@ -2,7 +2,7 @@
 # Generates ~200+ test questions across 10 categories for systematic coverage
 
 templates:
-  # Category 1: Single dance style queries (40 questions)
+  # Category 1: Single dance style queries (48 questions)
   - category: single_dance_style
     template: "Show me {dance_style} events {timeframe}"
     parameters:
@@ -21,7 +21,8 @@ templates:
         - "this weekend"
         - "next week"
         - "this week"
-    expected_count: 40  # 8 styles × 5 timeframes
+        - "next month"
+    expected_count: 48  # 8 styles × 6 timeframes
 
   # Category 2: Venue-specific queries (12 questions)
   - category: venue_specific
@@ -38,7 +39,7 @@ templates:
         - "tomorrow night"
     expected_count: 12  # 4 venues × 3 timeframes
 
-  # Category 3: Event type queries (30 questions)
+  # Category 3: Event type queries (45 questions)
   # Tests individual event types that exist in database
   - category: event_type
     template: "Find {event_type} for {dance_style} {timeframe}"
@@ -56,7 +57,8 @@ templates:
       timeframe:
         - "this week"
         - "next week"
-    expected_count: 30  # 5 event types × 3 styles × 2 timeframes
+        - "next month"
+    expected_count: 45  # 5 event types × 3 styles × 3 timeframes
 
   # Category 4: Multi-criteria queries (12 questions)
   - category: multi_criteria
@@ -74,7 +76,7 @@ templates:
         - "Victoria Ballroom"
     expected_count: 12  # 3 styles × 2 event types × 2 venues
 
-  # Category 5: Live music event queries (15 questions)
+  # Category 5: Live music event queries (6 questions)
   - category: live_music_events
     template: "Dance events with live music {timeframe}"
     parameters:
@@ -84,7 +86,8 @@ templates:
         - "this weekend"
         - "this week"
         - "next week"
-    expected_count: 5  # 5 timeframes
+        - "next month"
+    expected_count: 6  # 6 timeframes
 
   - category: live_music_by_style
     template: "{dance_style} events with live music {timeframe}"
@@ -110,7 +113,7 @@ templates:
         - "upcoming"
     expected_count: 2
 
-  # Category 7: Event type only queries (no dance style filter) (15 questions)
+  # Category 7: Event type only queries (no dance style filter) (20 questions)
   # Tests event types that actually exist in database
   - category: event_type_only
     template: "Show me {event_type} {timeframe}"
@@ -125,7 +128,8 @@ templates:
         - "this week"
         - "this weekend"
         - "tonight"
-    expected_count: 15  # 5 event types × 3 timeframes
+        - "next month"
+    expected_count: 20  # 5 event types × 4 timeframes
 
   # Category 7b: Combination event type queries (6 questions)
   # Tests common combinations that exist in database
@@ -155,7 +159,7 @@ templates:
         - "Sunday"
     expected_count: 7  # 7 days
 
-  # Category 9: Price queries (8 questions)
+  # Category 9: Price queries (12 questions)
   - category: price_queries
     template: "Free {dance_style} events {timeframe}"
     parameters:
@@ -167,7 +171,8 @@ templates:
       timeframe:
         - "this week"
         - "this weekend"
-    expected_count: 8  # 4 styles × 2 timeframes
+        - "next month"
+    expected_count: 12  # 4 styles × 3 timeframes
 
   # Category 10: Natural language - EXPANDED (15 questions)
   - category: natural_language
@@ -195,19 +200,19 @@ templates:
       - "Are there any dance practice sessions this week?"
     expected_count: 15
 
-# Total: ~161 test questions (aligned with actual database event types)
+# Total: ~195 test questions (aligned with actual database event types)
 # Breakdown by category:
-# 1. single_dance_style: 40
+# 1. single_dance_style: 48 (added "next month" timeframe)
 # 2. venue_specific: 12
-# 3. event_type: 30 (5 types that exist in DB: class, workshop, social dance, live music, rehearsal)
+# 3. event_type: 45 (added "next month" timeframe: 5 types × 3 styles × 3 timeframes)
 # 4. multi_criteria: 12
-# 5. live_music_events: 5
+# 5. live_music_events: 6 (added "next month" timeframe)
 # 5. live_music_by_style: 10
 # 6. festival_events: 2 (only 1 festival in DB currently)
-# 7. event_type_only: 15 (5 event types × 3 timeframes)
+# 7. event_type_only: 20 (added "next month" timeframe: 5 event types × 4 timeframes)
 # 7b. combination_event_types: 6 (tests "class, social dance" etc.)
 # 8. day_specific: 7
-# 9. price_queries: 8
+# 9. price_queries: 12 (added "next month" timeframe)
 # 10. natural_language: 15
 #
 # Database event types covered:
