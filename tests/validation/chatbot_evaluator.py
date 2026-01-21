@@ -402,6 +402,8 @@ class ChatbotScorer:
         # LLM evaluation prompt
         self.eval_prompt = """You are evaluating SQL query results for a dance events chatbot.
 
+IMPORTANT CONTEXT: Today's date is {current_date}. The current year is {current_year}.
+
 USER QUESTION: {question}
 
 EXPECTED CRITERIA: {expected_criteria}
@@ -455,8 +457,13 @@ Score guidelines:
                 'sql_issues': ['execution_failure']
             }
 
-        # Format evaluation prompt
+        # Format evaluation prompt with current date context
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        current_year = datetime.now().year
+
         prompt = self.eval_prompt.format(
+            current_date=current_date,
+            current_year=current_year,
             question=test_result['question'],
             expected_criteria=json.dumps(test_result['expected_criteria'], indent=2),
             sql_query=test_result['sql_query'],

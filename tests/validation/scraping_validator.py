@@ -182,23 +182,19 @@ class ScrapingValidator:
                 query = """
                     SELECT link, source, relevant, crawl_try, time_stamp, keywords
                     FROM urls
-                    WHERE link = %s
-                      AND time_stamp >= NOW() - INTERVAL '%s days'
+                    WHERE link = :url
+                      AND time_stamp >= NOW() - INTERVAL :days
                     ORDER BY time_stamp DESC
                     LIMIT 1
                 """
 
-                # Use parameterized query for security
-                from sqlalchemy import text
-                result = self.db_handler.conn.execute(
-                    text("SELECT link, source, relevant, crawl_try, time_stamp, keywords "
-                         "FROM urls WHERE link = :url "
-                         "AND time_stamp >= NOW() - INTERVAL :days "
-                         "ORDER BY time_stamp DESC LIMIT 1"),
-                    {"url": url, "days": f"{self.days_back} days"}
-                ).fetchall()
+                # Use DatabaseHandler's execute_query method (handles connection properly)
+                result = self.db_handler.execute_query(
+                    query,
+                    {"url": url, "days": f"'{self.days_back} days'"}
+                )
 
-                if not result:
+                if not result or len(result) == 0:
                     # Failure type: URL not attempted
                     failures.append({
                         'url': url,
@@ -211,29 +207,38 @@ class ScrapingValidator:
                     })
 
                 else:
+                    # Result is a list of Row objects from execute_query
                     recent = result[0]
 
+                    # Access columns by index: [link, source, relevant, crawl_try, time_stamp, keywords]
+                    link = recent[0]
+                    source = recent[1]
+                    relevant = recent[2]
+                    crawl_try = recent[3]
+                    time_stamp = recent[4]
+                    keywords = recent[5]
+
                     # Failure type: Marked irrelevant
-                    if not recent.relevant:
+                    if not relevant:
                         failures.append({
                             'url': url,
                             'source': url_row['source'],
                             'failure_type': 'marked_irrelevant',
                             'importance': url_row['importance_type'],
-                            'crawl_attempts': recent.crawl_try,
-                            'keywords_found': recent.keywords,
+                            'crawl_attempts': crawl_try,
+                            'keywords_found': keywords,
                             'recommendation': 'Previously successful URL now irrelevant - check for page structure changes or keyword updates'
                         })
 
                     # Failure type: Multiple retries (persistent issues)
-                    elif recent.crawl_try >= 3:
+                    elif crawl_try >= 3:
                         failures.append({
                             'url': url,
                             'source': url_row['source'],
                             'failure_type': 'multiple_retries',
                             'importance': url_row['importance_type'],
-                            'crawl_attempts': recent.crawl_try,
-                            'keywords_found': recent.keywords,
+                            'crawl_attempts': crawl_try,
+                            'keywords_found': keywords,
                             'recommendation': 'High retry count indicates persistent issues - check for anti-scraping measures or timeouts'
                         })
 

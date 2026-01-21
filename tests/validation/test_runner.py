@@ -20,6 +20,10 @@ import os
 # Add src to path for imports
 sys.path.insert(0, 'src')
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv('src/.env')  # Load from src/.env since that's where credentials are stored
+
 from datetime import datetime
 import logging
 import yaml
