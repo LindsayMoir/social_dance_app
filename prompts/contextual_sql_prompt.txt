@@ -65,9 +65,13 @@ The "Current User Question" contains the complete query to process. For refineme
 
 🔹 DATE PATTERNS (PostgreSQL EXTRACT(DOW): 0=Sunday, 1=Monday...6=Saturday):
 • "today"/"tonight": start_date = CURRENT_DATE
-• "tomorrow": start_date = CURRENT_DATE + INTERVAL '1 day'  
-• "this week": start_date BETWEEN CURRENT_DATE AND (CURRENT_DATE + INTERVAL '7 days')
-• "next week": start_date BETWEEN (CURRENT_DATE + INTERVAL '7 days') AND (CURRENT_DATE + INTERVAL '14 days')
+• "tomorrow": start_date = CURRENT_DATE + INTERVAL '1 day'
+• "this week": start_date >= (CURRENT_DATE - (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 6 ELSE EXTRACT(DOW FROM CURRENT_DATE) - 1 END))
+              AND start_date < (CURRENT_DATE - (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 6 ELSE EXTRACT(DOW FROM CURRENT_DATE) - 1 END) + INTERVAL '7 days')
+  (Finds Monday of current week, then gets Monday-Sunday inclusive)
+• "next week": start_date >= (CURRENT_DATE + (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 WHEN EXTRACT(DOW FROM CURRENT_DATE) = 1 THEN 7 ELSE (8 - EXTRACT(DOW FROM CURRENT_DATE)) END))
+              AND start_date < (CURRENT_DATE + (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 WHEN EXTRACT(DOW FROM CURRENT_DATE) = 1 THEN 7 ELSE (8 - EXTRACT(DOW FROM CURRENT_DATE)) END) + INTERVAL '7 days')
+  (Finds Monday of next week, then gets Monday-Sunday inclusive)
 
 🔹 LAST DAY PATTERNS (find most recent occurrence of specific weekday):
 Use this SIMPLER approach - look back up to 7 days and filter by day of week:
@@ -84,7 +88,9 @@ IMPORTANT: This finds the most recent occurrence of that weekday within the past
 • "this weekend"/"coming weekend":
   - Mon-Thu: start_date > CURRENT_DATE AND EXTRACT(DOW FROM start_date) IN (5,6,0) AND start_date < (CURRENT_DATE + INTERVAL '7 days')
   - Fri-Sun: start_date >= CURRENT_DATE AND EXTRACT(DOW FROM start_date) IN (5,6,0) AND start_date < (CURRENT_DATE + INTERVAL '3 days')
-• "next weekend": start_date >= (CURRENT_DATE + INTERVAL '7 days') AND EXTRACT(DOW FROM start_date) IN (5,6,0) AND start_date < (CURRENT_DATE + INTERVAL '14 days')
+• "next weekend": start_date >= (CURRENT_DATE + (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 WHEN EXTRACT(DOW FROM CURRENT_DATE) = 1 THEN 7 ELSE (8 - EXTRACT(DOW FROM CURRENT_DATE)) END) + INTERVAL '4 days')
+                 AND start_date < (CURRENT_DATE + (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 WHEN EXTRACT(DOW FROM CURRENT_DATE) = 1 THEN 7 ELSE (8 - EXTRACT(DOW FROM CURRENT_DATE)) END) + INTERVAL '7 days')
+  (Finds Monday of next week, then gets Friday-Sunday of that week)
 
 === DANCE STYLES ===
 Recognized: '2-step','argentine tango','bachata','balboa','cha cha','cha cha cha','country waltz','double shuffle','douceur','east coast swing','foxtrot','kizomba','lindy','lindy hop','line dance','merengue','milonga','night club','nite club','nite club 2','nite club two','quickstep','rhumba','rumba','salsa','samba','semba','swing','tango','tarraxa','tarraxinha','tarraxo','two step','urban kiz','waltz','wcs','west coast swing','zouk'
@@ -159,6 +165,30 @@ LIMIT 30
 🔹 LIMIT EXAMPLE:
 "Find 10 salsa events this week" (user specified limit):
 LIMIT 10
+
+🔹 THIS WEEK EXAMPLE:
+"Show me salsa events this week" (today=Tuesday Jan 21):
+SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
+FROM events
+WHERE dance_style ILIKE '%salsa%'
+  AND start_date >= (CURRENT_DATE - (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 6 ELSE EXTRACT(DOW FROM CURRENT_DATE) - 1 END))
+  AND start_date < (CURRENT_DATE - (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 6 ELSE EXTRACT(DOW FROM CURRENT_DATE) - 1 END) + INTERVAL '7 days')
+  AND event_type ILIKE '%social dance%'
+ORDER BY start_date, start_time
+LIMIT 30
+(This finds Monday of current week Jan 20, then gets events from Jan 20-26 inclusive)
+
+🔹 NEXT WEEK EXAMPLE:
+"Show me lindy hop events next week" (today=Tuesday Jan 21):
+SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
+FROM events
+WHERE dance_style ILIKE '%lindy hop%'
+  AND start_date >= (CURRENT_DATE + (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 WHEN EXTRACT(DOW FROM CURRENT_DATE) = 1 THEN 7 ELSE (8 - EXTRACT(DOW FROM CURRENT_DATE)) END))
+  AND start_date < (CURRENT_DATE + (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 WHEN EXTRACT(DOW FROM CURRENT_DATE) = 1 THEN 7 ELSE (8 - EXTRACT(DOW FROM CURRENT_DATE)) END) + INTERVAL '7 days')
+  AND event_type ILIKE '%social dance%'
+ORDER BY start_date, start_time
+LIMIT 30
+(This finds next Monday Jan 27, then gets events from Jan 27-Feb 2 inclusive)
 
 🔹 LAST DAY EXAMPLE:
 "Was there a rueda event sponsored by uvic last wednesday?" (today=Friday):
