@@ -174,7 +174,68 @@ templates:
         - "next month"
     expected_count: 12  # 4 styles × 3 timeframes
 
-  # Category 10: Natural language - EXPANDED (15 questions)
+  # Category 10: Time filtering tests - TODAY vs TONIGHT (16 questions)
+  # Tests time filtering: "tonight" should add start_time >= '18:00:00', "today" should not
+  - category: time_filtering_today_tonight
+    static_questions:
+      # TODAY (no time filter)
+      - "Show me salsa events today"
+      - "Show me bachata events today"
+      - "Show me tango events today"
+      - "Show me west coast swing events today"
+      # TONIGHT (time filter >= 18:00:00)
+      - "Show me salsa events tonight"
+      - "Show me bachata events tonight"
+      - "Show me tango events tonight"
+      - "Show me west coast swing events tonight"
+      # TOMORROW (no time filter)
+      - "Show me salsa events tomorrow"
+      - "Show me bachata events tomorrow"
+      # TOMORROW NIGHT (time filter >= 18:00:00)
+      - "Show me salsa events tomorrow night"
+      - "Show me bachata events tomorrow night"
+      # Day-specific night queries (time filter >= 18:00:00)
+      - "Show me salsa events Friday night"
+      - "Show me bachata events Saturday night"
+      - "What's happening Sunday night?"
+      - "Dance events Thursday night"
+    expected_count: 16
+
+  # Category 11: Calendar week tests - THIS WEEK and NEXT WEEK (10 questions)
+  # Tests proper Mon-Sun calendar week calculation
+  - category: calendar_week_tests
+    static_questions:
+      # THIS WEEK (should return Mon-Sun of current calendar week)
+      - "Show me salsa events this week"
+      - "Show me bachata events this week"
+      - "Show me tango events this week"
+      - "Show me west coast swing events this week"
+      - "What dance events are happening this week?"
+      # NEXT WEEK (should return Mon-Sun of next calendar week)
+      - "Show me salsa events next week"
+      - "Show me bachata events next week"
+      - "Show me tango events next week"
+      - "Show me west coast swing events next week"
+      - "What dance events are happening next week?"
+    expected_count: 10
+
+  # Category 12: Weekend calculation tests (8 questions)
+  # Tests proper this weekend vs next weekend calculation
+  - category: weekend_calculation_tests
+    static_questions:
+      # THIS WEEKEND (should return Fri-Sun of current week, not next week's days)
+      - "Show me salsa events this weekend"
+      - "Show me bachata events this weekend"
+      - "Show me tango events this weekend"
+      - "What's happening this weekend?"
+      # NEXT WEEKEND (should return Fri-Sun of next calendar week)
+      - "Show me salsa events next weekend"
+      - "Show me bachata events next weekend"
+      - "Show me tango events next weekend"
+      - "What's happening next weekend?"
+    expected_count: 8
+
+  # Category 13: Natural language - EXPANDED (15 questions)
   - category: natural_language
     static_questions:
       # Learning / Classes
@@ -200,7 +261,7 @@ templates:
       - "Are there any dance practice sessions this week?"
     expected_count: 15
 
-# Total: ~195 test questions (aligned with actual database event types)
+# Total: ~229 test questions (aligned with actual database event types)
 # Breakdown by category:
 # 1. single_dance_style: 48 (added "next month" timeframe)
 # 2. venue_specific: 12
@@ -213,7 +274,10 @@ templates:
 # 7b. combination_event_types: 6 (tests "class, social dance" etc.)
 # 8. day_specific: 7
 # 9. price_queries: 12 (added "next month" timeframe)
-# 10. natural_language: 15
+# 10. time_filtering_today_tonight: 16 (tests "today" vs "tonight", "tomorrow" vs "tomorrow night", "[day] night")
+# 11. calendar_week_tests: 10 (tests "this week" and "next week" Mon-Sun calculation)
+# 12. weekend_calculation_tests: 8 (tests "this weekend" vs "next weekend" proper Fri-Sun)
+# 13. natural_language: 15
 #
 # Database event types covered:
 # ✓ class (as "classes" in natural language)
