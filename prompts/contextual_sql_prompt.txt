@@ -56,6 +56,13 @@ DAY OF WEEK: {current_day_of_week} (Monday=1, Tuesday=2, Wednesday=3, Thursday=4
 • NO timeframe specified → add: start_date >= (CURRENT_DATE - INTERVAL '7 days')
 • Timeframe specified (today/tomorrow/this week/next week/weekend/dates) → use ONLY that window, NO default floor
 
+🔹 TIME FILTERING:
+• "tonight" → add: start_time >= '18:00:00' (6 PM or later)
+• "tomorrow night" → add: start_time >= '18:00:00' (6 PM or later)
+• "[day] night" (e.g., "Friday night", "Saturday night") → add: start_time >= '18:00:00'
+• "today", "tomorrow", "[day]" without "night" → NO time filter (all times)
+• Other timeframes (this week, next week, weekend, etc.) → NO time filter (all times)
+
 🔹 CONTEXT-AWARE BEHAVIOR:
 • INTENT "search": Process the user question as a new search query
 • INTENT "refinement": The user question contains the original query PLUS refinement (e.g., "Where can I dance tonight? Just salsa please")
@@ -64,8 +71,10 @@ DAY OF WEEK: {current_day_of_week} (Monday=1, Tuesday=2, Wednesday=3, Thursday=4
 The "Current User Question" contains the complete query to process. For refinements, the original query and refinement have been automatically combined for you. Just interpret the complete question naturally.
 
 🔹 DATE PATTERNS (PostgreSQL EXTRACT(DOW): 0=Sunday, 1=Monday...6=Saturday):
-• "today"/"tonight": start_date = CURRENT_DATE
+• "today": start_date = CURRENT_DATE (all events on current date, regardless of time)
+• "tonight": start_date = CURRENT_DATE AND start_time >= '18:00:00' (events starting at or after 6 PM)
 • "tomorrow": start_date = CURRENT_DATE + INTERVAL '1 day'
+• "tomorrow night": start_date = CURRENT_DATE + INTERVAL '1 day' AND start_time >= '18:00:00'
 • "this week": start_date >= (CURRENT_DATE - (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 6 ELSE EXTRACT(DOW FROM CURRENT_DATE) - 1 END))
               AND start_date < (CURRENT_DATE - (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 6 ELSE EXTRACT(DOW FROM CURRENT_DATE) - 1 END) + INTERVAL '7 days')
   (Finds Monday of current week, then gets Monday-Sunday inclusive)
@@ -162,6 +171,28 @@ WHERE (dance_style ILIKE '%west coast swing%' OR dance_style ILIKE '%wcs%')
 ORDER BY start_date, start_time
 LIMIT 30
 
+🔹 TODAY VS TONIGHT EXAMPLES:
+"Show me bachata events today":
+SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
+FROM events
+WHERE dance_style ILIKE '%bachata%'
+  AND start_date = CURRENT_DATE
+  AND event_type ILIKE '%social dance%'
+ORDER BY start_date, start_time
+LIMIT 30
+(No time restriction - includes all events on current date)
+
+"Show me bachata events tonight":
+SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
+FROM events
+WHERE dance_style ILIKE '%bachata%'
+  AND start_date = CURRENT_DATE
+  AND start_time >= '18:00:00'
+  AND event_type ILIKE '%social dance%'
+ORDER BY start_date, start_time
+LIMIT 30
+(Time restriction - only events starting at or after 6 PM)
+
 🔹 LIMIT EXAMPLE:
 "Find 10 salsa events this week" (user specified limit):
 LIMIT 10
@@ -204,7 +235,7 @@ ORDER BY start_date, start_time
 LIMIT 30
 
 🔹 VENUE EXAMPLE 1:
-"Who is playing at The Loft tomorrow night?" (note: venue query triggers both social dance AND live music):
+"Who is playing at The Loft tomorrow night?" (note: venue query triggers both social dance AND live music, "night" adds time filter):
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE (location ILIKE '%the loft%'
@@ -213,6 +244,7 @@ WHERE (location ILIKE '%the loft%'
        OR source ILIKE '%loft%'
        OR url ILIKE '%loft%')
   AND start_date = CURRENT_DATE + INTERVAL '1 day'
+  AND start_time >= '18:00:00'
   AND (event_type ILIKE '%social dance%' OR event_type ILIKE '%live music%')
 ORDER BY start_date, start_time
 LIMIT 30
@@ -237,3 +269,4 @@ LIMIT 30
 ✓ Column order correct ✓ Default event_type unless overridden ✓ Date window matches timeframe
 ✓ Weekend uses EXTRACT(DOW) ✓ LIMIT 30 ✓ ORDER BY start_date, start_time ✓ Style synonyms included
 ✓ Venue queries check location, source, AND url columns
+✓ Time filter (start_time >= '18:00:00') ONLY for "tonight", "tomorrow night", or "[day] night" queries
