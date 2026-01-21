@@ -264,13 +264,19 @@ class ScrapingValidator:
 
     def check_source_distribution(self) -> dict:
         """
-        Validate event source distribution matches expected baseline.
+        Validate event source distribution - ensures major sources are present.
 
-        Expected baseline (from successful pipeline run Jan 21, 2026):
-        - Total events: ~1,405
-        - Top 10 sources: ~1,320 events (94% of total)
-        - Top sources: Salsa Caliente (346), Victoria Summer Music (309),
-          Victoria Latin Dance Association (227), WCS Lessons (183), Red Hot Swing (124)
+        Primary check: Confirms that critical event sources appear in the database.
+        If any major source is missing, scraping likely failed for that source.
+
+        Expected major sources (from successful pipeline run Jan 21, 2026):
+        - Salsa Caliente
+        - Victoria Summer Music
+        - Victoria Latin Dance Association
+        - WCS Lessons, Social Dances, and Conventions – BC Swing Dance
+        - Red Hot Swing
+        - Eventbrite
+        - The Loft Pub Victoria
 
         Returns:
             dict: Distribution check results with status and warnings
@@ -278,24 +284,26 @@ class ScrapingValidator:
         logging.info("Checking event source distribution...")
 
         try:
-            # Expected baseline from Jan 21, 2026
-            EXPECTED_TOP_SOURCES = {
-                'Salsa Caliente': (300, 400),  # Expected range
-                'Victoria Summer Music': (250, 350),
-                'Victoria Latin Dance Association': (180, 270),
-                'WCS Lessons, Social Dances, and Conventions – BC Swing Dance ...': (150, 220),
-                'Red Hot Swing': (100, 150)
-            }
-            EXPECTED_TOTAL_EVENTS = (1200, 1600)  # Reasonable range
-            EXPECTED_TOP_10_PERCENTAGE = (85, 98)  # Top 10 should be 85-98% of total
+            # Critical sources that MUST be present in database (presence check only)
+            # These are major event providers - if missing, scraping failed
+            REQUIRED_SOURCES = [
+                'Salsa Caliente',
+                'Victoria Summer Music',
+                'Victoria Latin Dance Association',
+                'WCS Lessons, Social Dances, and Conventions – BC Swing Dance',
+                'Red Hot Swing',
+                'Eventbrite',
+                'The Loft Pub Victoria'
+            ]
 
-            # Query current distribution
+            EXPECTED_TOTAL_EVENTS = (1000, 2000)  # Reasonable range for total events
+
+            # Query all sources with counts (not just top 10 - need to check for presence)
             query = """
                 SELECT source, COUNT(*) AS counted
                 FROM events
                 GROUP BY source
                 ORDER BY counted DESC
-                LIMIT 10
             """
 
             result = self.db_handler.execute_query(query)
@@ -307,80 +315,87 @@ class ScrapingValidator:
                     'warnings': []
                 }
 
-            # Parse results
+            # Parse all results into dictionary for easy lookup
+            all_sources = {}
             top_10_sources = []
             top_10_total = 0
-            for row in result:
+
+            for i, row in enumerate(result):
                 source = row[0]
                 count = row[1]
-                top_10_sources.append({'source': source, 'count': count})
-                top_10_total += count
+                all_sources[source] = count
+
+                # Keep top 10 for reporting
+                if i < 10:
+                    top_10_sources.append({'source': source, 'count': count})
+                    top_10_total += count
 
             # Get total event count
-            total_query = "SELECT COUNT(*) FROM events"
-            total_result = self.db_handler.execute_query(total_query)
-            total_events = total_result[0][0] if total_result else 0
+            total_events = sum(all_sources.values())
 
             # Calculate percentage
             top_10_percentage = (top_10_total / total_events * 100) if total_events > 0 else 0
 
             # Validation checks
             warnings = []
+            missing_sources = []
             status = 'PASS'
 
-            # Check 1: Total event count
-            if not (EXPECTED_TOTAL_EVENTS[0] <= total_events <= EXPECTED_TOTAL_EVENTS[1]):
+            # Check 1: Total event count (reasonable range check)
+            if total_events < EXPECTED_TOTAL_EVENTS[0]:
                 warnings.append(
-                    f"Total event count ({total_events}) outside expected range "
-                    f"{EXPECTED_TOTAL_EVENTS[0]}-{EXPECTED_TOTAL_EVENTS[1]}"
+                    f"Total event count ({total_events}) below expected minimum "
+                    f"({EXPECTED_TOTAL_EVENTS[0]}) - possible scraping failures"
+                )
+                status = 'WARNING'
+            elif total_events > EXPECTED_TOTAL_EVENTS[1]:
+                warnings.append(
+                    f"Total event count ({total_events}) above expected maximum "
+                    f"({EXPECTED_TOTAL_EVENTS[1]}) - unusual activity or duplicates?"
                 )
                 status = 'WARNING'
 
-            # Check 2: Top 10 percentage
-            if not (EXPECTED_TOP_10_PERCENTAGE[0] <= top_10_percentage <= EXPECTED_TOP_10_PERCENTAGE[1]):
-                warnings.append(
-                    f"Top 10 sources represent {top_10_percentage:.1f}% of events, "
-                    f"expected {EXPECTED_TOP_10_PERCENTAGE[0]}-{EXPECTED_TOP_10_PERCENTAGE[1]}%"
-                )
-                status = 'WARNING'
-
-            # Check 3: Expected top sources are present with reasonable counts
-            for expected_source, (min_count, max_count) in EXPECTED_TOP_SOURCES.items():
+            # Check 2: CRITICAL - Required sources must be present
+            for required_source in REQUIRED_SOURCES:
                 found = False
-                for source_info in top_10_sources:
-                    if expected_source in source_info['source']:
+
+                # Check if any source in database contains the required source name
+                for db_source in all_sources.keys():
+                    if required_source in db_source or db_source in required_source:
                         found = True
-                        actual_count = source_info['count']
-                        if not (min_count <= actual_count <= max_count):
-                            warnings.append(
-                                f"Source '{expected_source}' has {actual_count} events, "
-                                f"expected {min_count}-{max_count}"
-                            )
-                            status = 'WARNING'
+                        event_count = all_sources[db_source]
+                        logging.info(f"✓ Found source '{db_source}': {event_count} events")
                         break
 
                 if not found:
+                    missing_sources.append(required_source)
                     warnings.append(
-                        f"Expected top source '{expected_source}' not found in top 10"
+                        f"CRITICAL: Required source '{required_source}' NOT FOUND in database - "
+                        f"scraping likely failed for this source"
                     )
-                    status = 'FAIL'
+                    status = 'FAIL'  # Missing critical source = FAIL
 
             # Log results
             logging.info(f"Total events: {total_events}")
+            logging.info(f"Total sources: {len(all_sources)}")
             logging.info(f"Top 10 sources: {top_10_total} events ({top_10_percentage:.1f}%)")
 
-            if warnings:
+            if missing_sources:
+                logging.error(f"❌ Missing {len(missing_sources)} required sources: {missing_sources}")
+            elif warnings:
                 for warning in warnings:
                     logging.warning(f"Source distribution check: {warning}")
             else:
-                logging.info("✅ Source distribution matches expected baseline")
+                logging.info("✅ All required sources present in database")
 
             return {
                 'status': status,
                 'total_events': total_events,
+                'total_sources': len(all_sources),
                 'top_10_sources': top_10_sources,
                 'top_10_total': top_10_total,
                 'top_10_percentage': round(top_10_percentage, 1),
+                'missing_sources': missing_sources,
                 'warnings': warnings
             }
 

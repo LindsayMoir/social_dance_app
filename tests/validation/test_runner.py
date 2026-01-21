@@ -361,8 +361,21 @@ class ValidationTestRunner:
                         <div class="metric-value">{dist.get('top_10_percentage', 0)}%</div>
                         <div class="metric-label">Top 10 Percentage</div>
                     </div>
+                    <div class="metric">
+                        <div class="metric-value">{dist.get('total_sources', 0)}</div>
+                        <div class="metric-label">Total Sources</div>
+                    </div>
                 </div>
                 """
+
+                # Missing sources (CRITICAL)
+                if dist.get('missing_sources'):
+                    html += "<h4>❌ Missing Required Sources</h4>"
+                    html += "<p class='error-box'>The following required sources are NOT present in the database. Scraping likely failed for these sources:</p>"
+                    html += "<ul>"
+                    for missing_source in dist['missing_sources']:
+                        html += f"<li class='error-box'><strong>{missing_source}</strong></li>"
+                    html += "</ul>"
 
                 # Top 10 sources table
                 if 'top_10_sources' in dist:
@@ -384,8 +397,8 @@ class ValidationTestRunner:
                 for warning in dist['warnings']:
                     html += f"<li class='error-box'>{warning}</li>"
                 html += "</ul>"
-            else:
-                html += "<p>✅ Source distribution matches expected baseline</p>"
+            elif not dist.get('missing_sources'):
+                html += "<p>✅ All required sources present in database</p>"
 
         return html
 
