@@ -262,6 +262,136 @@ class ScrapingValidator:
             logging.info("No scraping failures detected")
             return pd.DataFrame()
 
+    def check_source_distribution(self) -> dict:
+        """
+        Validate event source distribution matches expected baseline.
+
+        Expected baseline (from successful pipeline run Jan 21, 2026):
+        - Total events: ~1,405
+        - Top 10 sources: ~1,320 events (94% of total)
+        - Top sources: Salsa Caliente (346), Victoria Summer Music (309),
+          Victoria Latin Dance Association (227), WCS Lessons (183), Red Hot Swing (124)
+
+        Returns:
+            dict: Distribution check results with status and warnings
+        """
+        logging.info("Checking event source distribution...")
+
+        try:
+            # Expected baseline from Jan 21, 2026
+            EXPECTED_TOP_SOURCES = {
+                'Salsa Caliente': (300, 400),  # Expected range
+                'Victoria Summer Music': (250, 350),
+                'Victoria Latin Dance Association': (180, 270),
+                'WCS Lessons, Social Dances, and Conventions – BC Swing Dance ...': (150, 220),
+                'Red Hot Swing': (100, 150)
+            }
+            EXPECTED_TOTAL_EVENTS = (1200, 1600)  # Reasonable range
+            EXPECTED_TOP_10_PERCENTAGE = (85, 98)  # Top 10 should be 85-98% of total
+
+            # Query current distribution
+            query = """
+                SELECT source, COUNT(*) AS counted
+                FROM events
+                GROUP BY source
+                ORDER BY counted DESC
+                LIMIT 10
+            """
+
+            result = self.db_handler.execute_query(query)
+
+            if not result:
+                return {
+                    'status': 'ERROR',
+                    'message': 'Failed to query event source distribution',
+                    'warnings': []
+                }
+
+            # Parse results
+            top_10_sources = []
+            top_10_total = 0
+            for row in result:
+                source = row[0]
+                count = row[1]
+                top_10_sources.append({'source': source, 'count': count})
+                top_10_total += count
+
+            # Get total event count
+            total_query = "SELECT COUNT(*) FROM events"
+            total_result = self.db_handler.execute_query(total_query)
+            total_events = total_result[0][0] if total_result else 0
+
+            # Calculate percentage
+            top_10_percentage = (top_10_total / total_events * 100) if total_events > 0 else 0
+
+            # Validation checks
+            warnings = []
+            status = 'PASS'
+
+            # Check 1: Total event count
+            if not (EXPECTED_TOTAL_EVENTS[0] <= total_events <= EXPECTED_TOTAL_EVENTS[1]):
+                warnings.append(
+                    f"Total event count ({total_events}) outside expected range "
+                    f"{EXPECTED_TOTAL_EVENTS[0]}-{EXPECTED_TOTAL_EVENTS[1]}"
+                )
+                status = 'WARNING'
+
+            # Check 2: Top 10 percentage
+            if not (EXPECTED_TOP_10_PERCENTAGE[0] <= top_10_percentage <= EXPECTED_TOP_10_PERCENTAGE[1]):
+                warnings.append(
+                    f"Top 10 sources represent {top_10_percentage:.1f}% of events, "
+                    f"expected {EXPECTED_TOP_10_PERCENTAGE[0]}-{EXPECTED_TOP_10_PERCENTAGE[1]}%"
+                )
+                status = 'WARNING'
+
+            # Check 3: Expected top sources are present with reasonable counts
+            for expected_source, (min_count, max_count) in EXPECTED_TOP_SOURCES.items():
+                found = False
+                for source_info in top_10_sources:
+                    if expected_source in source_info['source']:
+                        found = True
+                        actual_count = source_info['count']
+                        if not (min_count <= actual_count <= max_count):
+                            warnings.append(
+                                f"Source '{expected_source}' has {actual_count} events, "
+                                f"expected {min_count}-{max_count}"
+                            )
+                            status = 'WARNING'
+                        break
+
+                if not found:
+                    warnings.append(
+                        f"Expected top source '{expected_source}' not found in top 10"
+                    )
+                    status = 'FAIL'
+
+            # Log results
+            logging.info(f"Total events: {total_events}")
+            logging.info(f"Top 10 sources: {top_10_total} events ({top_10_percentage:.1f}%)")
+
+            if warnings:
+                for warning in warnings:
+                    logging.warning(f"Source distribution check: {warning}")
+            else:
+                logging.info("✅ Source distribution matches expected baseline")
+
+            return {
+                'status': status,
+                'total_events': total_events,
+                'top_10_sources': top_10_sources,
+                'top_10_total': top_10_total,
+                'top_10_percentage': round(top_10_percentage, 1),
+                'warnings': warnings
+            }
+
+        except Exception as e:
+            logging.error(f"Error checking source distribution: {e}")
+            return {
+                'status': 'ERROR',
+                'message': f'Exception during source distribution check: {str(e)}',
+                'warnings': []
+            }
+
     def generate_report(self, failures_df: pd.DataFrame) -> dict:
         """
         Generate JSON report with scraping validation results.

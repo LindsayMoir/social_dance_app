@@ -110,8 +110,12 @@ class ValidationTestRunner:
             failures = validator.check_scraping_failures(important_urls)
             logging.info(f"Found {len(failures)} scraping failures")
 
+            # Check source distribution
+            distribution_check = validator.check_source_distribution()
+
             # Generate report
             scraping_report = validator.generate_report(failures)
+            scraping_report['source_distribution'] = distribution_check  # Add to report
             results['scraping_validation'] = scraping_report
 
             # Check for critical failures
@@ -124,6 +128,15 @@ class ValidationTestRunner:
                     f"⚠️  Critical failures detected: {whitelist_failures} whitelist, "
                     f"{edge_case_failures} edge case URLs failed"
                 )
+
+            # Check source distribution status
+            if distribution_check['status'] == 'FAIL':
+                results['overall_status'] = 'FAIL'
+                logging.error("❌ Source distribution check FAILED")
+            elif distribution_check['status'] == 'WARNING':
+                if results['overall_status'] == 'PASS':
+                    results['overall_status'] = 'WARNING'
+                logging.warning("⚠️  Source distribution check has warnings")
 
         except Exception as e:
             logging.error(f"Scraping validation failed: {e}", exc_info=True)
@@ -323,6 +336,56 @@ class ValidationTestRunner:
             html += "</table>"
         else:
             html += "<p>✅ No critical failures</p>"
+
+        # Add source distribution check
+        if 'source_distribution' in scraping_data:
+            dist = scraping_data['source_distribution']
+            html += "<h3>Source Distribution Check</h3>"
+
+            # Status and metrics
+            status_class = dist['status'].lower()
+            html += f"<p><strong>Status:</strong> <span class='status-{status_class}'>{dist['status']}</span></p>"
+
+            if 'total_events' in dist:
+                html += f"""
+                <div class="metric-container">
+                    <div class="metric">
+                        <div class="metric-value">{dist['total_events']}</div>
+                        <div class="metric-label">Total Events</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{dist.get('top_10_total', 0)}</div>
+                        <div class="metric-label">Top 10 Sources</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{dist.get('top_10_percentage', 0)}%</div>
+                        <div class="metric-label">Top 10 Percentage</div>
+                    </div>
+                </div>
+                """
+
+                # Top 10 sources table
+                if 'top_10_sources' in dist:
+                    html += "<h4>Top 10 Event Sources</h4>"
+                    html += "<table><tr><th>Rank</th><th>Source</th><th>Event Count</th></tr>"
+                    for i, source_info in enumerate(dist['top_10_sources'], 1):
+                        html += f"""
+                        <tr>
+                            <td>{i}</td>
+                            <td>{source_info['source']}</td>
+                            <td>{source_info['count']}</td>
+                        </tr>
+                        """
+                    html += "</table>"
+
+            # Warnings
+            if dist.get('warnings'):
+                html += "<h4>Warnings</h4><ul>"
+                for warning in dist['warnings']:
+                    html += f"<li class='error-box'>{warning}</li>"
+                html += "</ul>"
+            else:
+                html += "<p>✅ Source distribution matches expected baseline</p>"
 
         return html
 
