@@ -359,9 +359,11 @@ def process_query(request: QueryRequest):
         logging.info("=== END PROMPT ===")
     
     logging.info(f"Constructed Prompt: {prompt}")
-    
-    # Query the language model for a raw SQL query
-    sql_query = llm_handler.query_llm('', prompt)
+
+    # Query the language model for a raw SQL query with date calculator tool support
+    from date_calculator import CALCULATE_DATE_RANGE_TOOL
+    result = llm_handler.query_llm_with_tools('', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+    sql_query = result['content']
     logging.info(f"Raw SQL Query: {sql_query}")
 
     if sql_query:
