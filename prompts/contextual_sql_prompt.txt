@@ -270,54 +270,62 @@ LIMIT 30
 "Find 10 salsa events this week" (user specified limit):
 LIMIT 10
 
-🔹 THIS WEEK EXAMPLE:
-"Show me salsa events this week" (today=Tuesday Jan 21, DOW=2):
+🔹 THIS WEEK EXAMPLE (use the tool!):
+"Show me salsa events this week" (today=Tuesday Jan 21):
+→ Call calculate_date_range(temporal_phrase="this week", current_date="{current_date}")
+→ Receives: {{"start_date": "2026-01-19", "end_date": "2026-01-25"}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE dance_style ILIKE '%salsa%'
-  AND start_date >= CURRENT_DATE
-  AND start_date <= CURRENT_DATE + CAST((CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 0 ELSE 7 - EXTRACT(DOW FROM CURRENT_DATE) END) AS INTEGER)
+  AND start_date >= '2026-01-19'
+  AND start_date <= '2026-01-25'
   AND event_type ILIKE '%social dance%'
 ORDER BY start_date, start_time
 LIMIT 30
-(Today through end of current week. DOW=2, so 7-2=5 days forward. Returns Jan 21-26 inclusive)
+(Full calendar week Monday-Sunday, not just remaining days)
 
-🔹 NEXT WEEK EXAMPLE:
-"Show me lindy hop events next week" (today=Tuesday Jan 21, DOW=2):
+🔹 NEXT WEEK EXAMPLE (use the tool!):
+"Show me lindy hop events next week" (today=Tuesday Jan 21):
+→ Call calculate_date_range(temporal_phrase="next week", current_date="{current_date}")
+→ Receives: {{"start_date": "2026-01-26", "end_date": "2026-02-01"}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE dance_style ILIKE '%lindy hop%'
-  AND start_date >= CURRENT_DATE + CAST((CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 ELSE 8 - EXTRACT(DOW FROM CURRENT_DATE) END) AS INTEGER)
-  AND start_date <= CURRENT_DATE + CAST((CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 7 ELSE 14 - EXTRACT(DOW FROM CURRENT_DATE) END) AS INTEGER)
+  AND start_date >= '2026-01-26'
+  AND start_date <= '2026-02-01'
   AND event_type ILIKE '%social dance%'
 ORDER BY start_date, start_time
 LIMIT 30
-(Next Monday through next Sunday. DOW=2, so next Monday is 8-2=6 days forward, next Sunday is 14-2=12 days forward. Returns Jan 27-Feb 2 inclusive)
+(Next Monday through next Sunday - full calendar week)
 
-🔹 NEXT MONTH EXAMPLE:
+🔹 NEXT MONTH EXAMPLE (use the tool!):
 "Show me salsa events next month" (today=Tuesday Jan 21, 2026):
+→ Call calculate_date_range(temporal_phrase="next month", current_date="{current_date}")
+→ Receives: {{"start_date": "2026-02-01", "end_date": "2026-02-28", "month_number": 2, "year": 2026}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE dance_style ILIKE '%salsa%'
-  AND EXTRACT(MONTH FROM start_date) = (CASE WHEN EXTRACT(MONTH FROM CURRENT_DATE) = 12 THEN 1 ELSE EXTRACT(MONTH FROM CURRENT_DATE) + 1 END)
-  AND EXTRACT(YEAR FROM start_date) = (CASE WHEN EXTRACT(MONTH FROM CURRENT_DATE) = 12 THEN EXTRACT(YEAR FROM CURRENT_DATE) + 1 ELSE EXTRACT(YEAR FROM CURRENT_DATE) END)
+  AND start_date >= '2026-02-01'
+  AND start_date <= '2026-02-28'
   AND event_type ILIKE '%social dance%'
 ORDER BY start_date, start_time
 LIMIT 30
-(Current month is January (1), so next month is February (1+1=2), year stays 2026. Returns all events in February 2026)
+(Full month of February 2026 - handles year wrap automatically)
 
-🔹 NEXT WEEKEND EXAMPLE:
-"Show me bachata events next weekend" (today=Tuesday Jan 21, DOW=2):
+🔹 NEXT WEEKEND EXAMPLE (use the tool!):
+"Show me bachata events next weekend" (today=Tuesday Jan 21):
+→ Call calculate_date_range(temporal_phrase="next weekend", current_date="{current_date}")
+→ Receives: {{"start_date": "2026-01-30", "end_date": "2026-02-01", "dow_filter": [5,6,0]}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE dance_style ILIKE '%bachata%'
-  AND start_date >= CURRENT_DATE + CAST((CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 ELSE 8 - EXTRACT(DOW FROM CURRENT_DATE) END) AS INTEGER) + 4
-  AND start_date <= CURRENT_DATE + CAST((CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 ELSE 8 - EXTRACT(DOW FROM CURRENT_DATE) END) AS INTEGER) + 6
+  AND start_date >= '2026-01-30'
+  AND start_date <= '2026-02-01'
   AND EXTRACT(DOW FROM start_date) IN (5,6,0)
   AND event_type ILIKE '%social dance%'
 ORDER BY start_date, start_time
 LIMIT 30
-(DOW=2, so next Monday is 8-2=6 days forward (Jan 27). Friday is Jan 27+4=Jan 31, Sunday is Jan 27+6=Feb 2. Returns Jan 31-Feb 2 inclusive)
+(Friday-Sunday of next week - includes Friday night!)
 
 🔹 LAST DAY EXAMPLE:
 "Was there a rueda event sponsored by uvic last wednesday?" (today=Friday):
@@ -380,30 +388,34 @@ ORDER BY start_date, start_time
 LIMIT 30
 (Use the exact date from the tool - returns next occurrence of that day)
 
-🔹 FREE EVENTS EXAMPLE:
+🔹 FREE EVENTS EXAMPLE (use the tool!):
 "Free bachata events this week" (today=Tuesday):
+→ Call calculate_date_range(temporal_phrase="this week", current_date="{current_date}")
+→ Receives: {{"start_date": "2026-01-19", "end_date": "2026-01-25"}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE dance_style ILIKE '%bachata%'
-  AND start_date >= CURRENT_DATE
-  AND start_date <= (CURRENT_DATE + (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 0 ELSE 7 - EXTRACT(DOW FROM CURRENT_DATE) END))
+  AND start_date >= '2026-01-19'
+  AND start_date <= '2026-01-25'
   AND (price ILIKE '%free%' OR price ILIKE '%\$0%' OR price ILIKE '%no cover%' OR price ILIKE '%complimentary%')
   AND (event_type ILIKE '%class%' OR event_type ILIKE '%workshop%' OR event_type ILIKE '%social dance%')
 ORDER BY start_date, start_time
 LIMIT 30
-(Include all event types that might be free - classes, workshops, social dances)
+(Use tool for date range - include all free event types)
 
-🔹 MULTI-CRITERIA EVENT TYPE EXAMPLE 1 (OR logic):
+🔹 MULTI-CRITERIA EVENT TYPE EXAMPLE 1 (use the tool!):
 "Find classes and social dances for salsa this week":
+→ Call calculate_date_range(temporal_phrase="this week", current_date="{current_date}")
+→ Receives: {{"start_date": "2026-01-19", "end_date": "2026-01-25"}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE dance_style ILIKE '%salsa%'
-  AND start_date >= CURRENT_DATE
-  AND start_date <= (CURRENT_DATE + (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 0 ELSE 7 - EXTRACT(DOW FROM CURRENT_DATE) END))
+  AND start_date >= '2026-01-19'
+  AND start_date <= '2026-01-25'
   AND (event_type ILIKE '%class%' OR event_type ILIKE '%social dance%')
 ORDER BY start_date, start_time
 LIMIT 30
-(OR logic - events that are EITHER classes OR social dances)
+(Use tool for dates - OR logic for event types)
 
 🔹 MULTI-CRITERIA EVENT TYPE EXAMPLE 2 (use the tool!):
 "Dance events with live music this weekend":
@@ -430,11 +442,12 @@ CLARIFICATION: To recommend venues for west coast swing, could you specify when 
 ✓ Style synonyms included (e.g., WCS for West Coast Swing)
 ✓ Venue queries check location, source, AND url columns with multiple variations
 ✓ Time filter (start_time >= '18:00:00') ONLY for "tonight", "tomorrow night", or "[day] night" queries
-✓ Day-specific queries (e.g., "on Monday") look FORWARD not backward (14-day window)
-✓ "This week" = today through end of current week (Sunday)
-✓ "Next week" = next Monday through next Sunday (7 full days)
-✓ "Next month" = all events in the calendar month after current month (handle December→January wrap)
-✓ "Next weekend" = Friday-Sunday of the week starting with next Monday (not this weekend)
+✓ ALWAYS call calculate_date_range for temporal expressions (today, tonight, this week, next month, etc.)
+✓ Use returned dates DIRECTLY in SQL (never add INTERVAL to string dates)
+✓ "This week" = Monday-Sunday of current calendar week (full 7 days)
+✓ "Next week" = next Monday through next Sunday (full 7 days)
+✓ "This weekend" = Friday-Sunday of current week (includes Friday night!)
+✓ "Next weekend" = Friday-Sunday of next week (includes Friday night!)
 ✓ Multi-criteria event types use correct AND/OR logic
 ✓ Free event queries include price filter AND all relevant event types
 ✓ Subjective queries trigger CLARIFICATION mode instead of invalid SQL
