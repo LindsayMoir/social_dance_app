@@ -98,15 +98,21 @@ def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
             "end_date": yesterday.strftime("%Y-%m-%d")
         }
 
-    # This week (today through upcoming Sunday)
+    # This week (Monday-Sunday of current calendar week)
     elif temporal_phrase == "this week":
         dow = current.weekday()  # 0=Monday, 6=Sunday
-        # Days to Sunday: if Sunday (6), 0 days; if Monday (0), 6 days
-        days_to_sunday = 6 - dow
-        end_date = current + timedelta(days=days_to_sunday)
+
+        # Calculate Monday of this week
+        days_since_monday = dow  # If Monday, 0; if Tuesday, 1; etc.
+        monday = current - timedelta(days=days_since_monday)
+
+        # Calculate Sunday of this week
+        days_to_sunday = 6 - dow  # If Monday, 6; if Sunday, 0
+        sunday = current + timedelta(days=days_to_sunday)
+
         return {
-            "start_date": current.strftime("%Y-%m-%d"),
-            "end_date": end_date.strftime("%Y-%m-%d")
+            "start_date": monday.strftime("%Y-%m-%d"),
+            "end_date": sunday.strftime("%Y-%m-%d")
         }
 
     # Next week (next Monday through next Sunday)
