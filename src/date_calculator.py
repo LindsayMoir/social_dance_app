@@ -249,6 +249,65 @@ def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
             "year": year
         }
 
+    # Day-specific queries (e.g., "Monday", "Tuesday", "Friday")
+    # Map day names to weekday numbers (0=Monday, 6=Sunday)
+    day_names = {
+        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+        "friday": 4, "saturday": 5, "sunday": 6
+    }
+
+    # Check for specific day names
+    for day_name, target_dow in day_names.items():
+        if temporal_phrase == day_name:
+            current_dow = current.weekday()
+
+            # If today is the target day, return today
+            if current_dow == target_dow:
+                return {
+                    "start_date": current.strftime("%Y-%m-%d"),
+                    "end_date": current.strftime("%Y-%m-%d"),
+                    "dow_filter": [target_dow]
+                }
+
+            # Otherwise, find the next occurrence of this day
+            days_ahead = (target_dow - current_dow) % 7
+            if days_ahead == 0:
+                days_ahead = 7  # Next week if today is the target day
+
+            target_date = current + timedelta(days=days_ahead)
+            return {
+                "start_date": target_date.strftime("%Y-%m-%d"),
+                "end_date": target_date.strftime("%Y-%m-%d"),
+                "dow_filter": [target_dow]
+            }
+
+    # Day-specific night queries (e.g., "Monday night", "Friday night", "Saturday night")
+    for day_name, target_dow in day_names.items():
+        if temporal_phrase == f"{day_name} night":
+            current_dow = current.weekday()
+
+            # If today is the target day, return today with time filter
+            if current_dow == target_dow:
+                return {
+                    "start_date": current.strftime("%Y-%m-%d"),
+                    "end_date": current.strftime("%Y-%m-%d"),
+                    "time_filter": "18:00:00",
+                    "dow_filter": [target_dow]
+                }
+
+            # Otherwise, find the next occurrence of this day
+            days_ahead = (target_dow - current_dow) % 7
+            if days_ahead == 0:
+                days_ahead = 7  # Next week if today is the target day
+
+            target_date = current + timedelta(days=days_ahead)
+            return {
+                "start_date": target_date.strftime("%Y-%m-%d"),
+                "end_date": target_date.strftime("%Y-%m-%d"),
+                "time_filter": "18:00:00",
+                "dow_filter": [target_dow]
+            }
+
     # Unsupported temporal phrase
     else:
         logger.warning(f"Unsupported temporal phrase: {temporal_phrase}")
@@ -285,7 +344,21 @@ CALCULATE_DATE_RANGE_TOOL = {
                         "last month",
                         "this year",
                         "next year",
-                        "last year"
+                        "last year",
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday",
+                        "saturday",
+                        "sunday",
+                        "monday night",
+                        "tuesday night",
+                        "wednesday night",
+                        "thursday night",
+                        "friday night",
+                        "saturday night",
+                        "sunday night"
                     ]
                 },
                 "current_date": {
