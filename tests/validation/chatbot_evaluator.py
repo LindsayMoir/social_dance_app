@@ -244,8 +244,7 @@ class ChatbotTestExecutor:
             from date_calculator import CALCULATE_DATE_RANGE_TOOL
 
             # Query LLM for SQL with date calculator tool support
-            result = self.llm_handler.query_llm_with_tools('', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
-            sql_raw = result['content']
+            sql_raw = self.llm_handler.query_llm('', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
 
             if not sql_raw:
                 return self._create_error_result(question_dict, "LLM returned empty response")

@@ -361,15 +361,20 @@ class LLMHandler:
         return prompt, schema_type
 
 
-    def query_llm(self, url, prompt, schema_type=None):
+    def query_llm(self, url, prompt, schema_type=None, tools=None, max_iterations=3):
         """
         Query the configured LLM with a given prompt and return the response.
         Fallback occurs between Mistral and OpenAI if one fails.
+
+        Supports optional function/tool calling for LLM to invoke Python functions
+        (e.g., date calculations) before generating final response.
 
         Args:
             url (str): The URL being processed (for logging).
             prompt (str): The prompt to send to the LLM.
             schema_type (str): The schema type for structured output (optional).
+            tools (list): Optional list of tool definitions for function calling.
+            max_iterations (int): Maximum iterations for tool calls (default: 3).
 
         Returns:
             str: The response from the LLM if available, otherwise None.
@@ -377,6 +382,11 @@ class LLMHandler:
         if not self.config['llm']['spend_money']:
             logging.info("query_llm(): Spending money is disabled. Skipping the LLM query.")
             return None
+
+        # If tools provided, use tool calling logic
+        if tools:
+            result = self._query_with_tools(url, prompt, tools, max_iterations)
+            return result.get('content') if result else None
         
         # Instantiate response variable
         response = None
@@ -448,9 +458,9 @@ class LLMHandler:
             logging.error("query_llm(): Both LLM providers failed to provide a response.")
         return response
 
-    def query_llm_with_tools(self, url, prompt, tools=None, max_iterations=3):
+    def _query_with_tools(self, url, prompt, tools, max_iterations=3):
         """
-        Query the LLM with function/tool calling support.
+        Internal method: Query the LLM with function/tool calling support.
 
         This method allows the LLM to call Python functions (tools) to perform
         calculations or lookups before generating the final response. Supports
@@ -468,14 +478,6 @@ class LLMHandler:
                 - tool_calls (list): List of tool calls made (if any)
                 - iterations (int): Number of iterations taken
         """
-        if not self.config['llm']['spend_money']:
-            logging.info("query_llm_with_tools(): Spending money is disabled. Skipping the LLM query.")
-            return {"content": None, "tool_calls": [], "iterations": 0}
-
-        if not tools:
-            # No tools provided, fall back to regular query
-            response = self.query_llm(url, prompt)
-            return {"content": response, "tool_calls": [], "iterations": 0}
 
         # Import date calculator for tool execution
         from date_calculator import calculate_date_range
@@ -497,7 +499,7 @@ class LLMHandler:
         all_tool_calls = []
 
         for iteration in range(max_iterations):
-            logging.info(f"query_llm_with_tools(): Iteration {iteration + 1}/{max_iterations}")
+            logging.info(f"query_llm(): Tool calling iteration {iteration + 1}/{max_iterations}")
 
             # Query LLM with tools
             if provider == 'mistral':
@@ -505,16 +507,16 @@ class LLMHandler:
             elif provider == 'openai':
                 response = self._query_openai_with_tools(messages, tools)
             else:
-                logging.error("query_llm_with_tools(): Invalid LLM provider")
+                logging.error("query_llm(): Invalid LLM provider")
                 return {"content": None, "tool_calls": [], "iterations": iteration}
 
             if not response:
-                logging.error(f"query_llm_with_tools(): No response from {provider}")
+                logging.error(f"query_llm(): No response from {provider}")
                 return {"content": None, "tool_calls": all_tool_calls, "iterations": iteration}
 
             # Check if LLM wants to call a tool
             if response.get("tool_calls"):
-                logging.info(f"query_llm_with_tools(): LLM requested {len(response['tool_calls'])} tool call(s)")
+                logging.info(f"query_llm(): LLM requested {len(response['tool_calls'])} tool call(s)")
 
                 # Add assistant message with tool calls to conversation
                 messages.append({
@@ -528,13 +530,13 @@ class LLMHandler:
                     function_name = tool_call["function"]["name"]
                     function_args = json.loads(tool_call["function"]["arguments"])
 
-                    logging.info(f"query_llm_with_tools(): Calling {function_name} with args: {function_args}")
+                    logging.info(f"query_llm(): Calling {function_name} with args: {function_args}")
 
                     # Execute the function
                     if function_name in available_functions:
                         try:
                             function_result = available_functions[function_name](**function_args)
-                            logging.info(f"query_llm_with_tools(): {function_name} returned: {function_result}")
+                            logging.info(f"query_llm(): {function_name} returned: {function_result}")
 
                             # Add tool result to conversation
                             messages.append({
@@ -553,7 +555,7 @@ class LLMHandler:
 
                         except Exception as e:
                             error_msg = f"Error executing {function_name}: {str(e)}"
-                            logging.error(f"query_llm_with_tools(): {error_msg}")
+                            logging.error(f"query_llm(): {error_msg}")
                             messages.append({
                                 "role": "tool",
                                 "tool_call_id": tool_call.get("id", ""),
@@ -561,13 +563,13 @@ class LLMHandler:
                                 "content": json.dumps({"error": error_msg})
                             })
                     else:
-                        logging.error(f"query_llm_with_tools(): Unknown function: {function_name}")
+                        logging.error(f"query_llm(): Unknown function: {function_name}")
 
                 # Continue to next iteration to get final response from LLM
                 continue
             else:
                 # No tool calls, we have the final response
-                logging.info(f"query_llm_with_tools(): Final response received after {iteration + 1} iteration(s)")
+                logging.info(f"query_llm(): Final response received after {iteration + 1} iteration(s)")
                 return {
                     "content": response.get("content"),
                     "tool_calls": all_tool_calls,
@@ -575,7 +577,7 @@ class LLMHandler:
                 }
 
         # Max iterations reached
-        logging.warning(f"query_llm_with_tools(): Max iterations ({max_iterations}) reached")
+        logging.warning(f"query_llm(): Max iterations ({max_iterations}) reached")
         return {
             "content": messages[-1].get("content") if messages else None,
             "tool_calls": all_tool_calls,
