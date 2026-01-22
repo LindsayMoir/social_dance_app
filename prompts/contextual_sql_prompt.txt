@@ -97,6 +97,23 @@ The "Current User Question" contains the complete query to process. For refineme
   - If today is Tuesday (DOW=2): next Monday is +6 days, next Sunday is +12 days
   - If today is Saturday (DOW=6): next Monday is +2 days, next Sunday is +8 days
 
+• "next month": CRITICAL - All events in the calendar month following the current month:
+  ALGORITHMIC APPROACH:
+  Step 1: Get current month number (1=Jan, 2=Feb, ..., 12=Dec)
+  Step 2: Add 1 to get next month number
+  Step 3: If result > 12, subtract 12 to wrap to January (month 1)
+  Step 4: If wrapped, increment year by 1
+  Step 5: Filter for events in that month and year
+
+  SQL IMPLEMENTATION:
+  EXTRACT(MONTH FROM start_date) = (CASE WHEN EXTRACT(MONTH FROM CURRENT_DATE) = 12 THEN 1 ELSE EXTRACT(MONTH FROM CURRENT_DATE) + 1 END)
+  AND EXTRACT(YEAR FROM start_date) = (CASE WHEN EXTRACT(MONTH FROM CURRENT_DATE) = 12 THEN EXTRACT(YEAR FROM CURRENT_DATE) + 1 ELSE EXTRACT(YEAR FROM CURRENT_DATE) END)
+
+  Examples:
+  - If today is January 15, 2026 (month=1): next month is February (month=2), year=2026
+  - If today is December 15, 2026 (month=12): next month is January (month=1), year=2027
+  - If today is July 20, 2026 (month=7): next month is August (month=8), year=2026
+
 🔹 SPECIFIC DAY PATTERNS (forward-looking by default):
 CRITICAL: "Dance events on Monday" means UPCOMING Monday, not past Monday. Look forward 14 days.
 • "monday"/"on monday"/"events on monday": start_date >= CURRENT_DATE AND start_date <= CURRENT_DATE + INTERVAL '14 days' AND EXTRACT(DOW FROM start_date) = 1
@@ -122,10 +139,23 @@ IMPORTANT: This finds the most recent occurrence of that weekday within the past
 • "this weekend"/"coming weekend":
   - Mon-Thu: start_date > CURRENT_DATE AND EXTRACT(DOW FROM start_date) IN (5,6,0) AND start_date < (CURRENT_DATE + INTERVAL '7 days')
   - Fri-Sun: start_date >= CURRENT_DATE AND EXTRACT(DOW FROM start_date) IN (5,6,0) AND start_date < (CURRENT_DATE + INTERVAL '3 days')
-• "next weekend": start_date >= (CURRENT_DATE + (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 6 WHEN EXTRACT(DOW FROM CURRENT_DATE) IN (1,2,3,4) THEN (12 - EXTRACT(DOW FROM CURRENT_DATE)) ELSE (5 + 7 - EXTRACT(DOW FROM CURRENT_DATE)) END))
-                 AND start_date <= (CURRENT_DATE + (CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 6 WHEN EXTRACT(DOW FROM CURRENT_DATE) IN (1,2,3,4) THEN (14 - EXTRACT(DOW FROM CURRENT_DATE)) ELSE (7 + 7 - EXTRACT(DOW FROM CURRENT_DATE)) END))
-                 AND EXTRACT(DOW FROM start_date) IN (5,6,0)
-  (Gets Friday-Sunday of next calendar week)
+
+• "next weekend": CRITICAL - Friday through Sunday of next calendar week:
+  ALGORITHMIC APPROACH:
+  Step 1: Find the FIRST Monday AFTER today (not including today even if today is Monday)
+  Step 2: From that Monday, calculate Friday (+4 days), Saturday (+5 days), Sunday (+6 days)
+  Step 3: Filter for events in that date range
+
+  SQL IMPLEMENTATION (Friday through Sunday of the week starting with next Monday):
+  start_date >= CURRENT_DATE + CAST((CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 ELSE 8 - EXTRACT(DOW FROM CURRENT_DATE) END) AS INTEGER) + 4
+  AND start_date <= CURRENT_DATE + CAST((CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 ELSE 8 - EXTRACT(DOW FROM CURRENT_DATE) END) AS INTEGER) + 6
+  AND EXTRACT(DOW FROM start_date) IN (5,6,0)
+
+  Examples (showing next Monday, then Friday-Sunday):
+  - If today is Sunday Jan 26 (DOW=0): next Monday is +1 day (Jan 27), next weekend is Jan 31-Feb 2 (Fri-Sun)
+  - If today is Monday Jan 27 (DOW=1): next Monday is +7 days (Feb 3), next weekend is Feb 7-Feb 9 (Fri-Sun)
+  - If today is Tuesday Jan 28 (DOW=2): next Monday is +6 days (Feb 3), next weekend is Feb 7-Feb 9 (Fri-Sun)
+  - If today is Friday Jan 31 (DOW=5): next Monday is +3 days (Feb 3), next weekend is Feb 7-Feb 9 (Fri-Sun)
 
 === DANCE STYLES ===
 Recognized: '2-step','argentine tango','bachata','balboa','cha cha','cha cha cha','country waltz','double shuffle','douceur','east coast swing','foxtrot','kizomba','lindy','lindy hop','line dance','merengue','milonga','night club','nite club','nite club 2','nite club two','quickstep','rhumba','rumba','salsa','samba','semba','swing','tango','tarraxa','tarraxinha','tarraxo','two step','urban kiz','waltz','wcs','west coast swing','zouk'
@@ -293,6 +323,31 @@ ORDER BY start_date, start_time
 LIMIT 30
 (Next Monday through next Sunday. DOW=2, so next Monday is 8-2=6 days forward, next Sunday is 14-2=12 days forward. Returns Jan 27-Feb 2 inclusive)
 
+🔹 NEXT MONTH EXAMPLE:
+"Show me salsa events next month" (today=Tuesday Jan 21, 2026):
+SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
+FROM events
+WHERE dance_style ILIKE '%salsa%'
+  AND EXTRACT(MONTH FROM start_date) = (CASE WHEN EXTRACT(MONTH FROM CURRENT_DATE) = 12 THEN 1 ELSE EXTRACT(MONTH FROM CURRENT_DATE) + 1 END)
+  AND EXTRACT(YEAR FROM start_date) = (CASE WHEN EXTRACT(MONTH FROM CURRENT_DATE) = 12 THEN EXTRACT(YEAR FROM CURRENT_DATE) + 1 ELSE EXTRACT(YEAR FROM CURRENT_DATE) END)
+  AND event_type ILIKE '%social dance%'
+ORDER BY start_date, start_time
+LIMIT 30
+(Current month is January (1), so next month is February (1+1=2), year stays 2026. Returns all events in February 2026)
+
+🔹 NEXT WEEKEND EXAMPLE:
+"Show me bachata events next weekend" (today=Tuesday Jan 21, DOW=2):
+SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
+FROM events
+WHERE dance_style ILIKE '%bachata%'
+  AND start_date >= CURRENT_DATE + CAST((CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 ELSE 8 - EXTRACT(DOW FROM CURRENT_DATE) END) AS INTEGER) + 4
+  AND start_date <= CURRENT_DATE + CAST((CASE WHEN EXTRACT(DOW FROM CURRENT_DATE) = 0 THEN 1 ELSE 8 - EXTRACT(DOW FROM CURRENT_DATE) END) AS INTEGER) + 6
+  AND EXTRACT(DOW FROM start_date) IN (5,6,0)
+  AND event_type ILIKE '%social dance%'
+ORDER BY start_date, start_time
+LIMIT 30
+(DOW=2, so next Monday is 8-2=6 days forward (Jan 27). Friday is Jan 27+4=Jan 31, Sunday is Jan 27+6=Feb 2. Returns Jan 31-Feb 2 inclusive)
+
 🔹 LAST DAY EXAMPLE:
 "Was there a rueda event sponsored by uvic last wednesday?" (today=Friday):
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
@@ -399,7 +454,9 @@ CLARIFICATION: To recommend venues for west coast swing, could you specify when 
 ✓ Time filter (start_time >= '18:00:00') ONLY for "tonight", "tomorrow night", or "[day] night" queries
 ✓ Day-specific queries (e.g., "on Monday") look FORWARD not backward (14-day window)
 ✓ "This week" = today through end of current week (Sunday)
-✓ "Next week" = next Monday through next Sunday
+✓ "Next week" = next Monday through next Sunday (7 full days)
+✓ "Next month" = all events in the calendar month after current month (handle December→January wrap)
+✓ "Next weekend" = Friday-Sunday of the week starting with next Monday (not this weekend)
 ✓ Multi-criteria event types use correct AND/OR logic
 ✓ Free event queries include price filter AND all relevant event types
 ✓ Subjective queries trigger CLARIFICATION mode instead of invalid SQL
