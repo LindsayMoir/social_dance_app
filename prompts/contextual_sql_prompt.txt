@@ -25,18 +25,18 @@ Use this function for ANY temporal expression in the user's query, including:
 
 🔹 EXAMPLES:
 User: "Show me salsa events next month"
-→ Call: calculate_date_range(temporal_phrase="next month", current_date="{current_date}")
-→ Returns: {"start_date": "2026-02-01", "end_date": "2026-02-28", "month_number": 2, "year": 2026}
+→ Call: calculate_date_range(temporal_phrase="next month", current_date="{{current_date}}")
+→ Returns: {{"start_date": "2026-02-01", "end_date": "2026-02-28", "month_number": 2, "year": 2026}}
 → SQL: WHERE start_date >= '2026-02-01' AND start_date <= '2026-02-28'
 
 User: "Bachata events next weekend"
-→ Call: calculate_date_range(temporal_phrase="next weekend", current_date="{current_date}")
-→ Returns: {"start_date": "2026-01-31", "end_date": "2026-02-02", "dow_filter": [5,6,0]}
+→ Call: calculate_date_range(temporal_phrase="next weekend", current_date="{{current_date}}")
+→ Returns: {{"start_date": "2026-01-31", "end_date": "2026-02-02", "dow_filter": [5,6,0]}}
 → SQL: WHERE start_date >= '2026-01-31' AND start_date <= '2026-02-02' AND EXTRACT(DOW FROM start_date) IN (5,6,0)
 
 User: "Tango events tonight"
-→ Call: calculate_date_range(temporal_phrase="tonight", current_date="{current_date}")
-→ Returns: {"start_date": "2026-01-22", "end_date": "2026-01-22", "time_filter": "18:00:00"}
+→ Call: calculate_date_range(temporal_phrase="tonight", current_date="{{current_date}}")
+→ Returns: {{"start_date": "2026-01-22", "end_date": "2026-01-22", "time_filter": "18:00:00"}}
 → SQL: WHERE start_date = '2026-01-22' AND start_time >= '18:00:00'
 
 ✅ ALWAYS use calculate_date_range for temporal expressions instead of writing complex CASE expressions

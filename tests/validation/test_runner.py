@@ -17,8 +17,11 @@ Version: 1.0.0
 import sys
 import os
 
-# Add src to path for imports
-sys.path.insert(0, 'src')
+# Add src to path for imports (calculate path relative to this script)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+repo_root = os.path.dirname(os.path.dirname(script_dir))
+sys.path.insert(0, os.path.join(repo_root, 'src'))
+sys.path.insert(0, script_dir)  # Also add tests/validation for local imports
 
 # Load environment variables from .env file
 from dotenv import load_dotenv

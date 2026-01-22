@@ -341,8 +341,9 @@ class ChatbotTestExecutor:
         if 'SELECT' not in sql_upper:
             return False
 
-        # Must query events table
-        if 'FROM EVENTS' not in sql_upper:
+        # Must query events table (handle multiline SQL with extra whitespace)
+        import re
+        if not re.search(r'FROM\s+EVENTS', sql_upper):
             return False
 
         # Try to parse with sqlalchemy (basic validation)
