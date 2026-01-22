@@ -30,6 +30,24 @@ DATE CALCULATION RULES:
 
 USER QUERY: "{user_query}"
 
+=== AVAILABLE TOOL ===
+
+You have access to a Python function called 'calculate_date_range' that reliably calculates date ranges for temporal expressions.
+
+🔹 WHEN TO USE calculate_date_range:
+Use this function for ANY temporal expression in the user's query, including:
+• "today", "tonight", "tomorrow", "tomorrow night"
+• "this week", "next week", "this weekend", "next weekend"
+• "this month", "next month"
+• Specific days: "Monday", "Tuesday", etc.
+
+🔹 CRITICAL - WEEKEND DEFINITION:
+For dance events, weekends include Friday night, Saturday, and Sunday (NOT just Saturday and Sunday).
+The tool returns Friday-Sunday for "this weekend" and "next weekend".
+
+🔹 HOW TO USE:
+When you see a temporal expression, call calculate_date_range FIRST to get the exact dates, then use those dates in your interpretation.
+
 TEMPLATE FOR RESPONSE:
 Generate a natural language interpretation following this pattern:
 
@@ -38,24 +56,37 @@ Generate a natural language interpretation following this pattern:
 EXAMPLES:
 
 Query: "Where can I dance tonight?" (when today is Monday, 2025-09-08)
+→ Call: calculate_date_range(temporal_phrase="tonight", current_date="2025-09-08")
+→ Returns: {{"start_date": "2025-09-08", "end_date": "2025-09-08", "time_filter": "18:00:00"}}
 Response: "My understanding is that you want to see all social dance events available in the Victoria, BC area tonight. That would be today, Monday, September 8, 2025 after 6:00 PM PDT."
 
 Query: "Where can I dance tomorrow night?" (when today is Monday, 2025-09-08)
+→ Call: calculate_date_range(temporal_phrase="tomorrow night", current_date="2025-09-08")
+→ Returns: {{"start_date": "2025-09-09", "end_date": "2025-09-09", "time_filter": "18:00:00"}}
 Response: "My understanding is that you want to see all social dance events available in the Victoria, BC area tomorrow night. That would be Tuesday, September 9, 2025 after 6:00 PM PDT."
 
 Query: "Salsa classes this weekend" (when today is Monday, 2025-09-08)
-Response: "My understanding is that you want to see salsa classes available in the Victoria, BC area this weekend. That would be Saturday September 14 and Sunday September 15, 2025."
+→ Call: calculate_date_range(temporal_phrase="this weekend", current_date="2025-09-08")
+→ Returns: {{"start_date": "2025-09-12", "end_date": "2025-09-14", "dow_filter": [5,6,0]}}
+Response: "My understanding is that you want to see salsa classes available in the Victoria, BC area this weekend. That would be Friday, September 12, Saturday, September 13, and Sunday, September 14, 2025."
+
+Query: "Where can I dance this weekend?" (when today is Wednesday, 2026-01-21)
+→ Call: calculate_date_range(temporal_phrase="this weekend", current_date="2026-01-21")
+→ Returns: {{"start_date": "2026-01-23", "end_date": "2026-01-25", "dow_filter": [5,6,0]}}
+Response: "My understanding is that you want to see all social dance events available in the Victoria, BC area this weekend. That would be Friday, January 23, Saturday, January 24, and Sunday, January 25, 2026."
 
 Query: "Live music events at Crystal Garden"
 Response: "My understanding is that you want to see live music events at Crystal Garden available in the Victoria, BC area."
 
 INSTRUCTIONS:
-1. Be specific about dates and times when mentioned
-2. Include venue/location names when specified
-3. Include organization/source names when specified  
-4. Default to "social dance events" if no event type is specified
-5. Be natural and conversational
-6. Always include the default city area
-7. For time references like "tonight", assume after 6:00 PM unless specified otherwise
+1. ALWAYS call calculate_date_range for temporal expressions BEFORE generating your interpretation
+2. Use the returned dates in your response - include Friday for weekends
+3. Be specific about dates and times when mentioned
+4. Include venue/location names when specified
+5. Include organization/source names when specified
+6. Default to "social dance events" if no event type is specified
+7. Be natural and conversational
+8. Always include the default city area
+9. For time references like "tonight", the tool returns time_filter="18:00:00" (after 6:00 PM)
 
 Provide only the interpretation text, no additional commentary.

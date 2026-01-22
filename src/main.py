@@ -113,13 +113,14 @@ def generate_interpretation(user_query: str, config: dict) -> str:
         default_city=default_city,
         user_query=user_query
     )
-    
-    # Query LLM for interpretation
-    interpretation = llm_handler.query_llm('', formatted_prompt)
-    
+
+    # Query LLM for interpretation WITH date calculator tool
+    from date_calculator import CALCULATE_DATE_RANGE_TOOL
+    interpretation = llm_handler.query_llm('', formatted_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+
     if not interpretation:
         return f"My understanding is that you want to search for dance events related to: {user_query}"
-    
+
     return interpretation.strip()
 
 # Initialize the FastAPI app

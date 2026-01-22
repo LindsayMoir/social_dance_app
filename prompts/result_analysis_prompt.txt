@@ -8,7 +8,7 @@ TEST RESULTS DATA:
 {test_results_summary}
 
 INSTRUCTIONS:
-1. Identify recurring issue patterns (e.g., "date filtering problems", "venue matching issues", "event type confusion")
+1. Identify recurring issue patterns (e.g., "date filtering problems", "venue matching issues", "event type confusion", "inappropriate clarifications")
 2. For each pattern, note:
    - How many tests are affected
    - Which categories are impacted
@@ -16,6 +16,14 @@ INSTRUCTIONS:
    - Severity (Critical/High/Medium/Low)
 3. Prioritize issues by impact (frequency × severity)
 4. Recommend specific fixes for top issues
+
+SPECIAL ATTENTION:
+- CLARIFICATION responses are part of the normal workflow (the system confirms understanding before executing SQL)
+- Evaluate CLARIFICATION text accuracy, especially:
+  * Weekend definitions: Should include "Friday, Saturday, and Sunday" (NOT just "Saturday and Sunday")
+  * Date calculations: Dates should match the temporal expression correctly
+- Flag patterns of incorrect CLARIFICATION text (e.g., missing Friday in weekend definitions) as HIGH priority issues
+- These indicate the interpretation generation may not be using the date calculator tool correctly
 
 OUTPUT FORMAT (valid JSON only):
 {{

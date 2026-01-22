@@ -243,12 +243,14 @@ templates:
       - "Show me bachata events this weekend"
       - "Show me tango events this weekend"
       - "What's happening this weekend?"
+      - "Where can I dance this weekend?"
       # NEXT WEEKEND (should return Fri-Sun of next calendar week)
       - "Show me salsa events next weekend"
       - "Show me bachata events next weekend"
       - "Show me tango events next weekend"
       - "What's happening next weekend?"
-    expected_count: 8
+      - "Where can I dance next weekend?"
+    expected_count: 10
 
   # Category 15: Natural language - EXPANDED (15 questions)
   - category: natural_language
@@ -273,7 +275,7 @@ templates:
       - "Are there any dance practice sessions this week?"
     expected_count: 13
 
-# Total: ~239 test questions (aligned with actual database event types)
+# Total: ~241 test questions (aligned with actual database event types)
 # Breakdown by category:
 # 1. single_dance_style: 48 (added "next month" timeframe)
 # 2. venue_specific: 12
@@ -288,7 +290,7 @@ templates:
 # 11. price_queries: 12 (added "next month" timeframe)
 # 12. time_filtering_today_tonight: 16 (tests "today" vs "tonight", "tomorrow" vs "tomorrow night", "[day] night")
 # 13. calendar_week_tests: 10 (tests "this week" and "next week" Mon-Sun calculation)
-# 14. weekend_calculation_tests: 8 (tests "this weekend" vs "next weekend" proper Fri-Sun)
+# 14. weekend_calculation_tests: 10 (tests "this weekend" vs "next weekend" proper Fri-Sun)
 # 15. natural_language: 13 (removed festival questions)
 #
 # Database event types covered:

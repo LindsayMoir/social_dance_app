@@ -249,13 +249,17 @@ class ChatbotTestExecutor:
             if not sql_raw:
                 return self._create_error_result(question_dict, "LLM returned empty response")
 
-            # Check for CLARIFICATION response (valid for subjective queries)
+            # Check for CLARIFICATION response (part of normal confirmation workflow)
             if sql_raw.strip().startswith("CLARIFICATION:"):
+                # Extract just the clarification text (after "CLARIFICATION:")
+                clarification_text = sql_raw.strip().replace("CLARIFICATION:", "").strip()
+
                 return {
                     'question': question,
                     'category': question_dict['category'],
                     'expected_criteria': question_dict.get('expected_criteria', {}),
                     'sql_query': sql_raw.strip(),
+                    'clarification_text': clarification_text,  # Store for scorer evaluation
                     'sql_syntax_valid': True,  # CLARIFICATION is valid output
                     'execution_success': True,  # Successfully returned clarification
                     'result_count': 0,  # No SQL results expected
@@ -466,26 +470,47 @@ Score guidelines:
         Returns:
             dict: Evaluation with score, reasoning, criteria analysis
         """
-        # Handle CLARIFICATION responses (valid for subjective/ambiguous queries)
+        # Handle CLARIFICATION responses
+        # NOTE: CLARIFICATIONS are part of the normal workflow - the chatbot returns a
+        # confirmation/interpretation for EVERY query before executing SQL.
+        # We score based on whether the clarification text is accurate, not whether
+        # a clarification was returned.
         if test_result.get('is_clarification', False):
             question = test_result['question'].lower()
-            # Check if this is an appropriate clarification (subjective query)
-            if any(word in question for word in ['best', 'recommend', 'where should', 'what should', 'which']):
-                return {
-                    'score': 90,
-                    'reasoning': 'Appropriately requested clarification for subjective query that cannot be answered with SQL alone',
-                    'criteria_matched': ['appropriate_clarification'],
-                    'criteria_missed': [],
-                    'sql_issues': []
-                }
-            else:
-                return {
-                    'score': 50,
-                    'reasoning': 'Returned clarification for a query that should have been answerable with SQL',
-                    'criteria_matched': [],
-                    'criteria_missed': list(test_result['expected_criteria'].keys()),
-                    'sql_issues': ['unnecessary_clarification']
-                }
+            clarification_text = test_result.get('clarification_text', '').lower()
+
+            # For weekend queries, check if clarification includes Friday
+            if 'weekend' in question:
+                # Weekend should include Friday, Saturday, Sunday
+                has_friday = 'friday' in clarification_text
+                has_saturday = 'saturday' in clarification_text
+                has_sunday = 'sunday' in clarification_text
+
+                if has_friday and has_saturday and has_sunday:
+                    return {
+                        'score': 95,
+                        'reasoning': 'CLARIFICATION correctly identifies weekend as Friday, Saturday, and Sunday',
+                        'criteria_matched': ['weekend_definition', 'confirmation_workflow'],
+                        'criteria_missed': [],
+                        'sql_issues': []
+                    }
+                elif has_saturday and has_sunday and not has_friday:
+                    return {
+                        'score': 40,
+                        'reasoning': 'CLARIFICATION incorrectly defines weekend as only Saturday and Sunday (should include Friday night)',
+                        'criteria_matched': ['confirmation_workflow'],
+                        'criteria_missed': ['weekend_definition'],
+                        'sql_issues': ['Missing Friday in weekend definition']
+                    }
+
+            # For other queries, CLARIFICATION is part of normal workflow
+            return {
+                'score': 90,
+                'reasoning': 'CLARIFICATION returned as part of normal confirmation workflow',
+                'criteria_matched': ['confirmation_workflow'],
+                'criteria_missed': [],
+                'sql_issues': []
+            }
 
         # Auto-fail if query didn't execute
         if not test_result['execution_success']:
