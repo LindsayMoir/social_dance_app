@@ -27,20 +27,27 @@ Use this function for ANY temporal expression in the user's query, including:
 User: "Show me salsa events next month"
 → Call: calculate_date_range(temporal_phrase="next month", current_date="{{current_date}}")
 → Returns: {{"start_date": "2026-02-01", "end_date": "2026-02-28", "month_number": 2, "year": 2026}}
-→ SQL: WHERE start_date >= '2026-02-01' AND start_date <= '2026-02-28'
+→ SQL: WHERE dance_style ILIKE '%salsa%' AND start_date >= '2026-02-01' AND start_date <= '2026-02-28'
+
+User: "Where can I dance this weekend?"
+→ Call: calculate_date_range(temporal_phrase="this weekend", current_date="{{current_date}}")
+→ Returns: {{"start_date": "2026-01-23", "end_date": "2026-01-25", "dow_filter": [5,6,0]}}
+→ SQL: WHERE start_date >= '2026-01-23' AND start_date <= '2026-01-25' AND EXTRACT(DOW FROM start_date) IN (5,6,0)
+→ Note: For dance events, weekends include Friday night through Sunday (not just Sat-Sun)
 
 User: "Bachata events next weekend"
 → Call: calculate_date_range(temporal_phrase="next weekend", current_date="{{current_date}}")
 → Returns: {{"start_date": "2026-01-31", "end_date": "2026-02-02", "dow_filter": [5,6,0]}}
-→ SQL: WHERE start_date >= '2026-01-31' AND start_date <= '2026-02-02' AND EXTRACT(DOW FROM start_date) IN (5,6,0)
+→ SQL: WHERE dance_style ILIKE '%bachata%' AND start_date >= '2026-01-31' AND start_date <= '2026-02-02' AND EXTRACT(DOW FROM start_date) IN (5,6,0)
 
 User: "Tango events tonight"
 → Call: calculate_date_range(temporal_phrase="tonight", current_date="{{current_date}}")
 → Returns: {{"start_date": "2026-01-22", "end_date": "2026-01-22", "time_filter": "18:00:00"}}
-→ SQL: WHERE start_date = '2026-01-22' AND start_time >= '18:00:00'
+→ SQL: WHERE dance_style ILIKE '%tango%' AND start_date = '2026-01-22' AND start_time >= '18:00:00'
 
-✅ ALWAYS use calculate_date_range for temporal expressions instead of writing SQL date logic
-✅ The tool handles all date complexity (month wrapping, week boundaries, etc.)
+✅ CRITICAL: ALWAYS call calculate_date_range FIRST when you see a temporal expression, even if other query details are vague
+✅ The tool returns Friday-Sunday for weekends (dance events include Friday night)
+✅ After getting dates from the tool, generate SQL with or without additional filters as appropriate
 
 === DATABASE SCHEMA ===
 events (
@@ -203,15 +210,17 @@ Common venues and aliases:
 Format: "CLARIFICATION: <1-2 sentences>. Missing: <items>. Examples: '<rephrase 1>'; '<rephrase 2>'."
 
 Clarification triggers:
-• Missing timeframe for period queries
+• Missing timeframe for period queries (NO temporal expression like "tonight", "this weekend", "next month")
 • Unknown/conflicting style/type
 • Unsafe input
 • Context contradictions
 • SUBJECTIVE QUERIES that cannot be answered with SQL:
-  - "best place for [dance_style]" → Ask for timeframe: "To recommend venues for [dance_style], could you specify when? For example: 'west coast swing events tonight' or 'west coast swing events this weekend'"
-  - "where should I go" → Ask for dance style and timeframe
+  - "best place for [dance_style]" WITHOUT timeframe → Ask for timeframe: "To recommend venues for [dance_style], could you specify when? For example: 'west coast swing events tonight' or 'west coast swing events this weekend'"
+  - "where should I go" WITHOUT any temporal expression → Ask for timeframe
   - "most popular venue" / "which venue is better" → Cannot rank without criteria
-  - "recommend" / "suggest" → Needs more specific criteria (dance style, date, event type)
+  - "recommend" / "suggest" WITHOUT specific criteria → Needs dance style, date, or event type
+
+IMPORTANT: If query contains a temporal expression (tonight, tomorrow, this weekend, next month, etc.), it is NOT subjective - call calculate_date_range and generate SQL with all available filters
 
 === EXAMPLES ===
 
