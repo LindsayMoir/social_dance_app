@@ -30,8 +30,8 @@ templates:
     parameters:
       venue:
         - "The Loft"
-        - "Copper Owl"
-        - "Victoria Ballroom"
+        - "Dance Victoria"
+        - "Method Studios"
         - "Edelweiss Club"
       timeframe:
         - "tonight"
@@ -73,7 +73,7 @@ templates:
         - "social dances"
       venue:
         - "The Loft"
-        - "Victoria Ballroom"
+        - "Method Studios"
     expected_count: 12  # 3 styles × 2 event types × 2 venues
 
   # Category 5: Live music event queries (12 questions)
