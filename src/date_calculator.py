@@ -6,13 +6,27 @@ Provides reliable date calculations for temporal queries like 'next month',
 ensure accurate date range calculations.
 
 Author: Claude Code
-Version: 1.0.0
+Version: 1.1.0
 """
 
 from datetime import datetime, timedelta
 import logging
+import os
+import yaml
 
 logger = logging.getLogger(__name__)
+
+# Load config for temporal expressions
+_config = None
+
+def _load_config():
+    """Load configuration from config.yaml."""
+    global _config
+    if _config is None:
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+        with open(config_path, 'r') as f:
+            _config = yaml.safe_load(f)
+    return _config
 
 
 def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
@@ -249,14 +263,12 @@ def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
             "year": year
         }
 
-    # Day-specific queries (e.g., "Monday", "Tuesday", "Friday")
-    # Map day names to weekday numbers (0=Monday, 6=Sunday)
-    day_names = {
-        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
-        "friday": 4, "saturday": 5, "sunday": 6
-    }
+    # Load config for day names and time periods
+    config = _load_config()
+    day_names = config.get('temporal_expressions', {}).get('day_names', {})
+    time_periods = config.get('temporal_expressions', {}).get('time_periods', {})
 
-    # Check for specific day names
+    # Day-specific queries (e.g., "Monday", "Tuesday", "Friday")
     for day_name, target_dow in day_names.items():
         if temporal_phrase == day_name:
             current_dow = current.weekday()
@@ -281,37 +293,90 @@ def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
                 "dow_filter": [target_dow]
             }
 
-    # Day-specific night queries (e.g., "Monday night", "Friday night", "Saturday night")
+    # Day + time period queries (e.g., "Monday morning", "Friday night", "Saturday evening")
     for day_name, target_dow in day_names.items():
-        if temporal_phrase == f"{day_name} night":
-            current_dow = current.weekday()
+        for period_name, period_config in time_periods.items():
+            if temporal_phrase == f"{day_name} {period_name}":
+                current_dow = current.weekday()
 
-            # If today is the target day, return today with time filter
-            if current_dow == target_dow:
-                return {
-                    "start_date": current.strftime("%Y-%m-%d"),
-                    "end_date": current.strftime("%Y-%m-%d"),
-                    "time_filter": "18:00:00",
+                # If today is the target day, return today with time filter
+                if current_dow == target_dow:
+                    result = {
+                        "start_date": current.strftime("%Y-%m-%d"),
+                        "end_date": current.strftime("%Y-%m-%d"),
+                        "dow_filter": [target_dow]
+                    }
+
+                    # Add time filters
+                    if period_config.get('start_time'):
+                        result['time_filter'] = period_config['start_time']
+                    if period_config.get('end_time'):
+                        result['end_time_filter'] = period_config['end_time']
+
+                    return result
+
+                # Otherwise, find the next occurrence of this day
+                days_ahead = (target_dow - current_dow) % 7
+                if days_ahead == 0:
+                    days_ahead = 7  # Next week if today is the target day
+
+                target_date = current + timedelta(days=days_ahead)
+                result = {
+                    "start_date": target_date.strftime("%Y-%m-%d"),
+                    "end_date": target_date.strftime("%Y-%m-%d"),
                     "dow_filter": [target_dow]
                 }
 
-            # Otherwise, find the next occurrence of this day
-            days_ahead = (target_dow - current_dow) % 7
-            if days_ahead == 0:
-                days_ahead = 7  # Next week if today is the target day
+                # Add time filters
+                if period_config.get('start_time'):
+                    result['time_filter'] = period_config['start_time']
+                if period_config.get('end_time'):
+                    result['end_time_filter'] = period_config['end_time']
 
-            target_date = current + timedelta(days=days_ahead)
-            return {
-                "start_date": target_date.strftime("%Y-%m-%d"),
-                "end_date": target_date.strftime("%Y-%m-%d"),
-                "time_filter": "18:00:00",
-                "dow_filter": [target_dow]
-            }
+                return result
 
     # Unsupported temporal phrase
     else:
         logger.warning(f"Unsupported temporal phrase: {temporal_phrase}")
         raise ValueError(f"Unsupported temporal phrase: {temporal_phrase}")
+
+
+def _generate_temporal_phrase_enum():
+    """Generate the enum list of supported temporal phrases based on config."""
+    # Base temporal phrases
+    base_phrases = [
+        "today",
+        "tonight",
+        "tomorrow",
+        "tomorrow night",
+        "yesterday",
+        "this week",
+        "next week",
+        "this weekend",
+        "coming weekend",
+        "next weekend",
+        "this month",
+        "next month",
+        "last month",
+        "this year",
+        "next year",
+        "last year"
+    ]
+
+    # Load config to get day names and time periods
+    config = _load_config()
+    day_names = list(config.get('temporal_expressions', {}).get('day_names', {}).keys())
+    time_periods = list(config.get('temporal_expressions', {}).get('time_periods', {}).keys())
+
+    # Add day-specific phrases
+    all_phrases = base_phrases + day_names
+
+    # Add day + time period combinations
+    for day in day_names:
+        for period in time_periods:
+            all_phrases.append(f"{day} {period}")
+
+    return sorted(all_phrases)
 
 
 # Function calling schema for LLM
@@ -328,38 +393,7 @@ CALCULATE_DATE_RANGE_TOOL = {
                 "temporal_phrase": {
                     "type": "string",
                     "description": "The temporal expression from the user query",
-                    "enum": [
-                        "today",
-                        "tonight",
-                        "tomorrow",
-                        "tomorrow night",
-                        "yesterday",
-                        "this week",
-                        "next week",
-                        "this weekend",
-                        "coming weekend",
-                        "next weekend",
-                        "this month",
-                        "next month",
-                        "last month",
-                        "this year",
-                        "next year",
-                        "last year",
-                        "monday",
-                        "tuesday",
-                        "wednesday",
-                        "thursday",
-                        "friday",
-                        "saturday",
-                        "sunday",
-                        "monday night",
-                        "tuesday night",
-                        "wednesday night",
-                        "thursday night",
-                        "friday night",
-                        "saturday night",
-                        "sunday night"
-                    ]
+                    "enum": _generate_temporal_phrase_enum()
                 },
                 "current_date": {
                     "type": "string",

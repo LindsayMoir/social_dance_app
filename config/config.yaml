@@ -38,6 +38,30 @@ crawling:
 date_range:
   days_ahead: 365
   months: 3
+temporal_expressions:
+  # Time period definitions for queries like "Monday morning", "Friday evening", etc.
+  time_periods:
+    morning:
+      start_time: "06:00:00"
+      end_time: "12:00:00"
+    afternoon:
+      start_time: "12:00:00"
+      end_time: "17:00:00"
+    evening:
+      start_time: "17:00:00"
+      end_time: "21:00:00"
+    night:
+      start_time: "18:00:00"
+      end_time: null  # No end time, just start after 6pm
+  # Day name to weekday number mapping (0=Monday, 6=Sunday)
+  day_names:
+    monday: 0
+    tuesday: 1
+    wednesday: 2
+    thursday: 3
+    friday: 4
+    saturday: 5
+    sunday: 6
 debug:
   address_fix: debug/address_fix.csv
   after_url_updated: debug/after_url_updated.csv

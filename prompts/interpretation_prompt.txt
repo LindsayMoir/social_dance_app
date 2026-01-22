@@ -40,7 +40,7 @@ Use this function for ANY temporal expression in the user's query, including:
 • "this week", "next week", "this weekend", "next weekend"
 • "this month", "next month"
 • Specific days: "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
-• Specific day nights: "monday night", "tuesday night", "friday night", "saturday night", etc.
+• Day + time period: "monday morning", "friday evening", "saturday night", "tuesday afternoon", etc.
 
 🔹 CRITICAL - WEEKEND DEFINITION:
 For dance events, weekends include Friday night, Saturday, and Sunday (NOT just Saturday and Sunday).

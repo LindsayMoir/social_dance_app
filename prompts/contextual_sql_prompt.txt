@@ -11,7 +11,7 @@ Use this function for ANY temporal expression in the user's query, including:
 • "this month", "next month", "last month"
 • "this year", "next year", "last year"
 • Specific days: "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
-• Specific day nights: "monday night", "tuesday night", "friday night", "saturday night", etc.
+• Day + time period: "monday morning", "friday evening", "saturday night", "tuesday afternoon", etc.
 
 🔹 HOW IT WORKS:
 1. Extract the temporal phrase from the user's query (e.g., "next month", "this weekend")
