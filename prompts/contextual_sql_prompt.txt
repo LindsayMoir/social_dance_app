@@ -91,7 +91,11 @@ DAY OF WEEK: {current_day_of_week} (Monday=1, Tuesday=2, Wednesday=3, Thursday=4
 
 🔹 DATE FILTERING:
 • NO timeframe specified → add: start_date >= (CURRENT_DATE - INTERVAL '7 days')
-• Timeframe specified (today/tomorrow/this week/next week/weekend/dates) → use ONLY that window, NO default floor
+• Timeframe specified (today/tomorrow/this week/next week/weekend/dates) → CALL calculate_date_range FIRST, then use ONLY the returned dates
+
+CRITICAL: When you have start_date and end_date from the tool, use them DIRECTLY:
+  ✓ CORRECT: start_date >= '2026-01-26' AND start_date <= '2026-02-01'
+  ✗ WRONG: start_date >= '2026-01-26' + INTERVAL '7 days'  (NEVER add INTERVAL to string dates!)
 
 🔹 TIME FILTERING:
 • "tonight" → add: start_time >= '18:00:00' (6 PM or later)
@@ -226,14 +230,16 @@ IMPORTANT: If query contains a temporal expression (tonight, tomorrow, this week
 
 === EXAMPLES ===
 
-🔹 WEEKEND EXAMPLE:
+🔹 WEEKEND EXAMPLE (use the tool!):
 "Show me west coast swing events this weekend" (today=Thursday):
+→ Call calculate_date_range(temporal_phrase="this weekend", current_date="{current_date}")
+→ Receives: {{"start_date": "2026-01-23", "end_date": "2026-01-25", "dow_filter": [5,6,0]}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE (dance_style ILIKE '%west coast swing%' OR dance_style ILIKE '%wcs%')
-  AND start_date > CURRENT_DATE
+  AND start_date >= '2026-01-23'
+  AND start_date <= '2026-01-25'
   AND EXTRACT(DOW FROM start_date) IN (5,6,0)
-  AND start_date < (CURRENT_DATE + INTERVAL '7 days')
   AND event_type ILIKE '%social dance%'
 ORDER BY start_date, start_time
 LIMIT 30
@@ -326,8 +332,10 @@ WHERE dance_style ILIKE '%rueda%'
 ORDER BY start_date, start_time
 LIMIT 30
 
-🔹 VENUE EXAMPLE 1:
-"Who is playing at The Loft tomorrow night?" (note: venue query triggers both social dance AND live music, "night" adds time filter):
+🔹 VENUE EXAMPLE 1 (use the tool!):
+"Who is playing at The Loft tomorrow night?" (note: venue query triggers both social dance AND live music):
+→ Call calculate_date_range(temporal_phrase="tomorrow night", current_date="{current_date}")
+→ Receives: {{"start_date": "2026-01-23", "end_date": "2026-01-23", "time_filter": "18:00:00"}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE (location ILIKE '%the loft%'
@@ -335,14 +343,16 @@ WHERE (location ILIKE '%the loft%'
        OR source ILIKE '%the loft%'
        OR source ILIKE '%loft%'
        OR url ILIKE '%loft%')
-  AND start_date = CURRENT_DATE + INTERVAL '1 day'
+  AND start_date = '2026-01-23'
   AND start_time >= '18:00:00'
   AND (event_type ILIKE '%social dance%' OR event_type ILIKE '%live music%')
 ORDER BY start_date, start_time
 LIMIT 30
 
-🔹 VENUE EXAMPLE 2:
-"Are there any events at the Edelweiss Club this weekend?" (today=Wednesday, note: venue query always includes both social dance AND live music):
+🔹 VENUE EXAMPLE 2 (use the tool!):
+"Are there any events at the Edelweiss Club this weekend?" (today=Wednesday):
+→ Call calculate_date_range(temporal_phrase="this weekend", current_date="{current_date}")
+→ Receives: {{"start_date": "2026-01-23", "end_date": "2026-01-25", "dow_filter": [5,6,0]}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE (location ILIKE '%edelweiss club%'
@@ -350,24 +360,25 @@ WHERE (location ILIKE '%edelweiss club%'
        OR source ILIKE '%edelweiss club%'
        OR source ILIKE '%edelweiss%'
        OR url ILIKE '%edelweiss%')
-  AND start_date > CURRENT_DATE
+  AND start_date >= '2026-01-23'
+  AND start_date <= '2026-01-25'
   AND EXTRACT(DOW FROM start_date) IN (5,6,0)
-  AND start_date < (CURRENT_DATE + INTERVAL '7 days')
   AND (event_type ILIKE '%social dance%' OR event_type ILIKE '%live music%')
 ORDER BY start_date, start_time
 LIMIT 30
 
-🔹 DAY-SPECIFIC EXAMPLE (forward-looking):
+🔹 DAY-SPECIFIC EXAMPLE (use the tool!):
 "Dance events on Monday" (today=Tuesday):
+→ Call calculate_date_range(temporal_phrase="monday", current_date="{current_date}")
+→ Receives: {{"start_date": "2026-01-26", "end_date": "2026-01-26", "dow_filter": [1]}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
-WHERE start_date >= CURRENT_DATE
-  AND start_date <= CURRENT_DATE + INTERVAL '14 days'
+WHERE start_date = '2026-01-26'
   AND EXTRACT(DOW FROM start_date) = 1
   AND (event_type ILIKE '%social dance%' OR event_type ILIKE '%live music%')
 ORDER BY start_date, start_time
 LIMIT 30
-(Looks forward 14 days for upcoming Mondays - covers next 2 occurrences)
+(Use the exact date from the tool - returns next occurrence of that day)
 
 🔹 FREE EVENTS EXAMPLE:
 "Free bachata events this week" (today=Tuesday):
@@ -394,18 +405,20 @@ ORDER BY start_date, start_time
 LIMIT 30
 (OR logic - events that are EITHER classes OR social dances)
 
-🔹 MULTI-CRITERIA EVENT TYPE EXAMPLE 2 (combination check):
+🔹 MULTI-CRITERIA EVENT TYPE EXAMPLE 2 (use the tool!):
 "Dance events with live music this weekend":
+→ Call calculate_date_range(temporal_phrase="this weekend", current_date="{current_date}")
+→ Receives: {{"start_date": "2026-01-23", "end_date": "2026-01-25", "dow_filter": [5,6,0]}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
-WHERE start_date > CURRENT_DATE
+WHERE start_date >= '2026-01-23'
+  AND start_date <= '2026-01-25'
   AND EXTRACT(DOW FROM start_date) IN (5,6,0)
-  AND start_date < (CURRENT_DATE + INTERVAL '7 days')
   AND (event_type ILIKE '%live music%' OR event_type ILIKE '%social dance%')
   AND dance_style IS NOT NULL
 ORDER BY start_date, start_time
 LIMIT 30
-(Filter for dance-specific live music events - excludes non-dance concerts)
+(Use exact dates from tool - weekend includes Friday night!)
 
 🔹 SUBJECTIVE QUERY CLARIFICATION EXAMPLE:
 "What's the best place for west coast swing?":
