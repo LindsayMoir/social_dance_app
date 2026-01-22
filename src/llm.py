@@ -448,6 +448,221 @@ class LLMHandler:
             logging.error("query_llm(): Both LLM providers failed to provide a response.")
         return response
 
+    def query_llm_with_tools(self, url, prompt, tools=None, max_iterations=3):
+        """
+        Query the LLM with function/tool calling support.
+
+        This method allows the LLM to call Python functions (tools) to perform
+        calculations or lookups before generating the final response. Supports
+        iterative tool calling where the LLM can make multiple function calls.
+
+        Args:
+            url (str): The URL being processed (for logging)
+            prompt (str): The prompt to send to the LLM
+            tools (list): List of tool definitions (function schemas)
+            max_iterations (int): Maximum number of tool call iterations to prevent loops
+
+        Returns:
+            dict: Response with keys:
+                - content (str): The final LLM response
+                - tool_calls (list): List of tool calls made (if any)
+                - iterations (int): Number of iterations taken
+        """
+        if not self.config['llm']['spend_money']:
+            logging.info("query_llm_with_tools(): Spending money is disabled. Skipping the LLM query.")
+            return {"content": None, "tool_calls": [], "iterations": 0}
+
+        if not tools:
+            # No tools provided, fall back to regular query
+            response = self.query_llm(url, prompt)
+            return {"content": response, "tool_calls": [], "iterations": 0}
+
+        # Import date calculator for tool execution
+        from date_calculator import calculate_date_range
+
+        # Map function names to actual Python functions
+        available_functions = {
+            "calculate_date_range": calculate_date_range
+        }
+
+        # Determine provider (same logic as query_llm)
+        lower = url.lower()
+        if 'bard' in lower:
+            provider = 'openai'
+        else:
+            provider = self.config['llm']['provider']
+
+        # Initialize conversation messages
+        messages = [{"role": "user", "content": prompt}]
+        all_tool_calls = []
+
+        for iteration in range(max_iterations):
+            logging.info(f"query_llm_with_tools(): Iteration {iteration + 1}/{max_iterations}")
+
+            # Query LLM with tools
+            if provider == 'mistral':
+                response = self._query_mistral_with_tools(messages, tools)
+            elif provider == 'openai':
+                response = self._query_openai_with_tools(messages, tools)
+            else:
+                logging.error("query_llm_with_tools(): Invalid LLM provider")
+                return {"content": None, "tool_calls": [], "iterations": iteration}
+
+            if not response:
+                logging.error(f"query_llm_with_tools(): No response from {provider}")
+                return {"content": None, "tool_calls": all_tool_calls, "iterations": iteration}
+
+            # Check if LLM wants to call a tool
+            if response.get("tool_calls"):
+                logging.info(f"query_llm_with_tools(): LLM requested {len(response['tool_calls'])} tool call(s)")
+
+                # Add assistant message with tool calls to conversation
+                messages.append({
+                    "role": "assistant",
+                    "content": response.get("content"),
+                    "tool_calls": response["tool_calls"]
+                })
+
+                # Execute each tool call
+                for tool_call in response["tool_calls"]:
+                    function_name = tool_call["function"]["name"]
+                    function_args = json.loads(tool_call["function"]["arguments"])
+
+                    logging.info(f"query_llm_with_tools(): Calling {function_name} with args: {function_args}")
+
+                    # Execute the function
+                    if function_name in available_functions:
+                        try:
+                            function_result = available_functions[function_name](**function_args)
+                            logging.info(f"query_llm_with_tools(): {function_name} returned: {function_result}")
+
+                            # Add tool result to conversation
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.get("id", ""),
+                                "name": function_name,
+                                "content": json.dumps(function_result)
+                            })
+
+                            # Track tool call
+                            all_tool_calls.append({
+                                "function": function_name,
+                                "arguments": function_args,
+                                "result": function_result
+                            })
+
+                        except Exception as e:
+                            error_msg = f"Error executing {function_name}: {str(e)}"
+                            logging.error(f"query_llm_with_tools(): {error_msg}")
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.get("id", ""),
+                                "name": function_name,
+                                "content": json.dumps({"error": error_msg})
+                            })
+                    else:
+                        logging.error(f"query_llm_with_tools(): Unknown function: {function_name}")
+
+                # Continue to next iteration to get final response from LLM
+                continue
+            else:
+                # No tool calls, we have the final response
+                logging.info(f"query_llm_with_tools(): Final response received after {iteration + 1} iteration(s)")
+                return {
+                    "content": response.get("content"),
+                    "tool_calls": all_tool_calls,
+                    "iterations": iteration + 1
+                }
+
+        # Max iterations reached
+        logging.warning(f"query_llm_with_tools(): Max iterations ({max_iterations}) reached")
+        return {
+            "content": messages[-1].get("content") if messages else None,
+            "tool_calls": all_tool_calls,
+            "iterations": max_iterations
+        }
+
+    def _query_mistral_with_tools(self, messages, tools):
+        """Query Mistral with tool calling support."""
+        try:
+            model = self.config['llm']['mistral_model']
+            logging.info(f"_query_mistral_with_tools(): Querying Mistral model {model}")
+
+            response = self.mistral_client.chat.complete(
+                model=model,
+                messages=messages,
+                tools=tools
+            )
+
+            if not response or not response.choices:
+                return None
+
+            choice = response.choices[0]
+            message = choice.message
+
+            # Check for tool calls
+            if hasattr(message, 'tool_calls') and message.tool_calls:
+                return {
+                    "content": message.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        }
+                        for tc in message.tool_calls
+                    ]
+                }
+            else:
+                # No tool calls, return content
+                return {"content": message.content}
+
+        except Exception as e:
+            logging.error(f"_query_mistral_with_tools(): Error: {e}")
+            return None
+
+    def _query_openai_with_tools(self, messages, tools):
+        """Query OpenAI with tool calling support."""
+        try:
+            model = self.config['llm']['openai_model']
+            logging.info(f"_query_openai_with_tools(): Querying OpenAI model {model}")
+
+            response = self.openai_client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=tools
+            )
+
+            if not response or not response.choices:
+                return None
+
+            choice = response.choices[0]
+            message = choice.message
+
+            # Check for tool calls
+            if message.tool_calls:
+                return {
+                    "content": message.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        }
+                        for tc in message.tool_calls
+                    ]
+                }
+            else:
+                # No tool calls, return content
+                return {"content": message.content}
+
+        except Exception as e:
+            logging.error(f"_query_openai_with_tools(): Error: {e}")
+            return None
 
     def query_openai(self, prompt, model, image_url=None, schema_type=None):
         """
