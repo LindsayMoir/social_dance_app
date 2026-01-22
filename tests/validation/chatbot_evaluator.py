@@ -202,7 +202,54 @@ class ChatbotTestExecutor:
         with open(prompt_path, 'r') as f:
             self.sql_prompt_template = f.read()
 
-        logging.info("ChatbotTestExecutor initialized with production prompt")
+        # Load interpretation prompt (for confirmation text generation)
+        interpretation_prompt_path = 'prompts/interpretation_prompt.txt'
+        if not os.path.exists(interpretation_prompt_path):
+            raise FileNotFoundError(f"Interpretation prompt file not found: {interpretation_prompt_path}")
+
+        with open(interpretation_prompt_path, 'r') as f:
+            self.interpretation_prompt_template = f.read()
+
+        logging.info("ChatbotTestExecutor initialized with production prompts")
+
+    def generate_interpretation(self, user_query: str, current_date: str, current_day_of_week: str, current_time: str) -> str:
+        """
+        Generate a natural language interpretation of the user's search intent.
+        This mirrors the generate_interpretation() function in main.py.
+
+        Args:
+            user_query: The user's input query
+            current_date: Current date in YYYY-MM-DD format
+            current_day_of_week: Current day name (e.g., "Monday")
+            current_time: Current time with timezone (e.g., "14:30 PST")
+
+        Returns:
+            str: Natural language interpretation of the search intent
+        """
+        default_city = self.config.get('location', {}).get('epicentre', 'Victoria, British Columbia, Canada')
+
+        # Format the interpretation prompt
+        formatted_prompt = self.interpretation_prompt_template.format(
+            current_date=current_date,
+            current_day_of_week=current_day_of_week,
+            current_time=current_time,
+            default_city=default_city,
+            user_query=user_query
+        )
+
+        try:
+            # Query LLM for interpretation WITH date calculator tool
+            from date_calculator import CALCULATE_DATE_RANGE_TOOL
+            interpretation = self.llm_handler.query_llm('', formatted_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+
+            if not interpretation:
+                return f"My understanding is that you want to search for dance events related to: {user_query}"
+
+            return interpretation.strip()
+
+        except Exception as e:
+            logging.error(f"Error generating interpretation: {e}")
+            return f"My understanding is that you want to search for: {user_query}"
 
     def execute_test_question(self, question_dict: dict) -> dict:
         """
@@ -227,6 +274,16 @@ class ChatbotTestExecutor:
         now = datetime.now(pacific_tz)
         current_date = now.strftime("%Y-%m-%d")
         current_day_of_week = now.strftime("%A")
+        current_time = now.strftime("%H:%M %Z")
+
+        # STEP 1: Generate interpretation (confirmation text)
+        # This is what the user sees before SQL execution
+        interpretation = self.generate_interpretation(
+            user_query=question,
+            current_date=current_date,
+            current_day_of_week=current_day_of_week,
+            current_time=current_time
+        )
 
         # Build prompt (simplified - no conversation history for batch tests)
         prompt = self.sql_prompt_template.format(
@@ -249,7 +306,9 @@ class ChatbotTestExecutor:
             if not sql_raw:
                 return self._create_error_result(question_dict, "LLM returned empty response")
 
-            # Check for CLARIFICATION response (part of normal confirmation workflow)
+            # Check for CLARIFICATION response from SQL generation
+            # Note: This is different from the interpretation text - this is when the LLM
+            # asks for more information rather than generating SQL
             if sql_raw.strip().startswith("CLARIFICATION:"):
                 # Extract just the clarification text (after "CLARIFICATION:")
                 clarification_text = sql_raw.strip().replace("CLARIFICATION:", "").strip()
@@ -258,8 +317,9 @@ class ChatbotTestExecutor:
                     'question': question,
                     'category': question_dict['category'],
                     'expected_criteria': question_dict.get('expected_criteria', {}),
+                    'interpretation': interpretation,  # Confirmation text (tested separately)
                     'sql_query': sql_raw.strip(),
-                    'clarification_text': clarification_text,  # Store for scorer evaluation
+                    'clarification_text': clarification_text,  # LLM asking for more info
                     'sql_syntax_valid': True,  # CLARIFICATION is valid output
                     'execution_success': True,  # Successfully returned clarification
                     'result_count': 0,  # No SQL results expected
@@ -308,6 +368,7 @@ class ChatbotTestExecutor:
                 'question': question,
                 'category': question_dict['category'],
                 'expected_criteria': question_dict.get('expected_criteria', {}),
+                'interpretation': interpretation,  # Confirmation text shown to user
                 'sql_query': sql_query,
                 'sql_syntax_valid': syntax_valid,
                 'execution_success': execution_success,
@@ -460,16 +521,91 @@ Score guidelines:
 - 0-29: Query failed or completely wrong
 """
 
+    def _evaluate_interpretation(self, test_result: dict) -> dict:
+        """
+        Evaluate the interpretation text (confirmation message) for accuracy.
+
+        Checks:
+        - Weekend queries should mention Friday, Saturday, and Sunday
+        - Date mentions should be accurate
+        - Key details (dance style, venue, event type) should be included
+
+        Args:
+            test_result (dict): Test result with 'interpretation' field
+
+        Returns:
+            dict: Evaluation with score, issues found
+        """
+        interpretation = test_result.get('interpretation', '').lower()
+        question = test_result['question'].lower()
+        issues = []
+        score = 100  # Start with perfect score
+
+        # Check weekend definition (CRITICAL issue from user feedback)
+        if 'weekend' in question:
+            has_friday = 'friday' in interpretation
+            has_saturday = 'saturday' in interpretation
+            has_sunday = 'sunday' in interpretation
+
+            if not has_friday:
+                issues.append('Missing Friday in weekend definition')
+                score -= 50  # Major issue
+            if not has_saturday or not has_sunday:
+                issues.append('Missing Saturday/Sunday in weekend definition')
+                score -= 30
+
+            if has_friday and has_saturday and has_sunday:
+                return {
+                    'score': 100,
+                    'issues': [],
+                    'passed': True
+                }
+
+        # Check that dance style is mentioned if in question
+        dance_styles = ['salsa', 'bachata', 'tango', 'swing', 'kizomba', 'zouk', 'lindy hop', 'balboa']
+        for style in dance_styles:
+            if style in question and style not in interpretation:
+                issues.append(f'Missing dance style: {style}')
+                score -= 10
+
+        # Check that venue is mentioned if in question
+        venues = ['loft', 'dance victoria', 'method studios', 'edelweiss']
+        for venue in venues:
+            if venue in question and venue not in interpretation:
+                issues.append(f'Missing venue: {venue}')
+                score -= 10
+
+        # Check that event type is mentioned if in question
+        event_types = ['class', 'workshop', 'social', 'live music', 'rehearsal']
+        for event_type in event_types:
+            if event_type in question and event_type not in interpretation:
+                issues.append(f'Missing event type: {event_type}')
+                score -= 10
+
+        return {
+            'score': max(0, score),  # Don't go below 0
+            'issues': issues,
+            'passed': score >= 70
+        }
+
     def score_result(self, test_result: dict) -> dict:
         """
         Score a single test result using LLM evaluation.
+
+        Evaluates TWO aspects:
+        1. Interpretation text accuracy (confirmation message shown to user)
+        2. SQL query correctness (executed after user confirms)
 
         Args:
             test_result (dict): Test result from ChatbotTestExecutor
 
         Returns:
-            dict: Evaluation with score, reasoning, criteria analysis
+            dict: Evaluation with score, reasoning, criteria analysis, interpretation_evaluation
         """
+        # STEP 1: Evaluate interpretation text (confirmation message)
+        interpretation_evaluation = self._evaluate_interpretation(test_result)
+
+        # STEP 2: Evaluate SQL/CLARIFICATION
         # Handle CLARIFICATION responses
         # NOTE: CLARIFICATIONS are part of the normal workflow - the chatbot returns a
         # confirmation/interpretation for EVERY query before executing SQL.
@@ -492,7 +628,8 @@ Score guidelines:
                         'reasoning': 'CLARIFICATION correctly identifies weekend as Friday, Saturday, and Sunday',
                         'criteria_matched': ['weekend_definition', 'confirmation_workflow'],
                         'criteria_missed': [],
-                        'sql_issues': []
+                        'sql_issues': [],
+                        'interpretation_evaluation': interpretation_evaluation
                     }
                 elif has_saturday and has_sunday and not has_friday:
                     return {
@@ -500,7 +637,8 @@ Score guidelines:
                         'reasoning': 'CLARIFICATION incorrectly defines weekend as only Saturday and Sunday (should include Friday night)',
                         'criteria_matched': ['confirmation_workflow'],
                         'criteria_missed': ['weekend_definition'],
-                        'sql_issues': ['Missing Friday in weekend definition']
+                        'sql_issues': ['Missing Friday in weekend definition'],
+                        'interpretation_evaluation': interpretation_evaluation
                     }
 
             # For other queries, CLARIFICATION is part of normal workflow
@@ -509,7 +647,8 @@ Score guidelines:
                 'reasoning': 'CLARIFICATION returned as part of normal confirmation workflow',
                 'criteria_matched': ['confirmation_workflow'],
                 'criteria_missed': [],
-                'sql_issues': []
+                'sql_issues': [],
+                'interpretation_evaluation': interpretation_evaluation
             }
 
         # Auto-fail if query didn't execute
@@ -519,7 +658,8 @@ Score guidelines:
                 'reasoning': f"Query execution failed: {test_result.get('error', 'Unknown error')}",
                 'criteria_matched': [],
                 'criteria_missed': list(test_result['expected_criteria'].keys()),
-                'sql_issues': ['execution_failure']
+                'sql_issues': ['execution_failure'],
+                'interpretation_evaluation': interpretation_evaluation
             }
 
         # Format evaluation prompt with current date context
@@ -553,16 +693,18 @@ Score guidelines:
                 if 'score' in eval_result:
                     eval_result['score'] = max(0, min(100, eval_result['score']))
 
+                # Add interpretation evaluation
+                eval_result['interpretation_evaluation'] = interpretation_evaluation
                 return eval_result
             else:
                 logging.warning("No JSON found in LLM response, using fallback")
-                return self._fallback_scoring(test_result)
+                return self._fallback_scoring(test_result, interpretation_evaluation)
 
         except Exception as e:
             logging.error(f"LLM scoring failed: {e}")
-            return self._fallback_scoring(test_result)
+            return self._fallback_scoring(test_result, interpretation_evaluation)
 
-    def _fallback_scoring(self, test_result: dict) -> dict:
+    def _fallback_scoring(self, test_result: dict, interpretation_evaluation: dict) -> dict:
         """
         Simple rule-based scoring if LLM fails.
 
@@ -570,6 +712,7 @@ Score guidelines:
 
         Args:
             test_result (dict): Test result dictionary
+            interpretation_evaluation (dict): Interpretation evaluation result
 
         Returns:
             dict: Fallback evaluation
@@ -619,7 +762,8 @@ Score guidelines:
             'reasoning': 'Fallback rule-based scoring (LLM evaluation failed)',
             'criteria_matched': criteria_matched,
             'criteria_missed': criteria_missed,
-            'sql_issues': []
+            'sql_issues': [],
+            'interpretation_evaluation': interpretation_evaluation
         }
 
     def score_all_results(self, test_results: List[dict]) -> List[dict]:
@@ -664,7 +808,7 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'tests
 
     # Save detailed results to CSV
     try:
-        # Flatten evaluation dict for CSV
+            # Flatten evaluation dict for CSV
         flattened_results = []
         for result in scored_results:
             flat = result.copy()
@@ -675,6 +819,13 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'tests
                 flat['criteria_matched'] = ', '.join(eval_data.get('criteria_matched', []))
                 flat['criteria_missed'] = ', '.join(eval_data.get('criteria_missed', []))
                 flat['sql_issues'] = ', '.join(eval_data.get('sql_issues', []))
+
+                # Add interpretation evaluation to CSV
+                if 'interpretation_evaluation' in eval_data:
+                    interp_eval = eval_data['interpretation_evaluation']
+                    flat['interpretation_score'] = interp_eval.get('score', 0)
+                    flat['interpretation_issues'] = ', '.join(interp_eval.get('issues', []))
+                    flat['interpretation_passed'] = interp_eval.get('passed', True)
 
             # Remove complex fields for CSV
             flat.pop('sample_results', None)
@@ -706,6 +857,24 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'tests
         'fair (50-69)': sum(1 for s in scores if 50 <= s < 70),
         'poor (<50)': sum(1 for s in scores if s < 50)
     }
+
+    # Interpretation evaluation statistics
+    interpretation_scores = []
+    interpretation_failed = []
+    for r in scored_results:
+        if 'interpretation_evaluation' in r.get('evaluation', {}):
+            interp_eval = r['evaluation']['interpretation_evaluation']
+            interpretation_scores.append(interp_eval.get('score', 100))
+            if not interp_eval.get('passed', True):
+                interpretation_failed.append({
+                    'question': r['question'],
+                    'interpretation': r.get('interpretation', ''),
+                    'issues': interp_eval.get('issues', []),
+                    'score': interp_eval.get('score', 0)
+                })
+
+    avg_interpretation_score = np.mean(interpretation_scores) if interpretation_scores else 100
+    interpretation_pass_rate = 1 - (len(interpretation_failed) / total_tests) if total_tests > 0 else 1
 
     # Category breakdown
     categories = set(r['category'] for r in scored_results)
@@ -742,11 +911,17 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'tests
             'total_tests': total_tests,
             'execution_success_rate': float(execution_success_rate),
             'average_score': float(avg_score),
-            'score_distribution': score_buckets
+            'score_distribution': score_buckets,
+            'interpretation_evaluation': {
+                'average_interpretation_score': float(avg_interpretation_score),
+                'interpretation_pass_rate': float(interpretation_pass_rate),
+                'failed_interpretations_count': len(interpretation_failed)
+            }
         },
         'category_breakdown': category_stats,
         'problematic_questions': problematic[:20],  # Limit to first 20
-        'recommendations': _generate_recommendations(scored_results, category_stats)
+        'failed_interpretations': interpretation_failed[:20],  # Limit to first 20
+        'recommendations': _generate_recommendations(scored_results, category_stats, interpretation_failed)
     }
 
     # Save JSON report
@@ -761,18 +936,37 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'tests
     return report
 
 
-def _generate_recommendations(results: List[dict], category_stats: dict) -> List[dict]:
+def _generate_recommendations(results: List[dict], category_stats: dict, interpretation_failed: List[dict]) -> List[dict]:
     """
     Generate actionable recommendations based on test results.
 
     Args:
         results (List[dict]): Scored test results
         category_stats (dict): Category breakdown statistics
+        interpretation_failed (List[dict]): Failed interpretation evaluations
 
     Returns:
         List[dict]: Recommendations
     """
     recommendations = []
+
+    # Check for interpretation issues
+    if interpretation_failed:
+        # Count issue types
+        issue_types = {}
+        for failed in interpretation_failed:
+            for issue in failed.get('issues', []):
+                issue_types[issue] = issue_types.get(issue, 0) + 1
+
+        # Add recommendations for common interpretation issues
+        for issue, count in issue_types.items():
+            if count > 2:  # Frequent issue
+                recommendations.append({
+                    'issue': f'Interpretation issue: {issue}',
+                    'occurrences': count,
+                    'recommendation': 'Review interpretation_prompt.txt and ensure date calculator tool is being used correctly'
+                })
+
 
     # Check for low-performing categories
     for category, stats in category_stats.items():
