@@ -1176,6 +1176,9 @@ class DeduplicationHandler:
             pd.DataFrame: DataFrame with conflict groups, each group having multiple events
                          at the same venue/date/time.
         """
+        # Self-join query to find conflicting events
+        # Strategy: Join events table to itself to find pairs that conflict
+        # Conflict = same venue, same date, same time, but DIFFERENT names
         sql = """
         SELECT
             e1.event_id as event_id_1,
@@ -1195,12 +1198,12 @@ class DeduplicationHandler:
             e2.dance_style as dance_style_2
         FROM events e1
         JOIN events e2 ON
-            e1.start_date = e2.start_date
-            AND e1.location = e2.location
-            AND e1.start_time = e2.start_time
-            AND e1.event_id < e2.event_id
-            AND e1.event_name != e2.event_name
-        WHERE e1.start_date >= CURRENT_DATE
+            e1.start_date = e2.start_date          -- Same date
+            AND e1.location = e2.location          -- Same venue
+            AND e1.start_time = e2.start_time      -- Same start time
+            AND e1.event_id < e2.event_id          -- Prevent duplicate pairs (only get e1-e2, not e2-e1)
+            AND e1.event_name != e2.event_name     -- Different event names (the conflict!)
+        WHERE e1.start_date >= CURRENT_DATE        -- Only future events
         ORDER BY e1.start_date, e1.location, e1.start_time
         """
 
@@ -1245,8 +1248,12 @@ class DeduplicationHandler:
             response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
 
-            # Sanitize HTML content to prevent XSS vulnerabilities
-            # html.escape() converts special characters like <, >, & to HTML entities
+            # Sanitize HTML content to prevent XSS (Cross-Site Scripting) vulnerabilities
+            # Why: If scraped content contains malicious JavaScript like "<script>alert('xss')</script>"
+            #      and we later display this content in a web UI or log it, the script could execute
+            # html.escape() converts special characters to safe HTML entities:
+            #   < → &lt;   > → &gt;   & → &amp;   " → &quot;   ' → &#x27;
+            # Example: "<script>bad()</script>" becomes "&lt;script&gt;bad()&lt;/script&gt;" (harmless text)
             content = html.escape(response.text)
 
             logging.info(f"scrape_url_content(): Successfully scraped {url} ({len(content)} chars, sanitized)")
@@ -1273,8 +1280,15 @@ class DeduplicationHandler:
         if not text or pd.isna(text):
             return []
 
-        # Regex pattern for HTTP(S) URLs
-        # Matches: http:// or https:// followed by valid URL characters
+        # Regex pattern for HTTP(S) URLs - breaking down the components:
+        # http[s]?://  - Matches "http://" or "https://" (s is optional with ?)
+        # (?:...)      - Non-capturing group for URL characters
+        # [a-zA-Z]     - Letters (domain names, paths)
+        # [0-9]        - Numbers (ports, IDs, query params)
+        # [$-_@.&+]    - Common URL special chars (subdomains, query strings)
+        # [!*\\(\\),]  - Additional allowed chars (escaped parentheses, comma, exclamation)
+        # (?:%[0-9a-fA-F]{2})+ - Percent-encoded characters like %20 for spaces
+        # The final + means "one or more" of these character groups
         url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
         urls = re.findall(url_pattern, text)
         return urls
@@ -1299,24 +1313,32 @@ class DeduplicationHandler:
                 - reasoning (str): Explanation of the decision
                 Returns None if analysis fails.
         """
-        # Scrape main event URLs
+        # Scrape main event URLs (e.g., Google Calendar links)
+        # These often fail for Google Calendar events (require auth)
         content_1 = self.scrape_url_content(conflict_row['url_1'])
         content_2 = self.scrape_url_content(conflict_row['url_2'])
 
-        # Extract and scrape URLs from descriptions (often contains venue websites)
+        # Extract and scrape URLs from event descriptions
+        # Why: Descriptions often contain official venue websites (the ground truth!)
+        # Example: "http://www.victoriaedelweiss.ca/events/" in description text
+        # These venue sites are more reliable than user-created calendar links
         desc_urls_1 = self.extract_urls_from_text(conflict_row['description_1'])
         desc_urls_2 = self.extract_urls_from_text(conflict_row['description_2'])
 
+        # Build description content by scraping each URL found
         desc_content_1 = ""
         for url in desc_urls_1:
             scraped = self.scrape_url_content(url)
             if scraped:
+                # Limit to 2000 chars per URL to avoid overwhelming the LLM prompt
+                # (full prompt must stay under LLM context limits)
                 desc_content_1 += f"\n[From {url}]: {scraped[:2000]}\n"
 
         desc_content_2 = ""
         for url in desc_urls_2:
             scraped = self.scrape_url_content(url)
             if scraped:
+                # Limit to 2000 chars per URL to avoid overwhelming the LLM prompt
                 desc_content_2 += f"\n[From {url}]: {scraped[:2000]}\n"
 
         # Build prompt for LLM
@@ -1372,14 +1394,28 @@ Respond with ONLY valid JSON in this exact format:
         try:
             response = self.llm_handler.query_llm('', prompt)
 
-            # Parse JSON response
-            # Remove markdown code blocks if present
-            response_clean = response.strip()
+            # Clean LLM response to extract pure JSON
+            # LLMs often wrap JSON in markdown code blocks like:
+            # ```json
+            # {"key": "value"}
+            # ```
+            # We need to strip these wrappers before parsing
+
+            response_clean = response.strip()  # Remove leading/trailing whitespace
+
+            # Step 1: Remove markdown code fence (```)
+            # If response starts with ```, it's a markdown code block
+            # Split by newlines, remove first line (```), remove last line (```), rejoin
             if response_clean.startswith('```'):
                 response_clean = '\n'.join(response_clean.split('\n')[1:-1])
+
+            # Step 2: Remove 'json' language identifier
+            # After removing ```, line may start with "json" (the language identifier)
+            # Example: "json\n{...}" → Remove "json\n" to get just "{...}"
             if response_clean.startswith('json'):
                 response_clean = '\n'.join(response_clean.split('\n')[1:])
 
+            # Now we have clean JSON - parse it
             result = json.loads(response_clean)
 
             logging.info(f"analyze_conflict_with_llm(): LLM decision - Keep {result['correct_event_id']}, "
@@ -1423,14 +1459,17 @@ Respond with ONLY valid JSON in this exact format:
             logging.info(f"  Location: {row['location']}")
             logging.info(f"  Date/Time: {row['start_date']} {row['start_time']}")
 
-            # Analyze with LLM
+            # Analyze with LLM to determine which event is correct
+            # This scrapes URLs, builds prompt with all context, gets LLM decision
             decision = self.analyze_conflict_with_llm(row)
 
             if decision is None:
                 logging.warning(f"  Skipping conflict - LLM analysis failed")
                 continue
 
-            # Record decision
+            # Record decision for audit trail (saved to CSV regardless of dry_run)
+            # Why: Even in dry_run mode, we want to log what WOULD be deleted
+            # This allows review of LLM decisions before running live deletions
             decisions.append({
                 'event_id_correct': decision['correct_event_id'],
                 'event_id_incorrect': decision['incorrect_event_id'],
