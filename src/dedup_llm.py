@@ -24,6 +24,7 @@ Dependencies:
 from datetime import datetime
 from dotenv import load_dotenv
 from fuzzywuzzy import process, fuzz
+import html
 import json
 from io import StringIO
 import logging
@@ -36,6 +37,7 @@ from sklearn.cluster import DBSCAN
 from sqlalchemy import create_engine, text
 import subprocess
 from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any
 import yaml
 
 from llm import LLMHandler
@@ -1165,7 +1167,7 @@ class DeduplicationHandler:
         return pd.concat([canonical.to_frame().T, duplicates])
 
 
-    def find_venue_time_conflicts(self):
+    def find_venue_time_conflicts(self) -> pd.DataFrame:
         """
         Find events that occur at the same venue, same date, and same time but have different names.
         These are potential booking conflicts or data errors.
@@ -1219,16 +1221,19 @@ class DeduplicationHandler:
         return df
 
 
-    def scrape_url_content(self, url):
+    def scrape_url_content(self, url: Optional[str]) -> Optional[str]:
         """
         Scrape content from a URL to verify event information.
         Uses simple requests.get for basic scraping.
 
+        Security: HTML-escapes the scraped content to prevent XSS vulnerabilities
+        when content is displayed or logged.
+
         Args:
-            url (str): URL to scrape
+            url (Optional[str]): URL to scrape
 
         Returns:
-            str: Page content (text), or None if scraping fails
+            Optional[str]: HTML-escaped page content (text), or None if scraping fails
         """
         if not url or pd.isna(url):
             return None
@@ -1240,48 +1245,59 @@ class DeduplicationHandler:
             response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
 
-            # Return text content
-            content = response.text
-            logging.info(f"scrape_url_content(): Successfully scraped {url} ({len(content)} chars)")
+            # Sanitize HTML content to prevent XSS vulnerabilities
+            # html.escape() converts special characters like <, >, & to HTML entities
+            content = html.escape(response.text)
+
+            logging.info(f"scrape_url_content(): Successfully scraped {url} ({len(content)} chars, sanitized)")
             return content
 
-        except Exception as e:
+        except requests.RequestException as e:
             logging.warning(f"scrape_url_content(): Failed to scrape {url}: {e}")
+            return None
+        except Exception as e:
+            logging.error(f"scrape_url_content(): Unexpected error scraping {url}: {e}")
             return None
 
 
-    def extract_urls_from_text(self, text):
+    def extract_urls_from_text(self, text: Optional[str]) -> List[str]:
         """
         Extract URLs from text (descriptions, etc.).
 
         Args:
-            text (str): Text to extract URLs from
+            text (Optional[str]): Text to extract URLs from
 
         Returns:
-            list: List of URLs found
+            List[str]: List of URLs found (empty list if no URLs or text is None)
         """
         if not text or pd.isna(text):
             return []
 
-        # Regex pattern for URLs
+        # Regex pattern for HTTP(S) URLs
+        # Matches: http:// or https:// followed by valid URL characters
         url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
         urls = re.findall(url_pattern, text)
         return urls
 
 
-    def analyze_conflict_with_llm(self, conflict_row):
+    def analyze_conflict_with_llm(self, conflict_row: pd.Series) -> Optional[Dict[str, Any]]:
         """
         Use LLM to analyze a venue/time conflict and determine which event is correct.
 
         Args:
-            conflict_row (pd.Series): Row with conflict information
+            conflict_row (pd.Series): Row with conflict information containing:
+                - event_id_1, event_id_2, event_name_1, event_name_2
+                - url_1, url_2, description_1, description_2
+                - source_1, source_2, dance_style_1, dance_style_2
+                - start_date, start_time, location
 
         Returns:
-            dict: Decision with keys:
+            Optional[Dict[str, Any]]: Decision with keys:
                 - correct_event_id (int): ID of the correct event
                 - incorrect_event_id (int): ID of the incorrect event
                 - confidence (str): 'high', 'medium', 'low'
                 - reasoning (str): Explanation of the decision
+                Returns None if analysis fails.
         """
         # Scrape main event URLs
         content_1 = self.scrape_url_content(conflict_row['url_1'])
@@ -1376,15 +1392,16 @@ Respond with ONLY valid JSON in this exact format:
             return None
 
 
-    def resolve_venue_time_conflicts(self, dry_run=True):
+    def resolve_venue_time_conflicts(self, dry_run: bool = True) -> int:
         """
         Find and resolve venue/time conflicts by scraping source URLs and using LLM analysis.
 
         Args:
-            dry_run (bool): If True, only log decisions without deleting. If False, delete incorrect events.
+            dry_run (bool): If True, only log decisions without deleting.
+                           If False, delete incorrect events. Defaults to True.
 
         Returns:
-            int: Number of events deleted
+            int: Number of events deleted (0 if dry_run=True)
         """
         logging.info("=" * 70)
         logging.info("RESOLVING VENUE/TIME CONFLICTS")
