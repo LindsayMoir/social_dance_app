@@ -1250,6 +1250,25 @@ class DeduplicationHandler:
             return None
 
 
+    def extract_urls_from_text(self, text):
+        """
+        Extract URLs from text (descriptions, etc.).
+
+        Args:
+            text (str): Text to extract URLs from
+
+        Returns:
+            list: List of URLs found
+        """
+        if not text or pd.isna(text):
+            return []
+
+        # Regex pattern for URLs
+        url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+        urls = re.findall(url_pattern, text)
+        return urls
+
+
     def analyze_conflict_with_llm(self, conflict_row):
         """
         Use LLM to analyze a venue/time conflict and determine which event is correct.
@@ -1264,9 +1283,25 @@ class DeduplicationHandler:
                 - confidence (str): 'high', 'medium', 'low'
                 - reasoning (str): Explanation of the decision
         """
-        # Scrape both URLs if available
+        # Scrape main event URLs
         content_1 = self.scrape_url_content(conflict_row['url_1'])
         content_2 = self.scrape_url_content(conflict_row['url_2'])
+
+        # Extract and scrape URLs from descriptions (often contains venue websites)
+        desc_urls_1 = self.extract_urls_from_text(conflict_row['description_1'])
+        desc_urls_2 = self.extract_urls_from_text(conflict_row['description_2'])
+
+        desc_content_1 = ""
+        for url in desc_urls_1:
+            scraped = self.scrape_url_content(url)
+            if scraped:
+                desc_content_1 += f"\n[From {url}]: {scraped[:2000]}\n"
+
+        desc_content_2 = ""
+        for url in desc_urls_2:
+            scraped = self.scrape_url_content(url)
+            if scraped:
+                desc_content_2 += f"\n[From {url}]: {scraped[:2000]}\n"
 
         # Build prompt for LLM
         prompt = f"""You are analyzing two events that claim to occur at the same venue, date, and time but have different names. This is likely a data error - only ONE event can be correct.
@@ -1290,11 +1325,24 @@ EVENT 2 (ID: {conflict_row['event_id_2']}):
 - Description: {conflict_row['description_2']}
 - URL: {conflict_row['url_2']}
 
-SCRAPED CONTENT FROM EVENT 1 URL:
-{content_1[:3000] if content_1 else 'No content available'}
+SCRAPED CONTENT FROM EVENT 1 MAIN URL:
+{content_1[:3000] if content_1 else 'No content available (Google Calendar link)'}
 
-SCRAPED CONTENT FROM EVENT 2 URL:
-{content_2[:3000] if content_2 else 'No content available'}
+SCRAPED CONTENT FROM URLs IN EVENT 1 DESCRIPTION:
+{desc_content_1 if desc_content_1 else 'No URLs found in description'}
+
+SCRAPED CONTENT FROM EVENT 2 MAIN URL:
+{content_2[:3000] if content_2 else 'No content available (Google Calendar link)'}
+
+SCRAPED CONTENT FROM URLs IN EVENT 2 DESCRIPTION:
+{desc_content_2 if desc_content_2 else 'No URLs found in description'}
+
+ANALYSIS GUIDELINES:
+1. Venue website content (from description URLs) is the MOST RELIABLE source of truth
+2. Check if event times in descriptions match database times
+3. Compare event details (dance styles, prices, times) between events
+4. If one event's description contains the venue's official website, that's strong evidence
+5. Google Calendar URLs are less reliable (could be user-created events)
 
 Based on the information above, determine which event is CORRECT and which should be DELETED.
 Respond with ONLY valid JSON in this exact format:
