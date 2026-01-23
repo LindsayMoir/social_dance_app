@@ -40,6 +40,7 @@ Use this function for ANY temporal expression in the user's query, including:
 • "this week", "next week", "this weekend", "next weekend"
 • "this month", "next month"
 • Specific days: "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+• Last day: "last monday", "last tuesday", "last wednesday", etc.
 • Day + time period: "monday morning", "friday evening", "saturday night", "tuesday afternoon", etc.
 
 🔹 CRITICAL - WEEKEND DEFINITION:

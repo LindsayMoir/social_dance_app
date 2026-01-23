@@ -327,15 +327,15 @@ ORDER BY start_date, start_time
 LIMIT 30
 (Friday-Sunday of next week - includes Friday night!)
 
-🔹 LAST DAY EXAMPLE:
-"Was there a rueda event sponsored by uvic last wednesday?" (today=Friday):
+🔹 LAST DAY EXAMPLE (use the tool!):
+"Was there a rueda event sponsored by uvic last wednesday?" (today=Friday, 2026-01-23):
+→ Call calculate_date_range(temporal_phrase="last wednesday", current_date="2026-01-23")
+→ Receives: {"start_date": "2026-01-21", "end_date": "2026-01-21", "dow_filter": [2]}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE dance_style ILIKE '%rueda%'
   AND source ILIKE '%uvic%'
-  AND start_date >= (CURRENT_DATE - INTERVAL '7 days')
-  AND start_date < CURRENT_DATE  
-  AND EXTRACT(DOW FROM start_date) = 3
+  AND start_date = '2026-01-21'
   AND event_type ILIKE '%social dance%'
 ORDER BY start_date, start_time
 LIMIT 30

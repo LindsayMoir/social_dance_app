@@ -299,6 +299,28 @@ def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
                 "dow_filter": [target_dow]
             }
 
+    # Last [day] queries (e.g., "last monday", "last wednesday")
+    for day_name, target_dow in day_names.items():
+        if temporal_phrase == f"last {day_name}":
+            current_dow = current.weekday()
+
+            # Calculate days back to the last occurrence of this day
+            if current_dow == target_dow:
+                # If today is the target day, go back 7 days to last week
+                days_back = 7
+            else:
+                # Otherwise calculate days back
+                days_back = (current_dow - target_dow) % 7
+                if days_back == 0:
+                    days_back = 7  # Go to last week, not today
+
+            target_date = current - timedelta(days=days_back)
+            return {
+                "start_date": target_date.strftime("%Y-%m-%d"),
+                "end_date": target_date.strftime("%Y-%m-%d"),
+                "dow_filter": [target_dow]
+            }
+
     # Day + time period queries (e.g., "Monday morning", "Friday night", "Saturday evening")
     for day_name, target_dow in day_names.items():
         for period_name, period_config in time_periods.items():
@@ -376,6 +398,10 @@ def _generate_temporal_phrase_enum():
 
     # Add day-specific phrases
     all_phrases = base_phrases + day_names
+
+    # Add "last [day]" phrases (e.g., "last monday", "last wednesday")
+    for day in day_names:
+        all_phrases.append(f"last {day}")
 
     # Add day + time period combinations
     for day in day_names:
