@@ -30,6 +30,7 @@ import logging
 import os
 import pandas as pd
 import re
+import requests
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import DBSCAN
 from sqlalchemy import create_engine, text
@@ -1164,6 +1165,241 @@ class DeduplicationHandler:
         return pd.concat([canonical.to_frame().T, duplicates])
 
 
+    def find_venue_time_conflicts(self):
+        """
+        Find events that occur at the same venue, same date, and same time but have different names.
+        These are potential booking conflicts or data errors.
+
+        Returns:
+            pd.DataFrame: DataFrame with conflict groups, each group having multiple events
+                         at the same venue/date/time.
+        """
+        sql = """
+        SELECT
+            e1.event_id as event_id_1,
+            e2.event_id as event_id_2,
+            e1.event_name as event_name_1,
+            e2.event_name as event_name_2,
+            e1.start_date,
+            e1.start_time,
+            e1.location,
+            e1.source as source_1,
+            e2.source as source_2,
+            e1.url as url_1,
+            e2.url as url_2,
+            e1.description as description_1,
+            e2.description as description_2,
+            e1.dance_style as dance_style_1,
+            e2.dance_style as dance_style_2
+        FROM events e1
+        JOIN events e2 ON
+            e1.start_date = e2.start_date
+            AND e1.location = e2.location
+            AND e1.start_time = e2.start_time
+            AND e1.event_id < e2.event_id
+            AND e1.event_name != e2.event_name
+        WHERE e1.start_date >= CURRENT_DATE
+        ORDER BY e1.start_date, e1.location, e1.start_time
+        """
+
+        rows = self.db_handler.execute_query(sql)
+        if not rows:
+            logging.info("find_venue_time_conflicts(): No venue/time conflicts found")
+            return pd.DataFrame()
+
+        # Convert to DataFrame
+        df = pd.DataFrame(rows, columns=[
+            'event_id_1', 'event_id_2', 'event_name_1', 'event_name_2',
+            'start_date', 'start_time', 'location', 'source_1', 'source_2',
+            'url_1', 'url_2', 'description_1', 'description_2',
+            'dance_style_1', 'dance_style_2'
+        ])
+
+        logging.info(f"find_venue_time_conflicts(): Found {len(df)} venue/time conflicts")
+        return df
+
+
+    def scrape_url_content(self, url):
+        """
+        Scrape content from a URL to verify event information.
+        Uses simple requests.get for basic scraping.
+
+        Args:
+            url (str): URL to scrape
+
+        Returns:
+            str: Page content (text), or None if scraping fails
+        """
+        if not url or pd.isna(url):
+            return None
+
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+
+            # Return text content
+            content = response.text
+            logging.info(f"scrape_url_content(): Successfully scraped {url} ({len(content)} chars)")
+            return content
+
+        except Exception as e:
+            logging.warning(f"scrape_url_content(): Failed to scrape {url}: {e}")
+            return None
+
+
+    def analyze_conflict_with_llm(self, conflict_row):
+        """
+        Use LLM to analyze a venue/time conflict and determine which event is correct.
+
+        Args:
+            conflict_row (pd.Series): Row with conflict information
+
+        Returns:
+            dict: Decision with keys:
+                - correct_event_id (int): ID of the correct event
+                - incorrect_event_id (int): ID of the incorrect event
+                - confidence (str): 'high', 'medium', 'low'
+                - reasoning (str): Explanation of the decision
+        """
+        # Scrape both URLs if available
+        content_1 = self.scrape_url_content(conflict_row['url_1'])
+        content_2 = self.scrape_url_content(conflict_row['url_2'])
+
+        # Build prompt for LLM
+        prompt = f"""You are analyzing two events that claim to occur at the same venue, date, and time but have different names. This is likely a data error - only ONE event can be correct.
+
+CONFLICT DETAILS:
+Date: {conflict_row['start_date']}
+Time: {conflict_row['start_time']}
+Location: {conflict_row['location']}
+
+EVENT 1 (ID: {conflict_row['event_id_1']}):
+- Name: {conflict_row['event_name_1']}
+- Source: {conflict_row['source_1']}
+- Dance Style: {conflict_row['dance_style_1']}
+- Description: {conflict_row['description_1']}
+- URL: {conflict_row['url_1']}
+
+EVENT 2 (ID: {conflict_row['event_id_2']}):
+- Name: {conflict_row['event_name_2']}
+- Source: {conflict_row['source_2']}
+- Dance Style: {conflict_row['dance_style_2']}
+- Description: {conflict_row['description_2']}
+- URL: {conflict_row['url_2']}
+
+SCRAPED CONTENT FROM EVENT 1 URL:
+{content_1[:3000] if content_1 else 'No content available'}
+
+SCRAPED CONTENT FROM EVENT 2 URL:
+{content_2[:3000] if content_2 else 'No content available'}
+
+Based on the information above, determine which event is CORRECT and which should be DELETED.
+Respond with ONLY valid JSON in this exact format:
+{{
+    "correct_event_id": <event_id_1 or event_id_2>,
+    "incorrect_event_id": <the other event_id>,
+    "confidence": "<high|medium|low>",
+    "reasoning": "<brief explanation>"
+}}"""
+
+        try:
+            response = self.llm_handler.query_llm('', prompt)
+
+            # Parse JSON response
+            # Remove markdown code blocks if present
+            response_clean = response.strip()
+            if response_clean.startswith('```'):
+                response_clean = '\n'.join(response_clean.split('\n')[1:-1])
+            if response_clean.startswith('json'):
+                response_clean = '\n'.join(response_clean.split('\n')[1:])
+
+            result = json.loads(response_clean)
+
+            logging.info(f"analyze_conflict_with_llm(): LLM decision - Keep {result['correct_event_id']}, "
+                        f"Delete {result['incorrect_event_id']} (confidence: {result['confidence']})")
+
+            return result
+
+        except Exception as e:
+            logging.error(f"analyze_conflict_with_llm(): Failed to analyze conflict: {e}")
+            return None
+
+
+    def resolve_venue_time_conflicts(self, dry_run=True):
+        """
+        Find and resolve venue/time conflicts by scraping source URLs and using LLM analysis.
+
+        Args:
+            dry_run (bool): If True, only log decisions without deleting. If False, delete incorrect events.
+
+        Returns:
+            int: Number of events deleted
+        """
+        logging.info("=" * 70)
+        logging.info("RESOLVING VENUE/TIME CONFLICTS")
+        logging.info("=" * 70)
+
+        conflicts_df = self.find_venue_time_conflicts()
+
+        if conflicts_df.empty:
+            logging.info("resolve_venue_time_conflicts(): No conflicts to resolve")
+            return 0
+
+        deleted_count = 0
+        decisions = []
+
+        for idx, row in conflicts_df.iterrows():
+            logging.info(f"\nAnalyzing conflict {idx + 1}/{len(conflicts_df)}")
+            logging.info(f"  Event 1: {row['event_name_1']} (ID: {row['event_id_1']})")
+            logging.info(f"  Event 2: {row['event_name_2']} (ID: {row['event_id_2']})")
+            logging.info(f"  Location: {row['location']}")
+            logging.info(f"  Date/Time: {row['start_date']} {row['start_time']}")
+
+            # Analyze with LLM
+            decision = self.analyze_conflict_with_llm(row)
+
+            if decision is None:
+                logging.warning(f"  Skipping conflict - LLM analysis failed")
+                continue
+
+            # Record decision
+            decisions.append({
+                'event_id_correct': decision['correct_event_id'],
+                'event_id_incorrect': decision['incorrect_event_id'],
+                'confidence': decision['confidence'],
+                'reasoning': decision['reasoning'],
+                'location': row['location'],
+                'date': row['start_date'],
+                'time': row['start_time']
+            })
+
+            # Delete incorrect event if not dry run
+            if dry_run:
+                logging.info(f"  [DRY RUN] Would delete event_id {decision['incorrect_event_id']}")
+                logging.info(f"  Reasoning: {decision['reasoning']}")
+            else:
+                delete_sql = "DELETE FROM events WHERE event_id = :event_id"
+                self.db_handler.execute_query(delete_sql, {"event_id": decision['incorrect_event_id']})
+                logging.info(f"  DELETED event_id {decision['incorrect_event_id']}")
+                logging.info(f"  Reasoning: {decision['reasoning']}")
+                deleted_count += 1
+
+        # Save decisions to CSV
+        if decisions:
+            decisions_df = pd.DataFrame(decisions)
+            output_file = "output/venue_time_conflict_resolutions.csv"
+            decisions_df.to_csv(output_file, index=False)
+            logging.info(f"\nSaved conflict resolution decisions to {output_file}")
+
+        logging.info(f"\nresolve_venue_time_conflicts(): Processed {len(conflicts_df)} conflicts, "
+                    f"deleted {deleted_count} events")
+
+        return deleted_count
+
+
     def driver(self):
         """
         Main driver function for the deduplication process.
@@ -1186,6 +1422,10 @@ class DeduplicationHandler:
 
         # This uses transformers and DBSCAN to find duplicates based on embeddings.
         self.deduplicate_with_embeddings()
+
+        # Resolve venue/time conflicts by finding ground truth on the internet
+        logging.info("Starting venue/time conflict resolution...")
+        self.resolve_venue_time_conflicts(dry_run=False)
 
         # In order to improve deduplication we really need to evaluate the clusters that were scored.
         if self.config.get('score', {}).get('dup_trans_db_scan', False):
