@@ -44,6 +44,7 @@ from chatbot_evaluator import (
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_config import setup_logging
+from email_notifier import send_report_email
 
 
 class ValidationTestRunner:
@@ -215,6 +216,13 @@ class ValidationTestRunner:
                 self._generate_html_report(results)
         except Exception as e:
             logging.error(f"HTML report generation failed: {e}", exc_info=True)
+
+        # 4. SEND EMAIL NOTIFICATION (if configured)
+        try:
+            self._send_email_notification(results)
+        except Exception as e:
+            logging.error(f"Email notification failed: {e}", exc_info=True)
+            # Don't fail the entire validation if email fails
 
         # Final status
         logging.info("\n" + "=" * 80)
@@ -456,6 +464,70 @@ class ValidationTestRunner:
             html += "</table>"
 
         return html
+
+    def _send_email_notification(self, results: dict) -> None:
+        """
+        Send email notification with validation results.
+
+        Args:
+            results (dict): Combined validation results
+        """
+        output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'tests/output')
+
+        # Build summary for email body
+        summary = {}
+
+        # Add chatbot testing summary
+        if results.get('chatbot_testing') and 'summary' in results['chatbot_testing']:
+            chatbot_summary = results['chatbot_testing']['summary']
+            summary['total_tests'] = chatbot_summary.get('total_tests', 0)
+            summary['execution_success_rate'] = chatbot_summary.get('execution_success_rate', 0)
+            summary['average_score'] = chatbot_summary.get('average_score', 0)
+            summary['interpretation_pass_rate'] = chatbot_summary.get('interpretation_evaluation', {}).get('interpretation_pass_rate', 0)
+
+        # Add scraping validation summary
+        if results.get('scraping_validation') and 'summary' in results['scraping_validation']:
+            scraping_summary = results['scraping_validation']['summary']
+            summary['total_failures'] = scraping_summary.get('total_failures', 0)
+            summary['whitelist_failures'] = scraping_summary.get('whitelist_failures', 0)
+
+        # Add overall status
+        summary['overall_status'] = results['overall_status']
+        summary['timestamp'] = results['timestamp']
+
+        # Collect attachment paths
+        attachments = []
+
+        # Chatbot reports
+        chatbot_json = os.path.join(output_dir, 'chatbot_evaluation_report.json')
+        chatbot_csv = os.path.join(output_dir, 'chatbot_test_results.csv')
+        if os.path.exists(chatbot_json):
+            attachments.append(chatbot_json)
+        if os.path.exists(chatbot_csv):
+            attachments.append(chatbot_csv)
+
+        # Scraping report
+        scraping_json = os.path.join(output_dir, 'scraping_validation_report.json')
+        if os.path.exists(scraping_json):
+            attachments.append(scraping_json)
+
+        # Comprehensive HTML report
+        html_report = os.path.join(output_dir, 'comprehensive_test_report.html')
+        if os.path.exists(html_report):
+            attachments.append(html_report)
+
+        # Send email
+        logging.info("Attempting to send email notification...")
+        success = send_report_email(
+            report_summary=summary,
+            attachment_paths=attachments,
+            test_type="Pre-Commit Validation"
+        )
+
+        if success:
+            logging.info("✓ Email notification sent successfully")
+        else:
+            logging.info("Email notification skipped (not configured or failed)")
 
 
 def main():
