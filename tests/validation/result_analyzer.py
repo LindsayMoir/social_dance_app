@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Dict, List
 
 import pandas as pd
+import yaml
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
@@ -356,9 +357,23 @@ def main():
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
+    # Resolve output directory from config to align with validation reports
+    try:
+        with open('config/config.yaml', 'r') as f:
+            cfg = yaml.safe_load(f)
+        output_dir = (
+            cfg.get('testing', {})
+               .get('validation', {})
+               .get('reporting', {})
+               .get('output_dir', 'tests/output')
+        )
+    except Exception:
+        # Fallback to previous default if config missing/unreadable
+        output_dir = 'tests/output'
+
     # Paths
-    results_file = 'tests/output/chatbot_test_results.csv'
-    output_file = 'tests/output/analysis_report.txt'
+    results_file = os.path.join(output_dir, 'chatbot_test_results.csv')
+    output_file = os.path.join(output_dir, 'analysis_report.txt')
 
     try:
         # Initialize analyzer
