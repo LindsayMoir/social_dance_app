@@ -208,6 +208,6 @@ testing:
       score_threshold: 70  # Min average score to pass
       execution_threshold: 0.90  # Min SQL success rate (90%)
     reporting:
-      output_dir: tests/output
+      output_dir: output
       generate_html: true
       generate_csv: true
