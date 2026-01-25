@@ -330,7 +330,7 @@ LIMIT 30
 🔹 LAST DAY EXAMPLE (use the tool!):
 "Was there a rueda event sponsored by uvic last wednesday?" (today=Friday, 2026-01-23):
 → Call calculate_date_range(temporal_phrase="last wednesday", current_date="2026-01-23")
-→ Receives: {"start_date": "2026-01-21", "end_date": "2026-01-21", "dow_filter": [2]}
+→ Receives: {{"start_date": "2026-01-21", "end_date": "2026-01-21", "dow_filter": [2]}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE dance_style ILIKE '%rueda%'
