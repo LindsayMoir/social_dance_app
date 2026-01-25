@@ -89,15 +89,25 @@ if "pending_confirmation" not in st.session_state:
 if "pending_interpretation" not in st.session_state:
     st.session_state["pending_interpretation"] = None
 
-# Load chatbot instructions from a file specified in the YAML config
-prompt_config = config['prompts']['chatbot_instructions']
+# Load chatbot instructions from config, with safe fallbacks
+prompts_section = config.get('prompts', {}) if isinstance(config, dict) else {}
+prompt_config = prompts_section.get('chatbot_instructions', 'prompts/chatbot_instructions.txt')
+
 if isinstance(prompt_config, dict):
-    instructions_path = os.path.join(base_dir, prompt_config['file'])
+    instructions_rel = prompt_config.get('file', 'prompts/chatbot_instructions.txt')
 else:
     # Backward compatibility with old string format
-    instructions_path = os.path.join(base_dir, prompt_config)
-with open(instructions_path, "r") as file:
-    chatbot_instructions = file.read()
+    instructions_rel = prompt_config
+
+instructions_path = os.path.join(base_dir, instructions_rel)
+
+try:
+    with open(instructions_path, "r") as file:
+        chatbot_instructions = file.read()
+    logging.info(f"app.py: Loaded chatbot instructions from {instructions_path}")
+except Exception as e:
+    logging.error(f"app.py: Failed to load chatbot instructions from {instructions_path}: {e}")
+    chatbot_instructions = ""  # Render without the header if missing; app still works
 
 st.markdown(chatbot_instructions)
 
