@@ -206,7 +206,7 @@ testing:
   # Pre-commit validation configuration
   validation:
     scraping:
-      days_back: 7  # Check scraping in last N days
+      days_back: 30  # Check scraping in last N days
       whitelist_file: data/urls/aaa_urls.csv
       edge_cases_file: data/other/edge_cases.csv
       min_hit_ratio: 0.50  # Threshold for "high performer"
