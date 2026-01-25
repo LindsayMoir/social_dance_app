@@ -495,26 +495,9 @@ class ValidationTestRunner:
         summary['overall_status'] = results['overall_status']
         summary['timestamp'] = results['timestamp']
 
-        # Collect attachment paths
-        attachments = []
-
-        # Chatbot reports
-        chatbot_json = os.path.join(output_dir, 'chatbot_evaluation_report.json')
-        chatbot_csv = os.path.join(output_dir, 'chatbot_test_results.csv')
-        if os.path.exists(chatbot_json):
-            attachments.append(chatbot_json)
-        if os.path.exists(chatbot_csv):
-            attachments.append(chatbot_csv)
-
-        # Scraping report
-        scraping_json = os.path.join(output_dir, 'scraping_validation_report.json')
-        if os.path.exists(scraping_json):
-            attachments.append(scraping_json)
-
-        # Comprehensive HTML report
+        # Collect attachment paths — only include the comprehensive HTML report
         html_report = os.path.join(output_dir, 'comprehensive_test_report.html')
-        if os.path.exists(html_report):
-            attachments.append(html_report)
+        attachments = [html_report] if os.path.exists(html_report) else []
 
         # Send email
         logging.info("Attempting to send email notification...")
