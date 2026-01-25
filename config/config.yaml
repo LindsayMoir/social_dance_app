@@ -110,7 +110,7 @@ output:
   gs_search_results: output/gs_search_results.csv
   irrelevant_rows: output/irrelevant_rows.csv
   is_foreign: output/is_foreign.csv
-  prompts:
+prompts:
   address:
     file: prompts/address_from_raw_page.txt
     schema: address_extraction
@@ -171,9 +171,9 @@ output:
   irrelevant_rows:
     file: prompts/irrelevant_rows_prompt.txt
     schema: relevance_classification
-    relevant_dance_url:
-      file: prompts/relevant_dance_url.txt
-      schema: null
+  relevant_dance_url:
+    file: prompts/relevant_dance_url.txt
+    schema: null
   # Validation and chatbot prompts
   contextual_sql:
     file: prompts/contextual_sql_prompt.txt
