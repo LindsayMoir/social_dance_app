@@ -124,8 +124,23 @@ class ScrapingValidator:
                 ORDER BY hit_ratio DESC
             """
 
-            logging.info("Querying high-performing URLs from database...")
-            high_performers = pd.read_sql_query(query, self.db_handler.conn)
+            logging.info("Querying high-performing URLs from database via DatabaseHandler...")
+            rows = self.db_handler.execute_query(query)
+            # Convert to DataFrame with explicit columns if any rows returned
+            if rows:
+                high_performers = pd.DataFrame(
+                    rows,
+                    columns=[
+                        'link',
+                        'source',
+                        'keywords',
+                        'hit_ratio',
+                        'total_attempts',
+                        'last_crawled'
+                    ]
+                )
+            else:
+                high_performers = pd.DataFrame(columns=['link','source','keywords','hit_ratio','total_attempts','last_crawled'])
 
             # Add high performers that aren't already in whitelist or edge cases
             high_performer_count = 0
