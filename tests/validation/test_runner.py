@@ -175,7 +175,7 @@ class ValidationTestRunner:
             logging.info("Scoring complete")
 
             # Generate report
-            output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'tests/output')
+            output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'output')
             chatbot_report = generate_chatbot_report(scored_results, output_dir)
             results['chatbot_testing'] = chatbot_report
 
@@ -238,7 +238,7 @@ class ValidationTestRunner:
         Args:
             results (dict): Combined validation results
         """
-        output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'tests/output')
+        output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'output')
         output_path = os.path.join(output_dir, 'comprehensive_test_report.html')
 
         # Build HTML
@@ -472,7 +472,7 @@ class ValidationTestRunner:
         Args:
             results (dict): Combined validation results
         """
-        output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'tests/output')
+        output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'output')
 
         # Build summary for email body
         summary = {}

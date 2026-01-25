@@ -35,7 +35,7 @@ class ResultAnalyzer:
     identifying recurring issues and recommending fixes.
     """
 
-    def __init__(self, config_path: str = 'config/config.yaml', prompt_path: str = 'prompts/result_analysis_prompt.txt'):
+    def __init__(self, config_path: str = 'config/config.yaml', prompt_path: Optional[str] = None):
         """
         Initialize the ResultAnalyzer.
 
@@ -44,6 +44,20 @@ class ResultAnalyzer:
             prompt_path (str): Path to analysis prompt file
         """
         self.llm_handler = LLMHandler(config_path)
+
+        # Determine analysis prompt path from config if not explicitly provided
+        if prompt_path is None:
+            try:
+                with open(config_path, 'r') as f:
+                    cfg = yaml.safe_load(f)
+                prompt_path = (
+                    cfg.get('prompts', {})
+                       .get('result_analysis', {})
+                       .get('file', 'prompts/result_analysis_prompt.txt')
+                )
+            except Exception:
+                prompt_path = 'prompts/result_analysis_prompt.txt'
+
         self.analysis_prompt = self._load_prompt(prompt_path)
 
     def _load_prompt(self, prompt_path: str) -> str:
@@ -365,11 +379,11 @@ def main():
             cfg.get('testing', {})
                .get('validation', {})
                .get('reporting', {})
-               .get('output_dir', 'tests/output')
+               .get('output_dir', 'output')
         )
     except Exception:
         # Fallback to previous default if config missing/unreadable
-        output_dir = 'tests/output'
+        output_dir = 'output'
 
     # Paths
     results_file = os.path.join(output_dir, 'chatbot_test_results.csv')

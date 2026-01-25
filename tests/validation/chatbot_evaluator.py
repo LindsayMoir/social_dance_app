@@ -194,8 +194,12 @@ class ChatbotTestExecutor:
 
         self.llm_handler = LLMHandler(config_path='config/config.yaml')
 
-        # Load actual chatbot SQL prompt
-        prompt_path = 'prompts/contextual_sql_prompt.txt'
+        # Load actual chatbot SQL prompt (path from config if provided)
+        prompt_path = (
+            self.config.get('prompts', {})
+                .get('contextual_sql', {})
+                .get('file', 'prompts/contextual_sql_prompt.txt')
+        )
         if not os.path.exists(prompt_path):
             raise FileNotFoundError(f"SQL prompt file not found: {prompt_path}")
 
@@ -203,7 +207,11 @@ class ChatbotTestExecutor:
             self.sql_prompt_template = f.read()
 
         # Load interpretation prompt (for confirmation text generation)
-        interpretation_prompt_path = 'prompts/interpretation_prompt.txt'
+        interpretation_prompt_path = (
+            self.config.get('prompts', {})
+                .get('interpretation', {})
+                .get('file', 'prompts/interpretation_prompt.txt')
+        )
         if not os.path.exists(interpretation_prompt_path):
             raise FileNotFoundError(f"Interpretation prompt file not found: {interpretation_prompt_path}")
 
@@ -789,7 +797,7 @@ Score guidelines:
         return test_results
 
 
-def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'tests/output') -> dict:
+def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'output') -> dict:
     """
     Generate comprehensive chatbot testing report.
 

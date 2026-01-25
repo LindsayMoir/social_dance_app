@@ -455,7 +455,7 @@ class ScrapingValidator:
                 report['performance_degradation'] = degradation_df.to_dict('records')
 
         # Save report to file
-        output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'tests/output')
+        output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'output')
         os.makedirs(output_dir, exist_ok=True)
 
         output_path = os.path.join(output_dir, 'scraping_validation_report.json')
