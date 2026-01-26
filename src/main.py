@@ -126,6 +126,53 @@ def _format_sql_for_display(sql: str) -> str:
 
     return formatted.strip()
 
+
+def _enforce_default_event_type(sql: str, user_text: str) -> str:
+    """
+    Ensure SQL includes social dance by default unless the user explicitly restricts event_type.
+
+    Rules:
+    - If user_text indicates "only" classes or "only" live music, do not add social dance.
+    - If SQL already contains social dance, leave as-is.
+    - If SQL contains an event_type condition but not social dance, wrap the first event_type condition as
+      (event_type ILIKE '%social dance%' OR <original_event_type_condition>).
+    - If SQL has no event_type condition, append AND (event_type ILIKE '%social dance%') before ORDER BY/LIMIT.
+    """
+    if not sql:
+        return sql
+    s = sql
+    ut = (user_text or "").lower()
+    only_live = any(p in ut for p in ["only live", "only live music", "live only", "just live music"])
+    only_classes = any(p in ut for p in ["only class", "only classes", "classes only", "just classes", "just class"]) 
+
+    if only_live or only_classes:
+        return s
+
+    if "social dance" in s.lower():
+        return s
+
+    # Try to wrap the first event_type condition
+    import re as _re
+    m = _re.search(r"(?i)(event_type\s*(?:ILIKE|LIKE|=)\s*'[^']+')", s)
+    if m:
+        clause = m.group(1)
+        wrapped = f"( event_type ILIKE '%social dance%' OR {clause} )"
+        s = s[:m.start(1)] + wrapped + s[m.end(1):]
+        return s
+
+    # Otherwise, append a default social dance filter before ORDER BY/LIMIT
+    insert_pt = len(s)
+    m2 = _re.search(r"(?i)\bORDER\s+BY\b", s)
+    if m2:
+        insert_pt = m2.start()
+    prefix = s[:insert_pt].rstrip()
+    suffix = s[insert_pt:]
+    if " where " in prefix.lower():
+        prefix += " AND (event_type ILIKE '%social dance%')"
+    else:
+        prefix += " WHERE (event_type ILIKE '%social dance%')"
+    return prefix + " " + suffix.lstrip()
+
 def generate_interpretation(user_query: str, config: dict) -> str:
     """
     Generate a natural language interpretation of the user's search intent.
@@ -375,7 +422,7 @@ def process_confirmation(request: ConfirmationRequest):
                         s = s[si:]
                     s = s.split(";")[0]
                     if s.upper().startswith('SELECT') and not _sql_has_illegal_date_arithmetic(s):
-                        sanitized_query = s
+                        sanitized_query = _enforce_default_event_type(s, combined_q)
                     else:
                         # Strict SQL-only retry
                         sql_only_suffix = (
@@ -391,7 +438,7 @@ def process_confirmation(request: ConfirmationRequest):
                                 s2 = s2[si2:]
                             s2 = s2.split(";")[0]
                             if s2.upper().startswith('SELECT') and not _sql_has_illegal_date_arithmetic(s2):
-                                sanitized_query = s2
+                                sanitized_query = _enforce_default_event_type(s2, combined_q)
             if not sanitized_query.upper().startswith('SELECT'):
                 # Deterministic SQL fallback using date_calculator
                 from date_calculator import calculate_date_range
@@ -412,20 +459,38 @@ def process_confirmation(request: ConfirmationRequest):
                         "event_name, event_type, dance_style, day_of_week, start_date, end_date, "
                         "start_time, end_time, source, url, price, description, location"
                     )
-                    # Keep fallback minimally restrictive: only date range (and time filter if provided).
+                    # Base filters: date range (and time filter if provided)
                     filters = [f"start_date >= '{sd}'", f"start_date <= '{ed}'"]
-                    # If user asked to include classes/live, add those too (without excluding others)
-                    include_live = ("live music" in cq_l) or ("music" in cq_l)
-                    include_classes = any(w in cq_l for w in ["class", "classes", "workshop", "workshops", "lesson", "lessons"])
-                    or_clauses = []
-                    if include_classes:
-                        or_clauses.append("(event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')")
-                    if include_live:
-                        or_clauses.append("event_type ILIKE '%live music%'")
-                    if or_clauses:
-                        filters.append("( " + " OR ".join(or_clauses) + " )")
                     if tf:
                         filters.append(f"start_time >= '{tf}'")
+
+                    # Default event_type behavior: social dance by default unless explicitly restricted by user
+                    # If no explicit event_type filter is present in user-provided conditions, add social dance by default,
+                    # and include classes/live music if the user asked to include them (without excluding social dance).
+                    include_live = ("live music" in cq_l) or ("music" in cq_l)
+                    include_classes = any(w in cq_l for w in ["class", "classes", "workshop", "workshops", "lesson", "lessons"])
+                    only_classes = any(phrase in cq_l for phrase in ["only class", "only classes", "classes only", "just classes", "just class"])
+                    only_live = any(phrase in cq_l for phrase in ["only live", "only live music", "live only", "just live music"]) 
+
+                    # We'll append an OR group only if user hasn't already provided an event_type condition.
+                    # Detect explicit intent in clarification text as well (event_type with operator or shorthand)
+                    import re as _re_detect
+                    explicit_in_text = bool(_re_detect.search(r"(?i)\bevent_type\s*(=|ILIKE|LIKE|>=|<=|>|<|:)", cq))
+                    has_explicit_event_type = explicit_in_text or any('event_type' in f.lower() for f in filters)
+
+                    if not has_explicit_event_type:
+                        if only_classes:
+                            filters.append("(event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')")
+                        elif only_live:
+                            filters.append("event_type ILIKE '%live music%'")
+                        else:
+                            or_parts = ["event_type ILIKE '%social dance%'"]
+                            if include_classes:
+                                or_parts.append("(event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')")
+                            if include_live:
+                                or_parts.append("event_type ILIKE '%live music%'")
+                            if or_parts:
+                                filters.append("( " + " OR ".join(or_parts) + " )")
 
                     # Optional: parse simple column filters from the confirmed question (safe subset)
                     # Pattern: <column> <op> '<value>' where column is a known column and op in =, ILIKE, LIKE, >=, <=, >, <
@@ -471,6 +536,10 @@ def process_confirmation(request: ConfirmationRequest):
                     logging.info("CONFIRMATION: Using deterministic SQL fallback.")
                 else:
                     raise ValueError("Could not generate a valid SQL query from confirmation.")
+
+            # Final enforcement: ensure default social dance is included unless explicitly restricted
+            cq_final = pending_query.get('combined_query') or pending_query.get('user_input') or ''
+            sanitized_query = _enforce_default_event_type(sanitized_query, cq_final)
 
             display_sql = _format_sql_for_display(sanitized_query)
             logging.info(f"CONFIRMATION: Executing confirmed query: {sanitized_query}")
