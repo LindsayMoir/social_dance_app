@@ -438,10 +438,10 @@ def process_query(request: QueryRequest):
     sql_query = llm_handler.query_llm('', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
     logging.info(f"Raw SQL Query: {sql_query}")
 
+    # Always generate interpretation and confirmation, even if SQL didn't come back yet
+    sanitized_query = None
     if sql_query:
-        # Sanitize the SQL query by removing markdown formatting
         sanitized_query = sql_query.replace("```sql", "").replace("```", "").strip()
-        # Optionally, trim everything before the first "SELECT" and after the first ';'
         select_index = sanitized_query.find("SELECT")
         if (select_index != -1):
             sanitized_query = sanitized_query[select_index:]
@@ -471,7 +471,7 @@ def process_query(request: QueryRequest):
                     logging.warning("Preflight: Regenerated SQL still contains illegal date arithmetic; proceeding with interpretation but execution may fail.")
 
         # Ensure we actually have a SELECT statement; otherwise re-query with stricter instructions
-        if not sanitized_query.upper().startswith("SELECT"):
+        if sanitized_query and not sanitized_query.upper().startswith("SELECT"):
             logging.warning("Preflight: No valid SELECT found. Re-querying with explicit SQL-only instruction.")
             sql_only_suffix = (
                 "\n\nSTRICT FIX: Return ONLY a raw SQL SELECT statement (no tool calls, no JSON, no explanations). "
@@ -488,61 +488,49 @@ def process_query(request: QueryRequest):
                 if s3.upper().startswith("SELECT") and not _sql_has_illegal_date_arithmetic(s3):
                     sanitized_query = s3
                     logging.info("Preflight: Successfully regenerated a valid SELECT SQL.")
-        
-        # Generate natural language interpretation instead of executing immediately
-        try:
-            # Get the combined query for interpretation
-            if use_contextual_prompt:
-                query_for_interpretation = combined_query
-            else:
-                query_for_interpretation = user_input
 
-            interpretation = generate_interpretation(query_for_interpretation, config)
-            logging.info(f"Generated interpretation: {interpretation}")
+    # Generate natural language interpretation and always confirm intent
+    try:
+        if use_contextual_prompt:
+            query_for_interpretation = combined_query
+        else:
+            query_for_interpretation = user_input
 
-            # Store pending query for confirmation (even if SQL not yet valid). If invalid, we'll regenerate on confirm.
-            if use_contextual_prompt and session_token:
-                try:
-                    conversation_manager.store_pending_query(
-                        conversation_id=conversation_id,
-                        user_input=user_input,
-                        combined_query=query_for_interpretation,
-                        interpretation=interpretation,
-                        sql_query=sanitized_query if sanitized_query.upper().startswith('SELECT') else None
-                    )
+        interpretation = generate_interpretation(query_for_interpretation, config)
+        logging.info(f"Generated interpretation: {interpretation}")
 
-                    # Update context with concatenation info for next refinement
-                    search_context = {
-                        "last_search_query": context.get('last_search_query', combined_query),
-                        "concatenation_count": context.get('concatenation_count', 1)
-                    }
-                    conversation_manager.update_conversation_context(conversation_id, search_context)
+        if use_contextual_prompt and session_token:
+            try:
+                conversation_manager.store_pending_query(
+                    conversation_id=conversation_id,
+                    user_input=user_input,
+                    combined_query=query_for_interpretation,
+                    interpretation=interpretation,
+                    sql_query=sanitized_query if (sanitized_query and sanitized_query.upper().startswith('SELECT')) else None
+                )
+                search_context = {
+                    "last_search_query": context.get('last_search_query', combined_query),
+                    "concatenation_count": context.get('concatenation_count', 1)
+                }
+                conversation_manager.update_conversation_context(conversation_id, search_context)
+            except Exception as e:
+                logging.error(f"Error storing pending query: {e}")
+                raise HTTPException(status_code=500, detail=f"Error storing query for confirmation: {e}")
 
-                except Exception as e:
-                    logging.error(f"Error storing pending query: {e}")
-                    raise HTTPException(status_code=500, detail=f"Error storing query for confirmation: {e}")
-
-            # Return interpretation with confirmation options — always enable confirmation
-            return {
-                "interpretation": interpretation,
-                "confirmation_required": True,
-                "conversation_id": conversation_id if use_contextual_prompt else None,
-                "intent": intent if use_contextual_prompt else None,
-                "message": f"{interpretation}\n\nIf that is correct, please confirm using the buttons below:",
-                "options": ["yes", "clarify", "no"],
-                "sql_query": sanitized_query if sanitized_query.upper().startswith('SELECT') else None
-            }
-
-        except Exception as e:
-            logging.error(f"Error generating interpretation: {e}")
-            # Fallback for non-contextual queries - just return a simple message
-            return {
-                "message": f"I understand you want to search for: {user_input}. Please confirm if this is correct.",
-                "confirmation_required": True,
-                "simple_confirmation": True
-            }
-    else:
-        logging.warning("LLM did not return a valid SQL query.")
         return {
-            "message": "The language model could not generate a valid SQL query from your input. Please try rephrasing your question."
+            "interpretation": interpretation,
+            "confirmation_required": True,
+            "conversation_id": conversation_id if use_contextual_prompt else None,
+            "intent": intent if use_contextual_prompt else None,
+            "message": f"{interpretation}\n\nIf that is correct, please confirm using the buttons below:",
+            "options": ["yes", "clarify", "no"],
+            "sql_query": sanitized_query if (sanitized_query and sanitized_query.upper().startswith('SELECT')) else None
+        }
+
+    except Exception as e:
+        logging.error(f"Error generating interpretation: {e}")
+        return {
+            "message": f"I understand you want to search for: {user_input}. Please confirm if this is correct.",
+            "confirmation_required": True,
+            "simple_confirmation": True
         }
