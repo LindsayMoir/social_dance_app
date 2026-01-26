@@ -220,6 +220,18 @@ class ChatbotTestExecutor:
 
         logging.info("ChatbotTestExecutor initialized with production prompts")
 
+    @staticmethod
+    def _sql_has_illegal_date_arithmetic(sql: str) -> bool:
+        if not sql:
+            return False
+        s = sql.upper()
+        patterns = [
+            r"\bCURRENT_DATE\s*[\+\-]\s*\d+\b",
+            r"\bCURRENT_TIMESTAMP\s*[\+\-]\s*\d+\b",
+            r"'\d{4}-\d{2}-\d{2}'\s*[\+\-]",
+        ]
+        return any(re.search(p, s) for p in patterns)
+
     def generate_interpretation(self, user_query: str, current_date: str, current_day_of_week: str, current_time: str) -> str:
         """
         Generate a natural language interpretation of the user's search intent.
@@ -336,12 +348,30 @@ class ChatbotTestExecutor:
                     'is_clarification': True  # Flag for scorer
                 }
 
-            # Sanitize SQL (same logic as main.py lines 369-375)
-            sql_query = sql_raw.replace("```sql", "").replace("```", "").strip()
-            select_idx = sql_query.upper().find("SELECT")
-            if select_idx != -1:
-                sql_query = sql_query[select_idx:]
-            sql_query = sql_query.split(";")[0].strip()
+              # Sanitize SQL (same logic as main.py lines 369-375)
+              sql_query = sql_raw.replace("```sql", "").replace("```", "").strip()
+              select_idx = sql_query.upper().find("SELECT")
+              if select_idx != -1:
+                  sql_query = sql_query[select_idx:]
+              sql_query = sql_query.split(";")[0].strip()
+
+              # Preflight re-query if illegal date arithmetic is detected
+              if self._sql_has_illegal_date_arithmetic(sql_query):
+                  strict_suffix = (
+                      "\n\nSTRICT FIX: You MUST call calculate_date_range for ANY temporal expression and use ONLY the returned dates. "
+                      "Never add/subtract integers to dates (e.g., CURRENT_DATE + 7). If referencing CURRENT_DATE, use INTERVAL syntax only, "
+                      "but prefer explicit dates from the tool. Return ONLY SQL."
+                  )
+                  strict_prompt = f"{prompt}\n{strict_suffix}"
+                  sql_raw2 = self.llm_handler.query_llm('', strict_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+                  if sql_raw2:
+                      sql2 = sql_raw2.replace("```sql", "").replace("```", "").strip()
+                      si2 = sql2.upper().find("SELECT")
+                      if si2 != -1:
+                          sql2 = sql2[si2:]
+                      sql2 = sql2.split(";")[0].strip()
+                      if not self._sql_has_illegal_date_arithmetic(sql2):
+                          sql_query = sql2
 
             # Validate SQL syntax
             syntax_valid = self._check_sql_syntax(sql_query)

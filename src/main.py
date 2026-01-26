@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import create_engine, text
+import re
 
 # Set up sys.path so that modules in src/ are accessible
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -75,6 +76,18 @@ else:
 # Create the SQLAlchemy engine
 engine = create_engine(DATABASE_URL)
 logging.info("main.py: SQLAlchemy engine created.")
+
+# SQL preflight validation for date arithmetic and common pitfalls
+def _sql_has_illegal_date_arithmetic(sql: str) -> bool:
+    if not sql:
+        return False
+    s = sql.upper()
+    patterns = [
+        r"\bCURRENT_DATE\s*[\+\-]\s*\d+\b",
+        r"\bCURRENT_TIMESTAMP\s*[\+\-]\s*\d+\b",
+        r"'\d{4}-\d{2}-\d{2}'\s*[\+\-]",  # adding/subtracting to a string literal date
+    ]
+    return any(re.search(p, s) for p in patterns)
 
 def generate_interpretation(user_query: str, config: dict) -> str:
     """
@@ -391,6 +404,28 @@ def process_query(request: QueryRequest):
             sanitized_query = sanitized_query[select_index:]
         sanitized_query = sanitized_query.split(";")[0]
         logging.info(f"Sanitized SQL Query: {sanitized_query}")
+
+        # Preflight: reject illegal date arithmetic and re-query with strict reminder
+        if _sql_has_illegal_date_arithmetic(sanitized_query):
+            logging.warning("Preflight: Detected illegal date arithmetic in SQL. Re-querying with strict date rules.")
+            strict_suffix = (
+                "\n\nSTRICT FIX: You MUST call calculate_date_range for ANY temporal expression and use ONLY the returned dates. "
+                "Never add/subtract integers to dates (e.g., CURRENT_DATE + 7). If referencing CURRENT_DATE, use INTERVAL syntax only, "
+                "but prefer explicit dates from the tool. Return ONLY SQL."
+            )
+            strict_prompt = f"{prompt}\n{strict_suffix}"
+            sql_query2 = llm_handler.query_llm('', strict_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+            if sql_query2:
+                sanitized_query2 = sql_query2.replace("```sql", "").replace("```", "").strip()
+                select_index2 = sanitized_query2.find("SELECT")
+                if select_index2 != -1:
+                    sanitized_query2 = sanitized_query2[select_index2:]
+                sanitized_query2 = sanitized_query2.split(";")[0]
+                if not _sql_has_illegal_date_arithmetic(sanitized_query2):
+                    sanitized_query = sanitized_query2
+                    logging.info("Preflight: Successfully regenerated SQL without illegal date arithmetic.")
+                else:
+                    logging.warning("Preflight: Regenerated SQL still contains illegal date arithmetic; proceeding with interpretation but execution may fail.")
         
         # Generate natural language interpretation instead of executing immediately
         try:
