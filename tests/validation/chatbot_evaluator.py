@@ -297,7 +297,6 @@ class ChatbotTestExecutor:
         current_time = now.strftime("%H:%M %Z")
 
         # STEP 1: Generate interpretation (confirmation text)
-        # This is what the user sees before SQL execution
         interpretation = self.generate_interpretation(
             user_query=question,
             current_date=current_date,
@@ -326,59 +325,53 @@ class ChatbotTestExecutor:
             if not sql_raw:
                 return self._create_error_result(question_dict, "LLM returned empty response")
 
-            # Check for CLARIFICATION response from SQL generation
-            # Note: This is different from the interpretation text - this is when the LLM
-            # asks for more information rather than generating SQL
+            # CLARIFICATION path
             if sql_raw.strip().startswith("CLARIFICATION:"):
-                # Extract just the clarification text (after "CLARIFICATION:")
                 clarification_text = sql_raw.strip().replace("CLARIFICATION:", "").strip()
-
                 return {
                     'question': question,
                     'category': question_dict['category'],
                     'expected_criteria': question_dict.get('expected_criteria', {}),
-                    'interpretation': interpretation,  # Confirmation text (tested separately)
+                    'interpretation': interpretation,
                     'sql_query': sql_raw.strip(),
-                    'clarification_text': clarification_text,  # LLM asking for more info
-                    'sql_syntax_valid': True,  # CLARIFICATION is valid output
-                    'execution_success': True,  # Successfully returned clarification
-                    'result_count': 0,  # No SQL results expected
+                    'clarification_text': clarification_text,
+                    'sql_syntax_valid': True,
+                    'execution_success': True,
+                    'result_count': 0,
                     'sample_results': [],
                     'timestamp': datetime.now().isoformat(),
-                    'is_clarification': True  # Flag for scorer
+                    'is_clarification': True
                 }
 
-              # Sanitize SQL (same logic as main.py lines 369-375)
-              sql_query = sql_raw.replace("```sql", "").replace("```", "").strip()
-              select_idx = sql_query.upper().find("SELECT")
-              if select_idx != -1:
-                  sql_query = sql_query[select_idx:]
-              sql_query = sql_query.split(";")[0].strip()
+            # Sanitize SQL
+            sql_query = sql_raw.replace("```sql", "").replace("```", "").strip()
+            select_idx = sql_query.upper().find("SELECT")
+            if select_idx != -1:
+                sql_query = sql_query[select_idx:]
+            sql_query = sql_query.split(";")[0].strip()
 
-              # Preflight re-query if illegal date arithmetic is detected
-              if self._sql_has_illegal_date_arithmetic(sql_query):
-                  strict_suffix = (
-                      "\n\nSTRICT FIX: You MUST call calculate_date_range for ANY temporal expression and use ONLY the returned dates. "
-                      "Never add/subtract integers to dates (e.g., CURRENT_DATE + 7). If referencing CURRENT_DATE, use INTERVAL syntax only, "
-                      "but prefer explicit dates from the tool. Return ONLY SQL."
-                  )
-                  strict_prompt = f"{prompt}\n{strict_suffix}"
-                  sql_raw2 = self.llm_handler.query_llm('', strict_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
-                  if sql_raw2:
-                      sql2 = sql_raw2.replace("```sql", "").replace("```", "").strip()
-                      si2 = sql2.upper().find("SELECT")
-                      if si2 != -1:
-                          sql2 = sql2[si2:]
-                      sql2 = sql2.split(";")[0].strip()
-                      if not self._sql_has_illegal_date_arithmetic(sql2):
-                          sql_query = sql2
+            # Preflight re-query if illegal date arithmetic is detected
+            if self._sql_has_illegal_date_arithmetic(sql_query):
+                strict_suffix = (
+                    "\n\nSTRICT FIX: You MUST call calculate_date_range for ANY temporal expression and use ONLY the returned dates. "
+                    "Never add/subtract integers to dates (e.g., CURRENT_DATE + 7). If referencing CURRENT_DATE, use INTERVAL syntax only, "
+                    "but prefer explicit dates from the tool. Return ONLY SQL."
+                )
+                strict_prompt = f"{prompt}\n{strict_suffix}"
+                sql_raw2 = self.llm_handler.query_llm('', strict_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+                if sql_raw2:
+                    sql2 = sql_raw2.replace("```sql", "").replace("```", "").strip()
+                    si2 = sql2.upper().find("SELECT")
+                    if si2 != -1:
+                        sql2 = sql2[si2:]
+                    sql2 = sql2.split(";")[0].strip()
+                    if not self._sql_has_illegal_date_arithmetic(sql2):
+                        sql_query = sql2
 
-              # Validate SQL syntax
-              syntax_valid = self._check_sql_syntax(sql_query)
-              if not syntax_valid and self._sql_has_illegal_date_arithmetic(sql_query):
-                  logging.warning("Preflight: Invalid SQL with illegal date arithmetic detected. Attempting re-query.")
-                  # Already attempted in earlier step, but double-guard here
-                  pass
+            # Validate SQL syntax
+            syntax_valid = self._check_sql_syntax(sql_query)
+            if not syntax_valid and self._sql_has_illegal_date_arithmetic(sql_query):
+                logging.warning("Preflight: Invalid SQL with illegal date arithmetic detected. Attempting re-query.")
 
             # Execute query if valid
             if syntax_valid:
@@ -389,7 +382,6 @@ class ChatbotTestExecutor:
 
                     # Get sample results (first 5)
                     if results:
-                        # Convert to list of dicts for easier handling
                         sample_results = [dict(row._mapping) for row in results[:5]]
                     else:
                         sample_results = []
@@ -399,8 +391,6 @@ class ChatbotTestExecutor:
                     execution_success = False
                     result_count = 0
                     sample_results = []
-                    sql_query = sql_query  # Keep SQL for debugging
-
             else:
                 execution_success = False
                 result_count = 0
@@ -410,7 +400,7 @@ class ChatbotTestExecutor:
                 'question': question,
                 'category': question_dict['category'],
                 'expected_criteria': question_dict.get('expected_criteria', {}),
-                'interpretation': interpretation,  # Confirmation text shown to user
+                'interpretation': interpretation,
                 'sql_query': sql_query,
                 'sql_syntax_valid': syntax_valid,
                 'execution_success': execution_success,
