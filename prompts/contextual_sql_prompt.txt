@@ -140,7 +140,7 @@ Recognized: '2-step','argentine tango','bachata','balboa','cha cha','cha cha cha
 
 === EVENT TYPES ===
 Allowed: 'social dance','class','workshop','other','rehearsal','live music'
-• Default: event_type ILIKE '%social dance%'
+• No default event_type filter: only include event_type conditions if the user explicitly asks for them (e.g., says "social dance", "classes", "workshops", or "live music").
 • Learning keywords ("learn","lesson","class","workshop") → (event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')
 • Performance keywords ("playing","performing","perform","plays","band","musician","artist","who is") → (event_type ILIKE '%social dance%' OR event_type ILIKE '%live music%')
 • Venue/location queries (checking location, source, or url columns) → (event_type ILIKE '%social dance%' OR event_type ILIKE '%live music%')
@@ -168,10 +168,8 @@ CRITICAL: Distinguish between conjunctive and disjunctive requirements:
 
   - "Find live music for [dance_style]" / "Show me live music events"
     → If a specific dance style is mentioned, include it explicitly:
-    (event_type ILIKE '%live music%' OR event_type ILIKE '%social dance%')
-    AND dance_style ILIKE '%<style from user>%'
-    → If no style is mentioned, use ONLY the OR over event_type (no extra AND).
-    → Never add duplicate AND groups that repeat event_type conditions.
+       (event_type ILIKE '%live music%' OR event_type ILIKE '%social dance%') AND dance_style ILIKE '%<style>%'
+    → If no style is mentioned, you may omit event_type entirely and rely on other filters; avoid redundant groups.
 
 • REDUNDANCY AVOIDANCE (IMPORTANT):
   - Include at most ONE boolean group for event_type.
