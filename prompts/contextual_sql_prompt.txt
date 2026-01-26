@@ -247,7 +247,9 @@ Common venues and aliases:
 
 === OUTPUT MODES ===
 
-🟢 SQL MODE (preferred): Output ONLY the SQL query (no fences, comments, extra text)
+🟢 SQL MODE (preferred):
+• Output ONLY the raw SQL SELECT statement (no fences, comments, tool calls, or JSON)
+• The output MUST start with SELECT
 
 🟡 CLARIFICATION MODE: When ambiguous/unsafe/insufficient info:
 Format: "CLARIFICATION: <1-2 sentences>. Missing: <items>. Examples: '<rephrase 1>'; '<rephrase 2>'."

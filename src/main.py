@@ -426,6 +426,25 @@ def process_query(request: QueryRequest):
                     logging.info("Preflight: Successfully regenerated SQL without illegal date arithmetic.")
                 else:
                     logging.warning("Preflight: Regenerated SQL still contains illegal date arithmetic; proceeding with interpretation but execution may fail.")
+
+        # Ensure we actually have a SELECT statement; otherwise re-query with stricter instructions
+        if not sanitized_query.upper().startswith("SELECT"):
+            logging.warning("Preflight: No valid SELECT found. Re-querying with explicit SQL-only instruction.")
+            sql_only_suffix = (
+                "\n\nSTRICT FIX: Return ONLY a raw SQL SELECT statement (no tool calls, no JSON, no explanations). "
+                "Call calculate_date_range internally and embed the dates directly in WHERE clauses."
+            )
+            sql_only_prompt = f"{prompt}\n{sql_only_suffix}"
+            sql_query3 = llm_handler.query_llm('', sql_only_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+            if sql_query3:
+                s3 = sql_query3.replace("```sql", "").replace("```", "").strip()
+                si3 = s3.upper().find("SELECT")
+                if si3 != -1:
+                    s3 = s3[si3:]
+                s3 = s3.split(";")[0]
+                if s3.upper().startswith("SELECT") and not _sql_has_illegal_date_arithmetic(s3):
+                    sanitized_query = s3
+                    logging.info("Preflight: Successfully regenerated a valid SELECT SQL.")
         
         # Generate natural language interpretation instead of executing immediately
         try:
@@ -438,8 +457,8 @@ def process_query(request: QueryRequest):
             interpretation = generate_interpretation(query_for_interpretation, config)
             logging.info(f"Generated interpretation: {interpretation}")
             
-            # Store pending query for confirmation if using sessions
-            if use_contextual_prompt and session_token:
+            # Store pending query for confirmation only if SQL appears valid
+            if use_contextual_prompt and session_token and sanitized_query.upper().startswith('SELECT'):
                 try:
                     conversation_manager.store_pending_query(
                         conversation_id=conversation_id,
@@ -461,13 +480,24 @@ def process_query(request: QueryRequest):
                     raise HTTPException(status_code=500, detail=f"Error storing query for confirmation: {e}")
             
             # Return interpretation with confirmation options
+            # If SQL is invalid (no SELECT), return interpretation without enabling confirmation
+            if not sanitized_query.upper().startswith('SELECT'):
+                return {
+                    "message": f"{interpretation}\n\nI need a moment to refine the query for dates. Please try again or expand the time range.",
+                    "interpretation": interpretation,
+                    "confirmation_required": False,
+                    "intent": intent if use_contextual_prompt else None,
+                    "sql_query": None
+                }
+
             return {
                 "interpretation": interpretation,
                 "confirmation_required": True,
                 "conversation_id": conversation_id if use_contextual_prompt else None,
                 "intent": intent if use_contextual_prompt else None,
                 "message": f"{interpretation}\n\nIf that is correct, please confirm using the buttons below:",
-                "options": ["yes", "clarify", "no"]
+                "options": ["yes", "clarify", "no"],
+                "sql_query": sanitized_query
             }
             
         except Exception as e:

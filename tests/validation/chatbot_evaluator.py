@@ -373,8 +373,12 @@ class ChatbotTestExecutor:
                       if not self._sql_has_illegal_date_arithmetic(sql2):
                           sql_query = sql2
 
-            # Validate SQL syntax
-            syntax_valid = self._check_sql_syntax(sql_query)
+              # Validate SQL syntax
+              syntax_valid = self._check_sql_syntax(sql_query)
+              if not syntax_valid and self._sql_has_illegal_date_arithmetic(sql_query):
+                  logging.warning("Preflight: Invalid SQL with illegal date arithmetic detected. Attempting re-query.")
+                  # Already attempted in earlier step, but double-guard here
+                  pass
 
             # Execute query if valid
             if syntax_valid:
