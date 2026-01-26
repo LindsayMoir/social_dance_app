@@ -1,0 +1,44 @@
+name: Python Syntax Check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Compile all Python files (syntax/indentation)
+        run: |
+          python - << 'PY'
+          import os, sys, py_compile
+          bad = []
+          skip = {'.venv','venv','node_modules','__pycache__','.pytest_cache','.git'}
+          for root, dirs, files in os.walk('.', topdown=True):
+              dirs[:] = [d for d in dirs if d not in skip]
+              for f in files:
+                  if f.endswith('.py'):
+                      path = os.path.join(root, f)
+                      try:
+                          py_compile.compile(path, doraise=True)
+                      except Exception as e:
+                          bad.append((path, str(e)))
+          if bad:
+              print('Syntax/indentation errors found:')
+              for p, err in bad:
+                  print('---\n', p, '\n', err)
+              sys.exit(1)
+          else:
+              print('All Python files compiled successfully (no syntax/indent issues).')
+          PY
+
