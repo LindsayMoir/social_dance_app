@@ -89,6 +89,43 @@ def _sql_has_illegal_date_arithmetic(sql: str) -> bool:
     ]
     return any(re.search(p, s) for p in patterns)
 
+
+def _format_sql_for_display(sql: str) -> str:
+    """
+    Lightweight SQL formatter for display in UI.
+
+    - Puts each SELECT column on its own line
+    - Breaks before FROM, WHERE, GROUP BY, ORDER BY, LIMIT, HAVING
+    - Indents AND/OR conditions
+    """
+    if not sql:
+        return sql
+    s = re.sub(r"\s+", " ", sql.strip())
+
+    # Extract columns between SELECT and FROM
+    m = re.search(r"(?is)\bselect\s+(.*?)\s+from\s+", s)
+    if m:
+        cols_raw = m.group(1)
+        cols = [c.strip() for c in cols_raw.split(',')]
+        select_block = "SELECT\n    " + ",\n    ".join(cols)
+        rest = s[m.end():]  # starts after 'from '
+        formatted = select_block + "\nFROM " + rest
+    else:
+        formatted = s
+
+    # Section breaks
+    formatted = re.sub(r"(?i)\s+where\s+", "\nWHERE\n    ", formatted)
+    formatted = re.sub(r"(?i)\s+group\s+by\s+", "\nGROUP BY\n    ", formatted)
+    formatted = re.sub(r"(?i)\s+order\s+by\s+", "\nORDER BY\n    ", formatted)
+    formatted = re.sub(r"(?i)\s+having\s+", "\nHAVING\n    ", formatted)
+    formatted = re.sub(r"(?i)\s+limit\s+", "\nLIMIT ", formatted)
+
+    # Condition line breaks
+    formatted = formatted.replace(" AND ", "\n    AND ")
+    formatted = formatted.replace(" OR ", "\n    OR ")
+
+    return formatted.strip()
+
 def generate_interpretation(user_query: str, config: dict) -> str:
     """
     Generate a natural language interpretation of the user's search intent.
@@ -114,6 +151,7 @@ def generate_interpretation(user_query: str, config: dict) -> str:
             from date_calculator import calculate_date_range
             uq_l = uq.lower()
             tz_abbr = current_time.split()[-1]
+            include_live = "live music" in uq_l or "music" in uq_l
 
             # Map simple phrases
             phrases = [
@@ -135,8 +173,9 @@ def generate_interpretation(user_query: str, config: dict) -> str:
                 when = "tonight" if temporal == "tonight" else "tomorrow night"
                 date_txt = _format_date(sd)
                 after_txt = f" after {time_filter[:5]} {tz_abbr}" if time_filter else ""
+                event_phrase = "social dance and live music events" if include_live else "social dance events"
                 return (
-                    f"My understanding is that you want to see all social dance events available in the {default_city} area {when}. "
+                    f"My understanding is that you want to see all {event_phrase} available in the {default_city} area {when}. "
                     f"That would be {('today, ' if temporal=='tonight' else '')}{date_txt}{after_txt}."
                 )
 
@@ -147,20 +186,23 @@ def generate_interpretation(user_query: str, config: dict) -> str:
                 days = [d0 + timedelta(days=i) for i in range(3)]
                 days_txt = ", ".join([day.strftime("%A, %B %d").replace(" 0"," ") for day in days[:2]]) + \
                            f", and {days[2].strftime('%A, %B %d, %Y').replace(' 0',' ')}"
+                event_phrase = "social dance and live music events" if include_live else "social dance events"
                 return (
-                    f"My understanding is that you want to see all social dance events available in the {default_city} area {temporal}. "
+                    f"My understanding is that you want to see all {event_phrase} available in the {default_city} area {temporal}. "
                     f"That would be {days_txt}."
                 )
 
             if temporal in ("this week", "next week"):
+                event_phrase = "social dance and live music events" if include_live else "social dance events"
                 return (
-                    f"My understanding is that you want to see all social dance events available in the {default_city} area {temporal}. "
+                    f"My understanding is that you want to see all {event_phrase} available in the {default_city} area {temporal}. "
                     f"That would be from {_format_date(sd)} to {_format_date(ed)}."
                 )
 
             # Specific day
+            event_phrase = "social dance and live music events" if include_live else "social dance events"
             return (
-                f"My understanding is that you want to see all social dance events available in the {default_city} area on {_format_date(sd)}."
+                f"My understanding is that you want to see all {event_phrase} available in the {default_city} area on {_format_date(sd)}."
             )
         except Exception:
             return f"My understanding is that you want to see dance events available in the {default_city} area."
@@ -349,13 +391,37 @@ def process_confirmation(request: ConfirmationRequest):
                         "event_name, event_type, dance_style, day_of_week, start_date, end_date, "
                         "start_time, end_time, source, url, price, description, location"
                     )
-                    filters = [
-                        f"start_date >= '{sd}'",
-                        f"start_date <= '{ed}'",
-                        "event_type ILIKE '%social dance%'"
-                    ]
+                    # Keep fallback minimally restrictive: only date range (and time filter if provided).
+                    # This allows any valid combinations of event_type/dance_style to be included.
+                    filters = [f"start_date >= '{sd}'", f"start_date <= '{ed}'"]
                     if tf:
                         filters.append(f"start_time >= '{tf}'")
+
+                    # Optional: parse simple column filters from the confirmed question (safe subset)
+                    # Pattern: <column> <op> '<value>' where column is a known column and op in =, ILIKE, LIKE, >=, <=, >, <
+                    try:
+                        allowed_cols = {
+                            'event_name','event_type','dance_style','day_of_week','start_date','end_date',
+                            'start_time','end_time','source','url','price','description','location'
+                        }
+                        import re as _re
+                        for m in _re.finditer(r"(?i)\b([a-z_]+)\s*(=|ILIKE|LIKE|>=|<=|>|<)\s*'([^']*)'", cq):
+                            col, op, val = m.group(1).lower(), m.group(2).upper(), m.group(3)
+                            if col not in allowed_cols:
+                                continue
+                            safe_val = val.replace("'", "")
+                            # Prefer ILIKE with wildcards for textual columns when '=' is used
+                            text_cols = {
+                                'event_name','event_type','dance_style','day_of_week','source','url','price','description','location'
+                            }
+                            if op == '=' and col in text_cols:
+                                op = 'ILIKE'
+                            # Ensure wildcards for LIKE/ILIKE if none provided
+                            if op in ('LIKE','ILIKE') and '%' not in safe_val:
+                                safe_val = f"%{safe_val}%"
+                            filters.append(f"{col} {op} '{safe_val}'")
+                    except Exception:
+                        pass
                     sanitized_query = (
                         f"SELECT {cols} FROM events WHERE " + " AND ".join(filters) +
                         " ORDER BY start_date, start_time LIMIT 30"
@@ -364,6 +430,7 @@ def process_confirmation(request: ConfirmationRequest):
                 else:
                     raise ValueError("Could not generate a valid SQL query from confirmation.")
 
+            display_sql = _format_sql_for_display(sanitized_query)
             logging.info(f"CONFIRMATION: Executing confirmed query: {sanitized_query}")
 
             rows = db_handler.execute_query(sanitized_query)
@@ -382,14 +449,14 @@ def process_confirmation(request: ConfirmationRequest):
                 conversation_id=conversation_id,
                 role="assistant",
                 content=f"Found {len(data)} events",
-                sql_query=sanitized_query,
+                sql_query=display_sql,
                 result_count=len(data)
             )
             
             conversation_manager.clear_pending_query(conversation_id)
             
             return {
-                "sql_query": sanitized_query,
+                "sql_query": display_sql,
                 "data": data,
                 "message": "Here are the results from your confirmed query.",
                 "conversation_id": conversation_id,
