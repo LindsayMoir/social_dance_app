@@ -151,7 +151,8 @@ def generate_interpretation(user_query: str, config: dict) -> str:
             from date_calculator import calculate_date_range
             uq_l = uq.lower()
             tz_abbr = current_time.split()[-1]
-            include_live = "live music" in uq_l or "music" in uq_l
+            include_live = ("live music" in uq_l) or ("music" in uq_l)
+            include_classes = any(w in uq_l for w in ["class", "classes", "workshop", "workshops", "lesson", "lessons"])
 
             # Map simple phrases
             phrases = [
@@ -173,7 +174,12 @@ def generate_interpretation(user_query: str, config: dict) -> str:
                 when = "tonight" if temporal == "tonight" else "tomorrow night"
                 date_txt = _format_date(sd)
                 after_txt = f" after {time_filter[:5]} {tz_abbr}" if time_filter else ""
-                event_phrase = "social dance and live music events" if include_live else "social dance events"
+                parts = ["social dance events"]
+                if include_classes:
+                    parts.append("classes")
+                if include_live:
+                    parts.append("live music events")
+                event_phrase = " and ".join([", ".join(parts[:-1])] + [parts[-1]]) if len(parts) > 1 else parts[0]
                 return (
                     f"My understanding is that you want to see all {event_phrase} available in the {default_city} area {when}. "
                     f"That would be {('today, ' if temporal=='tonight' else '')}{date_txt}{after_txt}."
@@ -186,21 +192,36 @@ def generate_interpretation(user_query: str, config: dict) -> str:
                 days = [d0 + timedelta(days=i) for i in range(3)]
                 days_txt = ", ".join([day.strftime("%A, %B %d").replace(" 0"," ") for day in days[:2]]) + \
                            f", and {days[2].strftime('%A, %B %d, %Y').replace(' 0',' ')}"
-                event_phrase = "social dance and live music events" if include_live else "social dance events"
+                parts = ["social dance events"]
+                if include_classes:
+                    parts.append("classes")
+                if include_live:
+                    parts.append("live music events")
+                event_phrase = " and ".join([", ".join(parts[:-1])] + [parts[-1]]) if len(parts) > 1 else parts[0]
                 return (
                     f"My understanding is that you want to see all {event_phrase} available in the {default_city} area {temporal}. "
                     f"That would be {days_txt}."
                 )
 
             if temporal in ("this week", "next week"):
-                event_phrase = "social dance and live music events" if include_live else "social dance events"
+                parts = ["social dance events"]
+                if include_classes:
+                    parts.append("classes")
+                if include_live:
+                    parts.append("live music events")
+                event_phrase = " and ".join([", ".join(parts[:-1])] + [parts[-1]]) if len(parts) > 1 else parts[0]
                 return (
                     f"My understanding is that you want to see all {event_phrase} available in the {default_city} area {temporal}. "
                     f"That would be from {_format_date(sd)} to {_format_date(ed)}."
                 )
 
             # Specific day
-            event_phrase = "social dance and live music events" if include_live else "social dance events"
+            parts = ["social dance events"]
+            if include_classes:
+                parts.append("classes")
+            if include_live:
+                parts.append("live music events")
+            event_phrase = " and ".join([", ".join(parts[:-1])] + [parts[-1]]) if len(parts) > 1 else parts[0]
             return (
                 f"My understanding is that you want to see all {event_phrase} available in the {default_city} area on {_format_date(sd)}."
             )
@@ -392,34 +413,55 @@ def process_confirmation(request: ConfirmationRequest):
                         "start_time, end_time, source, url, price, description, location"
                     )
                     # Keep fallback minimally restrictive: only date range (and time filter if provided).
-                    # This allows any valid combinations of event_type/dance_style to be included.
                     filters = [f"start_date >= '{sd}'", f"start_date <= '{ed}'"]
+                    # If user asked to include classes/live, add those too (without excluding others)
+                    include_live = ("live music" in cq_l) or ("music" in cq_l)
+                    include_classes = any(w in cq_l for w in ["class", "classes", "workshop", "workshops", "lesson", "lessons"])
+                    or_clauses = []
+                    if include_classes:
+                        or_clauses.append("(event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')")
+                    if include_live:
+                        or_clauses.append("event_type ILIKE '%live music%'")
+                    if or_clauses:
+                        filters.append("( " + " OR ".join(or_clauses) + " )")
                     if tf:
                         filters.append(f"start_time >= '{tf}'")
 
                     # Optional: parse simple column filters from the confirmed question (safe subset)
                     # Pattern: <column> <op> '<value>' where column is a known column and op in =, ILIKE, LIKE, >=, <=, >, <
                     try:
-                        allowed_cols = {
-                            'event_name','event_type','dance_style','day_of_week','start_date','end_date',
-                            'start_time','end_time','source','url','price','description','location'
-                        }
+                        # Dynamically discover valid columns from the events table
+                        try:
+                            events_table = db_handler.metadata.tables.get('events')
+                            allowed_cols = set([c.name for c in events_table.columns]) if events_table else set()
+                        except Exception:
+                            allowed_cols = set()
+
                         import re as _re
+                        # Pattern 1: SQL-like conditions with quoted values
                         for m in _re.finditer(r"(?i)\b([a-z_]+)\s*(=|ILIKE|LIKE|>=|<=|>|<)\s*'([^']*)'", cq):
                             col, op, val = m.group(1).lower(), m.group(2).upper(), m.group(3)
-                            if col not in allowed_cols:
+                            if allowed_cols and col not in allowed_cols:
                                 continue
                             safe_val = val.replace("'", "")
-                            # Prefer ILIKE with wildcards for textual columns when '=' is used
-                            text_cols = {
-                                'event_name','event_type','dance_style','day_of_week','source','url','price','description','location'
-                            }
-                            if op == '=' and col in text_cols:
+                            # Prefer ILIKE with wildcards for textual comparisons when '=' is used
+                            if op == '=':
                                 op = 'ILIKE'
-                            # Ensure wildcards for LIKE/ILIKE if none provided
                             if op in ('LIKE','ILIKE') and '%' not in safe_val:
                                 safe_val = f"%{safe_val}%"
                             filters.append(f"{col} {op} '{safe_val}'")
+
+                        # Pattern 2: shorthand "col: value" or "col=value" without quotes → ILIKE '%value%'
+                        for m in _re.finditer(r"(?i)\b([a-z_]+)\s*[:=]\s*([\w\-\s%\./]+)", cq):
+                            col, val = m.group(1).lower(), m.group(2).strip()
+                            if allowed_cols and col not in allowed_cols:
+                                continue
+                            if not val:
+                                continue
+                            safe_val = val.replace("'", "")
+                            if '%' not in safe_val:
+                                safe_val = f"%{safe_val}%"
+                            filters.append(f"{col} ILIKE '{safe_val}'")
                     except Exception:
                         pass
                     sanitized_query = (
@@ -470,15 +512,17 @@ def process_confirmation(request: ConfirmationRequest):
             raise HTTPException(status_code=500, detail=error_message)
     
     elif confirmation == "clarify":
-        # Handle clarification - treat as new query with clarification text
+        # Handle clarification — merge with prior combined query for better context
         if not clarification:
             raise HTTPException(status_code=400, detail="Clarification text is required when selecting 'clarify' option.")
-        
-        # Clear pending query and process clarification as new query
+
+        prior = pending_query.get('combined_query') or pending_query.get('user_input') or ''
+        merged = (prior + ' ' + clarification).strip()
+
+        # Clear pending and re-run with merged input
         conversation_manager.clear_pending_query(conversation_id)
-        
-        # Create a new QueryRequest and process it
-        clarification_request = QueryRequest(user_input=clarification, session_token=session_token)
+
+        clarification_request = QueryRequest(user_input=merged, session_token=session_token)
         return process_query(clarification_request)
     
     elif confirmation == "no":
