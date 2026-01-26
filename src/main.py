@@ -100,6 +100,71 @@ def generate_interpretation(user_query: str, config: dict) -> str:
     Returns:
         str: Natural language interpretation of the search intent
     """
+    # Helper: deterministic fallback using local date_calculator
+    def _format_date(d: str) -> str:
+        try:
+            dt = datetime.strptime(d, "%Y-%m-%d")
+            s = dt.strftime("%A, %B %d, %Y")
+            return s.replace(" 0", " ")
+        except Exception:
+            return d
+
+    def _fallback_interpretation(uq: str) -> str:
+        try:
+            from date_calculator import calculate_date_range
+            uq_l = uq.lower()
+            tz_abbr = current_time.split()[-1]
+
+            # Map simple phrases
+            phrases = [
+                "tonight", "tomorrow night", "tomorrow",
+                "this weekend", "next weekend",
+                "this week", "next week",
+                "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+            ]
+            temporal = next((p for p in phrases if p in uq_l), None)
+
+            if not temporal:
+                return f"My understanding is that you want to see dance events available in the {default_city} area."
+
+            rng = calculate_date_range(temporal, current_date)
+            sd, ed = rng.get("start_date"), rng.get("end_date")
+            time_filter = rng.get("time_filter")
+
+            if temporal == "tonight" or temporal == "tomorrow night":
+                when = "tonight" if temporal == "tonight" else "tomorrow night"
+                date_txt = _format_date(sd)
+                after_txt = f" after {time_filter[:5]} {tz_abbr}" if time_filter else ""
+                return (
+                    f"My understanding is that you want to see all social dance events available in the {default_city} area {when}. "
+                    f"That would be {('today, ' if temporal=='tonight' else '')}{date_txt}{after_txt}."
+                )
+
+            if temporal in ("this weekend", "next weekend"):
+                # List Fri, Sat, Sun
+                from datetime import timedelta
+                d0 = datetime.strptime(sd, "%Y-%m-%d")
+                days = [d0 + timedelta(days=i) for i in range(3)]
+                days_txt = ", ".join([day.strftime("%A, %B %d").replace(" 0"," ") for day in days[:2]]) + \
+                           f", and {days[2].strftime('%A, %B %d, %Y').replace(' 0',' ')}"
+                return (
+                    f"My understanding is that you want to see all social dance events available in the {default_city} area {temporal}. "
+                    f"That would be {days_txt}."
+                )
+
+            if temporal in ("this week", "next week"):
+                return (
+                    f"My understanding is that you want to see all social dance events available in the {default_city} area {temporal}. "
+                    f"That would be from {_format_date(sd)} to {_format_date(ed)}."
+                )
+
+            # Specific day
+            return (
+                f"My understanding is that you want to see all social dance events available in the {default_city} area on {_format_date(sd)}."
+            )
+        except Exception:
+            return f"My understanding is that you want to see dance events available in the {default_city} area."
+
     # Load interpretation prompt
     interpretation_prompt_path = os.path.join(base_dir, 'prompts', 'interpretation_prompt.txt')
     try:
@@ -131,10 +196,31 @@ def generate_interpretation(user_query: str, config: dict) -> str:
     from date_calculator import CALCULATE_DATE_RANGE_TOOL
     interpretation = llm_handler.query_llm('', formatted_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
 
-    if not interpretation:
-        return f"My understanding is that you want to search for dance events related to: {user_query}"
+    if interpretation:
+        text = interpretation.strip()
+        # If the user asked for "tonight" or "tomorrow night", ensure time filter is present
+        uq_l = user_query.lower()
+        if ("tonight" in uq_l or "tomorrow night" in uq_l):
+            try:
+                from date_calculator import calculate_date_range
+                temporal = "tonight" if "tonight" in uq_l else "tomorrow night"
+                rng = calculate_date_range(temporal, current_date)
+                tf = rng.get("time_filter")
+                if tf:
+                    # Append a friendly time hint if not already present
+                    hhmm = tf[:5]
+                    tz_abbr = current_time.split()[-1]
+                    if hhmm not in text and "after" not in text.lower():
+                        text = text.rstrip('.') + f" after {hhmm} {tz_abbr}."
+            except Exception:
+                pass
 
-    return interpretation.strip()
+        # Heuristic: ensure it includes default city; otherwise fallback to deterministic version
+        if default_city.split(',')[0].split()[0].lower() in text.lower():
+            return text
+
+    # Deterministic fallback using local tool
+    return _fallback_interpretation(user_query)
 
 # Initialize the FastAPI app
 app = FastAPI(title="Social Dance Chatbot API")
