@@ -183,6 +183,14 @@ def generate_interpretation(user_query: str, config: dict) -> str:
     current_time = now_pacific.strftime("%H:%M %Z")
     default_city = config.get('location', {}).get('epicentre', 'your area')
     
+    # If the query contains a clear temporal phrase, prefer deterministic tool-based fallback
+    uq_l_pref = user_query.lower()
+    if any(p in uq_l_pref for p in [
+        "tonight", "tomorrow night", "tomorrow", "this weekend", "next weekend",
+        "this week", "next week", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+    ]):
+        return _fallback_interpretation(user_query)
+
     # Format the interpretation prompt
     formatted_prompt = interpretation_template.format(
         current_date=current_date,
@@ -303,10 +311,61 @@ def process_confirmation(request: ConfirmationRequest):
                     if si != -1:
                         s = s[si:]
                     s = s.split(";")[0]
-                    if not _sql_has_illegal_date_arithmetic(s):
+                    if s.upper().startswith('SELECT') and not _sql_has_illegal_date_arithmetic(s):
                         sanitized_query = s
+                    else:
+                        # Strict SQL-only retry
+                        sql_only_suffix = (
+                            "\n\nSTRICT FIX: Return ONLY a raw SQL SELECT statement (no tool calls, no JSON, no explanations). "
+                            "Call calculate_date_range internally and embed the dates directly in WHERE clauses."
+                        )
+                        strict_prompt = f"{prompt}\n{sql_only_suffix}"
+                        sql_raw2 = llm_handler.query_llm('', strict_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+                        if sql_raw2:
+                            s2 = sql_raw2.replace("```sql", "").replace("```", "").strip()
+                            si2 = s2.upper().find("SELECT")
+                            if si2 != -1:
+                                s2 = s2[si2:]
+                            s2 = s2.split(";")[0]
+                            if s2.upper().startswith('SELECT') and not _sql_has_illegal_date_arithmetic(s2):
+                                sanitized_query = s2
+            if not sanitized_query.upper().startswith('SELECT'):
+                # Deterministic SQL fallback using date_calculator
+                from date_calculator import calculate_date_range
+                cq = pending_query.get('combined_query') or pending_query.get('user_input') or ''
+                cq_l = cq.lower()
+                phrases = [
+                    "tonight", "tomorrow night", "tomorrow",
+                    "this weekend", "next weekend",
+                    "this week", "next week",
+                    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+                ]
+                temporal = next((p for p in phrases if p in cq_l), None)
+                if temporal:
+                    rng = calculate_date_range(temporal, current_date)
+                    sd, ed = rng.get('start_date'), rng.get('end_date')
+                    tf = rng.get('time_filter')
+                    cols = (
+                        "event_name, event_type, dance_style, day_of_week, start_date, end_date, "
+                        "start_time, end_time, source, url, price, description, location"
+                    )
+                    filters = [
+                        f"start_date >= '{sd}'",
+                        f"start_date <= '{ed}'",
+                        "event_type ILIKE '%social dance%'"
+                    ]
+                    if tf:
+                        filters.append(f"start_time >= '{tf}'")
+                    sanitized_query = (
+                        f"SELECT {cols} FROM events WHERE " + " AND ".join(filters) +
+                        " ORDER BY start_date, start_time LIMIT 30"
+                    )
+                    logging.info("CONFIRMATION: Using deterministic SQL fallback.")
+                else:
+                    raise ValueError("Could not generate a valid SQL query from confirmation.")
+
             logging.info(f"CONFIRMATION: Executing confirmed query: {sanitized_query}")
-            
+
             rows = db_handler.execute_query(sanitized_query)
             if not rows:
                 data = []
