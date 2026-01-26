@@ -20,10 +20,17 @@ load_dotenv()
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 config_path = os.path.join(base_dir, 'config', 'config.yaml')
 
-# Load YAML configuration
+# Load YAML configuration with extra diagnostics
+logging.info(f"app.py: Loading config from {config_path} (exists={os.path.exists(config_path)})")
 with open(config_path, "r") as f:
     config = yaml.safe_load(f)
-logging.info("app.py: config completed.")
+
+if not isinstance(config, dict):
+    raise ValueError(
+        f"app.py: Config did not load as a dict from {config_path}. Got type={type(config)}. "
+        "Ensure the YAML file is valid and non-empty."
+    )
+logging.info(f"app.py: config loaded with top-level keys: {list(config.keys())}")
 
 # Get FastAPI API URLs - conditional for local vs Render
 if os.getenv("RENDER"):
@@ -89,25 +96,28 @@ if "pending_confirmation" not in st.session_state:
 if "pending_interpretation" not in st.session_state:
     st.session_state["pending_interpretation"] = None
 
-# Load chatbot instructions from config, with safe fallbacks
-prompts_section = config.get('prompts', {}) if isinstance(config, dict) else {}
-prompt_config = prompts_section.get('chatbot_instructions', 'prompts/chatbot_instructions.txt')
+# Load chatbot instructions from config (strict: must exist)
+if 'prompts' not in config or 'chatbot_instructions' not in config['prompts']:
+    raise KeyError(
+        "app.py: Missing required config['prompts']['chatbot_instructions']. "
+        f"Config path: {config_path}. Top-level keys: {list(config.keys())}"
+    )
 
-if isinstance(prompt_config, dict):
-    instructions_rel = prompt_config.get('file', 'prompts/chatbot_instructions.txt')
-else:
-    # Backward compatibility with old string format
-    instructions_rel = prompt_config
-
+prompt_config = config['prompts']['chatbot_instructions']
+instructions_rel = (
+    prompt_config['file'] if isinstance(prompt_config, dict) else str(prompt_config)
+)
 instructions_path = os.path.join(base_dir, instructions_rel)
 
-try:
-    with open(instructions_path, "r") as file:
-        chatbot_instructions = file.read()
-    logging.info(f"app.py: Loaded chatbot instructions from {instructions_path}")
-except Exception as e:
-    logging.error(f"app.py: Failed to load chatbot instructions from {instructions_path}: {e}")
-    chatbot_instructions = ""  # Render without the header if missing; app still works
+if not os.path.exists(instructions_path):
+    raise FileNotFoundError(
+        f"app.py: Chatbot instructions file not found at {instructions_path}. "
+        "Update config['prompts']['chatbot_instructions'] to a valid path."
+    )
+
+with open(instructions_path, "r") as file:
+    chatbot_instructions = file.read()
+logging.info(f"app.py: Loaded chatbot instructions from {instructions_path}")
 
 st.markdown(chatbot_instructions)
 

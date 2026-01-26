@@ -155,15 +155,45 @@ CRITICAL: Distinguish between conjunctive and disjunctive requirements:
 
 • LIVE MUSIC QUERIES - CRITICAL:
   - "Dance events with live music" / "Where can I dance to live music?" / "What venues have live music for dancing?"
-    → Use OR logic with dance_style filter:
+    → Use OR logic only (no extra dance_style filter unless explicitly requested):
     (event_type ILIKE '%live music%' OR event_type ILIKE '%social dance%')
-    AND dance_style IS NOT NULL
-    (Includes any event that has live music OR social dance, as long as it's dance-related. Excludes non-dance concerts)
+    (Do NOT add a second AND group repeating event_type or adding "dance_style IS NOT NULL" — this can hide valid live music events.)
 
   - "Find live music for [dance_style]" / "Show me live music events"
-    → Use broader OR logic:
+    → If a specific dance style is mentioned, include it explicitly:
     (event_type ILIKE '%live music%' OR event_type ILIKE '%social dance%')
-    (Don't add duplicate AND conditions - this creates impossible queries!)
+    AND dance_style ILIKE '%<style from user>%'
+    → If no style is mentioned, use ONLY the OR over event_type (no extra AND).
+    → Never add duplicate AND groups that repeat event_type conditions.
+
+• REDUNDANCY AVOIDANCE (IMPORTANT):
+  - Include at most ONE boolean group for event_type.
+  - Do not append additional AND groups that repeat event_type or add generic filters like "dance_style IS NOT NULL" unless the user asked for a specific style.
+  - Keep the WHERE clause minimal and non-contradictory.
+
+=== CLARIFICATIONS AND REFINEMENTS ===
+When the user adds details in a follow-up (clarification), MERGE filters intelligently:
+
+• Event type merging:
+  - If the clarification says "also", "include", "as well", or "too" for another type (e.g., classes), EXPAND the event_type group with OR. Example:
+    Initial: (event_type ILIKE '%social dance%')
+    Clarify: "include classes" → (event_type ILIKE '%social dance%' OR event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')
+  - If the clarification says "only", "just", or "restrict to" a type, REPLACE the event_type group with that type(s) only. Example:
+    Initial: (event_type ILIKE '%live music%' OR event_type ILIKE '%social dance%')
+    Clarify: "only classes" → (event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')
+
+• Do not duplicate groups:
+  - Maintain exactly one event_type boolean group; update it instead of adding a new AND group.
+  - Avoid adding generic filters like "dance_style IS NOT NULL" unless explicitly requested.
+
+• Examples:
+  - User: "dance events tonight"
+    Clarify: "include classes"
+    Result: WHERE start_date = '<today>' AND start_time >= '18:00:00' AND (event_type ILIKE '%social dance%' OR event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')
+
+  - User: "live music tonight"
+    Clarify: "just classes"
+    Result: WHERE start_date = '<today>' AND start_time >= '18:00:00' AND (event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')
 
 === VENUE/LOCATION MATCHING ===
 🔹 CRITICAL: When user mentions a specific venue name (e.g., "The Loft", "Copper Owl", "Victoria Ballroom"), YOU MUST search ALL THREE columns:

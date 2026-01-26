@@ -194,11 +194,13 @@ class ScrapingValidator:
 
             try:
                 # Get most recent scraping attempt
+                # Use a parameterized interval to avoid string interpolation issues
+                # PostgreSQL: NOW() - (:days * INTERVAL '1 day')
                 query = """
                     SELECT link, source, relevant, crawl_try, time_stamp, keywords
                     FROM urls
                     WHERE link = :url
-                      AND time_stamp >= NOW() - INTERVAL :days
+                      AND time_stamp >= NOW() - (:days * INTERVAL '1 day')
                     ORDER BY time_stamp DESC
                     LIMIT 1
                 """
@@ -206,7 +208,7 @@ class ScrapingValidator:
                 # Use DatabaseHandler's execute_query method (handles connection properly)
                 result = self.db_handler.execute_query(
                     query,
-                    {"url": url, "days": f"'{self.days_back} days'"}
+                    {"url": url, "days": int(self.days_back)}
                 )
 
                 if not result or len(result) == 0:
