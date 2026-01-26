@@ -204,10 +204,13 @@ testing:
   validation:
     scraping:
       days_back: 30  # Check scraping in last N days
+      whitelist_days_back: 60  # Longer window for whitelisted URLs
       whitelist_file: data/urls/aaa_urls.csv
       edge_cases_file: data/other/edge_cases.csv
       min_hit_ratio: 0.50  # Threshold for "high performer"
       min_attempts: 3  # Min attempts to establish pattern
+      consecutive_failures_threshold: 2  # Mark irrelevant only if >=2 recent fails
+      whitelist_consecutive_failures_threshold: 3  # Stricter for whitelisted URLs
     chatbot:
       question_templates: tests/data/chatbot_test_questions.yaml
       llm_evaluation: true

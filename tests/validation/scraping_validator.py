@@ -50,6 +50,10 @@ class ScrapingValidator:
 
         # Load configuration with defaults
         self.days_back = self.scraping_config.get('days_back', 7)
+        # Softer thresholds for whitelisted URLs
+        self.whitelist_days_back = self.scraping_config.get('whitelist_days_back', max(self.days_back, 60))
+        self.consecutive_failures_threshold = self.scraping_config.get('consecutive_failures_threshold', 2)
+        self.whitelist_consecutive_failures_threshold = self.scraping_config.get('whitelist_consecutive_failures_threshold', 3)
         self.whitelist_file = self.scraping_config.get('whitelist_file', 'data/urls/aaa_urls.csv')
         self.edge_cases_file = self.scraping_config.get('edge_cases_file', 'data/other/edge_cases.csv')
         self.min_hit_ratio = self.scraping_config.get('min_hit_ratio', 0.50)
@@ -189,30 +193,68 @@ class ScrapingValidator:
 
         failures = []
 
+        def _normalize_link_variants(u: str) -> list:
+            try:
+                from urllib.parse import urlsplit, urlunsplit
+                parts = urlsplit(u)
+                # strip query and fragment
+                base = parts._replace(query='', fragment='')
+                # remove trailing slash from path (except root)
+                path = base.path[:-1] if base.path.endswith('/') and base.path != '/' else base.path
+                base = base._replace(path=path)
+                variants = set()
+                # original
+                variants.add(u)
+                # no query/fragment
+                variants.add(urlunsplit(base))
+                # ensure trailing slash variant
+                if not path.endswith('/') and path:
+                    variants.add(urlunsplit(base._replace(path=path + '/')))
+                # protocol swap http<->https
+                if base.scheme == 'https':
+                    variants.add(urlunsplit(base._replace(scheme='http')))
+                elif base.scheme == 'http':
+                    variants.add(urlunsplit(base._replace(scheme='https')))
+                return list({v.rstrip('/') for v in variants})  # de-dupe minor variants
+            except Exception:
+                return [u]
+
         for idx, url_row in important_urls_df.iterrows():
             url = url_row['url']
+            url_variants = _normalize_link_variants(url)
 
             try:
-                # Get most recent scraping attempt
-                # Use a parameterized interval to avoid string interpolation issues
-                # PostgreSQL: NOW() - (:days * INTERVAL '1 day')
-                query = """
+                # Choose window and thresholds based on importance
+                if url_row['importance_type'] == 'whitelist':
+                    window_days = int(self.whitelist_days_back)
+                    fail_thresh = int(self.whitelist_consecutive_failures_threshold)
+                else:
+                    window_days = int(self.days_back)
+                    fail_thresh = int(self.consecutive_failures_threshold)
+
+                # Build dynamic SQL with variants
+                placeholders = []
+                params = {"days": window_days}
+                where_or = []
+                for i, v in enumerate(url_variants[:8]):
+                    key = f"l{i}"
+                    placeholders.append(key)
+                    params[key] = v
+                    where_or.append(f"link = :{key}")
+
+                where_clause = " OR ".join(where_or) if where_or else "link = :l0"
+                query = f"""
                     SELECT link, source, relevant, crawl_try, time_stamp, keywords
                     FROM urls
-                    WHERE link = :url
+                    WHERE ({where_clause})
                       AND time_stamp >= NOW() - (:days * INTERVAL '1 day')
                     ORDER BY time_stamp DESC
-                    LIMIT 1
+                    LIMIT 5
                 """
 
-                # Use DatabaseHandler's execute_query method (handles connection properly)
-                result = self.db_handler.execute_query(
-                    query,
-                    {"url": url, "days": int(self.days_back)}
-                )
+                result = self.db_handler.execute_query(query, params)
 
-                if not result or len(result) == 0:
-                    # Failure type: URL not attempted
+                if not result:
                     failures.append({
                         'url': url,
                         'source': url_row['source'],
@@ -220,44 +262,55 @@ class ScrapingValidator:
                         'importance': url_row['importance_type'],
                         'crawl_attempts': 0,
                         'keywords_found': None,
-                        'recommendation': f'URL not in recent scraping run (last {self.days_back} days) - verify URL lists are loaded'
+                        'recommendation': f'URL not in recent scraping run (last {window_days} days) - verify URL lists and normalization'
                     })
+                    continue
 
-                else:
-                    # Result is a list of Row objects from execute_query
-                    recent = result[0]
+                # Evaluate recent attempts
+                relevants = [row[2] for row in result]
+                crawl_try_vals = [row[3] for row in result]
+                keywords_recent = result[0][5]
 
-                    # Access columns by index: [link, source, relevant, crawl_try, time_stamp, keywords]
-                    link = recent[0]
-                    source = recent[1]
-                    relevant = recent[2]
-                    crawl_try = recent[3]
-                    time_stamp = recent[4]
-                    keywords = recent[5]
+                any_success = any(bool(v) for v in relevants)
+                # Count consecutive irrelevants from most recent backwards
+                consecutive_irrelevant = 0
+                for v in relevants:
+                    if not v:
+                        consecutive_irrelevant += 1
+                    else:
+                        break
 
-                    # Failure type: Marked irrelevant
-                    if not relevant:
-                        failures.append({
-                            'url': url,
-                            'source': url_row['source'],
-                            'failure_type': 'marked_irrelevant',
-                            'importance': url_row['importance_type'],
-                            'crawl_attempts': crawl_try,
-                            'keywords_found': keywords,
-                            'recommendation': 'Previously successful URL now irrelevant - check for page structure changes or keyword updates'
-                        })
+                # Only flag as irrelevant if multiple consecutive recent attempts failed (threshold)
+                if not any_success and consecutive_irrelevant >= fail_thresh:
+                    failures.append({
+                        'url': url,
+                        'source': url_row['source'],
+                        'failure_type': 'marked_irrelevant',
+                        'importance': url_row['importance_type'],
+                        'crawl_attempts': crawl_try_vals[0] if crawl_try_vals else None,
+                        'keywords_found': keywords_recent,
+                        'recommendation': 'Repeated recent attempts found page irrelevant - check content/keywords; whitelisted URLs use stricter criteria'
+                    })
+                    continue
 
-                    # Failure type: Multiple retries (persistent issues)
-                    elif crawl_try >= 3:
-                        failures.append({
-                            'url': url,
-                            'source': url_row['source'],
-                            'failure_type': 'multiple_retries',
-                            'importance': url_row['importance_type'],
-                            'crawl_attempts': crawl_try,
-                            'keywords_found': keywords,
-                            'recommendation': 'High retry count indicates persistent issues - check for anti-scraping measures or timeouts'
-                        })
+                latest_crawl_try = crawl_try_vals[0] if crawl_try_vals else 0
+                if latest_crawl_try >= 3 and not any_success:
+                    failures.append({
+                        'url': url,
+                        'source': url_row['source'],
+                        'failure_type': 'multiple_retries',
+                        'importance': url_row['importance_type'],
+                        'crawl_attempts': latest_crawl_try,
+                        'keywords_found': keywords_recent,
+                        'recommendation': 'High retry count with no recent success - check anti-scraping measures or timeouts'
+                    })
+                    continue
+
+                # Single recent false but any success exists → treat as warning (log only)
+                if not relevants[0] and any_success:
+                    logging.warning(
+                        f"Scraping warning (not failure): recent attempt irrelevant but successes exist in window for URL={url}"
+                    )
 
             except Exception as e:
                 logging.error(f"Error checking URL {url}: {e}")
