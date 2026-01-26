@@ -1,0 +1,33 @@
+name: Ruff Lint (report-only)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Run ruff (do not fail build)
+        run: |
+          # Report-only run: exit code is always 0
+          ruff --version
+          set +e
+          ruff . --statistics --exit-zero
+          set -e
+
