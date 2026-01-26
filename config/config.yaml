@@ -188,7 +188,7 @@ prompts:
     file: prompts/single_event.txt
     schema: event_extraction
   sql:
-    file: prompts/sql_prompt.txt
+    file: prompts/contextual_sql_prompt.txt
     schema: null
 score:
   dup_trans_db_scan: false
