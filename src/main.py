@@ -496,44 +496,34 @@ def process_query(request: QueryRequest):
                 query_for_interpretation = combined_query
             else:
                 query_for_interpretation = user_input
-            
+
             interpretation = generate_interpretation(query_for_interpretation, config)
             logging.info(f"Generated interpretation: {interpretation}")
-            
-              # Store pending query for confirmation (even if SQL not yet valid). If invalid, we'll regenerate on confirm.
-              if use_contextual_prompt and session_token:
-                  try:
-                      conversation_manager.store_pending_query(
-                          conversation_id=conversation_id,
-                          user_input=user_input,
-                          combined_query=query_for_interpretation,
-                          interpretation=interpretation,
-                          sql_query=sanitized_query if sanitized_query.upper().startswith('SELECT') else None
-                      )
-                    
+
+            # Store pending query for confirmation (even if SQL not yet valid). If invalid, we'll regenerate on confirm.
+            if use_contextual_prompt and session_token:
+                try:
+                    conversation_manager.store_pending_query(
+                        conversation_id=conversation_id,
+                        user_input=user_input,
+                        combined_query=query_for_interpretation,
+                        interpretation=interpretation,
+                        sql_query=sanitized_query if sanitized_query.upper().startswith('SELECT') else None
+                    )
+
                     # Update context with concatenation info for next refinement
                     search_context = {
                         "last_search_query": context.get('last_search_query', combined_query),
                         "concatenation_count": context.get('concatenation_count', 1)
                     }
                     conversation_manager.update_conversation_context(conversation_id, search_context)
-                    
+
                 except Exception as e:
                     logging.error(f"Error storing pending query: {e}")
                     raise HTTPException(status_code=500, detail=f"Error storing query for confirmation: {e}")
-            
-            # Return interpretation with confirmation options
-            # If SQL is invalid (no SELECT), return interpretation without enabling confirmation
-            if not sanitized_query.upper().startswith('SELECT'):
-                return {
-                    "message": f"{interpretation}\n\nI need a moment to refine the query for dates. Please try again or expand the time range.",
-                    "interpretation": interpretation,
-                    "confirmation_required": False,
-                    "intent": intent if use_contextual_prompt else None,
-                    "sql_query": None
-                }
 
-              return {
+            # Return interpretation with confirmation options — always enable confirmation
+            return {
                 "interpretation": interpretation,
                 "confirmation_required": True,
                 "conversation_id": conversation_id if use_contextual_prompt else None,
@@ -542,7 +532,7 @@ def process_query(request: QueryRequest):
                 "options": ["yes", "clarify", "no"],
                 "sql_query": sanitized_query if sanitized_query.upper().startswith('SELECT') else None
             }
-            
+
         except Exception as e:
             logging.error(f"Error generating interpretation: {e}")
             # Fallback for non-contextual queries - just return a simple message
