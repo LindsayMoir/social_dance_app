@@ -504,14 +504,22 @@ class LLMHandler:
             # Query LLM with tools
             if provider == 'mistral':
                 response = self._query_mistral_with_tools(messages, tools)
+                # Fallback to OpenAI on failure (e.g., 5xx or empty)
+                if not response or not response.get("content"):
+                    logging.warning("query_llm(): Mistral tools returned no content; falling back to OpenAI")
+                    response = self._query_openai_with_tools(messages, tools)
             elif provider == 'openai':
                 response = self._query_openai_with_tools(messages, tools)
+                # Fallback to Mistral on failure
+                if not response or not response.get("content"):
+                    logging.warning("query_llm(): OpenAI tools returned no content; falling back to Mistral")
+                    response = self._query_mistral_with_tools(messages, tools)
             else:
                 logging.error("query_llm(): Invalid LLM provider")
                 return {"content": None, "tool_calls": [], "iterations": iteration}
 
             if not response:
-                logging.error(f"query_llm(): No response from {provider}")
+                logging.error(f"query_llm(): No response from providers during tool call")
                 return {"content": None, "tool_calls": all_tool_calls, "iterations": iteration}
 
             # Check if LLM wants to call a tool
