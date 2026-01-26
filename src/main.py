@@ -337,24 +337,40 @@ def process_query(request: QueryRequest):
             use_contextual_prompt = False
     
     if not use_contextual_prompt:
-        # Use original SQL prompt template (backward compatibility)
-        prompt_config = config['prompts']['sql']
-        if isinstance(prompt_config, dict):
-            prompt_file_path = os.path.join(base_dir, prompt_config['file'])
-        else:
-            prompt_file_path = os.path.join(base_dir, prompt_config)
-        
+        # Use contextual SQL prompt even in fallback (no history/context)
+        prompts_cfg = config.get('prompts', {})
+        contextual_cfg = prompts_cfg.get('contextual_sql', {})
+        contextual_path_rel = (
+            contextual_cfg.get('file') if isinstance(contextual_cfg, dict)
+            else 'prompts/contextual_sql_prompt.txt'
+        )
+        prompt_file_path = os.path.join(base_dir, contextual_path_rel)
+
         try:
             with open(prompt_file_path, "r") as file:
                 base_prompt = file.read()
         except Exception as e:
-            logging.error(f"Error reading prompt file: {e}")
-            raise HTTPException(status_code=500, detail="Error reading prompt file.")
-        
-        prompt = f"{base_prompt}\n\nUser Question:\n\n\"{user_input}\""
-        
-        # DEBUG: Log that we're using non-contextual prompt
-        logging.info("=== USING NON-CONTEXTUAL PROMPT ===")
+            logging.error(f"Error reading contextual SQL prompt file: {e}")
+            raise HTTPException(status_code=500, detail="Error reading contextual SQL prompt file.")
+
+        # Minimal context for non-session queries
+        pacific_tz = ZoneInfo("America/Los_Angeles")
+        now_pacific = datetime.now(pacific_tz)
+        current_date = now_pacific.strftime("%Y-%m-%d")
+        current_day_of_week = now_pacific.isoweekday()  # Monday=1, Sunday=7
+
+        prompt = base_prompt.format(
+            context_info="",
+            conversation_history="",
+            intent="search",
+            entities="{}",
+            current_date=current_date,
+            current_day_of_week=current_day_of_week
+        )
+        prompt += f"\n\nCurrent User Question: \"{user_input}\""
+
+        # DEBUG: Log that we're using contextual prompt in fallback
+        logging.info("=== USING CONTEXTUAL PROMPT (FALLBACK) ===")
         logging.info("=== FULL PROMPT BEING SENT TO LLM ===")
         logging.info(prompt)
         logging.info("=== END PROMPT ===")
