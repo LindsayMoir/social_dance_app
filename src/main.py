@@ -173,9 +173,52 @@ def process_confirmation(request: ConfirmationRequest):
         raise HTTPException(status_code=400, detail="No pending query found for confirmation.")
     
     if confirmation == "yes":
-        # Execute the pending SQL query
+        # Execute the pending SQL query (regenerate if missing/invalid)
         try:
-            sanitized_query = pending_query["sql_query"]
+            sanitized_query = pending_query.get("sql_query") or ""
+            if not sanitized_query.upper().startswith("SELECT"):
+                # Rebuild prompt and regenerate SQL now that the user confirmed intent
+                prompts_cfg = config.get('prompts', {})
+                contextual_cfg = prompts_cfg.get('contextual_sql', {})
+                contextual_path_rel = (
+                    contextual_cfg.get('file') if isinstance(contextual_cfg, dict)
+                    else 'prompts/contextual_sql_prompt.txt'
+                )
+                prompt_file_path = os.path.join(base_dir, contextual_path_rel)
+                with open(prompt_file_path, "r") as f:
+                    base_prompt = f.read()
+
+                ctx = conversation_manager.get_conversation_context(conversation_id)
+                recent = conversation_manager.get_recent_messages(conversation_id, limit=3)
+                history_text = "\n".join([f"{'User' if m['role']=='user' else 'Assistant'}: {m['content']}" for m in recent])
+
+                pacific_tz = ZoneInfo("America/Los_Angeles")
+                now_pacific = datetime.now(pacific_tz)
+                current_date = now_pacific.strftime("%Y-%m-%d")
+                current_day = now_pacific.isoweekday()
+
+                prompt = base_prompt.format(
+                    context_info=str(ctx),
+                    conversation_history=history_text,
+                    intent=pending_query.get('intent','search'),
+                    entities="{}",
+                    current_date=current_date,
+                    current_day_of_week=current_day
+                )
+                combined_q = pending_query.get('combined_query') or pending_query.get('user_input')
+                if combined_q:
+                    prompt += f"\n\nCurrent User Question: \"{combined_q}\""
+
+                from date_calculator import CALCULATE_DATE_RANGE_TOOL
+                sql_raw = llm_handler.query_llm('', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+                if sql_raw:
+                    s = sql_raw.replace("```sql", "").replace("```", "").strip()
+                    si = s.upper().find("SELECT")
+                    if si != -1:
+                        s = s[si:]
+                    s = s.split(";")[0]
+                    if not _sql_has_illegal_date_arithmetic(s):
+                        sanitized_query = s
             logging.info(f"CONFIRMATION: Executing confirmed query: {sanitized_query}")
             
             rows = db_handler.execute_query(sanitized_query)
@@ -457,16 +500,16 @@ def process_query(request: QueryRequest):
             interpretation = generate_interpretation(query_for_interpretation, config)
             logging.info(f"Generated interpretation: {interpretation}")
             
-            # Store pending query for confirmation only if SQL appears valid
-            if use_contextual_prompt and session_token and sanitized_query.upper().startswith('SELECT'):
-                try:
-                    conversation_manager.store_pending_query(
-                        conversation_id=conversation_id,
-                        user_input=user_input,
-                        combined_query=query_for_interpretation,
-                        interpretation=interpretation,
-                        sql_query=sanitized_query
-                    )
+              # Store pending query for confirmation (even if SQL not yet valid). If invalid, we'll regenerate on confirm.
+              if use_contextual_prompt and session_token:
+                  try:
+                      conversation_manager.store_pending_query(
+                          conversation_id=conversation_id,
+                          user_input=user_input,
+                          combined_query=query_for_interpretation,
+                          interpretation=interpretation,
+                          sql_query=sanitized_query if sanitized_query.upper().startswith('SELECT') else None
+                      )
                     
                     # Update context with concatenation info for next refinement
                     search_context = {
@@ -490,14 +533,14 @@ def process_query(request: QueryRequest):
                     "sql_query": None
                 }
 
-            return {
+              return {
                 "interpretation": interpretation,
                 "confirmation_required": True,
                 "conversation_id": conversation_id if use_contextual_prompt else None,
                 "intent": intent if use_contextual_prompt else None,
                 "message": f"{interpretation}\n\nIf that is correct, please confirm using the buttons below:",
                 "options": ["yes", "clarify", "no"],
-                "sql_query": sanitized_query
+                "sql_query": sanitized_query if sanitized_query.upper().startswith('SELECT') else None
             }
             
         except Exception as e:

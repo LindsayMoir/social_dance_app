@@ -242,17 +242,22 @@ if process_input:
         # Handle regular results (this shouldn't happen with confirmation system, but keep for fallback)
         events = data.get('data', [])
         user_question = input_to_process.lower()
-        
+
         if len(events) == 0:
-            # Provide context-aware response for no results
-            if any(word in user_question for word in ['duplicate', 'same', 'similar', 'correct', 'which one']):
-                assistant_content = "I can't analyze or compare events to determine duplicates, but I can help you search for specific events. Could you tell me more about what you're looking for?"
-            elif any(word in user_question for word in ['why', 'how', 'explain', 'what does']) and not any(word in user_question for word in ['show me', 'find', 'search', 'events', 'dance']):
-                assistant_content = "I'm designed to search for dance events, but I can't provide detailed explanations about event data. Let me help you find the events you're interested in instead!"
-            elif any(word in user_question for word in ['when', 'where', 'time', 'location', 'address']):
-                assistant_content = "I couldn't find events matching that specific query. Try asking about dance events in a broader way, like 'salsa events this week' or 'dance classes near me'."
+            # If backend sent a specific message (e.g., waiting for better SQL), prefer it
+            backend_message = data.get('message')
+            if backend_message:
+                assistant_content = backend_message
             else:
-                assistant_content = "I couldn't find events matching your request. I specialize in finding dance events - try asking about specific dance styles, locations, or time periods!"
+                # Provide context-aware response for no results
+                if any(word in user_question for word in ['duplicate', 'same', 'similar', 'correct', 'which one']):
+                    assistant_content = "I can't analyze or compare events to determine duplicates, but I can help you search for specific events. Could you tell me more about what you're looking for?"
+                elif any(word in user_question for word in ['why', 'how', 'explain', 'what does']) and not any(word in user_question for word in ['show me', 'find', 'search', 'events', 'dance']):
+                    assistant_content = "I'm designed to search for dance events, but I can't provide detailed explanations about event data. Let me help you find the events you're interested in instead!"
+                elif any(word in user_question for word in ['when', 'where', 'time', 'location', 'address']):
+                    assistant_content = "I couldn't find events matching that specific query. Try asking about dance events in a broader way, like 'salsa events this week' or 'dance classes near me'."
+                else:
+                    assistant_content = "I couldn't find events matching your request. I specialize in finding dance events - try asking about specific dance styles, locations, or time periods!"
         else:
             assistant_content = f"Found {len(events)} events"
         
