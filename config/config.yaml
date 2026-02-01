@@ -33,7 +33,7 @@ crawling:
   max_crawl_trys: 3
   max_website_urls: 10
   # Limit for random sampling of chatbot validation questions (0 = all)
-  random_test_limit: 0
+  random_test_limit: 20
   prompt_max_length: 100000
   scroll_depth: 2
   urls_run_limit: 500
