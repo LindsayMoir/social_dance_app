@@ -30,6 +30,7 @@ load_dotenv('src/.env')  # Load from src/.env since that's where credentials are
 from datetime import datetime
 import logging
 import yaml
+import random
 
 # Import validation modules
 from scraping_validator import ScrapingValidator
@@ -163,6 +164,17 @@ class ValidationTestRunner:
             question_gen = TestQuestionGenerator(template_file)
             questions = question_gen.generate_all_questions()
             logging.info(f"Generated {len(questions)} test questions")
+
+            # Optionally sample a random subset of questions based on config.crawling.random_test_limit
+            try:
+                sample_n = int(self.config.get('crawling', {}).get('random_test_limit', 0) or 0)
+            except Exception:
+                sample_n = 0
+
+            if sample_n > 0 and len(questions) > sample_n:
+                random.shuffle(questions)
+                questions = questions[:sample_n]
+                logging.info(f"Randomly selected {len(questions)} questions (random_test_limit={sample_n})")
 
             # Execute tests
             executor = ChatbotTestExecutor(self.config, self.db_handler)
