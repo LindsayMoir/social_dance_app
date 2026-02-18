@@ -86,3 +86,12 @@ def enforce_dance_style(sql: str, user_text: str) -> str:
         prefix += f" WHERE {group}"
 
     return prefix + " " + suffix.lstrip()
+
+
+
+def detect_styles_in_text(text: str) -> list:
+    """
+    Return a list of canonical dance styles detected in text.
+    Uses the same synonym map as enforcement to keep behavior consistent.
+    """
+    return _styles_from_text(text)

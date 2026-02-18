@@ -26,7 +26,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
 sys.path.append(current_dir)
 sys.path.append(parent_dir)
-from utils.sql_filters import enforce_dance_style
+from utils.sql_filters import enforce_dance_style, detect_styles_in_text
 
 print("Updated sys.path:", sys.path)
 print("Current working directory:", os.getcwd())
@@ -174,6 +174,32 @@ def _enforce_default_event_type(sql: str, user_text: str) -> str:
     else:
         prefix += " WHERE (event_type ILIKE '%social dance%')"
     return prefix + " " + suffix.lstrip()
+
+
+def _force_style_in_interpretation(text: str, user_text: str) -> str:
+    """
+    Ensure the natural language interpretation reflects any explicit dance style from user_text.
+
+    - If a style is detected and not already present in the text, replace the first occurrence of
+      "dance events" or "social dance events" with "<style> events".
+    - If no suitable phrase is found, append a concise style note.
+    """
+    try:
+        styles = detect_styles_in_text(user_text)
+    except Exception:
+        styles = []
+    if not styles or not text:
+        return text
+    lower_text = text.lower()
+    if any(st in lower_text for st in styles):
+        return text
+    style_phrase = ", ".join(styles) + " events"
+    import re as _re
+    new = _re.sub(r"(?i)\b(social\s+)?dance events\b", style_phrase, text, count=1)
+    if new != text:
+        return new
+    # Fallback: append style note
+    return text.rstrip('.') + f" (style: {', '.join(styles)})."
 
 def generate_interpretation(user_query: str, config: dict) -> str:
     """
@@ -826,6 +852,7 @@ def process_query(request: QueryRequest):
             query_for_interpretation = user_input
 
         interpretation = generate_interpretation(query_for_interpretation, config)
+        interpretation = _force_style_in_interpretation(interpretation, query_for_interpretation)
         logging.info(f"Generated interpretation: {interpretation}")
 
         if use_contextual_prompt and session_token:
