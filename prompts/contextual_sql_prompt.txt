@@ -35,7 +35,7 @@ User: "Where can I dance this weekend?"
 → Call: calculate_date_range(temporal_phrase="this weekend", current_date="{{current_date}}")
 → Returns: {{"start_date": "2026-01-23", "end_date": "2026-01-25", "dow_filter": [5,6,0]}}
 → SQL: WHERE start_date >= '2026-01-23' AND start_date <= '2026-01-25' AND EXTRACT(DOW FROM start_date) IN (5,6,0)
-→ Note: For dance events, weekends include Friday night through Sunday (not just Sat-Sun)
+→ Note: Weekends include Friday through Sunday (inclusive)
 
 User: "Bachata events next weekend"
 → Call: calculate_date_range(temporal_phrase="next weekend", current_date="{{current_date}}")
@@ -77,6 +77,14 @@ TODAY: {current_date}
 DAY OF WEEK: {current_day_of_week}
 Note: In PostgreSQL, EXTRACT(DOW FROM date) returns 0=Sunday .. 6=Saturday.
 For weekend filters, use IN (5,6,0).
+CRITICAL REMINDER: Friday=5, Saturday=6, Sunday=0. Do NOT use 5 for Saturday.
+
+WEEK / WEEKEND POLICY (Project-Specific):
+• Week = Sunday–Saturday.
+• "This week": return only upcoming dates in the current week; do not include past days. If today is Tuesday, return Tuesday–Saturday.
+• Next week = Sunday–Saturday of the following week.
+• Weekend = Friday through Sunday (inclusive). No special time cutoff is required.
+  - Use the dates returned by the tool.
 
 === SQL GENERATION RULES ===
 
@@ -109,7 +117,8 @@ CRITICAL: When you have start_date and end_date from the tool, use them DIRECTLY
 • "tomorrow night" → add: start_time >= '18:00:00' (6 PM or later)
 • "[day] night" (e.g., "Friday night", "Saturday night") → add: start_time >= '18:00:00'
 • "today", "tomorrow", "[day]" without "night" → NO time filter (all times)
-• Other timeframes (this week, next week, weekend, etc.) → NO time filter (all times)
+• "weekend" → NO additional time filter (all times)
+• Other timeframes (this week, next week, etc.) → NO time filter (all times)
 
 🔹 CONTEXT-AWARE BEHAVIOR:
 • INTENT "search": Process the user question as a new search query
@@ -176,6 +185,22 @@ CRITICAL: Distinguish between conjunctive and disjunctive requirements:
   - Do not append additional AND groups that repeat event_type or add generic filters like "dance_style IS NOT NULL" unless the user asked for a specific style.
   - Keep the WHERE clause minimal and non-contradictory.
 
+=== DANCE STYLE FILTERING ===
+• Only add a dance_style filter when the user explicitly mentions a style (e.g., "west coast swing", "wcs", "bachata", "lindy hop").
+• If no style is mentioned, DO NOT add any dance_style condition by default.
+• When a style is mentioned, include common synonyms/abbreviations in a single OR group, for example:
+  - West Coast Swing → (dance_style ILIKE '%west coast swing%' OR dance_style ILIKE '%wcs%')
+  - East Coast Swing → (dance_style ILIKE '%east coast swing%' OR dance_style ILIKE '%ecs%')
+  - Lindy Hop → (dance_style ILIKE '%lindy hop%' OR dance_style ILIKE '%lindy%')
+• Multiple styles requested → OR them in one group; keep exactly one dance_style group.
+• Venue-only or generic “dance events” queries → do not infer a specific style.
+
+Examples:
+• "Where can I dance west coast swing this week?"
+  → WHERE (dance_style ILIKE '%west coast swing%' OR dance_style ILIKE '%wcs%') AND ...
+• "Where can I dance this week?" (no style)
+  → No dance_style filter; apply date and event_type defaults only.
+
 === CLARIFICATIONS AND REFINEMENTS ===
 When the user adds details in a follow-up (clarification), MERGE filters intelligently:
 
@@ -188,6 +213,12 @@ When the user adds details in a follow-up (clarification), MERGE filters intelli
     Clarify: "only classes" → (event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')
 
 • Do not duplicate groups:
+
+• Dance style merging:
+  - If a clarification adds a specific style (e.g., "actually west coast swing"), ADD or REPLACE the dance_style group accordingly.
+  - If a clarification says "only [style]", keep only that style’s group.
+  - Maintain exactly one dance_style group with OR across synonyms/styles; do not duplicate.
+
   - Maintain exactly one event_type boolean group; update it instead of adding a new AND group.
   - Avoid adding generic filters like "dance_style IS NOT NULL" unless explicitly requested.
 
@@ -415,15 +446,14 @@ LIMIT 30
 🔹 DAY-SPECIFIC EXAMPLE (use the tool!):
 "Dance events on Monday" (today=Tuesday):
 → Call calculate_date_range(temporal_phrase="monday", current_date="{current_date}")
-→ Receives: {{"start_date": "2026-01-26", "end_date": "2026-01-26", "dow_filter": [1]}}
+→ Receives: {{"start_date": "2026-01-26", "end_date": "2026-01-26"}}
 SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, start_time, end_time, source, url, price, description, location
 FROM events
 WHERE start_date = '2026-01-26'
-  AND EXTRACT(DOW FROM start_date) = 1
   AND (event_type ILIKE '%social dance%' OR event_type ILIKE '%live music%')
 ORDER BY start_date, start_time
 LIMIT 30
-(Use the exact date from the tool - returns next occurrence of that day)
+(Use the exact date from the tool — avoid combining EXTRACT(DOW) with fixed dates to prevent contradictions)
 
 🔹 FREE EVENTS EXAMPLE (use the tool!):
 "Free bachata events this week" (today=Tuesday):
@@ -475,16 +505,18 @@ CLARIFICATION: To recommend venues for west coast swing, could you specify when 
 
 === FINAL CHECKLIST ===
 ✓ Column order correct ✓ Default event_type unless overridden ✓ Date window matches timeframe
+✓ Dance style filter present ONLY when user mentions a style; include common synonyms (e.g., WCS for West Coast Swing). No style → no dance_style filter.
+Default event_type policy: Include social dance by default unless the user explicitly restricts event_type (e.g., "only live music", "only classes"). If the user asks to include other types (classes, live music), OR them in with social dance.
 ✓ Weekend uses EXTRACT(DOW) ✓ LIMIT 30 (or user-specified) ✓ ORDER BY start_date, start_time
 ✓ Style synonyms included (e.g., WCS for West Coast Swing)
 ✓ Venue queries check location, source, AND url columns with multiple variations
 ✓ Time filter (start_time >= '18:00:00') ONLY for "tonight", "tomorrow night", or "[day] night" queries
 ✓ ALWAYS call calculate_date_range for temporal expressions (today, tonight, this week, next month, etc.)
 ✓ Use returned dates DIRECTLY in SQL (never add INTERVAL to string dates)
-✓ "This week" = Monday-Sunday of current calendar week (full 7 days)
-✓ "Next week" = next Monday through next Sunday (full 7 days)
-✓ "This weekend" = Friday-Sunday of current week (includes Friday night!)
-✓ "Next weekend" = Friday-Sunday of next week (includes Friday night!)
+✓ "This week" = Sunday–Saturday of current week (use only remaining days in the current week)
+✓ "Next week" = next Sunday through next Saturday (full 7 days)
+✓ "This weekend" = Friday through Sunday of current week (inclusive)
+✓ "Next weekend" = Friday through Sunday of next week (inclusive)
 ✓ Multi-criteria event types use correct AND/OR logic
 ✓ Free event queries include price filter AND all relevant event types
 ✓ Subjective queries trigger CLARIFICATION mode instead of invalid SQL

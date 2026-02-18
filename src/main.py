@@ -26,6 +26,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.abspath(os.path.join(current_dir, os.pardir))
 sys.path.append(current_dir)
 sys.path.append(parent_dir)
+from utils.sql_filters import enforce_dance_style
+
 print("Updated sys.path:", sys.path)
 print("Current working directory:", os.getcwd())
 
@@ -423,6 +425,7 @@ def process_confirmation(request: ConfirmationRequest):
                     s = s.split(";")[0]
                     if s.upper().startswith('SELECT') and not _sql_has_illegal_date_arithmetic(s):
                         sanitized_query = _enforce_default_event_type(s, combined_q)
+                        sanitized_query = enforce_dance_style(sanitized_query, combined_q)
                     else:
                         # Strict SQL-only retry
                         sql_only_suffix = (
@@ -540,6 +543,7 @@ def process_confirmation(request: ConfirmationRequest):
             # Final enforcement: ensure default social dance is included unless explicitly restricted
             cq_final = pending_query.get('combined_query') or pending_query.get('user_input') or ''
             sanitized_query = _enforce_default_event_type(sanitized_query, cq_final)
+            sanitized_query = enforce_dance_style(sanitized_query, cq_final)
 
             display_sql = _format_sql_for_display(sanitized_query)
             logging.info(f"CONFIRMATION: Executing confirmed query: {sanitized_query}")
@@ -841,6 +845,14 @@ def process_query(request: QueryRequest):
             except Exception as e:
                 logging.error(f"Error storing pending query: {e}")
                 raise HTTPException(status_code=500, detail=f"Error storing query for confirmation: {e}")
+
+        # Ensure dance_style filter is present when the user explicitly requested a style
+        try:
+            qfe = combined_query if use_contextual_prompt else user_input
+            if sanitized_query and sanitized_query.upper().startswith('SELECT'):
+                sanitized_query = enforce_dance_style(sanitized_query, qfe)
+        except Exception:
+            pass
 
         return {
             "interpretation": interpretation,
