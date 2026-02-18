@@ -68,47 +68,29 @@ def detect_date_from_image(local_path: Path) -> tuple[str | None, str | None]:
     Returns:
         (yyyy_mm_dd, weekday) or (None, None) if no confident detection.
     """
+    from PIL import Image as _PILImage
     try:
-        img = Image.open(local_path).convert('RGB')
+        base_img = _PILImage.open(local_path).convert('RGB')
     except Exception:
         return (None, None)
 
-    max_dim = max(img.size)
-    if max_dim < 1200:
-        scale = 1200 / max_dim
-        img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
-    gray = img.convert('L')
-    from PIL import ImageEnhance as _IE
-    gray = _IE.Contrast(gray).enhance(2.0)
+    def _find_month_day(img):
+        from pytesseract import Output as _Output
+        from PIL import ImageEnhance as _IE
+        # Scale and increase contrast
+        max_dim = max(img.size)
+        if max_dim < 1400:
+            scale = 1400 / max_dim
+            img = img.resize((int(img.width * scale), int(img.height * scale)), _PILImage.LANCZOS)
+        gray = img.convert('L')
+        gray = _IE.Contrast(gray).enhance(2.2)
 
-    try:
-        data = pytesseract.image_to_data(gray, lang='eng', config='--oem 3 --psm 11', output_type=Output.DICT)
-    except Exception:
-        return (None, None)
-
-    words = []
-    for i in range(len(data.get('text', []))):
-        t = (data['text'][i] or '').strip()
-        if not t:
-            continue
-        try:
-            conf = float(data.get('conf', ['0'])[i]) if isinstance(data.get('conf'), list) else 0.0
-        except Exception:
-            conf = 0.0
-        if conf < 0:
-            continue
-        words.append({
-            'text': t,
-            'x': data['left'][i],
-            'y': data['top'][i],
-            'w': data['width'][i],
-            'h': data['height'][i],
-            'block': data.get('block_num', [0])[i],
-        })
-
-    if not words:
-        try:
-            data = pytesseract.image_to_data(gray, lang='eng', config='--oem 3 --psm 6', output_type=Output.DICT)
+        words = []
+        for psm in (11, 6, 4):
+            try:
+                data = pytesseract.image_to_data(gray, lang='eng', config=f'--oem 3 --psm {psm}', output_type=_Output.DICT)
+            except Exception:
+                continue
             for i in range(len(data.get('text', []))):
                 t = (data['text'][i] or '').strip()
                 if not t:
@@ -117,6 +99,8 @@ def detect_date_from_image(local_path: Path) -> tuple[str | None, str | None]:
                     conf = float(data.get('conf', ['0'])[i]) if isinstance(data.get('conf'), list) else 0.0
                 except Exception:
                     conf = 0.0
+                if conf < 0:
+                    continue
                 words.append({
                     'text': t,
                     'x': data['left'][i],
@@ -125,65 +109,81 @@ def detect_date_from_image(local_path: Path) -> tuple[str | None, str | None]:
                     'h': data['height'][i],
                     'block': data.get('block_num', [0])[i],
                 })
-        except Exception:
-            pass
         if not words:
-            return (None, None)
+            return None
 
-    months = {
-        'jan': 1, 'january': 1,
-        'feb': 2, 'february': 2,
-        'mar': 3, 'march': 3,
-        'apr': 4, 'april': 4,
-        'may': 5,
-        'jun': 6, 'june': 6,
-        'jul': 7, 'july': 7,
-        'aug': 8, 'august': 8,
-        'sep': 9, 'sept': 9, 'september': 9,
-        'oct': 10, 'october': 10,
-        'nov': 11, 'november': 11,
-        'dec': 12, 'december': 12,
-    }
-
-    best = None
-    for m in (w for w in words if w['text'].lower() in months):
-        same_block = [w for w in words if w['block'] == m['block']]
-        nums = []
-        for w in same_block:
-            t = w['text'].replace('O', '0').replace('o', '0')
-            if t.isdigit():
+        months = {'jan':1,'january':1,'feb':2,'february':2,'mar':3,'march':3,'apr':4,'april':4,'may':5,'jun':6,'june':6,'jul':7,'july':7,'aug':8,'august':8,'sep':9,'sept':9,'september':9,'oct':10,'october':10,'nov':11,'november':11,'dec':12,'december':12}
+        best = None
+        for m in (w for w in words if w['text'].lower() in months):
+            # Month center
+            mxc = m['x'] + m['w']//2
+            myc = m['y'] + m['h']//2
+            def _nd(u):
+                return u['text'].replace('O','0').replace('o','0')
+            # If any two-digit near the month exists, prefer it over lone single-digit candidates
+            two_digit_near = any(_nd(v).isdigit() and len(_nd(v))>=2 and abs((v['y']+v['h']//2)-myc) < 140 and abs((v['x']+v['w']//2)-mxc) < 240 for v in words)
+            addr_kw = {'studio','st','st.','street','ave','avenue','road','rd','yates','blvd','boulevard','way','lane','ln'}
+            best_local = None
+            for w in words:
+                t = _nd(w)
+                if not t.isdigit():
+                    continue
                 n = int(t)
-                if 1 <= n <= 31:
-                    dy = abs((w['y'] + w['h'] // 2) - (m['y'] + m['h'] // 2))
-                    dx = abs((w['x'] + w['w'] // 2) - (m['x'] + m['w'] // 2))
-                    score = dy * 5 + dx - w['h']
-                    nums.append((score, n))
-        if not nums:
-            continue
-        nums.sort(key=lambda x: x[0])
-        score, day = nums[0]
-        cand = (months[m['text'].lower()], day, score)
-        if (best is None) or (cand[2] < best[2]):
-            best = cand
+                if not (1 <= n <= 31):
+                    continue
+                dy = abs((w['y'] + w['h']//2) - myc)
+                dx = abs((w['x'] + w['w']//2) - mxc)
+                block_pen = 0 if w['block'] == m['block'] else 40
+                # Bonuses (negative) and penalties
+                size_bonus = -2 * min(w['h'], m['h'])
+                xalign_bonus = -0.5 * dx
+                # Context penalty using nearest token
+                context_pen = 0
+                wx = w['x'] + w['w']//2
+                wy = w['y'] + w['h']//2
+                nearest = None
+                min_d = 10**9
+                for u in words:
+                    if u is w:
+                        continue
+                    ux = u['x'] + u['w']//2
+                    uy = u['y'] + u['h']//2
+                    d = abs(ux - wx) + abs(uy - wy)
+                    if d < min_d:
+                        min_d = d
+                        nearest = u
+                if nearest and nearest['text'].lower().strip('.,') in addr_kw and min_d < 160:
+                    context_pen += 75
+                single_digit_pen = 120 if (len(t)==1 and two_digit_near) else 0
+                score = dy*8 + dx*0.5 + block_pen + context_pen + single_digit_pen + size_bonus + xalign_bonus
+                cand = (months[m['text'].lower()], n, score)
+                if (best_local is None) or (cand[2] < best_local[2]):
+                    best_local = cand
+            if best_local and ((best is None) or (best_local[2] < best[2])):
+                best = best_local
+            
+            return best
 
-    if not best:
-        return (None, None)
-
-    month_num, day_num, _ = best
-
-    from datetime import date as _date, timedelta as _td, datetime as _dt
-    try:
-        from zoneinfo import ZoneInfo
-        tz = ZoneInfo('America/Los_Angeles')
-        today = _dt.now(tz).date()
-    except Exception:
-        today = _dt.now().date()
-    year = today.year
-    try_date = _date(year, month_num, day_num)
-    if try_date < today and (today - try_date) > _td(days=90):
-        year += 1
-    final_date = _date(year, month_num, day_num)
-    return (final_date.isoformat(), final_date.strftime('%A'))
+    # Try base and rotated variants
+    for angle in (0, 90, 270):
+        img = base_img.rotate(angle, expand=True) if angle else base_img
+        best = _find_month_day(img)
+        if best:
+            month_num, day_num, _ = best
+            from datetime import date as _date, timedelta as _td, datetime as _dt
+            try:
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo('America/Los_Angeles')
+                today = _dt.now(tz).date()
+            except Exception:
+                today = _dt.now().date()
+            year = today.year
+            try_date = _date(year, month_num, day_num)
+            if try_date < today and (today - try_date) > _td(days=90):
+                year += 1
+            final_date = _date(year, month_num, day_num)
+            return (final_date.isoformat(), final_date.strftime('%A'))
+    return (None, None)
 
 class ImageScraper:
     def __init__(self, config: dict):
