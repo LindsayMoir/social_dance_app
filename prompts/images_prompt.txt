@@ -22,14 +22,18 @@ ________________________________________
 	o	Past Month/Day LESS THAN 90 days ago: Assume the current year.
 	o	Past Month/Day MORE THAN 90 days ago: Assume the next year.
 •	"Today" should be interpreted as the current date.
+•	If extracted_text begins with a hint like:
+    Detected_Date: YYYY-MM-DD
+    Detected_Day: <Weekday>
+  then TRUST Detected_Date as the event's date and set day_of_week to that date’s weekday. Do NOT shift the date to match any conflicting weekday words in the text.
 •	If an event starts with a day_of_week (e.g. Sunday, Monday, Tuesday, Wednesday, etc.) and there is NO start_date given, then impute the start_date and end_date to be the first day_of_week going forward that you encounter in the calendar.
 	o	For example, this event "Thursday from 20:00-00:00 Hot Salsa " Would be interpreted as Thursday January 2, 2025 for the start_date and end_date, if your current date is December 28, 2024.
 •	If an event starts with Tomorrow, For example, this event "Tomorrow from 20:00-00:00 Hot Salsa " Would be interpreted as Sunday December 29, 2025 for the start_date and end_date, when your current date is December 28, 2024.
 _____________________________________
 3. day_of_week and start_date Consistency
-•	Do not change the given day_of_week.
-•	If your computed start_date is not that weekday, shift the date by ±1 day (whichever is closer) until it matches.
-•	Adjust end_date accordingly (if single-day, set equal to start_date).
+•	If a specific calendar date is present (e.g., "Feb 20" or "2026-02-20") or if a Detected_Date hint is present, TRUST THE DATE. Compute day_of_week from the date. Do NOT shift the date to match a weekday word.
+•	Only when NO explicit date is present and a day_of_week is provided, infer the next occurrence of that weekday and use that as start_date (and set end_date = start_date for single-day events).
+•	If both appear but disagree, keep the date and correct day_of_week to the date’s weekday.
 _____________________________________
 4. end_time
 •	end_time = start_time plus 2 hours. For example if the event starts at 19:15:00, it ends at 21:15:00.

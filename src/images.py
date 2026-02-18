@@ -18,6 +18,7 @@ import pytesseract
 import requests
 from dotenv import load_dotenv
 from PIL import Image, ImageEnhance
+from pytesseract import Output
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from scrapy import Selector
 from sqlalchemy import text
@@ -57,6 +58,132 @@ with config_path.open() as f:
 
 logger = logging.getLogger(__name__)
 logger.info("\n\nStarting images.py ...")
+
+
+
+def detect_date_from_image(local_path: Path) -> tuple[str | None, str | None]:
+    """
+    Detect a Month + Day from a poster-style image using OCR word boxes and infer a full date.
+
+    Returns:
+        (yyyy_mm_dd, weekday) or (None, None) if no confident detection.
+    """
+    try:
+        img = Image.open(local_path).convert('RGB')
+    except Exception:
+        return (None, None)
+
+    max_dim = max(img.size)
+    if max_dim < 1200:
+        scale = 1200 / max_dim
+        img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
+    gray = img.convert('L')
+    from PIL import ImageEnhance as _IE
+    gray = _IE.Contrast(gray).enhance(2.0)
+
+    try:
+        data = pytesseract.image_to_data(gray, lang='eng', config='--oem 3 --psm 11', output_type=Output.DICT)
+    except Exception:
+        return (None, None)
+
+    words = []
+    for i in range(len(data.get('text', []))):
+        t = (data['text'][i] or '').strip()
+        if not t:
+            continue
+        try:
+            conf = float(data.get('conf', ['0'])[i]) if isinstance(data.get('conf'), list) else 0.0
+        except Exception:
+            conf = 0.0
+        if conf < 0:
+            continue
+        words.append({
+            'text': t,
+            'x': data['left'][i],
+            'y': data['top'][i],
+            'w': data['width'][i],
+            'h': data['height'][i],
+            'block': data.get('block_num', [0])[i],
+        })
+
+    if not words:
+        try:
+            data = pytesseract.image_to_data(gray, lang='eng', config='--oem 3 --psm 6', output_type=Output.DICT)
+            for i in range(len(data.get('text', []))):
+                t = (data['text'][i] or '').strip()
+                if not t:
+                    continue
+                try:
+                    conf = float(data.get('conf', ['0'])[i]) if isinstance(data.get('conf'), list) else 0.0
+                except Exception:
+                    conf = 0.0
+                words.append({
+                    'text': t,
+                    'x': data['left'][i],
+                    'y': data['top'][i],
+                    'w': data['width'][i],
+                    'h': data['height'][i],
+                    'block': data.get('block_num', [0])[i],
+                })
+        except Exception:
+            pass
+        if not words:
+            return (None, None)
+
+    months = {
+        'jan': 1, 'january': 1,
+        'feb': 2, 'february': 2,
+        'mar': 3, 'march': 3,
+        'apr': 4, 'april': 4,
+        'may': 5,
+        'jun': 6, 'june': 6,
+        'jul': 7, 'july': 7,
+        'aug': 8, 'august': 8,
+        'sep': 9, 'sept': 9, 'september': 9,
+        'oct': 10, 'october': 10,
+        'nov': 11, 'november': 11,
+        'dec': 12, 'december': 12,
+    }
+
+    best = None
+    for m in (w for w in words if w['text'].lower() in months):
+        same_block = [w for w in words if w['block'] == m['block']]
+        nums = []
+        for w in same_block:
+            t = w['text'].replace('O', '0').replace('o', '0')
+            if t.isdigit():
+                n = int(t)
+                if 1 <= n <= 31:
+                    dy = abs((w['y'] + w['h'] // 2) - (m['y'] + m['h'] // 2))
+                    dx = abs((w['x'] + w['w'] // 2) - (m['x'] + m['w'] // 2))
+                    score = dy * 5 + dx - w['h']
+                    nums.append((score, n))
+        if not nums:
+            continue
+        nums.sort(key=lambda x: x[0])
+        score, day = nums[0]
+        cand = (months[m['text'].lower()], day, score)
+        if (best is None) or (cand[2] < best[2]):
+            best = cand
+
+    if not best:
+        return (None, None)
+
+    month_num, day_num, _ = best
+
+    from datetime import date as _date, timedelta as _td, datetime as _dt
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo('America/Los_Angeles')
+        today = _dt.now(tz).date()
+    except Exception:
+        today = _dt.now().date()
+    year = today.year
+    try_date = _date(year, month_num, day_num)
+    if try_date < today and (today - try_date) > _td(days=90):
+        year += 1
+    final_date = _date(year, month_num, day_num)
+    return (final_date.isoformat(), final_date.strftime('%A'))
 
 class ImageScraper:
     def __init__(self, config: dict):
@@ -700,6 +827,12 @@ class ImageScraper:
             return
         self.logger.info(f"process_image_url(): Extracted text length {len(text)} characters")
         self.logger.info(f"process_image_url(): Extracted text: \n{text}")
+
+        det_date, det_dow = detect_date_from_image(path)
+        if det_date and det_dow:
+            hint = f"Detected_Date: {det_date}\nDetected_Day: {det_dow}\n"
+            text = hint + text
+            self.logger.info(f"process_image_url(): Detected date hint {det_date} ({det_dow}) added to OCR text")
 
         # Keyword filtering
         found = [kw for kw in self.keywords_list if kw.lower() in text.lower()]
