@@ -265,7 +265,27 @@ class LLMHandler:
             parsed_result = self.extract_and_parse_json(llm_response, url, schema_type)
 
             if parsed_result:
+                # If the OCR layer provided a Detected_Date/Detected_Day hint, override parsed dates to match it.
+                try:
+                    import re as _re
+                    m = _re.search(r"(?im)^Detected_Date:\s*(\d{4}-\d{2}-\d{2})", extracted_text or "")
+                    detected_date = m.group(1) if m else None
+                except Exception:
+                    detected_date = None
                 events_df = pd.DataFrame(parsed_result)
+                if detected_date:
+                    try:
+                        events_df['start_date'] = detected_date
+                        events_df['end_date'] = events_df.get('end_date', '')
+                        events_df['end_date'] = events_df['end_date'].where(events_df['end_date'].astype(str).str.len() > 0, detected_date)
+                        import pandas as _pd
+                        _sd = _pd.to_datetime(detected_date, errors='coerce')
+                        wd = _sd.day_name() if _sd is not _pd.NaT else None
+                        if wd:
+                            events_df['day_of_week'] = wd
+                        logging.info(f"process_llm_response: Overrode dates from Detected_Date hint: {detected_date}")
+                    except Exception as _e:
+                        logging.warning(f"process_llm_response: Failed to apply Detected_Date override: {_e}")
                 self.db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_list)
                 logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
                 return True
@@ -504,14 +524,14 @@ class LLMHandler:
             # Query LLM with tools
             if provider == 'mistral':
                 response = self._query_mistral_with_tools(messages, tools)
-                # Fallback to OpenAI on failure (e.g., 5xx or empty)
-                if not response or not response.get("content"):
+                # Fallback only if truly no response and no tool calls
+                if not response or (not response.get("content") and not response.get("tool_calls")):
                     logging.warning("query_llm(): Mistral tools returned no content; falling back to OpenAI")
                     response = self._query_openai_with_tools(messages, tools)
             elif provider == 'openai':
                 response = self._query_openai_with_tools(messages, tools)
-                # Fallback to Mistral on failure
-                if not response or not response.get("content"):
+                # Fallback only if truly no response and no tool calls
+                if not response or (not response.get("content") and not response.get("tool_calls")):
                     logging.warning("query_llm(): OpenAI tools returned no content; falling back to Mistral")
                     response = self._query_mistral_with_tools(messages, tools)
             else:
@@ -527,10 +547,36 @@ class LLMHandler:
                 logging.info(f"query_llm(): LLM requested {len(response['tool_calls'])} tool call(s)")
 
                 # Add assistant message with tool calls to conversation
+                # Normalize tool_calls for providers
+                # - OpenAI requires type='function'
+                # - Some providers (e.g., Mistral) are strict about tool call id format
+                #   → sanitize ids to a-zA-Z0-9 with length 9
+                import re as _re_tc
+                def _sanitize_id(i: str) -> str:
+                    i = (i or "")
+                    i = _re_tc.sub(r"[^A-Za-z0-9]", "", i)
+                    if len(i) >= 9:
+                        return i[:9]
+                    # pad deterministically with zeros if too short
+                    return (i + ("0" * 9))[:9]
+
+                normalized_tool_calls = []
+                id_map = {}
+                for tc in response["tool_calls"]:
+                    orig_id = tc.get("id", "")
+                    sid = _sanitize_id(orig_id)
+                    id_map[orig_id] = sid
+                    norm = {
+                        "id": sid,
+                        "type": "function",
+                        "function": tc.get("function", {})
+                    }
+                    normalized_tool_calls.append(norm)
+
                 messages.append({
                     "role": "assistant",
                     "content": response.get("content"),
-                    "tool_calls": response["tool_calls"]
+                    "tool_calls": normalized_tool_calls
                 })
 
                 # Execute each tool call
@@ -549,7 +595,7 @@ class LLMHandler:
                             # Add tool result to conversation
                             messages.append({
                                 "role": "tool",
-                                "tool_call_id": tool_call.get("id", ""),
+                                "tool_call_id": id_map.get(tool_call.get("id", ""), _sanitize_id(tool_call.get("id", ""))),
                                 "name": function_name,
                                 "content": json.dumps(function_result)
                             })
@@ -566,7 +612,7 @@ class LLMHandler:
                             logging.error(f"query_llm(): {error_msg}")
                             messages.append({
                                 "role": "tool",
-                                "tool_call_id": tool_call.get("id", ""),
+                                "tool_call_id": id_map.get(tool_call.get("id", ""), _sanitize_id(tool_call.get("id", ""))),
                                 "name": function_name,
                                 "content": json.dumps({"error": error_msg})
                             })
@@ -617,6 +663,7 @@ class LLMHandler:
                     "tool_calls": [
                         {
                             "id": tc.id,
+                            "type": "function",
                             "function": {
                                 "name": tc.function.name,
                                 "arguments": tc.function.arguments
