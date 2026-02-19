@@ -260,7 +260,7 @@ class DeduplicationHandler:
             prompt = self.load_prompt(chunk.to_markdown())
             logging.info(f"def process_chunk_with_llm(): Prompt for chunk {chunk_index}.")
 
-            response_chunk = self.llm_handler.query_llm('', prompt)
+            response_chunk = self.llm_handler.query_llm('', prompt, schema_type='deduplication_response')
 
             if not response_chunk:
                 logging.warning(f"def process_chunk_with_llm(): Received empty response for chunk {chunk_index}.")
@@ -273,38 +273,67 @@ class DeduplicationHandler:
             return None
 
     def parse_llm_response(self, response_chunk):
-        """
-        Parses a response chunk from an LLM to extract a JSON array of objects and convert it into a pandas DataFrame.
-        The method searches for a JSON array structure within the input string, attempts to parse it,
-        and validates that the resulting DataFrame contains the required columns: 'group_id', 'event_id', and 'Label'.
-        If parsing fails or required columns are missing, an empty DataFrame is returned.
-        Args:
-            response_chunk (str): The raw string response from the LLM, expected to contain a JSON array.
-        Returns:
-            pd.DataFrame: A DataFrame containing the extracted data if successful, otherwise an empty DataFrame.
-        """
+        # 1) Try schema-aware parser from LLMHandler first
         try:
-            json_match = re.search(r'\[\s*\{.*\}\s*\]', response_chunk, re.DOTALL)
+            parsed = self.llm_handler.extract_and_parse_json(response_chunk, '', 'deduplication_response')
+            if parsed:
+                if isinstance(parsed, list):
+                    df = pd.DataFrame(parsed)
+                elif isinstance(parsed, pd.DataFrame):
+                    df = parsed
+                else:
+                    df = pd.DataFrame(parsed)
+                required = {"group_id", "event_id", "Label"}
+                if required.issubset(df.columns):
+                    logging.info(f"def clean_response(): Parsed {len(df)} rows via schema-aware parser.")
+                    return df
+        except Exception as e:
+            logging.warning(f"def clean_response(): schema-aware parse failed, falling back. Error: {e}")
 
-            if not json_match:
-                logging.error("def clean_response(): No valid JSON structure found in response.")
+        # 2) Fallback: extract JSON array from fenced code or raw text and parse strictly
+        try:
+            text = (response_chunk or '').strip()
+            m = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", text, re.DOTALL | re.IGNORECASE)
+            if m:
+                json_str = m.group(1)
+            else:
+                text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+                start_idx = text.find('[')
+                if start_idx == -1:
+                    logging.error("def clean_response(): No '[' found; cannot locate JSON array in response.")
+                    return pd.DataFrame()
+                bracket = 0
+                end_idx = -1
+                for i, ch in enumerate(text[start_idx:], start=start_idx):
+                    if ch == '[':
+                        bracket += 1
+                    elif ch == ']':
+                        bracket -= 1
+                        if bracket == 0:
+                            end_idx = i
+                            break
+                if end_idx == -1:
+                    logging.error("def clean_response(): Unbalanced brackets; cannot extract JSON array.")
+                    return pd.DataFrame()
+                json_str = text[start_idx:end_idx+1]
+
+            try:
+                obj = json.loads(json_str)
+            except json.JSONDecodeError:
+                obj = json.loads(html.unescape(json_str))
+            if not isinstance(obj, list):
+                logging.error("def clean_response(): Top-level JSON is not a list.")
                 return pd.DataFrame()
-
-            json_str = json_match.group()
-            df = pd.read_json(StringIO(json_str))
-
-            required_columns = {"group_id", "event_id", "Label"}
-            if not required_columns.issubset(df.columns):
-                logging.error(f"def clean_response(): Extracted JSON is missing required columns: {df.columns}")
+            df = pd.DataFrame(obj)
+            required = {"group_id", "event_id", "Label"}
+            if not required.issubset(df.columns):
+                logging.error(f"def clean_response(): Extracted JSON is missing required columns: {list(df.columns)}")
                 return pd.DataFrame()
-
-            logging.info(f"def clean_response(): Successfully extracted {len(df)} rows from response.")
+            logging.info(f"def clean_response(): Successfully extracted {len(df)} rows from fallback parser.")
             return df
-
-        except (json.JSONDecodeError, ValueError) as e:
+        except Exception as e:
             logging.error(f"def clean_response(): Error parsing LLM response to JSON: {e}")
             return pd.DataFrame()
-        
 
     def merge_and_save_results(self, df, response_dfs):
         """
