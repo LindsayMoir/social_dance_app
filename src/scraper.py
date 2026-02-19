@@ -25,6 +25,7 @@ import shutil
 import sys
 import yaml
 import subprocess
+import csv
 
 from credentials import get_credentials
 from db import DatabaseHandler
@@ -139,7 +140,7 @@ class EventSpider(scrapy.Spider):
             elif not db_handler.should_process_url(url):
                 try:
                     if is_whitelisted:
-                        import os, csv
+                        # csv imported at module level
                         os.makedirs('output', exist_ok=True)
                         with open('output/skipped_whitelist.csv', 'a', newline='') as f:
                             w = csv.writer(f)
