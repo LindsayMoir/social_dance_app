@@ -76,7 +76,7 @@ class EventSpider(scrapy.Spider):
         try:
             if os.path.exists(calendar_urls_file):
                 calendar_df = pd.read_csv(calendar_urls_file)
-                self.calendar_urls_set = set(calendar_df['link'].tolist())
+                self.calendar_urls_set = {db_handler._normalize_for_compare(str(u)) for u in calendar_df['link'].dropna().tolist()}
                 logging.info(f"__init__(): Loaded {len(self.calendar_urls_set)} calendar URLs for special handling")
         except Exception as e:
             logging.warning(f"__init__(): Could not load calendar URLs: {e}")
@@ -111,22 +111,41 @@ class EventSpider(scrapy.Spider):
             keywords = row['keywords']
             url = row['link']
 
-            # ✳️ Skip Facebook or Instagram URLs immediately
-            if 'facebook.com' in url.lower() or 'instagram.com' in url.lower():
+            # Whitelist check
+            try:
+                is_whitelisted = db_handler.is_whitelisted_url(url)
+            except Exception:
+                is_whitelisted = False
+
+            # ✳️ Skip Facebook or Instagram URLs unless whitelisted
+            if ('facebook.com' in url.lower() or 'instagram.com' in url.lower()) and not is_whitelisted:
                 logging.info(f"start(): Skipping social media URL (fb/ig): {url}")
                 child_row = [url, '', source, [], False, 1, datetime.now()]
                 db_handler.write_url_to_db(child_row)
                 continue
 
-            if db_handler.avoid_domains(url):
+            if db_handler.avoid_domains(url) and not is_whitelisted:
                 logging.info(f"start(): Skipping blacklisted URL {url}.")
                 continue
 
             # Special handling for calendar URLs - always process them regardless of historical relevancy
-            is_calendar_url = url in self.calendar_urls_set
+            try:
+                norm_url = db_handler._normalize_for_compare(url)
+            except Exception:
+                norm_url = url
+            is_calendar_url = any(norm_url.startswith(cu) for cu in self.calendar_urls_set)
             if is_calendar_url:
                 logging.info(f"start(): Processing calendar URL {url} (bypassing historical relevancy)")
             elif not db_handler.should_process_url(url):
+                try:
+                    if is_whitelisted:
+                        import os, csv
+                        os.makedirs('output', exist_ok=True)
+                        with open('output/skipped_whitelist.csv', 'a', newline='') as f:
+                            w = csv.writer(f)
+                            w.writerow([datetime.now().isoformat(), url, source, 'history_gate'])
+                except Exception:
+                    pass
                 logging.info(f"start(): Skipping URL {url} based on historical relevancy.")
                 continue
 
@@ -218,12 +237,22 @@ class EventSpider(scrapy.Spider):
 
         # 5) Filter unwanted links and record them
         all_links      = {url} | set(page_links)
-        filtered_links = {lnk for lnk in all_links if 'facebook' not in lnk and 'instagram' not in lnk}
-        unwanted_links = all_links - filtered_links
-        for link in unwanted_links:
-            child_row = [link, url, source, found_keywords, False, 1, datetime.now()]
-            db_handler.write_url_to_db(child_row)
-            logging.info(f"def parse(): Recorded unwanted URL: {link}")
+        filtered_links = set()
+        for link in all_links:
+            low = link.lower()
+            try:
+                wl = db_handler.is_whitelisted_url(link)
+            except Exception:
+                wl = False
+            if 'facebook' in low or 'instagram' in low:
+                child_row = [link, url, source, found_keywords, False, 1, datetime.now()]
+                db_handler.write_url_to_db(child_row)
+                if wl:
+                    logging.info(f"def parse(): Routed whitelisted social URL to FB/IG pipeline: {link}")
+                else:
+                    logging.info(f"def parse(): Recorded unwanted social URL: {link}")
+                continue
+            filtered_links.add(link)
 
         # 6) Follow each remaining link with Playwright rendering
         for link in filtered_links:

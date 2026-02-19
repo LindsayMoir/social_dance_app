@@ -56,6 +56,18 @@ class DatabaseHandler():
         """
         self.config = config
         self.load_blacklist_domains()
+        # Pre-load whitelist entries and normalize them for robust checks
+        try:
+            self._whitelist_set = set()
+            whitelist_path = os.path.join(self.config['input']['urls'], 'aaa_urls.csv')
+            if os.path.exists(whitelist_path):
+                df = pd.read_csv(whitelist_path)
+                if 'link' in df.columns:
+                    links = [str(u).strip() for u in df['link'].dropna().tolist()]
+                    self._whitelist_set = {self._normalize_for_compare(u) for u in links}
+                    logging.info(f"Loaded whitelist with {len(self._whitelist_set)} entries from {whitelist_path}")
+        except Exception as e:
+            logging.warning(f"Failed to preload whitelist: {e}")
 
         # Get database configuration using centralized utility
         # This automatically handles local, render_dev, and render_prod environments
@@ -161,6 +173,41 @@ class DatabaseHandler():
         url_lower = url.lower()
         return any(domain in url_lower for domain in self.blacklisted_domains)
     
+
+
+    def _normalize_for_compare(self, url: str) -> str:
+        try:
+            from urllib.parse import urlparse, urlunparse
+            p = urlparse(url)
+            scheme = (p.scheme or 'https').lower()
+            netloc = (p.netloc or '').lower()
+            if netloc.endswith(':80') and scheme == 'http':
+                netloc = netloc[:-3]
+            if netloc.endswith(':443') and scheme == 'https':
+                netloc = netloc[:-4]
+            path = (p.path or '').rstrip('/')
+            return urlunparse((scheme, netloc, path, '', p.query, ''))
+        except Exception:
+            return (url or '').strip().lower().rstrip('/')
+
+    def is_whitelisted_url(self, url: str) -> bool:
+        try:
+            if not hasattr(self, '_whitelist_set') or not self._whitelist_set:
+                return False
+            u_norm = self._normalize_for_compare(url)
+            if u_norm in self._whitelist_set:
+                return True
+            from urllib.parse import urlparse
+            pu = urlparse(u_norm)
+            for w in self._whitelist_set:
+                pw = urlparse(w)
+                if pu.scheme == pw.scheme and pu.netloc == pw.netloc:
+                    if not pw.path or pu.path.startswith(pw.path):
+                        return True
+            return False
+        except Exception as e:
+            logging.warning(f'is_whitelisted_url: error {e}')
+            return False
 
     def get_db_connection(self):
         """
@@ -2743,24 +2790,20 @@ class DatabaseHandler():
 
         # Normalize URL to handle Instagram/FB CDN dynamic parameters
         normalized_url = self.normalize_url(url)
+        generic_norm = self._normalize_for_compare(normalized_url)
 
         # Log normalization if URL changed
         if normalized_url != url:
             logging.info(f"should_process_url: Normalized Instagram URL for comparison")
 
-        # 0. Check if URL is in whitelist (always process) - URLs in data/urls/aaa_urls.csv should always be processed
+        # 0. Whitelist precedence: always process whitelisted URLs
         try:
-            aaa_urls_path = os.path.join(self.config['input']['urls'], 'aaa_urls.csv')
-            if os.path.exists(aaa_urls_path):
-                aaa_urls_df = pd.read_csv(aaa_urls_path)
-                if 'link' in aaa_urls_df.columns:
-                    # Check if normalized_url matches any whitelist URL
-                    if normalized_url in aaa_urls_df['link'].values:
-                        logging.info(f"should_process_url: URL {normalized_url[:100]}... is in whitelist (aaa_urls.csv), processing it.")
-                        return True
+            if self.is_whitelisted_url(url) or self.is_whitelisted_url(normalized_url):
+                logging.info(f"should_process_url: URL {normalized_url[:100]}... is whitelisted, processing it.")
+                return True
         except Exception as e:
-            logging.warning(f"should_process_url: Could not check whitelist: {e}")
-
+            logging.warning(f"should_process_url: whitelist check error: {e}")
+    
         # 1. Filter all rows for this normalized URL
         df_url = self.urls_df[self.urls_df['link'] == normalized_url]
         # If we've never recorded this normalized URL, process it
