@@ -509,7 +509,7 @@ class FacebookEventScraper():
         return real
     
 
-    def navigate_and_maybe_login(self, incoming_url: str) -> bool:
+    def navigate_and_maybe_login(self, incoming_url: str, max_attempts: int = 2) -> bool:
         """
         Navigate to a Facebook URL, handle login redirects, detect blocks, and retry.
         Input:
@@ -520,7 +520,8 @@ class FacebookEventScraper():
         real_url = self.normalize_facebook_url(incoming_url)
         page = self.logged_in_page
 
-        for attempt in range(2):
+        attempts = max(1, int(max_attempts))
+        for attempt in range(attempts):
             try:
                 t = random.randint(20000//2, int(20000 * 1.5))
                 page.goto(real_url, wait_until="domcontentloaded", timeout=t)
@@ -542,7 +543,7 @@ class FacebookEventScraper():
                 continue
 
             logging.warning(f"navigate_and_maybe_login: blocked or rate-limited on {real_url}")
-            if attempt == 0:
+            if attempt < attempts - 1:
                 cooldown_ms = random.randint(6000, 12000)
                 page.wait_for_timeout(cooldown_ms)
                 continue

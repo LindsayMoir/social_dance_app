@@ -299,12 +299,19 @@ def validate_facebook(headless=False, check_timeout_seconds=60):
                 .get('scraping', {})
                 .get('facebook_group_probe_limit', 10)
             )
+            group_probe_max_failures = int(
+                config.get('testing', {})
+                .get('validation', {})
+                .get('scraping', {})
+                .get('facebook_group_probe_max_failures', 2)
+            )
             group_urls = _load_facebook_group_probe_urls(config, limit=group_probe_limit)
             failed_group_urls: list[str] = []
             if logged_in and group_urls:
                 for group_url in group_urls:
                     try:
-                        if not fb_scraper.navigate_and_maybe_login(group_url):
+                        # Single-attempt probe for speed: avoid retry-heavy auth loops here.
+                        if not fb_scraper.navigate_and_maybe_login(group_url, max_attempts=1):
                             failed_group_urls.append(group_url)
                     except Exception as probe_error:
                         logging.warning(
@@ -313,6 +320,12 @@ def validate_facebook(headless=False, check_timeout_seconds=60):
                             probe_error,
                         )
                         failed_group_urls.append(group_url)
+                    if len(failed_group_urls) >= group_probe_max_failures:
+                        logging.error(
+                            "validate_facebook(): Reached fail-fast threshold (%s failed group probes), stopping probe loop early.",
+                            group_probe_max_failures,
+                        )
+                        break
 
             # Clean up browser
             fb_scraper.browser.close()
