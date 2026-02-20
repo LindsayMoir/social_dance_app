@@ -75,7 +75,7 @@ Note:
       configuration and keys files.
     - Logging should be configured in the main execution context to capture log messages.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 load_dotenv()
@@ -121,6 +121,11 @@ class LLMHandler:
         # Set reasonable timeout for Mistral API calls (60 seconds = 60000 milliseconds)
         # Note: Mistral uses timeout_ms (milliseconds) instead of timeout (seconds)
         self.mistral_client = Mistral(api_key=mistral_api_key, timeout_ms=60000)
+        self.mistral_rate_limit_strikes = 0
+        llm_config = self.config.get('llm', {})
+        self.mistral_rate_limit_max_strikes = int(llm_config.get('mistral_rate_limit_max_strikes', 2) or 2)
+        self.mistral_cooldown_seconds = int(llm_config.get('mistral_cooldown_seconds', 300) or 300)
+        self.mistral_cooldown_until = None
 
         # Get the keywords      
         self.keywords_list = self.get_keywords()
@@ -421,6 +426,39 @@ class LLMHandler:
 
         return prompt, schema_type
 
+    def _is_mistral_rate_limited(self, error: Exception) -> bool:
+        """Return True when the Mistral failure looks like a rate limit."""
+        message = str(error).lower()
+        return "429" in message or "rate limit" in message or "too many requests" in message
+
+    def _mistral_in_cooldown(self) -> bool:
+        """Return True while Mistral rate-limit cooldown window is active."""
+        if self.mistral_cooldown_until is None:
+            return False
+        now = datetime.now()
+        if now >= self.mistral_cooldown_until:
+            self.mistral_cooldown_until = None
+            self.mistral_rate_limit_strikes = 0
+            return False
+        return True
+
+    def _record_mistral_result(self, error: Exception = None) -> None:
+        """Update strike/cooldown state after a Mistral attempt."""
+        if error is None:
+            self.mistral_rate_limit_strikes = 0
+            self.mistral_cooldown_until = None
+            return
+        if not self._is_mistral_rate_limited(error):
+            return
+        self.mistral_rate_limit_strikes += 1
+        if self.mistral_rate_limit_strikes >= self.mistral_rate_limit_max_strikes:
+            self.mistral_cooldown_until = datetime.now() + timedelta(seconds=self.mistral_cooldown_seconds)
+            logging.warning(
+                "query_llm(): Entering Mistral cooldown until %s after %s consecutive rate limits",
+                self.mistral_cooldown_until.isoformat(),
+                self.mistral_rate_limit_strikes,
+            )
+
 
     def query_llm(self, url, prompt, schema_type=None, tools=None, max_iterations=3):
         """
@@ -473,30 +511,40 @@ class LLMHandler:
                 logging.warning(f"query_llm(): OpenAI query failed: {error_message}")
 
             # Fallback to Mistral
-            try:
-                model = self.config['llm']['mistral_model']
-                logging.info("query_llm(): Falling back to Mistral")
-                response = self.query_mistral(prompt, model, schema_type=schema_type)
-                if response:
-                    logging.info(f"query_llm(): Mistral response received: {response}")
-                else:
-                    logging.warning("query_llm(): Mistral returned no response.")
-            except Exception as e:
-                error_message = str(e).replace('error', 'rejection')
-                logging.warning(f"query_llm(): Mistral query failed: {error_message}")
+            if self._mistral_in_cooldown():
+                logging.warning("query_llm(): Skipping Mistral fallback due to active cooldown.")
+            else:
+                try:
+                    model = self.config['llm']['mistral_model']
+                    logging.info("query_llm(): Falling back to Mistral")
+                    response = self.query_mistral(prompt, model, schema_type=schema_type)
+                    self._record_mistral_result()
+                    if response:
+                        logging.info(f"query_llm(): Mistral response received: {response}")
+                    else:
+                        logging.warning("query_llm(): Mistral returned no response.")
+                except Exception as e:
+                    self._record_mistral_result(e)
+                    error_message = str(e).replace('error', 'rejection')
+                    logging.warning(f"query_llm(): Mistral query failed: {error_message}")
 
         elif provider == 'mistral':
             # Try Mistral first
-            try:
-                model = self.config['llm']['mistral_model']
-                logging.info("query_llm(): Querying Mistral")
-                response = self.query_mistral(prompt, model, schema_type=schema_type)
-                if response:
-                    logging.info(f"query_llm(): Mistral response received: {response}")
-                    return response
-            except Exception as e:
-                error_message = str(e).replace('error', 'rejection')
-                logging.warning(f"query_llm(): Mistral query failed: {error_message}")
+            if self._mistral_in_cooldown():
+                logging.warning("query_llm(): Skipping Mistral query due to active cooldown.")
+            else:
+                try:
+                    model = self.config['llm']['mistral_model']
+                    logging.info("query_llm(): Querying Mistral")
+                    response = self.query_mistral(prompt, model, schema_type=schema_type)
+                    self._record_mistral_result()
+                    if response:
+                        logging.info(f"query_llm(): Mistral response received: {response}")
+                        return response
+                except Exception as e:
+                    self._record_mistral_result(e)
+                    error_message = str(e).replace('error', 'rejection')
+                    logging.warning(f"query_llm(): Mistral query failed: {error_message}")
 
             # Fallback to OpenAI
             try:

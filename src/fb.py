@@ -877,25 +877,31 @@ class FacebookEventScraper():
         # 1) Load or initialize the checkpoint dataframe
         # On Render, always query database fresh (no checkpointing)
         is_render = os.getenv('RENDER') == 'true'
+        query = text("""
+            SELECT *
+            FROM urls
+            WHERE link ILIKE :link_pattern
+              AND link NOT ILIKE :exclude_sharer
+              AND link NOT ILIKE :exclude_dialog
+              AND link NOT ILIKE :exclude_recover
+              AND link NOT ILIKE :exclude_plugins
+              AND link NOT ILIKE :exclude_share_php
+        """)
+        params = {
+            'link_pattern': '%facebook%',
+            'exclude_sharer': '%/sharer/%',
+            'exclude_dialog': '%/dialog/%',
+            'exclude_recover': '%/recover/%',
+            'exclude_plugins': '%/plugins/%',
+            'exclude_share_php': '%share.php%',
+        }
         if is_render:
-            query = text("""
-                SELECT *
-                FROM urls
-                WHERE link ILIKE :link_pattern
-            """)
-            params = {'link_pattern': '%facebook%'}
             fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
             logging.info(f"def driver_fb_urls(): Retrieved {fb_urls_df.shape[0]} Facebook URLs from the database.")
         elif should_use_fb_checkpoint(config, is_render):
             fb_urls_df = pd.read_csv(config['checkpoint']['fb_urls_cp'])
             logging.info(f"def driver_fb_urls(): Loaded {fb_urls_df.shape[0]} Facebook URLs from checkpoint CSV.")
         else:
-            query = text("""
-                SELECT *
-                FROM urls
-                WHERE link ILIKE :link_pattern
-            """)
-            params = {'link_pattern': '%facebook%'}
             fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
             logging.info(f"def driver_fb_urls(): Retrieved {fb_urls_df.shape[0]} Facebook URLs from the database.")
 
@@ -904,6 +910,27 @@ class FacebookEventScraper():
         fb_urls_df['events_processed'] = False
         if os.getenv('RENDER') != 'true':
             fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+        checkpoint_write_every = int(self.config.get('checkpoint', {}).get('fb_urls_write_every', 10) or 10)
+        checkpoint_updates = 0
+        checkpoint_dirty = False
+        existing_links = set(fb_urls_df['link'].dropna().astype(str))
+
+        def flush_checkpoint(force: bool = False) -> None:
+            nonlocal checkpoint_updates, checkpoint_dirty
+            if is_render or not checkpoint_dirty:
+                return
+            if force or checkpoint_updates >= checkpoint_write_every:
+                fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+                checkpoint_updates = 0
+                checkpoint_dirty = False
+
+        def mark_checkpoint_dirty() -> None:
+            nonlocal checkpoint_updates, checkpoint_dirty
+            if is_render:
+                return
+            checkpoint_dirty = True
+            checkpoint_updates += 1
+            flush_checkpoint(force=False)
 
         # 3) Iterate each base Facebook URL
         if fb_urls_df.shape[0] > 0:
@@ -932,8 +959,7 @@ class FacebookEventScraper():
                     db_handler.write_url_to_db(url_row)
                     fb_urls_df.loc[fb_urls_df['link'] == raw_base_url, 'processed'] = True
                     fb_urls_df.loc[fb_urls_df['link'] == raw_base_url, 'events_processed'] = True
-                    if os.getenv('RENDER') != 'true':
-                        fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+                    mark_checkpoint_dirty()
                     continue
 
                 # Skip if already done
@@ -953,8 +979,8 @@ class FacebookEventScraper():
                 # Mark as processed
                 fb_urls_df.loc[fb_urls_df['link'] == raw_base_url, 'processed'] = True
                 fb_urls_df.loc[fb_urls_df['link'] == base_url, 'processed'] = True
+                mark_checkpoint_dirty()
                 if os.getenv('RENDER') != 'true':
-                    fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
                     logging.info(f"def driver_fb_urls(): Base URL marked processed: {base_url}")
                 else:
                     logging.info(f"def driver_fb_urls(): Skipping checkpoint write on Render")
@@ -993,7 +1019,7 @@ class FacebookEventScraper():
                     self.urls_visited.add(event_url)
 
                     # Add or update checkpoint row
-                    if event_url not in fb_urls_df['link'].values:
+                    if event_url not in existing_links:
                         new_row = pd.DataFrame({
                             'link': [event_url],
                             'source': [source],
@@ -1002,12 +1028,13 @@ class FacebookEventScraper():
                             'events_processed': [True]
                         })
                         fb_urls_df = pd.concat([fb_urls_df, new_row], ignore_index=True)
+                        existing_links.add(event_url)
                     else:
                         fb_urls_df.loc[fb_urls_df['link'] == event_url, 'processed'] = True
                         fb_urls_df.loc[fb_urls_df['link'] == event_url, 'events_processed'] = True
 
+                    mark_checkpoint_dirty()
                     if os.getenv('RENDER') != 'true':
-                        fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
                         logging.info(f"def driver_fb_urls(): Event URL marked processed: {event_url}")
                     else:
                         logging.info(f"def driver_fb_urls(): Skipping checkpoint write on Render")
@@ -1018,14 +1045,15 @@ class FacebookEventScraper():
                 # 6) Finally mark that we've scraped events for the base URL
                 fb_urls_df.loc[fb_urls_df['link'] == raw_base_url, 'events_processed'] = True
                 fb_urls_df.loc[fb_urls_df['link'] == base_url, 'events_processed'] = True
+                mark_checkpoint_dirty()
                 if os.getenv('RENDER') != 'true':
-                    fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
                     logging.info(f"def driver_fb_urls(): Events_scraped flag set for base URL: {base_url}")
                 else:
                     logging.info(f"def driver_fb_urls(): Skipping checkpoint write on Render")
 
         else:
             logging.warning("def driver_fb_urls(): No Facebook URLs returned from the database.")
+        flush_checkpoint(force=True)
 
 
     def write_run_statistics(self) -> None:
