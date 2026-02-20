@@ -1,5 +1,6 @@
 import pandas as pd
 import sys
+import asyncio
 
 sys.path.insert(0, 'src')
 
@@ -196,3 +197,108 @@ def test_parse_extracts_calendar_id_from_rendered_page_text(monkeypatch):
     list(spider.parse(response, keywords="salsa", source="Victoria Latin Dance Association", url="https://vlda.ca/resources/"))
 
     assert "17de2ca43f525c87058ffafe1f0206da82a19d00a85a6ae979ad6bb618dcd8ae@group.calendar.google.com" in processed_ids
+
+
+def test_start_whitelist_seed_bypasses_history_gate(monkeypatch, tmp_path):
+    import scraper as scraper_module
+
+    seed_csv = tmp_path / "seed.csv"
+    seed_csv.write_text(
+        "source,keywords,link\n"
+        "Test Source,salsa,https://latindancecanada.com/\n"
+        "Other Source,swing,https://example.com/events\n",
+        encoding="utf-8",
+    )
+
+    class DummyDB:
+        def get_db_connection(self):
+            return object()
+
+        def is_whitelisted_url(self, url: str) -> bool:
+            return "latindancecanada.com" in url
+
+        def avoid_domains(self, _url: str) -> bool:
+            return False
+
+        def should_process_url(self, _url: str) -> bool:
+            return False
+
+        def write_url_to_db(self, _row):
+            return None
+
+    monkeypatch.setattr(scraper_module, "db_handler", DummyDB(), raising=False)
+
+    spider = EventSpider.__new__(EventSpider)
+    spider.config = {
+        "startup": {"use_db": False},
+        "input": {"urls": str(tmp_path)},
+    }
+    spider.whitelist_urls_df = pd.DataFrame(
+        [{"source": "Whitelist", "keywords": "salsa", "link": "https://latindancecanada.com/"}]
+    )
+    spider.whitelist_roots = {normalize_url_for_compare("https://latindancecanada.com/")}
+    spider.attempted_whitelist_roots = set()
+    spider.calendar_urls_set = set()
+
+    async def _collect():
+        reqs = []
+        async for req in spider.start():
+            reqs.append(req)
+        return reqs
+
+    requests = asyncio.run(_collect())
+    start_urls = [r.url for r in requests]
+    assert "https://latindancecanada.com/" in start_urls
+    assert "https://example.com/events" not in start_urls
+
+
+def test_start_sets_high_priority_for_whitelist_seed(monkeypatch, tmp_path):
+    import scraper as scraper_module
+
+    seed_csv = tmp_path / "seed.csv"
+    seed_csv.write_text(
+        "source,keywords,link\n"
+        "Test Source,salsa,https://latindancecanada.com/\n",
+        encoding="utf-8",
+    )
+
+    class DummyDB:
+        def get_db_connection(self):
+            return object()
+
+        def is_whitelisted_url(self, _url: str) -> bool:
+            return True
+
+        def avoid_domains(self, _url: str) -> bool:
+            return False
+
+        def should_process_url(self, _url: str) -> bool:
+            return False
+
+        def write_url_to_db(self, _row):
+            return None
+
+    monkeypatch.setattr(scraper_module, "db_handler", DummyDB(), raising=False)
+
+    spider = EventSpider.__new__(EventSpider)
+    spider.config = {
+        "startup": {"use_db": False},
+        "input": {"urls": str(tmp_path)},
+    }
+    spider.whitelist_urls_df = pd.DataFrame(
+        [{"source": "Whitelist", "keywords": "salsa", "link": "https://latindancecanada.com/"}]
+    )
+    spider.whitelist_roots = {normalize_url_for_compare("https://latindancecanada.com/")}
+    spider.attempted_whitelist_roots = set()
+    spider.calendar_urls_set = set()
+
+    async def _collect():
+        reqs = []
+        async for req in spider.start():
+            reqs.append(req)
+        return reqs
+
+    requests = asyncio.run(_collect())
+    assert requests
+    assert requests[0].url == "https://latindancecanada.com/"
+    assert requests[0].priority == 1000
