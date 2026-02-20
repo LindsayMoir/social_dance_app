@@ -74,6 +74,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 import random
 import re
 from sqlalchemy import text
+import subprocess
 import time
 from urllib.parse import urlparse, parse_qs, unquote
 import yaml
@@ -171,6 +172,63 @@ def is_non_content_facebook_url(url: str) -> bool:
     if "sharer.php" in path:
         return True
     return False
+
+
+def sanitize_facebook_seed_urls(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """
+    Normalize and filter Facebook seed URLs before processing.
+
+    This guards against stale checkpoint rows containing login/share/recover/dialog
+    endpoints and de-duplicates rows after canonicalization.
+    """
+    stats = {
+        "input_rows": len(df),
+        "empty_rows_dropped": 0,
+        "canonicalized_rows": 0,
+        "non_content_rows_dropped": 0,
+        "duplicate_rows_dropped": 0,
+        "output_rows": 0,
+    }
+
+    if "link" not in df.columns:
+        stats["output_rows"] = len(df)
+        return df, stats
+
+    cleaned = df.copy()
+    cleaned["link"] = cleaned["link"].astype(str).str.strip()
+    before_empty = len(cleaned)
+    cleaned = cleaned[cleaned["link"] != ""].copy()
+    stats["empty_rows_dropped"] = before_empty - len(cleaned)
+
+    cleaned["normalized_link"] = cleaned["link"].apply(canonicalize_facebook_url).astype(str).str.strip()
+    stats["canonicalized_rows"] = int((cleaned["normalized_link"] != cleaned["link"]).sum())
+
+    is_non_content = cleaned["normalized_link"].apply(is_non_content_facebook_url)
+    stats["non_content_rows_dropped"] = int(is_non_content.sum())
+    cleaned = cleaned[~is_non_content].copy()
+
+    cleaned["link"] = cleaned["normalized_link"]
+    cleaned = cleaned.drop(columns=["normalized_link"])
+
+    before_dedup = len(cleaned)
+    cleaned = cleaned.drop_duplicates(subset=["link"], keep="first").reset_index(drop=True)
+    stats["duplicate_rows_dropped"] = before_dedup - len(cleaned)
+    stats["output_rows"] = len(cleaned)
+    return cleaned, stats
+
+
+def get_git_revision() -> str:
+    """
+    Return current git short SHA for runtime traceability.
+    """
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        return "unknown"
 
 
 class FacebookEventScraper():
@@ -905,6 +963,17 @@ class FacebookEventScraper():
             fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
             logging.info(f"def driver_fb_urls(): Retrieved {fb_urls_df.shape[0]} Facebook URLs from the database.")
 
+        fb_urls_df, seed_stats = sanitize_facebook_seed_urls(fb_urls_df)
+        logging.info(
+            "def driver_fb_urls(): Seed URL sanitize stats: input=%s output=%s canonicalized=%s dropped_non_content=%s dropped_empty=%s dropped_duplicates=%s",
+            seed_stats["input_rows"],
+            seed_stats["output_rows"],
+            seed_stats["canonicalized_rows"],
+            seed_stats["non_content_rows_dropped"],
+            seed_stats["empty_rows_dropped"],
+            seed_stats["duplicate_rows_dropped"],
+        )
+
         # 2) Add checkpoint columns
         fb_urls_df['processed'] = False
         fb_urls_df['events_processed'] = False
@@ -1172,6 +1241,7 @@ def main():
     from logging_config import setup_logging
     setup_logging('fb')
     logging.info("\n\nfb.py starting...")
+    logging.info("__main__: fb.py revision %s", get_git_revision())
 
     start_time = datetime.now()
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")

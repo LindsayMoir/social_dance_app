@@ -1195,6 +1195,13 @@ class DatabaseHandler():
         # Basic location cleanup
         df = self.clean_up_address_basic(df)
 
+        # Drop old events before expensive address resolution.
+        df = self._drop_old_events_by_date(df, context="pre_address")
+        if df.empty:
+            logging.info("write_events_to_db: No events remain after early old-date filtering, skipping address processing.")
+            self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
+            return
+
         # Resolve structured addresses using LLM + match/insert logic
         updated_rows = []
         for i, row in df.iterrows():
@@ -1208,8 +1215,8 @@ class DatabaseHandler():
 
         logging.info(f"write_events_to_db: Address processing complete for {len(updated_rows)} events.")
 
-        # Remove old or incomplete events
-        df = self._filter_events(df)
+        # Remove rows that are incomplete after address normalization.
+        df = self._filter_events(df, apply_date_filter=False)
 
         if df.empty:
             logging.info("write_events_to_db: No events remain after filtering, skipping write.")
@@ -1334,14 +1341,41 @@ class DatabaseHandler():
         logging.info(f"_clean_day_of_week_field: Made {changes_made} changes to day_of_week values")
         return df
 
-    def _filter_events(self, df):
+    def _drop_old_events_by_date(self, df: pd.DataFrame, context: str = "default") -> pd.DataFrame:
+        """
+        Drop events whose end_date is older than the configured cutoff.
+        """
+        if 'end_date' not in df.columns:
+            logging.warning("_drop_old_events_by_date(%s): Missing 'end_date' column.", context)
+            return df
+
+        old_days = int(self.config.get('clean_up', {}).get('old_events', 0) or 0)
+        if old_days <= 0:
+            return df
+
+        working_df = df.copy()
+        working_df['end_date'] = pd.to_datetime(working_df['end_date'], errors='coerce')
+        cutoff = pd.Timestamp.now() - pd.Timedelta(days=old_days)
+        rows_before = len(working_df)
+        filtered_df = working_df[working_df['end_date'] >= cutoff].reset_index(drop=True)
+        dropped = rows_before - len(filtered_df)
+        if dropped:
+            logging.info(
+                "_drop_old_events_by_date(%s): Dropped %s events older than %s",
+                context,
+                dropped,
+                cutoff.date(),
+            )
+        return filtered_df
+
+    def _filter_events(self, df, apply_date_filter: bool = True):
         """
         Filters a DataFrame of events by removing rows with all important columns empty and excluding old events.
         This method performs the following steps:
         1. Replaces empty or whitespace-only strings in important columns with pandas NA values.
         2. Drops rows where all important columns ('start_date', 'end_date', 'start_time', 'end_time', 'location', 'description') are missing.
-        3. Converts the 'end_date' column to datetime, coercing errors to NaT.
-        4. Removes events whose 'end_date' is older than the cutoff date, defined as the current time minus the number of days specified in the configuration under 'clean_up' -> 'old_events'.
+        3. Optionally removes events whose 'end_date' is older than the cutoff date,
+           defined as current time minus config['clean_up']['old_events'] days.
         Args:
             df (pd.DataFrame): DataFrame containing event data.
         Returns:
@@ -1364,14 +1398,9 @@ class DatabaseHandler():
         if rows_before_dropna != rows_after_dropna:
             logging.info(f"_filter_events: Dropped {rows_before_dropna - rows_after_dropna} rows with all important columns empty")
 
-        df['end_date'] = pd.to_datetime(df['end_date'], errors='coerce')
-        cutoff = pd.Timestamp.now() - pd.Timedelta(days=self.config['clean_up']['old_events'])
-        rows_before_date_filter = len(df)
-        filtered_df = df[df['end_date'] >= cutoff].reset_index(drop=True)
-        rows_after_date_filter = len(filtered_df)
-        
-        if rows_before_date_filter != rows_after_date_filter:
-            logging.info(f"_filter_events: Dropped {rows_before_date_filter - rows_after_date_filter} events older than {cutoff.date()}")
+        filtered_df = df
+        if apply_date_filter:
+            filtered_df = self._drop_old_events_by_date(df, context="filter_events")
         
         logging.info(f"_filter_events: Output DataFrame has {len(filtered_df)} events")
         return filtered_df
