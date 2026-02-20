@@ -38,6 +38,7 @@ import csv
 from datetime import datetime
 import logging
 import os
+import random
 import yaml
 
 # Load configuration
@@ -93,7 +94,7 @@ def _resolve_gs_urls_file(config_data: dict) -> str:
     return config_data.get('input', {}).get('gs_urls', 'data/urls/gs_urls.csv')
 
 
-def _read_facebook_group_urls_from_csv(file_path: str, limit: int, seen: set[str]) -> list[str]:
+def _read_facebook_group_urls_from_csv(file_path: str, seen: set[str]) -> list[str]:
     """Read distinct Facebook group URLs from a CSV file."""
     if not os.path.exists(file_path):
         logging.warning("_read_facebook_group_urls_from_csv(): File not found at %s", file_path)
@@ -112,8 +113,6 @@ def _read_facebook_group_urls_from_csv(file_path: str, limit: int, seen: set[str
                     continue
                 seen.add(candidate)
                 group_urls.append(candidate)
-                if len(group_urls) >= limit:
-                    break
     except Exception as e:
         logging.error("_read_facebook_group_urls_from_csv(): Failed reading %s: %s", file_path, e)
         return []
@@ -121,28 +120,34 @@ def _read_facebook_group_urls_from_csv(file_path: str, limit: int, seen: set[str
     return group_urls
 
 
-def _load_facebook_group_probe_urls(config_data: dict, limit: int = 10) -> list[str]:
+def _load_facebook_group_probe_urls(config_data: dict, limit: int = 5) -> list[str]:
     """
     Load Facebook group URLs for credential probe checks from whitelist and gs_urls CSVs.
     """
     whitelist_file = _resolve_whitelist_file(config_data)
     gs_urls_file = _resolve_gs_urls_file(config_data)
-    group_urls: list[str] = []
+    all_group_urls: list[str] = []
     seen: set[str] = set()
 
-    # Prefer whitelist groups first, then fill remaining slots from gs_urls.
-    group_urls.extend(_read_facebook_group_urls_from_csv(whitelist_file, limit=limit, seen=seen))
-    remaining = max(0, limit - len(group_urls))
-    if remaining > 0:
-        group_urls.extend(_read_facebook_group_urls_from_csv(gs_urls_file, limit=remaining, seen=seen))
+    # Build a deduped pool from both sources, then randomly sample requested probe count.
+    all_group_urls.extend(_read_facebook_group_urls_from_csv(whitelist_file, seen=seen))
+    all_group_urls.extend(_read_facebook_group_urls_from_csv(gs_urls_file, seen=seen))
+
+    if limit <= 0:
+        selected_group_urls: list[str] = []
+    elif len(all_group_urls) <= limit:
+        selected_group_urls = all_group_urls
+    else:
+        selected_group_urls = random.sample(all_group_urls, k=limit)
 
     logging.info(
-        "_load_facebook_group_probe_urls(): Loaded %s Facebook group URL probes from %s and %s",
-        len(group_urls),
+        "_load_facebook_group_probe_urls(): Selected %s random Facebook group URL probes from pool size %s (%s, %s)",
+        len(selected_group_urls),
+        len(all_group_urls),
         whitelist_file,
         gs_urls_file,
     )
-    return group_urls
+    return selected_group_urls
 
 
 def validate_gmail(headless=False, check_timeout_seconds=60):
@@ -297,7 +302,7 @@ def validate_facebook(headless=False, check_timeout_seconds=60):
                 config.get('testing', {})
                 .get('validation', {})
                 .get('scraping', {})
-                .get('facebook_group_probe_limit', 10)
+                .get('facebook_group_probe_limit', 5)
             )
             group_probe_max_failures = int(
                 config.get('testing', {})

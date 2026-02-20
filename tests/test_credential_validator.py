@@ -34,10 +34,11 @@ def test_load_facebook_group_probe_urls_filters_and_limits(tmp_path):
     }
 
     urls = _load_facebook_group_probe_urls(cfg, limit=2)
-    assert urls == [
+    assert len(urls) == 2
+    assert set(urls) == {
         "https://www.facebook.com/groups/alivetango",
         "https://www.facebook.com/groups/TangoVanIsle",
-    ]
+    }
 
 
 def test_load_facebook_group_probe_urls_returns_empty_when_missing_file():
