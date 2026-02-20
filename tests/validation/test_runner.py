@@ -475,6 +475,25 @@ class ValidationTestRunner:
                 """
             html += "</table>"
 
+        # New: Problem Categories (score < 90)
+        if chatbot_data.get('problem_categories'):
+            html += "<h3>Problem Categories (Score < 90)</h3>"
+            for cat in chatbot_data['problem_categories']:
+                html += f"<h4>{cat['name']} ({cat['count']} issues)</h4>"
+                example_q = cat.get('example', {}).get('question', '')
+                example_reason = cat.get('example', {}).get('reason', '')
+                html += f"<p><strong>Example:</strong> {example_q}<br><em>{example_reason}</em></p>"
+                example_sql = cat.get('example', {}).get('sql', '')
+                if example_sql:
+                    html += f"<pre style=\"white-space: pre-wrap; background:#f8f9fa; padding:10px; border-radius:4px; border:1px solid #eee;\"><code>{example_sql}</code></pre>"
+                if cat.get('questions'):
+                    html += "<ul>"
+                    for qtext in cat['questions']:
+                        html += f"<li>{qtext}</li>"
+                    html += "</ul>"
+                if cat.get('recommendation'):
+                    html += f"<p><strong>Recommendation:</strong> {cat['recommendation']}</p>"
+
         return html
 
     def _send_email_notification(self, results: dict) -> None:

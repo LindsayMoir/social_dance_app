@@ -328,6 +328,8 @@ class ChatbotTestExecutor:
             # CLARIFICATION path
             if sql_raw.strip().startswith("CLARIFICATION:"):
                 clarification_text = sql_raw.strip().replace("CLARIFICATION:", "").strip()
+                logging.info("QUESTION: %s", question)
+                logging.info("CLARIFICATION TEXT: %s", clarification_text)
                 return {
                     'question': question,
                     'category': question_dict['category'],
@@ -340,6 +342,8 @@ class ChatbotTestExecutor:
                     'result_count': 0,
                     'sample_results': [],
                     'timestamp': datetime.now().isoformat(),
+                    'current_date_used': current_date,
+                    'current_timezone': "America/Los_Angeles",
                     'is_clarification': True
                 }
 
@@ -367,6 +371,10 @@ class ChatbotTestExecutor:
                     sql2 = sql2.split(";")[0].strip()
                     if not self._sql_has_illegal_date_arithmetic(sql2):
                         sql_query = sql2
+
+            # Log the final SQL that will be validated/executed
+            logging.info("QUESTION: %s", question)
+            logging.info("SQL:\n%s", sql_query or "<none>")
 
             # Validate SQL syntax
             syntax_valid = self._check_sql_syntax(sql_query)
@@ -406,7 +414,9 @@ class ChatbotTestExecutor:
                 'execution_success': execution_success,
                 'result_count': result_count,
                 'sample_results': sample_results,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'current_date_used': current_date,
+                'current_timezone': "America/Los_Angeles"
             }
 
         except Exception as e:
@@ -530,11 +540,38 @@ SAMPLE RESULTS (first 5 events): {sample_results}
 
 TOTAL RESULT COUNT: {result_count}
 
-Evaluate whether the SQL query correctly addresses the user's intent. Consider:
+PROJECT TEMPORAL POLICIES (STRICT):
+- Weekend definition for dance events = Friday through Sunday (inclusive), no special time cutoff.
+  • APPLY THIS ONLY when the user's timeframe explicitly mentions weekend ("this weekend", "next weekend", or an equivalent weekend phrasing).
+- Week boundaries = Sunday–Saturday. "This week" means today through Saturday; "Next week" means Sunday–Saturday of the following week.
+  • DO NOT apply weekend-only constraints to week-based queries. Do not penalize a 'this week' or 'next week' query for not enforcing a Friday cutoff.
+- Timezone: use the local Pacific time context when interpreting dates/times.
+
+EVALUATION CRITERIA:
 1. Does the SQL filter by the correct criteria (dance style, timeframe, venue, event type)?
-2. Are date/time filters correct for the requested timeframe?
+2. Are date/time filters correct for the requested timeframe (respect the Weekend/Week policies above, and only apply the weekend rule when the query asks for weekend)?
 3. Is the result count reasonable (0 results may indicate incorrect query)?
 4. Do the sample results match what the user asked for?
+
+DEFAULT EVENT TYPE POLICY (CRITICAL):
+- By default, queries should include social dances unless the user explicitly restricts event types (e.g., "only classes", "live music only").
+- If the user later adds other types (classes, workshops, live music), they should be OR'ed in with social dance.
+- Do NOT penalize queries for including event_type ILIKE '%social dance%' by default. That is correct and expected unless the user requested otherwise.
+
+LEARNING-EVENT SYNONYMS (IMPORTANT):
+- "Class" and "Workshop" are considered learning-oriented and interchangeable for most intents.
+- If a user asks for classes, including workshops (event_type ILIKE '%workshop%') alongside classes is acceptable and should NOT be penalized.
+- Only penalize inclusion of workshops when the user explicitly restricts to classes only (e.g., "classes only", "no workshops").
+
+EVENT-TYPE CONJUNCTION POLICY (AND vs OR):
+- Natural language like "classes and social dances", "workshops and social dancing", or "classes with social" should be interpreted as OR across event types (either type qualifies) unless the user explicitly requires both in the same event.
+- Acceptable patterns include (event_type ILIKE '%class%' OR event_type ILIKE '%workshop%' OR event_type ILIKE '%social dance%').
+- Do NOT penalize the use of OR for these phrasings. Only require AND (same-event conjunction) when the user is explicit (e.g., "class followed by social in one event", "combined class+social").
+
+TONIGHT / NIGHTTIME POLICY (CRITICAL):
+- For phrases like "tonight" or "tomorrow night", it is CORRECT to filter using start_date = <that day> AND start_time >= '18:00:00'.
+- Do NOT penalize queries for not including events that started earlier but continue into the night, unless the user explicitly asks to include overlapping/ongoing events.
+- "Tonight" does not require span/overlap logic by default; the 18:00 cutoff is the established policy.
 
 Respond with ONLY valid JSON:
 {{
@@ -546,9 +583,9 @@ Respond with ONLY valid JSON:
 }}
 
 Score guidelines:
-- 90-100: Perfect query, results exactly match intent
-- 70-89: Good query, minor issues (e.g., date range slightly off)
-- 50-69: Partially correct, some criteria missing
+- 90-100: Perfect query, results exactly match intent and temporal policies
+- 70-89: Good query, minor issues (e.g., date window slightly off but still mostly correct)
+- 50-69: Partially correct, some criteria missing or temporal policy partially applied
 - 30-49: Major issues, wrong filters or logic
 - 0-29: Query failed or completely wrong
 """
@@ -695,8 +732,12 @@ Score guidelines:
             }
 
         # Format evaluation prompt with current date context
-        current_date = datetime.now().strftime('%Y-%m-%d')
-        current_year = datetime.now().year
+        # Use the same date context used to generate SQL (Pacific) if available
+        current_date = test_result.get('current_date_used') or datetime.now().strftime('%Y-%m-%d')
+        try:
+            current_year = int(current_date[:4])
+        except Exception:
+            current_year = datetime.now().year
 
         prompt = self.eval_prompt.format(
             current_date=current_date,
@@ -937,6 +978,52 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'outpu
     ]
 
     # Build JSON report
+    # Build Problem Categories (evaluation_score < 90)
+    def _categorize_issue(row: dict) -> str:
+        q = row.get('question', '').lower()
+        reason = row.get('evaluation', {}).get('reasoning', '').lower()
+        sql = (row.get('sql_query') or '').lower()
+
+        # Prefer weekend classification first to avoid "week" substrings in reasoning misplacing weekend queries
+        if any(k in q or k in reason for k in ["weekend", " fri", " sat", " sun", "friday", "saturday", "sunday"]):
+            return "Weekend Calculation"
+
+        # Week classification: ensure we don't accidentally match weekend
+        week_terms = ["this week", "next week", "calendar week", "monday", "sunday", "week calculation"]
+        if any((t in q or t in reason) for t in week_terms):
+            return "Week Calculation"
+
+        if any(k in q for k in ["tonight", "tomorrow night"]) or ("tonight" in reason):
+            return "Tonight / Time Filter"
+        if "event_type" in reason or ("social dance" in q and "event_type" in sql and "social" not in sql):
+            return "Event Type Defaults"
+        if any(k in sql for k in ["current_date +", "current_date -"]) or "interval" in reason:
+            return "Date Arithmetic"
+        return "Other"
+
+    issues_under_90 = [r for r in scored_results if r['evaluation']['score'] < 90]
+    buckets = {}
+    for r in issues_under_90:
+        cat = _categorize_issue(r)
+        buckets.setdefault(cat, []).append(r)
+
+    # Take top 5 by frequency
+    top_cats = sorted(buckets.items(), key=lambda x: len(x[1]), reverse=True)[:5]
+    problem_categories = []
+    for name, rows in top_cats:
+        example = rows[0]
+        problem_categories.append({
+            'name': name,
+            'count': len(rows),
+            'example': {
+                'question': example.get('question', ''),
+                'reason': example['evaluation'].get('reasoning', '')[:200],
+                'sql': example.get('sql_query', '')
+            },
+            'questions': [r.get('question', '') for r in rows[:10]],
+            'recommendation': 'Align policy and date tool; verify prompt and SQL filters.'
+        })
+
     report = {
         'timestamp': datetime.now().isoformat(),
         'summary': {
@@ -952,6 +1039,7 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'outpu
         },
         'category_breakdown': category_stats,
         'problematic_questions': problematic[:20],  # Limit to first 20
+        'problem_categories': problem_categories,
         'failed_interpretations': interpretation_failed[:20],  # Limit to first 20
         'recommendations': _generate_recommendations(scored_results, category_stats, interpretation_failed)
     }

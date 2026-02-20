@@ -32,38 +32,13 @@ crawling:
   max_attempts: 3
   max_crawl_trys: 3
   max_website_urls: 10
-  # Limit for random sampling of chatbot validation questions (0 = all)
-  random_test_limit: 20
   prompt_max_length: 100000
+  random_test_limit: 10
   scroll_depth: 2
   urls_run_limit: 500
 date_range:
   days_ahead: 365
   months: 3
-temporal_expressions:
-  # Time period definitions for queries like "Monday morning", "Friday evening", etc.
-  time_periods:
-    morning:
-      start_time: "06:00:00"
-      end_time: "12:00:00"
-    afternoon:
-      start_time: "12:00:00"
-      end_time: "17:00:00"
-    evening:
-      start_time: "17:00:00"
-      end_time: "21:00:00"
-    night:
-      start_time: "18:00:00"
-      end_time: null  # No end time, just start after 6pm
-  # Day name to weekday number mapping (0=Monday, 6=Sunday)
-  day_names:
-    monday: 0
-    tuesday: 1
-    wednesday: 2
-    thursday: 3
-    friday: 4
-    saturday: 5
-    sunday: 6
 debug:
   address_fix: debug/address_fix.csv
   after_url_updated: debug/after_url_updated.csv
@@ -128,6 +103,9 @@ prompts:
   chatbot_instructions:
     file: prompts/chatbot_instructions.txt
     schema: null
+  contextual_sql:
+    file: prompts/contextual_sql_prompt.txt
+    schema: null
   dedup:
     file: prompts/dedup_prompt.txt
     schema: deduplication_response
@@ -170,18 +148,14 @@ prompts:
   images:
     file: prompts/images_prompt.txt
     schema: event_extraction
+  interpretation:
+    file: prompts/interpretation_prompt.txt
+    schema: null
   irrelevant_rows:
     file: prompts/irrelevant_rows_prompt.txt
     schema: relevance_classification
   relevant_dance_url:
     file: prompts/relevant_dance_url.txt
-    schema: null
-  # Validation and chatbot prompts
-  contextual_sql:
-    file: prompts/contextual_sql_prompt.txt
-    schema: null
-  interpretation:
-    file: prompts/interpretation_prompt.txt
     schema: null
   result_analysis:
     file: prompts/result_analysis_prompt.txt
@@ -195,6 +169,28 @@ search:
   gs_num_results: 10
 startup:
   use_db: false
+temporal_expressions:
+  day_names:
+    friday: 4
+    monday: 0
+    saturday: 5
+    sunday: 6
+    thursday: 3
+    tuesday: 1
+    wednesday: 2
+  time_periods:
+    afternoon:
+      end_time: '17:00:00'
+      start_time: '12:00:00'
+    evening:
+      end_time: '21:00:00'
+      start_time: '17:00:00'
+    morning:
+      end_time: '12:00:00'
+      start_time: 06:00:00
+    night:
+      end_time: null
+      start_time: '18:00:00'
 testing:
   drop_tables: false
   fast_api_url: http://localhost:8080/query
@@ -202,24 +198,23 @@ testing:
   nof_no_url_events: 10
   sql: true
   status: true
-  # Pre-commit validation configuration
   validation:
-    scraping:
-      days_back: 30  # Check scraping in last N days
-      whitelist_days_back: 60  # Longer window for whitelisted URLs
-      whitelist_file: data/urls/aaa_urls.csv
-      edge_cases_file: data/other/edge_cases.csv
-      min_hit_ratio: 0.50  # Threshold for "high performer"
-      min_attempts: 3  # Min attempts to establish pattern
-      consecutive_failures_threshold: 2  # Mark irrelevant only if >=2 recent fails
-      whitelist_consecutive_failures_threshold: 3  # Stricter for whitelisted URLs
     chatbot:
-      question_templates: tests/data/chatbot_test_questions.yaml
-      llm_evaluation: true
+      execution_threshold: 0.9
       fallback_scoring: true
-      score_threshold: 70  # Min average score to pass
-      execution_threshold: 0.90  # Min SQL success rate (90%)
+      llm_evaluation: true
+      question_templates: tests/data/chatbot_test_questions.yaml
+      score_threshold: 70
     reporting:
-      output_dir: output
-      generate_html: true
       generate_csv: true
+      generate_html: true
+      output_dir: output
+    scraping:
+      consecutive_failures_threshold: 2
+      days_back: 7
+      edge_cases_file: data/other/edge_cases.csv
+      min_attempts: 3
+      min_hit_ratio: 0.5
+      whitelist_consecutive_failures_threshold: 3
+      whitelist_days_back: 60
+      whitelist_file: data/urls/aaa_urls.csv

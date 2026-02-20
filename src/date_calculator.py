@@ -98,59 +98,42 @@ def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
             "end_date": yesterday.strftime("%Y-%m-%d")
         }
 
-    # This week (Monday-Sunday of current calendar week)
+    # This week (Sunday-Saturday of current week; forward-only from today)
     elif temporal_phrase == "this week":
-        dow = current.weekday()  # 0=Monday, 6=Sunday
-
-        # Calculate Monday of this week
-        days_since_monday = dow  # If Monday, 0; if Tuesday, 1; etc.
-        monday = current - timedelta(days=days_since_monday)
-
-        # Calculate Sunday of this week
-        days_to_sunday = 6 - dow  # If Monday, 6; if Sunday, 0
-        sunday = current + timedelta(days=days_to_sunday)
-
+        # Python weekday(): Monday=0..Sunday=6; we want Sunday start
+        days_since_sunday = (current.weekday() + 1) % 7
+        sunday = current - timedelta(days=days_since_sunday)
+        saturday = sunday + timedelta(days=6)
+        start = current  # forward-only, start today within the week
+        end = saturday
         return {
-            "start_date": monday.strftime("%Y-%m-%d"),
-            "end_date": sunday.strftime("%Y-%m-%d")
+            "start_date": start.strftime("%Y-%m-%d"),
+            "end_date": end.strftime("%Y-%m-%d")
         }
 
-    # Next week (next Monday through next Sunday)
+    # Next week (Sunday-Saturday of next week)
     elif temporal_phrase == "next week":
-        dow = current.weekday()  # 0=Monday, 6=Sunday
-        # Days to next Monday
-        days_to_monday = (7 - dow) % 7
-        if days_to_monday == 0:
-            days_to_monday = 7  # Not today, next week
-
-        next_monday = current + timedelta(days=days_to_monday)
-        next_sunday = next_monday + timedelta(days=6)
-
+        days_since_sunday = (current.weekday() + 1) % 7
+        this_sunday = current - timedelta(days=days_since_sunday)
+        next_sunday = this_sunday + timedelta(days=7)
+        next_saturday = next_sunday + timedelta(days=6)
         return {
-            "start_date": next_monday.strftime("%Y-%m-%d"),
-            "end_date": next_sunday.strftime("%Y-%m-%d")
+            "start_date": next_sunday.strftime("%Y-%m-%d"),
+            "end_date": next_saturday.strftime("%Y-%m-%d")
         }
 
-    # This weekend (Friday-Sunday of current week)
+    # This weekend (Fri 18:00 to Sun 23:59:59 of current week)
     elif temporal_phrase in ["this weekend", "coming weekend"]:
-        dow = current.weekday()  # 0=Monday, 6=Sunday
-
-        # If Monday-Thursday: upcoming Fri-Sun
-        if dow in [0, 1, 2, 3]:
-            days_to_friday = 4 - dow
-            friday = current + timedelta(days=days_to_friday)
-            sunday = friday + timedelta(days=2)
-        # If Friday-Sunday: this Fri-Sun (or remaining days)
-        else:
-            # Calculate back to Friday of this week
-            days_since_friday = dow - 4  # Friday is day 4
-            friday = current - timedelta(days=days_since_friday)
-            sunday = friday + timedelta(days=2)
-
+        dow = current.weekday()  # 0=Mon..6=Sun
+        # Compute upcoming Friday
+        days_to_friday = (4 - dow) % 7  # Friday=4
+        friday = current + timedelta(days=days_to_friday)
+        sunday = friday + timedelta(days=2)
         return {
             "start_date": friday.strftime("%Y-%m-%d"),
             "end_date": sunday.strftime("%Y-%m-%d"),
-            "dow_filter": [5, 6, 0]  # Friday, Saturday, Sunday
+            "time_filter": "18:00:00",  # Friday evening start
+            "end_time_filter": "23:59:59"
         }
 
     # Next weekend (Friday-Sunday of next week)
