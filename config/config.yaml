@@ -28,7 +28,7 @@ constants:
     url: https://www.facebook.com/groups/cubansalsaclub/
 crawling:
   depth_limit: 2
-  headless: true
+  headless: false
   max_attempts: 3
   max_crawl_trys: 3
   max_website_urls: 10
@@ -213,6 +213,8 @@ testing:
       consecutive_failures_threshold: 2
       days_back: 7
       edge_cases_file: data/other/edge_cases.csv
+      facebook_group_probe_limit: 5
+      facebook_group_probe_max_failures: 2
       min_attempts: 3
       min_hit_ratio: 0.5
       whitelist_consecutive_failures_threshold: 3
