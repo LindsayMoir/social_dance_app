@@ -174,6 +174,40 @@ def is_non_content_facebook_url(url: str) -> bool:
     return False
 
 
+def classify_facebook_access_state(current_url: str, page_content: str) -> str:
+    """
+    Classify Facebook page access state as one of:
+    - 'ok': content appears accessible
+    - 'login': authentication wall detected
+    - 'blocked': temporary block/rate-limit/interstitial detected
+    """
+    url_lower = (current_url or "").lower()
+    content_lower = (page_content or "").lower()
+
+    login_markers = (
+        "/login",
+        "login form",
+        "log in to facebook",
+        "must log in",
+        "/checkpoint/",
+        "two-factor",
+    )
+    if any(m in url_lower for m in ("/login", "/checkpoint/")) or any(m in content_lower for m in login_markers):
+        return "login"
+
+    blocked_markers = (
+        "temporarily blocked",
+        "misusing this feature",
+        "too many requests",
+        "try again later",
+        "rate limited",
+    )
+    if "/sorry/" in url_lower or any(m in content_lower for m in blocked_markers):
+        return "blocked"
+
+    return "ok"
+
+
 def sanitize_facebook_seed_urls(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """
     Normalize and filter Facebook seed URLs before processing.
@@ -486,33 +520,35 @@ class FacebookEventScraper():
         real_url = self.normalize_facebook_url(incoming_url)
         page = self.logged_in_page
 
-        # Always navigate to the canonical target URL first.
-        try:
-            t = random.randint(20000//2, int(20000 * 1.5))
-            page.goto(real_url, wait_until="domcontentloaded", timeout=t)
-        except PlaywrightTimeoutError:
-            logging.warning(f"navigate_and_maybe_login: timeout on {real_url}")
-
-        try:
-            content = page.content().lower()
-            if 'temporarily blocked' in content or 'misusing this feature' in content:
-                logging.warning(f"navigate_and_maybe_login: blocked or rate-limited on {real_url}")
-                return False
-        except Exception:
-            pass
-
-        if 'login' in page.url.lower():
-            logging.info(f"navigate_and_maybe_login: login required for {incoming_url}")
-            if not self.login_to_facebook():
-                return False
+        for attempt in range(2):
             try:
                 t = random.randint(20000//2, int(20000 * 1.5))
                 page.goto(real_url, wait_until="domcontentloaded", timeout=t)
             except PlaywrightTimeoutError:
-                logging.error(f"navigate_and_maybe_login: timeout after login for {real_url}")
-                return False
+                logging.warning(f"navigate_and_maybe_login: timeout on {real_url}")
 
-        return True
+            try:
+                state = classify_facebook_access_state(page.url, page.content())
+            except Exception:
+                state = classify_facebook_access_state(page.url, "")
+
+            if state == "ok":
+                return True
+
+            if state == "login":
+                logging.info(f"navigate_and_maybe_login: login required for {incoming_url}")
+                if not self.login_to_facebook():
+                    return False
+                continue
+
+            logging.warning(f"navigate_and_maybe_login: blocked or rate-limited on {real_url}")
+            if attempt == 0:
+                cooldown_ms = random.randint(6000, 12000)
+                page.wait_for_timeout(cooldown_ms)
+                continue
+            return False
+
+        return False
     
 
     def extract_event_links(self, search_url: str) -> set:
@@ -569,7 +605,7 @@ class FacebookEventScraper():
         return links
 
 
-    def extract_event_text(self, link: str) -> str:
+    def extract_event_text(self, link: str, assume_navigated: bool = False) -> str:
         """
         Extracts the full text content from a Facebook event page.
         Navigates to the specified event link, handling login if necessary, and attempts to load the page content.
@@ -581,9 +617,10 @@ class FacebookEventScraper():
             str: The extracted text content from the event page, or None if extraction fails.
         """
 
-        if not self.navigate_and_maybe_login(link):
-            logging.warning(f"extract_event_text: cannot access {link}")
-            return None
+        if not assume_navigated:
+            if not self.navigate_and_maybe_login(link):
+                logging.warning(f"extract_event_text: cannot access {link}")
+                return None
         
         self.total_url_attempts += 1
         page = self.logged_in_page
@@ -591,14 +628,13 @@ class FacebookEventScraper():
         if not page or page.url == "about:blank":
             page = self.context.new_page()
             self.logged_in_page = page
-        timeout_value = random.randint(10000, 15000)
-        logging.info(f"extract_event_text: Navigating to {link} ({timeout_value} ms)")
-
-        try:
-            page.goto(link, wait_until="domcontentloaded", timeout=timeout_value)
-        except PlaywrightTimeoutError:
-            logging.error(f"extract_event_text: timeout on {link}")
-            return None
+            timeout_value = random.randint(10000, 15000)
+            logging.info(f"extract_event_text: Navigating to {link} ({timeout_value} ms)")
+            try:
+                page.goto(link, wait_until="domcontentloaded", timeout=timeout_value)
+            except PlaywrightTimeoutError:
+                logging.error(f"extract_event_text: timeout on {link}")
+                return None
         
         page.wait_for_timeout(random.randint(4000, 7000))
         for btn in page.query_selector_all("text=/See more/i"):
@@ -802,9 +838,9 @@ class FacebookEventScraper():
 
         # 1) Extract text: full event page vs relevant snippet
         if "event" in url:
-            extracted_text = self.extract_event_text(url)
+            extracted_text = self.extract_event_text(url, assume_navigated=True)
         else:
-            full_text = self.extract_event_text(url)
+            full_text = self.extract_event_text(url, assume_navigated=True)
             extracted_text = self.extract_relevant_text(full_text, url) if full_text else None
 
         # 2) Bail if no text

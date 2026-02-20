@@ -5,6 +5,7 @@ sys.path.insert(0, "src")
 from fb import should_use_fb_checkpoint
 from fb import canonicalize_facebook_url, is_facebook_login_redirect, is_non_content_facebook_url
 from fb import sanitize_facebook_seed_urls
+from fb import classify_facebook_access_state
 import pandas as pd
 
 
@@ -66,3 +67,27 @@ def test_sanitize_facebook_seed_urls_canonicalizes_filters_and_dedupes():
     assert stats["canonicalized_rows"] >= 1
     assert stats["non_content_rows_dropped"] == 2
     assert stats["duplicate_rows_dropped"] == 1
+
+
+def test_classify_facebook_access_state_detects_login():
+    state = classify_facebook_access_state(
+        "https://www.facebook.com/login/?next=%2Fevents%2F123%2F",
+        "Log in to Facebook",
+    )
+    assert state == "login"
+
+
+def test_classify_facebook_access_state_detects_blocked():
+    state = classify_facebook_access_state(
+        "https://www.facebook.com/events/123/",
+        "You are temporarily blocked from using this feature. Try again later.",
+    )
+    assert state == "blocked"
+
+
+def test_classify_facebook_access_state_detects_ok():
+    state = classify_facebook_access_state(
+        "https://www.facebook.com/events/123/",
+        "Event details and comments",
+    )
+    assert state == "ok"
