@@ -44,10 +44,6 @@ with open('config/config.yaml', "r") as file:
 from db import DatabaseHandler
 from logging_config import setup_logging
 
-# Setup centralized logging
-setup_logging('emails')
-logging.info("\n\nStarting Gmail Processor...")
-
 # Load environment variables from .env
 load_dotenv()
 
@@ -312,6 +308,11 @@ class GmailProcessor:
 
 
 if __name__ == "__main__":
+    # Setup centralized logging only for direct script execution.
+    # Avoid configuring logging at import time because this module is imported by credential_validator.py.
+    setup_logging('emails')
+    logging.info("\n\nStarting Gmail Processor...")
+
     # Initialize DatabaseHandler
     db_handler = DatabaseHandler(config)
     
