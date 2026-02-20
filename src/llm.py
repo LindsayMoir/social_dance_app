@@ -250,9 +250,26 @@ class LLMHandler:
         """
         # Generate prompt, query LLM, and process the response.
         prompt_text, schema_type = self.generate_prompt(url, extracted_text, prompt_type)
-        if len(prompt_text) > self.config['crawling']['prompt_max_length']:
-            logging.warning(f"def process_llm_response: Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
-            return False
+        max_prompt_length = int(self.config['crawling']['prompt_max_length'])
+        if len(prompt_text) > max_prompt_length:
+            # Fail-soft behavior: trim page text to fit prompt budget instead of dropping extraction.
+            try:
+                base_prompt, _ = self.generate_prompt(url, "", prompt_type)
+            except Exception:
+                base_prompt = ""
+            overhead_chars = len(base_prompt)
+            text_budget = max(5000, max_prompt_length - overhead_chars - 1000)
+            trimmed_text = self._trim_extracted_text_for_budget(extracted_text, text_budget)
+            prompt_text, schema_type = self.generate_prompt(url, trimmed_text, prompt_type)
+            if len(prompt_text) > max_prompt_length:
+                prompt_text = prompt_text[:max_prompt_length]
+            logging.warning(
+                "def process_llm_response: Prompt for URL %s exceeded max length; "
+                "trimmed extracted text from %d to %d chars.",
+                url,
+                len(extracted_text or ""),
+                len(trimmed_text or ""),
+            )
         llm_response = self.query_llm(url, prompt_text, schema_type)
 
         if llm_response:
@@ -293,6 +310,30 @@ class LLMHandler:
         else:
             logging.error(f"def process_llm_response: Failed to process LLM response for URL: {url}")
             return False
+
+    @staticmethod
+    def _trim_extracted_text_for_budget(extracted_text: str, max_chars: int) -> str:
+        """
+        Trim extracted page text to a max character budget while preserving
+        both leading and trailing context.
+        """
+        if not extracted_text:
+            return ""
+        if max_chars <= 0:
+            return ""
+        if len(extracted_text) <= max_chars:
+            return extracted_text
+        if max_chars < 100:
+            return extracted_text[:max_chars]
+        head_chars = int(max_chars * 0.7)
+        tail_chars = max_chars - head_chars - len("\n...[TRUNCATED]...\n")
+        if tail_chars < 0:
+            tail_chars = 0
+        return (
+            extracted_text[:head_chars]
+            + "\n...[TRUNCATED]...\n"
+            + (extracted_text[-tail_chars:] if tail_chars > 0 else "")
+        )
         
 
     def generate_prompt(self, url, extracted_text, prompt_type):

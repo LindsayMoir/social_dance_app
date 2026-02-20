@@ -26,6 +26,7 @@ import sys
 import yaml
 import subprocess
 import csv
+from urllib.parse import urljoin, urlparse, urlunparse
 
 from credentials import get_credentials
 from db import DatabaseHandler
@@ -40,6 +41,124 @@ with open('config/config.yaml', 'r') as file:
 
 # Handlers will be instantiated when needed to avoid blocking module import
 _handlers_cache = None
+
+
+def normalize_url_for_compare(url: str) -> str:
+    """
+    Normalize URL for deterministic comparisons and de-duplication.
+    """
+    try:
+        parsed = urlparse(url)
+        scheme = (parsed.scheme or "https").lower()
+        netloc = (parsed.netloc or "").lower()
+        if netloc.endswith(":80") and scheme == "http":
+            netloc = netloc[:-3]
+        if netloc.endswith(":443") and scheme == "https":
+            netloc = netloc[:-4]
+        path = (parsed.path or "").rstrip("/")
+        return urlunparse((scheme, netloc, path, "", parsed.query, ""))
+    except Exception:
+        return (url or "").strip().lower().rstrip("/")
+
+
+def normalize_http_links(base_url: str, raw_links: list[str], limit: int | None = None) -> list[str]:
+    """
+    Normalize links using base_url and keep only unique http/https URLs.
+
+    This accepts relative and protocol-relative links (e.g., '/events', '//calendar.google.com/...').
+    """
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_link in raw_links:
+        if not raw_link:
+            continue
+        candidate = urljoin(base_url, str(raw_link).strip())
+        scheme = urlparse(candidate).scheme.lower()
+        if scheme not in ("http", "https"):
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        normalized.append(candidate)
+        if limit is not None and len(normalized) >= limit:
+            break
+    return normalized
+
+
+def is_calendar_candidate(url: str, calendar_roots: set[str]) -> bool:
+    """
+    Returns True when URL is a known calendar seed/root or a Google Calendar link.
+    """
+    low = (url or "").lower()
+    if "calendar.google.com" in low or "@group.calendar.google.com" in low or "%40group.calendar.google.com" in low:
+        return True
+    norm_url = normalize_url_for_compare(url)
+    return any(norm_url.startswith(root) for root in calendar_roots)
+
+
+def merge_seed_urls(seed_df: pd.DataFrame, whitelist_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge regular crawl seeds with whitelist seeds and de-duplicate by normalized URL.
+    """
+    combined = pd.concat([seed_df, whitelist_df], ignore_index=True, sort=False)
+    if combined.empty:
+        return combined
+    for required_col in ("source", "keywords", "link"):
+        if required_col not in combined.columns:
+            combined[required_col] = ""
+    combined["link"] = combined["link"].fillna("").astype(str).str.strip()
+    combined = combined[combined["link"] != ""].copy()
+    combined["_norm"] = combined["link"].map(normalize_url_for_compare)
+    combined = combined.drop_duplicates(subset=["_norm"], keep="first")
+    return combined.drop(columns=["_norm"])
+
+
+def should_force_follow_link(parent_url: str, parent_is_whitelisted: bool, link: str, calendar_roots: set[str]) -> bool:
+    """
+    Determine whether crawler should force-follow a child link.
+
+    Force follow when:
+    - child link itself is whitelisted
+    - child link is calendar-related
+    - parent page is whitelisted and child is on same domain
+    """
+    if not link:
+        return False
+    try:
+        child_is_whitelisted = db_handler.is_whitelisted_url(link)
+    except Exception:
+        child_is_whitelisted = False
+    if child_is_whitelisted:
+        return True
+    if is_calendar_candidate(link, calendar_roots):
+        return True
+    if parent_is_whitelisted:
+        try:
+            return urlparse(parent_url).netloc.lower() == urlparse(link).netloc.lower()
+        except Exception:
+            return False
+    return False
+
+
+def prioritize_links_for_crawl(links: list[str], max_links: int) -> list[str]:
+    """
+    Prioritize event/calendar links before applying crawl cap.
+    """
+    if max_links <= 0:
+        return []
+    scored: list[tuple[int, int, str]] = []
+    for idx, link in enumerate(links):
+        low = link.lower()
+        score = 0
+        if any(token in low for token in ("calendar", "events", "event", "schedule", "social", "month", "list")):
+            score += 5
+        if "calendar.google.com" in low or "@group.calendar.google.com" in low or "%40group.calendar.google.com" in low:
+            score += 8
+        if "/events/" in low:
+            score += 4
+        scored.append((score, idx, link))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [link for _, _, link in scored[:max_links]]
 
 def get_handlers():
     """Initialize and return handlers only when needed."""
@@ -77,10 +196,26 @@ class EventSpider(scrapy.Spider):
         try:
             if os.path.exists(calendar_urls_file):
                 calendar_df = pd.read_csv(calendar_urls_file)
-                self.calendar_urls_set = {db_handler._normalize_for_compare(str(u)) for u in calendar_df['link'].dropna().tolist()}
+                self.calendar_urls_set = {normalize_url_for_compare(str(u)) for u in calendar_df['link'].dropna().tolist()}
                 logging.info(f"__init__(): Loaded {len(self.calendar_urls_set)} calendar URLs for special handling")
         except Exception as e:
             logging.warning(f"__init__(): Could not load calendar URLs: {e}")
+
+        # Load whitelist URLs as mandatory crawl seeds
+        self.whitelist_urls_df = pd.DataFrame(columns=["source", "keywords", "link"])
+        try:
+            urls_dir = self.config.get("input", {}).get("urls", "data/urls")
+            whitelist_path = os.path.join(urls_dir, "aaa_urls.csv")
+            if os.path.exists(whitelist_path):
+                wl_df = pd.read_csv(whitelist_path, dtype=str)
+                for required_col in ("source", "keywords", "link"):
+                    if required_col not in wl_df.columns:
+                        wl_df[required_col] = ""
+                wl_df["link"] = wl_df["link"].fillna("").astype(str).str.strip()
+                self.whitelist_urls_df = wl_df[wl_df["link"] != ""][["source", "keywords", "link"]]
+                logging.info(f"__init__(): Loaded {len(self.whitelist_urls_df)} whitelist URLs from {whitelist_path}")
+        except Exception as e:
+            logging.warning(f"__init__(): Could not load whitelist URLs: {e}")
 
         logging.info("\n\nscraper.py starting...")
 
@@ -107,10 +242,15 @@ class EventSpider(scrapy.Spider):
             dataframes = [pd.read_csv(file) for file in csv_files]
             urls_df = pd.concat(dataframes, ignore_index=True)
 
+        # Always include whitelist seeds, even in DB mode.
+        urls_df = merge_seed_urls(urls_df, self.whitelist_urls_df)
+
         for _, row in urls_df.iterrows():
-            source = row['source']
-            keywords = row['keywords']
-            url = row['link']
+            source = row.get('source', '')
+            keywords = row.get('keywords', '')
+            url = row.get('link', '')
+            if not url:
+                continue
 
             # Whitelist check
             try:
@@ -130,11 +270,8 @@ class EventSpider(scrapy.Spider):
                 continue
 
             # Special handling for calendar URLs - always process them regardless of historical relevancy
-            try:
-                norm_url = db_handler._normalize_for_compare(url)
-            except Exception:
-                norm_url = url
-            is_calendar_url = any(norm_url.startswith(cu) for cu in self.calendar_urls_set)
+            norm_url = normalize_url_for_compare(url)
+            is_calendar_url = is_calendar_candidate(norm_url, self.calendar_urls_set)
             if is_calendar_url:
                 logging.info(f"start(): Processing calendar URL {url} (bypassing historical relevancy)")
             elif not db_handler.should_process_url(url):
@@ -157,7 +294,11 @@ class EventSpider(scrapy.Spider):
                 cb_kwargs={'keywords': keywords, 'source': source, 'url': url},
                 meta={
                     "playwright": True,
-                    "playwright_page_methods": [PageMethod("wait_for_selector", "body")],
+                    "playwright_page_methods": [
+                        PageMethod("wait_for_selector", "body"),
+                        PageMethod("wait_for_load_state", "networkidle"),
+                        PageMethod("wait_for_timeout", 2500),
+                    ],
                 },
             )
 
@@ -175,7 +316,12 @@ class EventSpider(scrapy.Spider):
         if not isinstance(response, TextResponse):
             return
         
-        if any(dom in url for dom in ('facebook', 'instagram')):
+        try:
+            is_whitelisted_origin = db_handler.is_whitelisted_url(url)
+        except Exception:
+            is_whitelisted_origin = False
+
+        if any(dom in url for dom in ('facebook', 'instagram')) and not is_whitelisted_origin:
             # record it as unwanted and stop processing immediately
             child_row = [url, '', source, [], False, 1, datetime.now()]
             db_handler.write_url_to_db(child_row)
@@ -212,28 +358,26 @@ class EventSpider(scrapy.Spider):
 
         # 3) Extract all <a href> links (limit to configured maximum)
         raw_links = response.css('a::attr(href)').getall()
-        page_links = [
-            response.urljoin(link)
-            for link in raw_links
-            if link and link.startswith(("http://", "https://"))
-        ][: self.config['crawling']['max_website_urls']]
+        page_links_all = normalize_http_links(
+            response.url,
+            raw_links,
+        )
+        page_links = prioritize_links_for_crawl(page_links_all, self.config['crawling']['max_website_urls'])
         logging.info(f"def parse(): Found {len(page_links)} links on {response.url}")
 
         # 4) Process iframes & extract Google Calendar addresses
-        iframe_links = [
-            response.urljoin(link)
-            for link in response.css('iframe::attr(src)').getall()
-            if link.startswith(("http://", "https://"))
-        ]
+        iframe_links = normalize_http_links(response.url, response.css('iframe::attr(src)').getall())
         calendar_emails = re.findall(
             r'"gcal"\s*:\s*"([A-Za-z0-9_.+-]+@group\.calendar\.google\.com)"',
             response.text
         )
-        if iframe_links or calendar_emails:
-            for cal_url in iframe_links + calendar_emails:
+        calendar_anchor_links = [link for link in page_links if is_calendar_candidate(link, self.calendar_urls_set)]
+        calendar_sources = iframe_links + calendar_emails + calendar_anchor_links
+        if calendar_sources:
+            for cal_url in calendar_sources:
                 self.fetch_google_calendar_events(cal_url, url, source, keywords)
             # mark the page itself as relevant if calendar events fetched
-            url_row = [cal_url, url, source, found_keywords, True, crawl_try, time_stamp]
+            url_row = [url, "", source, found_keywords, True, crawl_try, time_stamp]
             db_handler.write_url_to_db(url_row)
 
         # 5) Filter unwanted links and record them
@@ -246,12 +390,13 @@ class EventSpider(scrapy.Spider):
             except Exception:
                 wl = False
             if 'facebook' in low or 'instagram' in low:
+                if wl:
+                    logging.info(f"def parse(): Whitelisted social URL kept for crawl: {link}")
+                    filtered_links.add(link)
+                    continue
                 child_row = [link, url, source, found_keywords, False, 1, datetime.now()]
                 db_handler.write_url_to_db(child_row)
-                if wl:
-                    logging.info(f"def parse(): Routed whitelisted social URL to FB/IG pipeline: {link}")
-                else:
-                    logging.info(f"def parse(): Recorded unwanted social URL: {link}")
+                logging.info(f"def parse(): Recorded unwanted social URL: {link}")
                 continue
             filtered_links.add(link)
 
@@ -260,11 +405,13 @@ class EventSpider(scrapy.Spider):
 
             # Check urls to see if they should be scraped
 
-            if db_handler.avoid_domains(link):
+            force_follow = should_force_follow_link(url, is_whitelisted_origin, link, self.calendar_urls_set)
+
+            if db_handler.avoid_domains(link) and not force_follow:
                 logging.info(f"parse: Skipping blacklisted URL {link}.")
                 continue
 
-            if not db_handler.should_process_url(link):
+            if not force_follow and not db_handler.should_process_url(link):
                 logging.info(f"def eventbrite_search(): Skipping URL {link} based on historical relevancy.")
                 continue
 
@@ -272,11 +419,6 @@ class EventSpider(scrapy.Spider):
             if link in self.visited_link:
                 continue
             self.visited_link.add(link)
-
-            # Check urls to see if they should be scraped
-            if not db_handler.should_process_url(link):
-                logging.info(f"def eventbrite_search(): Skipping URL {link} based on historical relevancy.")
-                continue
 
             # record the child link before crawling
             child_row = [link, url, source, found_keywords, False, 1, datetime.now()]
@@ -294,7 +436,9 @@ class EventSpider(scrapy.Spider):
                 meta={
                     "playwright": True,
                     "playwright_page_methods": [
-                        PageMethod("wait_for_selector", "body")
+                        PageMethod("wait_for_selector", "body"),
+                        PageMethod("wait_for_load_state", "networkidle"),
+                        PageMethod("wait_for_timeout", 2500),
                     ],
                 },
             )
@@ -321,9 +465,32 @@ class EventSpider(scrapy.Spider):
 
 
     def extract_calendar_ids(self, calendar_url):
-        pattern = r'src=([^&]+%40group.calendar.google.com)'
-        ids = re.findall(pattern, calendar_url)
-        return [id.replace('%40', '@') for id in ids]
+        if not calendar_url:
+            return []
+
+        text = str(calendar_url)
+        # Handle escaped JS strings like "https:\/\/calendar.google.com\/calendar\/ical\/..."
+        text = text.replace("\\/", "/")
+
+        patterns = [
+            # Standard Google Calendar embed src parameter
+            r'src=([^&]+%40group\.calendar\.google\.com)',
+            r'src=([^&]+%40gmail\.com)',
+            # Calendar IDs directly present in text
+            r'([A-Za-z0-9_.+-]+(?:%40|@)group\.calendar\.google\.com)',
+            r'([A-Za-z0-9_.+-]+(?:%40|@)gmail\.com)',
+            # Public ICS feed URLs
+            r'/calendar/ical/([^/]+(?:%40|@)group\.calendar\.google\.com)/public',
+            r'/calendar/ical/([^/]+(?:%40|@)gmail\.com)/public',
+        ]
+
+        ids: set[str] = set()
+        for pattern in patterns:
+            for match in re.findall(pattern, text, flags=re.IGNORECASE):
+                candidate = str(match).replace('%40', '@')
+                if self.is_valid_calendar_id(candidate):
+                    ids.add(candidate)
+        return list(ids)
     
 
     def decode_calendar_id(self, calendar_url):
