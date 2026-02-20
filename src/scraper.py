@@ -372,10 +372,22 @@ class EventSpider(scrapy.Spider):
             response.text
         )
         calendar_anchor_links = [link for link in page_links if is_calendar_candidate(link, self.calendar_urls_set)]
-        calendar_sources = iframe_links + calendar_emails + calendar_anchor_links
-        if calendar_sources:
-            for cal_url in calendar_sources:
-                self.fetch_google_calendar_events(cal_url, url, source, keywords)
+        calendar_sources = iframe_links + calendar_anchor_links
+        calendar_ids: set[str] = set(calendar_emails)
+        calendar_ids.update(self.extract_calendar_ids(extracted_text))
+
+        for cal_url in calendar_sources:
+            extracted_ids = self.extract_calendar_ids(cal_url)
+            if extracted_ids:
+                calendar_ids.update(extracted_ids)
+                continue
+            self.fetch_google_calendar_events(cal_url, url, source, keywords)
+
+        if calendar_ids:
+            for calendar_id in sorted(calendar_ids):
+                self.process_calendar_id(calendar_id, response.url, url, source, keywords)
+
+        if calendar_sources or calendar_ids:
             # mark the page itself as relevant if calendar events fetched
             url_row = [url, "", source, found_keywords, True, crawl_try, time_stamp]
             db_handler.write_url_to_db(url_row)

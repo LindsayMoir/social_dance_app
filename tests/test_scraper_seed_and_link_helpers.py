@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, 'src')
 
 import yaml
+from scrapy.http import HtmlResponse, Request
 
 from scraper import (
     EventSpider,
@@ -124,3 +125,64 @@ def test_extract_calendar_ids_supports_ics_hycal_format():
     )
     ids = spider.extract_calendar_ids(sample)
     assert "17de2ca43f525c87058ffafe1f0206da82a19d00a85a6ae979ad6bb618dcd8ae@group.calendar.google.com" in ids
+
+
+def test_parse_extracts_calendar_id_from_rendered_page_text(monkeypatch):
+    import scraper as scraper_module
+
+    class DummyDB:
+        def is_whitelisted_url(self, _url: str) -> bool:
+            return False
+
+        def write_url_to_db(self, _row):
+            return None
+
+        def avoid_domains(self, _url: str) -> bool:
+            return False
+
+        def should_process_url(self, _url: str) -> bool:
+            return False
+
+    class DummyLLM:
+        def process_llm_response(self, *args, **kwargs) -> bool:
+            return False
+
+    monkeypatch.setattr(scraper_module, "db_handler", DummyDB(), raising=False)
+    monkeypatch.setattr(scraper_module, "llm_handler", DummyLLM(), raising=False)
+
+    spider = EventSpider.__new__(EventSpider)
+    spider.keywords_list = ["dance"]
+    spider.config = {"crawling": {"max_website_urls": 10, "urls_run_limit": 100}}
+    spider.calendar_urls_set = set()
+    spider.visited_link = set()
+
+    processed_ids = []
+
+    def capture_calendar_id(calendar_id, _calendar_url, _url, _source, _keywords):
+        processed_ids.append(calendar_id)
+
+    monkeypatch.setattr(spider, "process_calendar_id", capture_calendar_id)
+    monkeypatch.setattr(spider, "fetch_google_calendar_events", lambda *args, **kwargs: None)
+
+    html = """
+    <html>
+      <body>
+        <div>Dance community resources</div>
+        <script>
+          hycal_render_calendar({"ics":"https:\\/\\/calendar.google.com\\/calendar\\/ical\\/
+          17de2ca43f525c87058ffafe1f0206da82a19d00a85a6ae979ad6bb618dcd8ae@group.calendar.google.com
+          \\/public\\/basic.ics"})
+        </script>
+      </body>
+    </html>
+    """
+    response = HtmlResponse(
+        url="https://vlda.ca/resources/",
+        body=html,
+        encoding="utf-8",
+        request=Request(url="https://vlda.ca/resources/"),
+    )
+
+    list(spider.parse(response, keywords="salsa", source="Victoria Latin Dance Association", url="https://vlda.ca/resources/"))
+
+    assert "17de2ca43f525c87058ffafe1f0206da82a19d00a85a6ae979ad6bb618dcd8ae@group.calendar.google.com" in processed_ids
