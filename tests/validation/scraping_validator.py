@@ -215,7 +215,18 @@ class ScrapingValidator:
                     variants.add(urlunsplit(base._replace(scheme='http')))
                 elif base.scheme == 'http':
                     variants.add(urlunsplit(base._replace(scheme='https')))
-                return list({v.rstrip('/') for v in variants})  # de-dupe minor variants
+                # Keep exact trailing-slash variants because urls.link stores both forms.
+                # Also add opposite slash form for non-root paths to maximize matching.
+                expanded = set()
+                for v in variants:
+                    expanded.add(v)
+                    p = urlsplit(v)
+                    if p.path and p.path != '/':
+                        if p.path.endswith('/'):
+                            expanded.add(urlunsplit(p._replace(path=p.path.rstrip('/'))))
+                        else:
+                            expanded.add(urlunsplit(p._replace(path=p.path + '/')))
+                return list(expanded)
             except Exception:
                 return [u]
 
