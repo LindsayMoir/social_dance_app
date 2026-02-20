@@ -175,3 +175,6 @@ cython_debug/
 
 # Claude Code instructions (project-specific, may contain sensitive context)
 .claude_instructions
+
+# Office/LibreOffice temporary lock files
+.~lock.*

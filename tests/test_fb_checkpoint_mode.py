@@ -3,7 +3,7 @@ import sys
 sys.path.insert(0, "src")
 
 from fb import should_use_fb_checkpoint
-from fb import canonicalize_facebook_url, is_facebook_login_redirect
+from fb import canonicalize_facebook_url, is_facebook_login_redirect, is_non_content_facebook_url
 
 
 def test_should_use_fb_checkpoint_true_only_when_enabled_and_not_render():
@@ -28,3 +28,15 @@ def test_is_facebook_login_redirect_detects_login_urls():
     plain = "https://www.facebook.com/groups/victoriawesties/"
     assert is_facebook_login_redirect(wrapped) is True
     assert is_facebook_login_redirect(plain) is False
+
+
+def test_canonicalize_facebook_url_unwraps_recover_redirect():
+    wrapped = "https://www.facebook.com/recover/initiate/?next=https%3A%2F%2Fwww.facebook.com%2Fgroups%2Falivetango%2F"
+    assert canonicalize_facebook_url(wrapped) == "https://www.facebook.com/groups/alivetango/"
+
+
+def test_is_non_content_facebook_url_flags_sharer_dialog_recover():
+    assert is_non_content_facebook_url("https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fexample.com") is True
+    assert is_non_content_facebook_url("https://www.facebook.com/dialog/send?app_id=1&link=https%3A%2F%2Fexample.com") is True
+    assert is_non_content_facebook_url("https://www.facebook.com/recover/initiate/?next=%2Fgroups%2Fabc%2F") is True
+    assert is_non_content_facebook_url("https://www.facebook.com/groups/victoriawesties/") is False

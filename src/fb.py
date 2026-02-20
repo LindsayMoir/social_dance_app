@@ -116,10 +116,14 @@ def canonicalize_facebook_url(url: str) -> str:
         host = (parsed.netloc or "").lower()
         path = (parsed.path or "").lower()
 
-        if "facebook.com" not in host or "/login" not in path:
+        if "facebook.com" not in host:
             return current
 
         qs = parse_qs(parsed.query)
+        should_unwrap_next = "/login" in path or "/recover/initiate" in path
+        if not should_unwrap_next:
+            return current
+
         nxt = qs.get("next", [None])[0]
         if not nxt:
             return current
@@ -143,6 +147,30 @@ def is_facebook_login_redirect(url: str) -> bool:
     host = (parsed.netloc or "").lower()
     path = (parsed.path or "").lower()
     return "facebook.com" in host and "/login" in path
+
+
+def is_non_content_facebook_url(url: str) -> bool:
+    """
+    Return True for Facebook utility/auth/share endpoints that are not event/group content pages.
+    """
+    parsed = urlparse(url or "")
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").lower()
+
+    if "facebook.com" not in host:
+        return False
+
+    blocked_prefixes = (
+        "/sharer/",
+        "/dialog/",
+        "/recover/",
+        "/share.php",
+    )
+    if path.startswith(blocked_prefixes):
+        return True
+    if "sharer.php" in path:
+        return True
+    return False
 
 
 class FacebookEventScraper():
@@ -895,6 +923,19 @@ class FacebookEventScraper():
                         base_url,
                     )
 
+                if is_non_content_facebook_url(base_url):
+                    logging.info(
+                        "def driver_fb_urls(): Skipping non-content Facebook endpoint: %s",
+                        base_url,
+                    )
+                    url_row = [base_url, parent_url, source, keywords, False, 1, datetime.now()]
+                    db_handler.write_url_to_db(url_row)
+                    fb_urls_df.loc[fb_urls_df['link'] == raw_base_url, 'processed'] = True
+                    fb_urls_df.loc[fb_urls_df['link'] == raw_base_url, 'events_processed'] = True
+                    if os.getenv('RENDER') != 'true':
+                        fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
+                    continue
+
                 # Skip if already done
                 if base_url in self.urls_visited or base_url in processed_base_urls:
                     continue
@@ -930,6 +971,15 @@ class FacebookEventScraper():
                 # 5) Process each event link
                 for event_url in fb_event_links:
                     event_url = self.normalize_facebook_url(event_url)
+
+                    if is_non_content_facebook_url(event_url):
+                        logging.info(
+                            "def driver_fb_urls(): Skipping non-content discovered Facebook endpoint: %s",
+                            event_url,
+                        )
+                        url_row = [event_url, base_url, source, keywords, False, 1, datetime.now()]
+                        db_handler.write_url_to_db(url_row)
+                        continue
 
                     if event_url in self.urls_visited:
                         continue
