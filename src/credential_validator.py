@@ -260,6 +260,43 @@ def validate_eventbrite(headless=False, check_timeout_seconds=60):
     return asyncio.run(validate_eventbrite_async(headless, check_timeout_seconds))
 
 
+def _manual_facebook_group_review(fb_scraper, failed_group_urls: list[str], max_urls: int = 3) -> list[str]:
+    """
+    Open failed Facebook group URLs for manual review, then re-probe once.
+    Returns the subset that still fails after manual intervention.
+    """
+    review_urls = failed_group_urls[:max(1, max_urls)]
+    print("\nFacebook group access needs manual confirmation.")
+    print(f"Reviewing up to {len(review_urls)} failed group URL(s) in browser...")
+
+    for idx, group_url in enumerate(review_urls, start=1):
+        logging.info("validate_facebook(): Manual review %s/%s for %s", idx, len(review_urls), group_url)
+        try:
+            fb_scraper.page.goto(group_url, timeout=30000, wait_until="domcontentloaded")
+        except Exception as review_error:
+            logging.warning("validate_facebook(): Manual review navigation failed for %s: %s", group_url, review_error)
+        print(f"[{idx}/{len(review_urls)}] Check this URL in browser: {group_url}")
+        try:
+            input("Press ENTER after confirming you can access it (or Ctrl+C to abort): ")
+        except EOFError:
+            logging.warning("validate_facebook(): Non-interactive terminal; skipping manual Facebook group review.")
+            break
+
+    still_failed: list[str] = []
+    for group_url in failed_group_urls:
+        try:
+            if not fb_scraper.navigate_and_maybe_login(group_url, max_attempts=1):
+                still_failed.append(group_url)
+        except Exception as probe_error:
+            logging.warning(
+                "validate_facebook(): Post-review group probe exception for %s: %s",
+                group_url,
+                probe_error,
+            )
+            still_failed.append(group_url)
+    return still_failed
+
+
 def validate_facebook(headless=False, check_timeout_seconds=60):
     """
     Validates Facebook session credentials using existing fb.py logic.
@@ -310,6 +347,18 @@ def validate_facebook(headless=False, check_timeout_seconds=60):
                 .get('scraping', {})
                 .get('facebook_group_probe_max_failures', 2)
             )
+            manual_review_enabled = bool(
+                config.get('testing', {})
+                .get('validation', {})
+                .get('scraping', {})
+                .get('facebook_group_manual_review', True)
+            )
+            manual_review_max_urls = int(
+                config.get('testing', {})
+                .get('validation', {})
+                .get('scraping', {})
+                .get('facebook_group_manual_review_max_urls', 3)
+            )
             group_urls = _load_facebook_group_probe_urls(config, limit=group_probe_limit)
             failed_group_urls: list[str] = []
             if logged_in and group_urls:
@@ -331,6 +380,17 @@ def validate_facebook(headless=False, check_timeout_seconds=60):
                             group_probe_max_failures,
                         )
                         break
+
+            if logged_in and failed_group_urls and not headless and manual_review_enabled:
+                logging.info(
+                    "validate_facebook(): Starting manual group review for %s failed probe(s).",
+                    len(failed_group_urls),
+                )
+                failed_group_urls = _manual_facebook_group_review(
+                    fb_scraper=fb_scraper,
+                    failed_group_urls=failed_group_urls,
+                    max_urls=manual_review_max_urls,
+                )
 
             # Clean up browser
             fb_scraper.browser.close()
