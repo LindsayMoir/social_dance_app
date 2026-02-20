@@ -103,6 +103,48 @@ def should_use_fb_checkpoint(config_data: dict, is_render: bool) -> bool:
     return bool(config_data.get('checkpoint', {}).get('fb_urls_cp_status', False))
 
 
+def canonicalize_facebook_url(url: str) -> str:
+    """
+    Normalize Facebook login redirect URLs to their real target page.
+    """
+    if not url:
+        return url
+
+    current = str(url).strip()
+    for _ in range(3):  # safety guard for nested next= redirects
+        parsed = urlparse(current)
+        host = (parsed.netloc or "").lower()
+        path = (parsed.path or "").lower()
+
+        if "facebook.com" not in host or "/login" not in path:
+            return current
+
+        qs = parse_qs(parsed.query)
+        nxt = qs.get("next", [None])[0]
+        if not nxt:
+            return current
+
+        decoded = unquote(nxt).strip()
+        if not decoded:
+            return current
+        if decoded.startswith("/"):
+            decoded = f"https://www.facebook.com{decoded}"
+        if decoded == current:
+            return current
+        current = decoded
+    return current
+
+
+def is_facebook_login_redirect(url: str) -> bool:
+    """
+    Return True if URL points to a Facebook login endpoint.
+    """
+    parsed = urlparse(url or "")
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").lower()
+    return "facebook.com" in host and "/login" in path
+
+
 class FacebookEventScraper():
     def __init__(self, config_path: str = "config/config.yaml") -> None:
         # Load configuration
@@ -341,14 +383,10 @@ class FacebookEventScraper():
         If the URL is a Facebook login redirect, unwrap the 'next' parameter and return the real target.
         Otherwise, return the URL unchanged.
         """
-        if 'facebook.com/login/' in url:
-            parsed = urlparse(url)
-            qs = parse_qs(parsed.query)
-            if 'next' in qs:
-                real = unquote(qs['next'][0])
-                logging.info(f"normalize_facebook_url: unwrapped login redirect to {real}")
-                return real
-        return url
+        real = canonicalize_facebook_url(url)
+        if real != url:
+            logging.info(f"normalize_facebook_url: unwrapped login redirect to {real}")
+        return real
     
 
     def navigate_and_maybe_login(self, incoming_url: str) -> bool:
@@ -362,50 +400,23 @@ class FacebookEventScraper():
         real_url = self.normalize_facebook_url(incoming_url)
         page = self.logged_in_page
 
-        # If this is a login redirect, try it first to trigger login flow
-        if 'facebook.com/login/' in incoming_url:
-            try:
-                t = random.randint(20000//2, int(20000 * 1.5))
-                page.goto(incoming_url, wait_until="domcontentloaded", timeout=t)
-            except PlaywrightTimeoutError:
-                logging.warning(f"navigate_and_maybe_login: timeout on login redirect {incoming_url}")
-
-            content = page.content().lower()
-            # Detect temporary block
-            if 'temporarily blocked' in content or 'misusing this feature' in content:
-                logging.warning(f"navigate_and_maybe_login: blocked on login redirect. Falling back to {real_url}")
-                try:
-                    t = random.randint(20000//2, int(20000 * 1.5))
-                    page.goto(real_url, wait_until="domcontentloaded", timeout=t)
-                except PlaywrightTimeoutError:
-                    logging.error(f"navigate_and_maybe_login: timeout loading fallback {real_url}")
-                return True
-
-            # If still on login page, perform login
-            if 'login' in page.url.lower():
-                logging.info(f"navigate_and_maybe_login: login required for {incoming_url}")
-                if not self.login_to_facebook():
-                    return False
-
-            # After login, go to real URL
-            try:
-                t = random.randint(20000//2, int(20000 * 1.5))
-                page.goto(real_url, wait_until="domcontentloaded", timeout=t)
-            except PlaywrightTimeoutError:
-                logging.error(f"navigate_and_maybe_login: timeout loading real URL {real_url}")
-                return False
-
-            return True
-
-        # Non-login URLs: direct navigation
+        # Always navigate to the canonical target URL first.
         try:
             t = random.randint(20000//2, int(20000 * 1.5))
             page.goto(real_url, wait_until="domcontentloaded", timeout=t)
         except PlaywrightTimeoutError:
             logging.warning(f"navigate_and_maybe_login: timeout on {real_url}")
 
+        try:
+            content = page.content().lower()
+            if 'temporarily blocked' in content or 'misusing this feature' in content:
+                logging.warning(f"navigate_and_maybe_login: blocked or rate-limited on {real_url}")
+                return False
+        except Exception:
+            pass
+
         if 'login' in page.url.lower():
-            logging.info(f"navigate_and_maybe_login: login required for {real_url}")
+            logging.info(f"navigate_and_maybe_login: login required for {incoming_url}")
             if not self.login_to_facebook():
                 return False
             try:
@@ -688,6 +699,9 @@ class FacebookEventScraper():
         Returns:
             None
         """
+        # Canonicalize URL first to avoid persisting login redirect wrappers.
+        url = self.normalize_facebook_url(url)
+
         # Set up url_row for database writing
         url_row = [url, parent_url, source, keywords, False, 1, datetime.now()]
 
@@ -697,8 +711,7 @@ class FacebookEventScraper():
             db_handler.write_url_to_db(url_row)
             return
 
-        # Normalize URL and initialize tracking
-        url = self.normalize_facebook_url(url)
+        # Initialize tracking
         self.total_url_attempts += 1
 
         # 1) Extract text: full event page vs relevant snippet
@@ -866,15 +879,24 @@ class FacebookEventScraper():
 
         # 3) Iterate each base Facebook URL
         if fb_urls_df.shape[0] > 0:
+            processed_base_urls = set()
             for idx, row in fb_urls_df.iterrows():
-                base_url = row['link']
+                raw_base_url = row['link']
+                base_url = self.normalize_facebook_url(raw_base_url)
                 parent_url = row['parent_url']
                 source = row['source']
                 keywords = row['keywords']
                 logging.info(f"def driver_fb_urls(): Processing base URL: {base_url}")
 
+                if is_facebook_login_redirect(raw_base_url):
+                    logging.info(
+                        "def driver_fb_urls(): Canonicalized login redirect base URL %s -> %s",
+                        raw_base_url,
+                        base_url,
+                    )
+
                 # Skip if already done
-                if base_url in self.urls_visited:
+                if base_url in self.urls_visited or base_url in processed_base_urls:
                     continue
 
                 # Check urls to see if they should be scraped
@@ -885,8 +907,10 @@ class FacebookEventScraper():
                 # Process the base URL itself (writes any events found on that exact page)
                 self.process_fb_url(base_url, parent_url, source, keywords)
                 self.urls_visited.add(base_url)
+                processed_base_urls.add(base_url)
 
                 # Mark as processed
+                fb_urls_df.loc[fb_urls_df['link'] == raw_base_url, 'processed'] = True
                 fb_urls_df.loc[fb_urls_df['link'] == base_url, 'processed'] = True
                 if os.getenv('RENDER') != 'true':
                     fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
@@ -905,6 +929,7 @@ class FacebookEventScraper():
 
                 # 5) Process each event link
                 for event_url in fb_event_links:
+                    event_url = self.normalize_facebook_url(event_url)
 
                     if event_url in self.urls_visited:
                         continue
@@ -941,6 +966,7 @@ class FacebookEventScraper():
                         break
 
                 # 6) Finally mark that we've scraped events for the base URL
+                fb_urls_df.loc[fb_urls_df['link'] == raw_base_url, 'events_processed'] = True
                 fb_urls_df.loc[fb_urls_df['link'] == base_url, 'events_processed'] = True
                 if os.getenv('RENDER') != 'true':
                     fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
