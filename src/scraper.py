@@ -96,6 +96,14 @@ def is_calendar_candidate(url: str, calendar_roots: set[str]) -> bool:
     return any(norm_url.startswith(root) for root in calendar_roots)
 
 
+def is_whitelist_candidate(url: str, whitelist_roots: set[str]) -> bool:
+    """
+    Returns True when URL matches or is under a whitelisted root URL.
+    """
+    norm_url = normalize_url_for_compare(url)
+    return any(norm_url.startswith(root) for root in whitelist_roots)
+
+
 def merge_seed_urls(seed_df: pd.DataFrame, whitelist_df: pd.DataFrame) -> pd.DataFrame:
     """
     Merge regular crawl seeds with whitelist seeds and de-duplicate by normalized URL.
@@ -216,6 +224,12 @@ class EventSpider(scrapy.Spider):
                 logging.info(f"__init__(): Loaded {len(self.whitelist_urls_df)} whitelist URLs from {whitelist_path}")
         except Exception as e:
             logging.warning(f"__init__(): Could not load whitelist URLs: {e}")
+        self.whitelist_roots = {
+            normalize_url_for_compare(str(u))
+            for u in self.whitelist_urls_df["link"].dropna().tolist()
+            if str(u).strip()
+        }
+        self.attempted_whitelist_roots: set[str] = set()
 
         logging.info("\n\nscraper.py starting...")
 
@@ -253,10 +267,11 @@ class EventSpider(scrapy.Spider):
                 continue
 
             # Whitelist check
+            is_whitelisted_seed = is_whitelist_candidate(url, self.whitelist_roots)
             try:
-                is_whitelisted = db_handler.is_whitelisted_url(url)
+                is_whitelisted = is_whitelisted_seed or db_handler.is_whitelisted_url(url)
             except Exception:
-                is_whitelisted = False
+                is_whitelisted = is_whitelisted_seed
 
             # ✳️ Skip Facebook or Instagram URLs unless whitelisted
             if ('facebook.com' in url.lower() or 'instagram.com' in url.lower()) and not is_whitelisted:
@@ -274,6 +289,8 @@ class EventSpider(scrapy.Spider):
             is_calendar_url = is_calendar_candidate(norm_url, self.calendar_urls_set)
             if is_calendar_url:
                 logging.info(f"start(): Processing calendar URL {url} (bypassing historical relevancy)")
+            elif is_whitelisted_seed:
+                logging.info(f"start(): Processing whitelist URL {url} (bypassing historical relevancy)")
             elif not db_handler.should_process_url(url):
                 try:
                     if is_whitelisted:
@@ -292,6 +309,7 @@ class EventSpider(scrapy.Spider):
                 url=url,
                 callback=self.parse,
                 cb_kwargs={'keywords': keywords, 'source': source, 'url': url},
+                priority=1000 if is_whitelisted_seed else 0,
                 meta={
                     "playwright": True,
                     "playwright_page_methods": [
@@ -320,6 +338,13 @@ class EventSpider(scrapy.Spider):
             is_whitelisted_origin = db_handler.is_whitelisted_url(url)
         except Exception:
             is_whitelisted_origin = False
+        is_whitelisted_origin = is_whitelisted_origin or is_whitelist_candidate(url, self.whitelist_roots)
+        if is_whitelisted_origin:
+            norm_current = normalize_url_for_compare(url)
+            for root in self.whitelist_roots:
+                if norm_current.startswith(root):
+                    self.attempted_whitelist_roots.add(root)
+                    break
 
         if any(dom in url for dom in ('facebook', 'instagram')) and not is_whitelisted_origin:
             # record it as unwanted and stop processing immediately
@@ -437,6 +462,15 @@ class EventSpider(scrapy.Spider):
             db_handler.write_url_to_db(child_row)
 
             if len(self.visited_link) >= self.config['crawling']['urls_run_limit']:
+                remaining_whitelist = len(self.whitelist_roots - self.attempted_whitelist_roots)
+                if remaining_whitelist > 0 and not force_follow:
+                    logging.info(
+                        "parse(): URL run limit reached but %d whitelist roots are still unattempted; "
+                        "skipping non-whitelist link: %s",
+                        remaining_whitelist,
+                        link,
+                    )
+                    continue
                 logging.info(f"parse(): Reached URL run limit ({self.config['crawling']['urls_run_limit']}); stopping crawler.")
                 raise scrapy.exceptions.CloseSpider(reason="URL run limit reached")
 

@@ -9,6 +9,7 @@ from scrapy.http import HtmlResponse, Request
 from scraper import (
     EventSpider,
     is_calendar_candidate,
+    is_whitelist_candidate,
     merge_seed_urls,
     normalize_http_links,
     normalize_url_for_compare,
@@ -41,6 +42,13 @@ def test_is_calendar_candidate_matches_google_and_seed_roots():
     assert is_calendar_candidate("https://calendar.google.com/calendar/embed?src=abc", calendar_roots)
     assert is_calendar_candidate("https://vlda.ca/resources/calendar-feed", calendar_roots)
     assert not is_calendar_candidate("https://example.com/events", calendar_roots)
+
+
+def test_is_whitelist_candidate_matches_root_and_subpath():
+    whitelist_roots = {normalize_url_for_compare("https://latindancecanada.com/")}
+    assert is_whitelist_candidate("https://latindancecanada.com/", whitelist_roots)
+    assert is_whitelist_candidate("https://latindancecanada.com/group-classes/", whitelist_roots)
+    assert not is_whitelist_candidate("https://example.com/events", whitelist_roots)
 
 
 def test_merge_seed_urls_always_includes_whitelist_and_dedups():
@@ -154,6 +162,8 @@ def test_parse_extracts_calendar_id_from_rendered_page_text(monkeypatch):
     spider.keywords_list = ["dance"]
     spider.config = {"crawling": {"max_website_urls": 10, "urls_run_limit": 100}}
     spider.calendar_urls_set = set()
+    spider.whitelist_roots = set()
+    spider.attempted_whitelist_roots = set()
     spider.visited_link = set()
 
     processed_ids = []
