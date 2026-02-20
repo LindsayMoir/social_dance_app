@@ -3,7 +3,7 @@ checkpoint:
   fb_search: checkpoint/fb_search_keywords.csv
   fb_urls: checkpoint/fb_urls.csv
   fb_urls_cp: checkpoint/fb_urls_cp.csv
-  fb_urls_cp_status: true
+  fb_urls_cp_status: false
 clean_up:
   old_events: 3
 constants:

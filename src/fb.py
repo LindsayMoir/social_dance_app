@@ -94,6 +94,15 @@ llm_handler = None
 db_handler = None
 
 
+def should_use_fb_checkpoint(config_data: dict, is_render: bool) -> bool:
+    """
+    Decide whether fb.py should read facebook URLs from checkpoint CSV.
+    """
+    if is_render:
+        return False
+    return bool(config_data.get('checkpoint', {}).get('fb_urls_cp_status', False))
+
+
 class FacebookEventScraper():
     def __init__(self, config_path: str = "config/config.yaml") -> None:
         # Load configuration
@@ -113,10 +122,13 @@ class FacebookEventScraper():
         self.logged_in_page = self.page
 
         # Attempt login
-        if self.login_to_facebook():
+        self.login_success = self.login_to_facebook()
+        if self.login_success:
             logging.info("Facebook login successful.")
         else:
-            logging.error("Facebook login failed.")
+            logging.error("Facebook login failed. Aborting run to avoid zero-yield scraping.")
+            self._safe_shutdown_browser()
+            raise RuntimeError("Facebook login failed; stopping fb.py.")
 
         # Run statistics tracking
         if config['testing']['status']:
@@ -146,6 +158,69 @@ class FacebookEventScraper():
 
         # Get keywords (deferred if handlers not initialized)
         self.keywords_list = llm_handler.get_keywords() if llm_handler else []
+
+
+    def _safe_shutdown_browser(self) -> None:
+        """Close Playwright resources safely."""
+        try:
+            if hasattr(self, 'context') and self.context:
+                self.context.close()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'browser') and self.browser:
+                self.browser.close()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'playwright') and self.playwright:
+                self.playwright.stop()
+        except Exception:
+            pass
+
+
+    def _ensure_authenticated_or_raise(self) -> None:
+        """Fail fast if Facebook authentication was not established."""
+        if not getattr(self, 'login_success', False):
+            raise RuntimeError("Facebook session is not authenticated; aborting run.")
+
+
+    def _retry_headless_login_with_fresh_context(self) -> bool:
+        """
+        Repair attempt: rebuild context without storage state and retry login once.
+        """
+        try:
+            if hasattr(self, 'context') and self.context:
+                self.context.close()
+        except Exception:
+            pass
+
+        try:
+            self.context = self.browser.new_context()
+            self.page = self.context.new_page()
+            self.logged_in_page = self.page
+            page = self.logged_in_page
+
+            page.goto("https://www.facebook.com/login", wait_until="domcontentloaded", timeout=20000)
+            page.wait_for_selector("input[name='email']", timeout=10000)
+            page.wait_for_selector("input[name='pass']", timeout=10000)
+
+            email, password, _ = get_credentials("Facebook")
+            page.fill("input[name='email']", email)
+            page.fill("input[name='pass']", password)
+            page.click("button[type='submit']")
+            page.wait_for_timeout(5000)
+
+            if "login" in page.url.lower():
+                return False
+
+            self.context.storage_state(path=self.facebook_auth_path)
+            from secret_paths import sync_auth_to_db
+            sync_auth_to_db(self.facebook_auth_path, 'facebook')
+            return True
+        except Exception as e:
+            logging.error(f"_retry_headless_login_with_fresh_context: failed: {e}")
+            return False
     
 
     def login_to_facebook(self) -> bool:
@@ -214,7 +289,21 @@ class FacebookEventScraper():
             page.wait_for_selector("input[name='email']", timeout=10000)
             page.wait_for_selector("input[name='pass']", timeout=10000)
         except PlaywrightTimeoutError:
-            logging.error("login_to_facebook: login form did not appear.")
+            # Sometimes Facebook redirects to an authenticated state or an interstitial.
+            try:
+                page.goto("https://www.facebook.com/events", wait_until="domcontentloaded", timeout=15000)
+                if "login" not in page.url.lower():
+                    logging.info("login_to_facebook: authenticated session detected after selector timeout.")
+                    return True
+            except Exception:
+                pass
+
+            logging.warning("login_to_facebook: login form did not appear. Retrying with fresh context.")
+            if self._retry_headless_login_with_fresh_context():
+                logging.info("login_to_facebook: recovered session with fresh context.")
+                return True
+
+            logging.error("login_to_facebook: login form did not appear and retry failed.")
             return False
 
         try:
@@ -531,6 +620,7 @@ class FacebookEventScraper():
         Returns:
             tuple: The last search_url used and count of events processed.
         """
+        self._ensure_authenticated_or_raise()
         base_url = self.config['constants']['fb_base_url']
         location_id = self.config['constants']['fb_location_id']
         events_processed = 0
@@ -681,6 +771,7 @@ class FacebookEventScraper():
         Returns:
             None
         """
+        self._ensure_authenticated_or_raise()
         # Read in keywords and append a column for processed status
         keywords_df = pd.read_csv(self.config['input']['data_keywords'])
         keywords_df['processed'] = keywords_df['processed'] = False
@@ -741,9 +832,11 @@ class FacebookEventScraper():
         2. For each URL, processes it and then scrapes any event links by hitting the /events/ subpage.
         3. Writes every processed URL—including event links—to the checkpoint CSV.
         """
+        self._ensure_authenticated_or_raise()
         # 1) Load or initialize the checkpoint dataframe
         # On Render, always query database fresh (no checkpointing)
-        if os.getenv('RENDER') == 'true':
+        is_render = os.getenv('RENDER') == 'true'
+        if is_render:
             query = text("""
                 SELECT *
                 FROM urls
@@ -752,8 +845,9 @@ class FacebookEventScraper():
             params = {'link_pattern': '%facebook%'}
             fb_urls_df = pd.read_sql(query, db_handler.conn, params=params)
             logging.info(f"def driver_fb_urls(): Retrieved {fb_urls_df.shape[0]} Facebook URLs from the database.")
-        elif config['checkpoint']['fb_urls_cp_status']:
+        elif should_use_fb_checkpoint(config, is_render):
             fb_urls_df = pd.read_csv(config['checkpoint']['fb_urls_cp'])
+            logging.info(f"def driver_fb_urls(): Loaded {fb_urls_df.shape[0]} Facebook URLs from checkpoint CSV.")
         else:
             query = text("""
                 SELECT *
