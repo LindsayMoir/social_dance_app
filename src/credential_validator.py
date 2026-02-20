@@ -88,22 +88,20 @@ def _resolve_whitelist_file(config_data: dict) -> str:
     )
 
 
-def _load_facebook_group_probe_urls(config_data: dict, limit: int = 10) -> list[str]:
-    """
-    Load Facebook group URLs from whitelist CSV for credential probe checks.
-    """
-    whitelist_file = _resolve_whitelist_file(config_data)
-    if not os.path.exists(whitelist_file):
-        logging.warning(
-            "_load_facebook_group_probe_urls(): Whitelist file not found at %s",
-            whitelist_file,
-        )
+def _resolve_gs_urls_file(config_data: dict) -> str:
+    """Resolve gs_urls CSV file path from config with a safe default."""
+    return config_data.get('input', {}).get('gs_urls', 'data/urls/gs_urls.csv')
+
+
+def _read_facebook_group_urls_from_csv(file_path: str, limit: int, seen: set[str]) -> list[str]:
+    """Read distinct Facebook group URLs from a CSV file."""
+    if not os.path.exists(file_path):
+        logging.warning("_read_facebook_group_urls_from_csv(): File not found at %s", file_path)
         return []
 
     group_urls: list[str] = []
-    seen: set[str] = set()
     try:
-        with open(whitelist_file, 'r', encoding='utf-8') as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 candidate = (row.get('link') or row.get('url') or '').strip()
@@ -117,13 +115,32 @@ def _load_facebook_group_probe_urls(config_data: dict, limit: int = 10) -> list[
                 if len(group_urls) >= limit:
                     break
     except Exception as e:
-        logging.error("_load_facebook_group_probe_urls(): Failed reading whitelist CSV: %s", e)
+        logging.error("_read_facebook_group_urls_from_csv(): Failed reading %s: %s", file_path, e)
         return []
 
+    return group_urls
+
+
+def _load_facebook_group_probe_urls(config_data: dict, limit: int = 10) -> list[str]:
+    """
+    Load Facebook group URLs for credential probe checks from whitelist and gs_urls CSVs.
+    """
+    whitelist_file = _resolve_whitelist_file(config_data)
+    gs_urls_file = _resolve_gs_urls_file(config_data)
+    group_urls: list[str] = []
+    seen: set[str] = set()
+
+    # Prefer whitelist groups first, then fill remaining slots from gs_urls.
+    group_urls.extend(_read_facebook_group_urls_from_csv(whitelist_file, limit=limit, seen=seen))
+    remaining = max(0, limit - len(group_urls))
+    if remaining > 0:
+        group_urls.extend(_read_facebook_group_urls_from_csv(gs_urls_file, limit=remaining, seen=seen))
+
     logging.info(
-        "_load_facebook_group_probe_urls(): Loaded %s Facebook group URL probes from %s",
+        "_load_facebook_group_probe_urls(): Loaded %s Facebook group URL probes from %s and %s",
         len(group_urls),
         whitelist_file,
+        gs_urls_file,
     )
     return group_urls
 
