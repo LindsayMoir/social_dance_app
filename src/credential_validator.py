@@ -32,6 +32,9 @@ Usage:
 """
 
 import asyncio
+import copy
+from contextlib import contextmanager
+import csv
 from datetime import datetime
 import logging
 import os
@@ -40,6 +43,89 @@ import yaml
 # Load configuration
 with open('config/config.yaml', 'r') as file:
     config = yaml.safe_load(file)
+
+
+@contextmanager
+def _temporary_headless_config(headless: bool):
+    """
+    Temporarily force config/config.yaml crawling.headless for validators that load config from disk.
+    """
+    config_path = 'config/config.yaml'
+    with open(config_path, 'r', encoding='utf-8') as f:
+        original_config = yaml.safe_load(f)
+
+    original_headless = bool(original_config.get('crawling', {}).get('headless', True))
+    updated_config = copy.deepcopy(original_config)
+    updated_config.setdefault('crawling', {})
+    updated_config['crawling']['headless'] = bool(headless)
+
+    if original_headless != bool(headless):
+        with open(config_path, 'w', encoding='utf-8') as f:
+            yaml.safe_dump(updated_config, f)
+        logging.info(
+            "_temporary_headless_config(): Set crawling.headless=%s for credential validation",
+            bool(headless),
+        )
+    try:
+        yield
+    finally:
+        if original_headless != bool(headless):
+            with open(config_path, 'w', encoding='utf-8') as f:
+                yaml.safe_dump(original_config, f)
+            logging.info(
+                "_temporary_headless_config(): Restored crawling.headless=%s after credential validation",
+                original_headless,
+            )
+
+
+def _resolve_whitelist_file(config_data: dict) -> str:
+    """Resolve the whitelist file path from config with a safe default."""
+    return (
+        config_data.get('testing', {})
+        .get('validation', {})
+        .get('scraping', {})
+        .get('whitelist_file', 'data/urls/aaa_urls.csv')
+    )
+
+
+def _load_facebook_group_probe_urls(config_data: dict, limit: int = 10) -> list[str]:
+    """
+    Load Facebook group URLs from whitelist CSV for credential probe checks.
+    """
+    whitelist_file = _resolve_whitelist_file(config_data)
+    if not os.path.exists(whitelist_file):
+        logging.warning(
+            "_load_facebook_group_probe_urls(): Whitelist file not found at %s",
+            whitelist_file,
+        )
+        return []
+
+    group_urls: list[str] = []
+    seen: set[str] = set()
+    try:
+        with open(whitelist_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                candidate = (row.get('link') or row.get('url') or '').strip()
+                if 'facebook.com/groups/' not in candidate:
+                    continue
+                candidate = candidate.rstrip('/')
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                group_urls.append(candidate)
+                if len(group_urls) >= limit:
+                    break
+    except Exception as e:
+        logging.error("_load_facebook_group_probe_urls(): Failed reading whitelist CSV: %s", e)
+        return []
+
+    logging.info(
+        "_load_facebook_group_probe_urls(): Loaded %s Facebook group URL probes from %s",
+        len(group_urls),
+        whitelist_file,
+    )
+    return group_urls
 
 
 def validate_gmail(headless=False, check_timeout_seconds=60):
@@ -114,29 +200,22 @@ async def validate_eventbrite_async(headless=False, check_timeout_seconds=60):
         logging.info("validate_eventbrite(): Attempting to authenticate Eventbrite...")
         start_time = datetime.now()
 
-        # Create ReadExtract instance with headless mode from parameter
-        # Temporarily override config for validation
-        original_headless = config['crawling']['headless']
-        config['crawling']['headless'] = headless
+        with _temporary_headless_config(headless):
+            read_extract = ReadExtract(config_path='config/config.yaml')
+            await read_extract.init_browser()
 
-        read_extract = ReadExtract(config_path='config/config.yaml')
-        await read_extract.init_browser()
+            # Attempt Eventbrite login
+            # login_to_website returns True if session valid or login successful
+            login_success = await read_extract.login_to_website(
+                organization="Eventbrite",
+                login_url="https://www.eventbrite.com/signin/",
+                email_selector="input#email",
+                pass_selector="input#password",
+                submit_selector="button[type='submit']"
+            )
 
-        # Attempt Eventbrite login
-        # login_to_website returns True if session valid or login successful
-        login_success = await read_extract.login_to_website(
-            organization="Eventbrite",
-            login_url="https://www.eventbrite.com/signin/",
-            email_selector="input#email",
-            pass_selector="input#password",
-            submit_selector="button[type='submit']"
-        )
-
-        # Restore original headless setting
-        config['crawling']['headless'] = original_headless
-
-        # Clean up browser
-        await read_extract.close()
+            # Clean up browser
+            await read_extract.close()
 
         elapsed = (datetime.now() - start_time).total_seconds()
 
@@ -183,34 +262,62 @@ def validate_facebook(headless=False, check_timeout_seconds=60):
         logging.info("validate_facebook(): Attempting to authenticate Facebook...")
         start_time = datetime.now()
 
-        # Temporarily override config for validation
-        original_headless = config['crawling']['headless']
-        config['crawling']['headless'] = headless
+        with _temporary_headless_config(headless):
+            # Create Facebook scraper - this automatically calls login_to_facebook()
+            # which will open browser if session is invalid
+            fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
 
-        # Create Facebook scraper - this automatically calls login_to_facebook()
-        # which will open browser if session is invalid
-        fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
+            # Check if login was successful by navigating to Facebook
+            try:
+                fb_scraper.page.goto("https://www.facebook.com/", timeout=15000)
+                logged_in = "login" not in fb_scraper.page.url.lower()
+            except Exception as nav_error:
+                logging.warning(f"validate_facebook(): Error checking login status: {nav_error}")
+                logged_in = False
 
-        # Restore original headless setting
-        config['crawling']['headless'] = original_headless
+            # Validate access to whitelisted Facebook groups as part of credential check.
+            group_probe_limit = int(
+                config.get('testing', {})
+                .get('validation', {})
+                .get('scraping', {})
+                .get('facebook_group_probe_limit', 10)
+            )
+            group_urls = _load_facebook_group_probe_urls(config, limit=group_probe_limit)
+            failed_group_urls: list[str] = []
+            if logged_in and group_urls:
+                for group_url in group_urls:
+                    try:
+                        if not fb_scraper.navigate_and_maybe_login(group_url):
+                            failed_group_urls.append(group_url)
+                    except Exception as probe_error:
+                        logging.warning(
+                            "validate_facebook(): Group probe exception for %s: %s",
+                            group_url,
+                            probe_error,
+                        )
+                        failed_group_urls.append(group_url)
 
-        # Check if login was successful by navigating to Facebook
-        try:
-            fb_scraper.page.goto("https://www.facebook.com/", timeout=15000)
-            logged_in = "login" not in fb_scraper.page.url.lower()
-        except Exception as nav_error:
-            logging.warning(f"validate_facebook(): Error checking login status: {nav_error}")
-            logged_in = False
-
-        # Clean up browser
-        fb_scraper.browser.close()
-        fb_scraper.playwright.stop()
+            # Clean up browser
+            fb_scraper.browser.close()
+            fb_scraper.playwright.stop()
 
         elapsed = (datetime.now() - start_time).total_seconds()
 
-        if logged_in:
+        if logged_in and not failed_group_urls:
             logging.info(f"validate_facebook(): Facebook authenticated successfully ({elapsed:.1f}s)")
             return {'valid': True, 'error': None}
+        if logged_in and failed_group_urls:
+            sample = ", ".join(failed_group_urls[:3])
+            logging.error(
+                "validate_facebook(): Facebook login succeeded, but %s/%s group probes failed. Examples: %s",
+                len(failed_group_urls),
+                len(group_urls),
+                sample,
+            )
+            return {
+                'valid': False,
+                'error': f'Facebook group access failed for {len(failed_group_urls)} of {len(group_urls)} probe URLs'
+            }
         else:
             logging.error("validate_facebook(): Facebook authentication failed")
             return {'valid': False, 'error': 'Facebook login failed - still on login page'}
