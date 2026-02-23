@@ -269,6 +269,7 @@ def _manual_facebook_group_review(fb_scraper, failed_group_urls: list[str], max_
     print("\nFacebook group access needs manual confirmation.")
     print(f"Reviewing up to {len(review_urls)} failed group URL(s) in browser...")
 
+    confirmed_access: set[str] = set()
     for idx, group_url in enumerate(review_urls, start=1):
         logging.info("validate_facebook(): Manual review %s/%s for %s", idx, len(review_urls), group_url)
         try:
@@ -278,22 +279,18 @@ def _manual_facebook_group_review(fb_scraper, failed_group_urls: list[str], max_
         print(f"[{idx}/{len(review_urls)}] Check this URL in browser: {group_url}")
         try:
             input("Press ENTER after confirming you can access it (or Ctrl+C to abort): ")
+            confirmed_access.add(group_url)
         except EOFError:
             logging.warning("validate_facebook(): Non-interactive terminal; skipping manual Facebook group review.")
             break
 
-    still_failed: list[str] = []
-    for group_url in failed_group_urls:
-        try:
-            if not fb_scraper.navigate_and_maybe_login(group_url, max_attempts=1):
-                still_failed.append(group_url)
-        except Exception as probe_error:
-            logging.warning(
-                "validate_facebook(): Post-review group probe exception for %s: %s",
-                group_url,
-                probe_error,
-            )
-            still_failed.append(group_url)
+    # Trust explicit user confirmation in interactive review mode.
+    still_failed = [url for url in failed_group_urls if url not in confirmed_access]
+    logging.info(
+        "validate_facebook(): Manual review confirmed %s/%s failed probe URLs.",
+        len(confirmed_access),
+        len(failed_group_urls),
+    )
     return still_failed
 
 
