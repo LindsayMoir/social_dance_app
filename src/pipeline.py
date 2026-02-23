@@ -1454,8 +1454,8 @@ def send_text_message(message: str):
 # PIPELINE EXECUTION
 # ------------------------
 PIPELINE_STEPS = [
-    ("credential_validation", credential_validation_step),
     ("copy_log_files", copy_log_files),
+    ("credential_validation", credential_validation_step),
     ("copy_drop_create_events", copy_drop_create_events),
     ("sync_address_sequence", sync_address_sequence),
     ("emails", emails_step),
