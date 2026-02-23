@@ -540,6 +540,22 @@ class FacebookEventScraper():
                 logging.info(f"navigate_and_maybe_login: login required for {incoming_url}")
                 if not self.login_to_facebook():
                     return False
+                # Immediately re-check target URL after login, even in single-attempt mode.
+                try:
+                    t = random.randint(20000 // 2, int(20000 * 1.5))
+                    page.goto(real_url, wait_until="domcontentloaded", timeout=t)
+                except PlaywrightTimeoutError:
+                    logging.warning(f"navigate_and_maybe_login: timeout after login for {real_url}")
+                try:
+                    post_login_state = classify_facebook_access_state(page.url, page.content())
+                except Exception:
+                    post_login_state = classify_facebook_access_state(page.url, "")
+                if post_login_state == "ok":
+                    return True
+                if post_login_state == "blocked":
+                    logging.warning(f"navigate_and_maybe_login: blocked or rate-limited on {real_url}")
+                    return False
+                # Still appears to require login.
                 continue
 
             logging.warning(f"navigate_and_maybe_login: blocked or rate-limited on {real_url}")
