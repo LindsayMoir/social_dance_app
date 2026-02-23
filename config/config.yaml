@@ -214,7 +214,7 @@ testing:
       days_back: 7
       edge_cases_file: data/other/edge_cases.csv
       facebook_group_probe_limit: 5
-      facebook_group_probe_max_failures: 2
+      facebook_group_probe_max_failures: 0
       facebook_group_manual_review: true
       facebook_group_manual_review_max_urls: 3
       min_attempts: 3

@@ -138,7 +138,7 @@ def _load_facebook_group_probe_urls(config_data: dict, limit: int = 5) -> list[s
     elif len(all_group_urls) <= limit:
         selected_group_urls = all_group_urls
     else:
-        selected_group_urls = random.sample(all_group_urls, k=limit)
+        selected_group_urls = random.SystemRandom().sample(all_group_urls, k=limit)
 
     logging.info(
         "_load_facebook_group_probe_urls(): Selected %s random Facebook group URL probes from pool size %s (%s, %s)",
@@ -147,6 +147,7 @@ def _load_facebook_group_probe_urls(config_data: dict, limit: int = 5) -> list[s
         whitelist_file,
         gs_urls_file,
     )
+    logging.info("_load_facebook_group_probe_urls(): Probe URL set: %s", selected_group_urls)
     return selected_group_urls
 
 
@@ -342,7 +343,7 @@ def validate_facebook(headless=False, check_timeout_seconds=60):
                 config.get('testing', {})
                 .get('validation', {})
                 .get('scraping', {})
-                .get('facebook_group_probe_max_failures', 2)
+                .get('facebook_group_probe_max_failures', 0)
             )
             manual_review_enabled = bool(
                 config.get('testing', {})
@@ -371,7 +372,7 @@ def validate_facebook(headless=False, check_timeout_seconds=60):
                             probe_error,
                         )
                         failed_group_urls.append(group_url)
-                    if len(failed_group_urls) >= group_probe_max_failures:
+                    if group_probe_max_failures > 0 and len(failed_group_urls) >= group_probe_max_failures:
                         logging.error(
                             "validate_facebook(): Reached fail-fast threshold (%s failed group probes), stopping probe loop early.",
                             group_probe_max_failures,

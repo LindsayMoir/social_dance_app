@@ -184,15 +184,14 @@ def classify_facebook_access_state(current_url: str, page_content: str) -> str:
     url_lower = (current_url or "").lower()
     content_lower = (page_content or "").lower()
 
-    login_markers = (
-        "/login",
-        "login form",
-        "log in to facebook",
-        "must log in",
-        "/checkpoint/",
-        "two-factor",
-    )
-    if any(m in url_lower for m in ("/login", "/checkpoint/")) or any(m in content_lower for m in login_markers):
+    # Treat explicit auth URLs as login walls.
+    if any(m in url_lower for m in ("/login", "/checkpoint/")):
+        return "login"
+
+    # Use stricter content checks to avoid false positives on pages that contain generic "log in" text.
+    has_login_form = ('name="email"' in content_lower and 'name="pass"' in content_lower)
+    has_login_gate = ("must log in" in content_lower or "two-factor" in content_lower)
+    if has_login_form or has_login_gate:
         return "login"
 
     blocked_markers = (

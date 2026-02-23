@@ -91,3 +91,11 @@ def test_classify_facebook_access_state_detects_ok():
         "Event details and comments",
     )
     assert state == "ok"
+
+
+def test_classify_facebook_access_state_does_not_false_positive_on_generic_login_text():
+    state = classify_facebook_access_state(
+        "https://www.facebook.com/groups/examplegroup/",
+        "Some footer text saying log in to facebook to comment",
+    )
+    assert state == "ok"
