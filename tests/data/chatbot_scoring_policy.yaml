@@ -1,0 +1,63 @@
+rules:
+  - id: default_event_type_policy
+    when:
+      question_not_contains_any:
+        - "live music only"
+        - "only live music"
+        - "classes only"
+        - "only classes"
+        - "class only"
+        - "workshops only"
+        - "only workshops"
+        - "no social dance"
+        - "exclude social dance"
+        - "without social dance"
+      sql_contains_all:
+        - "event_type"
+        - "%social dance%"
+      any_of:
+        - reasoning_contains_any:
+            - "too restrictive"
+            - "forcing event_type"
+            - "restrictive by forcing event_type"
+            - "restrictive by limiting event_type"
+        - sql_issues_contains_any:
+            - "event_type"
+    action:
+      set_score: 100
+      set_reasoning: "Default social-dance event_type filter is correct for this query under repository policy; no penalty applied."
+      add_criteria_matched:
+        - "default_event_type_policy"
+      remove_criteria_missed_contains_any:
+        - "event_type"
+      remove_sql_issues_contains_any:
+        - "event_type"
+
+  - id: rehearsal_event_type_policy
+    when:
+      question_contains_any:
+        - "rehearsal"
+        - "rehearsals"
+      sql_contains_all:
+        - "event_type"
+        - "%rehearsal%"
+      any_of:
+        - reasoning_contains_any:
+            - "doesn't explicitly ensure events are dance-related"
+            - "does not explicitly ensure events are dance-related"
+            - "doesn't explicitly ensure events are dance related"
+            - "does not explicitly ensure events are dance related"
+        - sql_issues_contains_any:
+            - "dance-related"
+            - "dance related"
+    action:
+      set_score: 100
+      set_reasoning: "Rehearsal event_type filter is sufficient for rehearsal intent in this dataset; no extra dance-related filter is required."
+      add_criteria_matched:
+        - "rehearsal_event_type_policy"
+      remove_criteria_missed_contains_any:
+        - "dance-related"
+        - "dance related"
+      remove_sql_issues_contains_any:
+        - "dance-related"
+        - "dance related"

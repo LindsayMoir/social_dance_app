@@ -524,6 +524,7 @@ class ChatbotScorer:
             llm_handler: LLMHandler instance
         """
         self.llm_handler = llm_handler
+        self.scoring_policy = self._load_scoring_policy()
 
         # LLM evaluation prompt
         self.eval_prompt = """You are evaluating SQL query results for a dance events chatbot.
@@ -595,6 +596,109 @@ Score guidelines:
 - 30-49: Major issues, wrong filters or logic
 - 0-29: Query failed or completely wrong
 """
+
+    def _load_scoring_policy(self) -> dict:
+        """Load YAML-driven deterministic scoring override rules."""
+        policy_path = "tests/data/chatbot_scoring_policy.yaml"
+        if not os.path.exists(policy_path):
+            logging.warning("Scoring policy file not found: %s", policy_path)
+            return {"rules": []}
+        try:
+            with open(policy_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            rules = data.get("rules", [])
+            if not isinstance(rules, list):
+                logging.warning("Invalid scoring policy format in %s (rules must be a list)", policy_path)
+                return {"rules": []}
+            return {"rules": rules}
+        except Exception as e:
+            logging.error("Failed to load scoring policy from %s: %s", policy_path, e)
+            return {"rules": []}
+
+    @staticmethod
+    def _contains_any(haystack: str, needles: List[str]) -> bool:
+        return any(str(n).lower() in haystack for n in needles)
+
+    @staticmethod
+    def _list_contains_any(values: List[str], needles: List[str]) -> bool:
+        lowered = [str(v).lower() for v in values]
+        return any(any(str(n).lower() in v for n in needles) for v in lowered)
+
+    def _matches_subcondition(self, subcondition: dict, context: dict) -> bool:
+        """Evaluate a single condition block against context."""
+        question = context["question"]
+        sql = context["sql"]
+        reasoning = context["reasoning"]
+        sql_issues = context["sql_issues"]
+
+        if "question_contains_any" in subcondition and not self._contains_any(question, subcondition["question_contains_any"]):
+            return False
+        if "question_not_contains_any" in subcondition and self._contains_any(question, subcondition["question_not_contains_any"]):
+            return False
+        if "sql_contains_all" in subcondition and not all(str(term).lower() in sql for term in subcondition["sql_contains_all"]):
+            return False
+        if "reasoning_contains_any" in subcondition and not self._contains_any(reasoning, subcondition["reasoning_contains_any"]):
+            return False
+        if "sql_issues_contains_any" in subcondition and not self._list_contains_any(sql_issues, subcondition["sql_issues_contains_any"]):
+            return False
+        return True
+
+    def _rule_matches(self, rule: dict, context: dict) -> bool:
+        """Evaluate a policy rule with AND + optional any_of semantics."""
+        when = rule.get("when", {})
+        if not isinstance(when, dict):
+            return False
+
+        # Base AND conditions (everything except any_of)
+        base = {k: v for k, v in when.items() if k != "any_of"}
+        if not self._matches_subcondition(base, context):
+            return False
+
+        # Optional OR-of-subconditions
+        any_of = when.get("any_of")
+        if any_of is None:
+            return True
+        if not isinstance(any_of, list) or not any_of:
+            return True
+        return any(self._matches_subcondition(sc, context) for sc in any_of if isinstance(sc, dict))
+
+    @staticmethod
+    def _remove_items_containing(values: List[str], needles: List[str]) -> List[str]:
+        lowered_needles = [str(n).lower() for n in needles]
+        out = []
+        for val in values:
+            val_l = str(val).lower()
+            if any(n in val_l for n in lowered_needles):
+                continue
+            out.append(val)
+        return out
+
+    def _apply_policy_action(self, eval_result: dict, action: dict) -> dict:
+        """Apply a rule action to evaluation result."""
+        sql_issues = [str(x) for x in eval_result.get("sql_issues", [])]
+        criteria_missed = [str(x) for x in eval_result.get("criteria_missed", [])]
+        criteria_matched = [str(x) for x in eval_result.get("criteria_matched", [])]
+
+        if "remove_sql_issues_contains_any" in action:
+            sql_issues = self._remove_items_containing(sql_issues, action["remove_sql_issues_contains_any"])
+        if "remove_criteria_missed_contains_any" in action:
+            criteria_missed = self._remove_items_containing(criteria_missed, action["remove_criteria_missed_contains_any"])
+        if "add_criteria_matched" in action:
+            for marker in action["add_criteria_matched"]:
+                if marker not in criteria_matched:
+                    criteria_matched.append(marker)
+        if "set_reasoning" in action:
+            eval_result["reasoning"] = str(action["set_reasoning"])
+        if "set_score" in action:
+            try:
+                eval_result["score"] = max(0, min(100, int(action["set_score"])))
+            except Exception:
+                pass
+
+        eval_result["sql_issues"] = sql_issues
+        eval_result["criteria_missed"] = criteria_missed
+        eval_result["criteria_matched"] = criteria_matched
+        return eval_result
 
     def _evaluate_interpretation(self, test_result: dict) -> dict:
         """
@@ -854,59 +958,29 @@ Score guidelines:
         """
         Enforce scoring policy overrides for known deterministic rules.
 
-        Current rule:
-        - Default event_type social-dance filter is correct unless user explicitly
-          asks for a different exclusive event type.
+        Rules are loaded from tests/data/chatbot_scoring_policy.yaml.
         """
         question = (test_result.get('question') or '').lower()
         sql = (test_result.get('sql_query') or '').lower()
         reasoning = (eval_result.get('reasoning') or '').lower()
         sql_issues = [str(x) for x in eval_result.get('sql_issues', [])]
-        criteria_missed = [str(x) for x in eval_result.get('criteria_missed', [])]
-        criteria_matched = [str(x) for x in eval_result.get('criteria_matched', [])]
+        context = {
+            "question": question,
+            "sql": sql,
+            "reasoning": reasoning,
+            "sql_issues": sql_issues,
+        }
 
-        has_default_social_filter = "event_type" in sql and "%social dance%" in sql
-        explicit_non_social_restriction = any(
-            phrase in question
-            for phrase in [
-                "live music only",
-                "only live music",
-                "classes only",
-                "only classes",
-                "class only",
-                "workshops only",
-                "only workshops",
-                "no social dance",
-                "exclude social dance",
-                "without social dance",
-            ]
-        )
-
-        default_social_penalty_signal = any(
-            signal in reasoning
-            for signal in [
-                "too restrictive",
-                "forcing event_type",
-                "restrictive by forcing event_type",
-                "restrictive by limiting event_type",
-            ]
-        ) or any("event_type" in issue.lower() for issue in sql_issues)
-
-        if has_default_social_filter and not explicit_non_social_restriction and default_social_penalty_signal:
-            # Remove event_type-related misses/issues caused by contradictory evaluator behavior.
-            filtered_issues = [x for x in sql_issues if "event_type" not in x.lower()]
-            filtered_missed = [x for x in criteria_missed if x.lower() != "event_type"]
-            if "default_event_type_policy" not in criteria_matched:
-                criteria_matched.append("default_event_type_policy")
-
-            eval_result['sql_issues'] = filtered_issues
-            eval_result['criteria_missed'] = filtered_missed
-            eval_result['criteria_matched'] = criteria_matched
-            eval_result['reasoning'] = (
-                "Default social-dance event_type filter is correct for this query "
-                "under repository policy; no penalty applied."
-            )
-            eval_result['score'] = 100
+        for rule in self.scoring_policy.get("rules", []):
+            if not isinstance(rule, dict):
+                continue
+            if self._rule_matches(rule, context):
+                action = rule.get("action", {})
+                if isinstance(action, dict):
+                    eval_result = self._apply_policy_action(eval_result, action)
+                    # Keep context in sync for cascading rules.
+                    context["reasoning"] = (eval_result.get("reasoning") or "").lower()
+                    context["sql_issues"] = [str(x) for x in eval_result.get("sql_issues", [])]
 
         return eval_result
 

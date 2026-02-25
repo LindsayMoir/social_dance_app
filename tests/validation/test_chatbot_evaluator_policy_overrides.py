@@ -34,3 +34,28 @@ def test_default_social_dance_filter_not_penalized_for_tonight_query():
     assert "default_event_type_policy" in out["criteria_matched"]
     assert "event_type" not in [c.lower() for c in out["criteria_missed"]]
     assert all("event_type" not in issue.lower() for issue in out["sql_issues"])
+
+
+def test_rehearsal_query_not_penalized_for_missing_extra_dance_related_filter():
+    scorer = ChatbotScorer(_DummyLLM())
+
+    test_result = {
+        "question": "Show me dance rehearsals next month",
+        "sql_query": (
+            "SELECT * FROM events WHERE event_type ILIKE '%rehearsal%' "
+            "AND start_date >= '2026-03-01' AND start_date <= '2026-03-31'"
+        ),
+    }
+    eval_result = {
+        "score": 86,
+        "reasoning": "The query correctly filters rehearsals but doesn't explicitly ensure events are dance-related.",
+        "criteria_matched": ["event_type", "timeframe"],
+        "criteria_missed": [],
+        "sql_issues": ["doesn't explicitly ensure events are dance-related"],
+    }
+
+    out = scorer._apply_policy_overrides(test_result, eval_result)
+
+    assert out["score"] == 100
+    assert "rehearsal_event_type_policy" in out["criteria_matched"]
+    assert all("dance-related" not in issue.lower() for issue in out["sql_issues"])
