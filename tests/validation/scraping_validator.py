@@ -265,7 +265,34 @@ class ScrapingValidator:
 
                 result = self.db_handler.execute_query(query, params)
 
+                # Count recent successful child URL attempts under this base URL.
+                # This avoids false negatives where base URL parsing fails but
+                # child event pages were successfully extracted and marked relevant.
+                child_where_or = []
+                child_params = {"days": window_days}
+                for i, v in enumerate(url_variants[:8]):
+                    key = f"p{i}"
+                    child_params[key] = v
+                    child_where_or.append(f"parent_url = :{key}")
+                child_where_clause = " OR ".join(child_where_or) if child_where_or else "parent_url = :p0"
+                child_query = f"""
+                    SELECT COUNT(*)
+                    FROM urls
+                    WHERE ({child_where_clause})
+                      AND relevant = true
+                      AND time_stamp >= NOW() - (:days * INTERVAL '1 day')
+                """
+                child_result = self.db_handler.execute_query(child_query, child_params)
+                child_success_count = int(child_result[0][0]) if child_result else 0
+
                 if not result:
+                    if child_success_count > 0:
+                        logging.info(
+                            "Scraping validator: base URL %s has no direct recent rows but has %s recent relevant child URL rows.",
+                            url,
+                            child_success_count,
+                        )
+                        continue
                     failures.append({
                         'url': url,
                         'source': url_row['source'],
@@ -293,6 +320,13 @@ class ScrapingValidator:
 
                 # Only flag as irrelevant if multiple consecutive recent attempts failed (threshold)
                 if not any_success and consecutive_irrelevant >= fail_thresh:
+                    if child_success_count > 0:
+                        logging.info(
+                            "Scraping validator: suppressing marked_irrelevant for %s due to %s recent relevant child URL rows.",
+                            url,
+                            child_success_count,
+                        )
+                        continue
                     failures.append({
                         'url': url,
                         'source': url_row['source'],
