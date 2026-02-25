@@ -61,3 +61,33 @@ rules:
       remove_sql_issues_contains_any:
         - "dance-related"
         - "dance related"
+
+  - id: workshop_learning_synonym_policy
+    when:
+      question_contains_any:
+        - "workshop"
+        - "workshops"
+      sql_contains_all:
+        - "event_type"
+        - "%workshop%"
+        - "%class%"
+      any_of:
+        - reasoning_contains_any:
+            - "allows general 'class'"
+            - "allows general class"
+            - "not strictly workshop"
+            - "includes classes"
+        - sql_issues_contains_any:
+            - "class"
+            - "workshop"
+    action:
+      set_score: 100
+      set_reasoning: "Class/workshop filtering is acceptable for workshop intent under learning-event synonym policy; no penalty applied."
+      add_criteria_matched:
+        - "workshop_learning_synonym_policy"
+      remove_criteria_missed_contains_any:
+        - "class"
+        - "workshop"
+      remove_sql_issues_contains_any:
+        - "class"
+        - "workshop"
