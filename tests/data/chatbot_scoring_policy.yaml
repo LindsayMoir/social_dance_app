@@ -91,3 +91,62 @@ rules:
       remove_sql_issues_contains_any:
         - "class"
         - "workshop"
+
+  - id: weekday_single_date_policy
+    when:
+      question_contains_any:
+        - " on monday"
+        - " on tuesday"
+        - " on wednesday"
+        - " on thursday"
+        - " on friday"
+        - " on saturday"
+        - " on sunday"
+      question_not_contains_any:
+        - "every monday"
+        - "every tuesday"
+        - "every wednesday"
+        - "every thursday"
+        - "every friday"
+        - "every saturday"
+        - "every sunday"
+        - "all mondays"
+        - "all tuesdays"
+        - "all wednesdays"
+        - "all thursdays"
+        - "all fridays"
+        - "all saturdays"
+        - "all sundays"
+        - "mondays"
+        - "tuesdays"
+        - "wednesdays"
+        - "thursdays"
+        - "fridays"
+        - "saturdays"
+        - "sundays"
+      sql_contains_all:
+        - "start_date ="
+      any_of:
+        - reasoning_contains_any:
+            - "instead of filtering for events occurring on mondays"
+            - "instead of filtering for events occurring on monday"
+            - "all mondays"
+            - "occurring on mondays"
+            - "occurring on monday"
+        - sql_issues_contains_any:
+            - "monday"
+            - "mondays"
+            - "day_of_week"
+    action:
+      set_score: 100
+      set_reasoning: "Interpreting 'on Monday' as the next Monday (single-date filter) is valid unless the user explicitly asks for recurring/all Mondays."
+      add_criteria_matched:
+        - "weekday_single_date_policy"
+      remove_criteria_missed_contains_any:
+        - "monday"
+        - "mondays"
+        - "day_of_week"
+      remove_sql_issues_contains_any:
+        - "monday"
+        - "mondays"
+        - "day_of_week"

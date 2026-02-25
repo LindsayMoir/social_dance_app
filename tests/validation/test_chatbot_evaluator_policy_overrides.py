@@ -86,3 +86,31 @@ def test_workshop_query_not_penalized_for_class_workshop_or_filter():
     assert out["score"] == 100
     assert "workshop_learning_synonym_policy" in out["criteria_matched"]
     assert all("class" not in issue.lower() for issue in out["sql_issues"])
+
+
+def test_weekday_on_monday_single_date_not_penalized():
+    scorer = ChatbotScorer(_DummyLLM())
+
+    test_result = {
+        "question": "Dance events on Monday",
+        "sql_query": (
+            "SELECT * FROM events WHERE start_date = '2026-03-02' "
+            "AND (event_type ILIKE '%social dance%' OR event_type ILIKE '%live music%')"
+        ),
+    }
+    eval_result = {
+        "score": 84,
+        "reasoning": (
+            "The query incorrectly restricts to a single start_date instead of "
+            "filtering for events occurring on Mondays."
+        ),
+        "criteria_matched": ["event_type"],
+        "criteria_missed": ["day_of_week"],
+        "sql_issues": ["should filter all Mondays, not single date"],
+    }
+
+    out = scorer._apply_policy_overrides(test_result, eval_result)
+
+    assert out["score"] == 100
+    assert "weekday_single_date_policy" in out["criteria_matched"]
+    assert all("monday" not in issue.lower() for issue in out["sql_issues"])
