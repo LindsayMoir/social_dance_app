@@ -68,7 +68,7 @@ COMMON_CONFIG_UPDATES = {
          "max_website_urls": 10,
          "urls_run_limit": 500,  # default for all steps
     },
-    "llm": {"provider": "mistral", "spend_money": True}
+    "llm": {"provider": "openai", "spend_money": True, "fallback_enabled": False}
 }
 
 # ------------------------
@@ -560,7 +560,9 @@ def post_process_ebs():
 
 @flow(name="EBS Step")
 def ebs_step():
-    original_config = backup_and_update_config("ebs", updates=COMMON_CONFIG_UPDATES)
+    ebs_updates = copy.deepcopy(COMMON_CONFIG_UPDATES)
+    ebs_updates["crawling"]["urls_run_limit"] = 250
+    original_config = backup_and_update_config("ebs", updates=ebs_updates)
     write_run_config.submit("ebs", original_config)
     if not pre_process_ebs():
         send_text_message("ebs.py pre-processing failed: keywords file missing.")
@@ -683,7 +685,13 @@ def post_process_scraper():
 @flow(name="Scraper Step")
 def scraper_step():
     scraper_updates = copy.deepcopy(COMMON_CONFIG_UPDATES)
-    scraper_updates["crawling"]["urls_run_limit"] = 1500
+    scraper_updates["crawling"]["urls_run_limit"] = 900
+    scraper_updates["crawling"]["scraper_download_timeout_seconds"] = 35
+    scraper_updates["crawling"]["scraper_playwright_timeout_ms"] = 35000
+    scraper_updates["crawling"]["scraper_retry_times"] = 1
+    scraper_updates["crawling"]["scraper_post_load_wait_ms"] = 1000
+    scraper_updates["crawling"]["scraper_concurrent_requests"] = 16
+    scraper_updates["crawling"]["scraper_concurrent_requests_per_domain"] = 8
     original_config = backup_and_update_config("scraper", updates=scraper_updates)
     write_run_config.submit("scraper", original_config)
     if not pre_process_scraper():
@@ -715,16 +723,18 @@ def post_process_fb():
 
 @flow(name="FB Step")
 def fb_step():
-    original_config = backup_and_update_config("fb", updates=COMMON_CONFIG_UPDATES)
+    fb_updates = copy.deepcopy(COMMON_CONFIG_UPDATES)
+    fb_updates["crawling"]["urls_run_limit"] = 500
+    fb_updates["crawling"]["fb_base_urls_limit"] = 180
+    fb_updates["crawling"]["fb_event_links_per_base_limit"] = 20
+    fb_updates["crawling"]["fb_post_nav_wait_ms"] = 1800
+    fb_updates["crawling"]["fb_post_expand_wait_ms"] = 900
+    fb_updates["crawling"]["fb_final_wait_ms"] = 700
+    original_config = backup_and_update_config("fb", updates=fb_updates)
     write_run_config.submit("fb", original_config)
     run_fb_script()
     post_process_fb()
-    with open(CONFIG_PATH, "r") as f:
-        current_config = yaml.safe_load(f)
-    current_config['llm']['provider'] = 'mistral'
-    with open(CONFIG_PATH, "w") as f:
-        yaml.dump(current_config, f)
-    logger.info("def fb_step(): Updated config llm.provider to mistral for the remaining pipeline run.")
+    restore_config(original_config, "fb")
     return True
 
 # ------------------------

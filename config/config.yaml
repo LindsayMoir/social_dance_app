@@ -14,11 +14,22 @@ constants:
 crawling:
   depth_limit: 2
   headless: true
+  fb_base_urls_limit: 180
+  fb_event_links_per_base_limit: 20
+  fb_final_wait_ms: 700
+  fb_post_expand_wait_ms: 900
+  fb_post_nav_wait_ms: 1800
   max_attempts: 3
   max_crawl_trys: 3
   max_website_urls: 10
   prompt_max_length: 100000
   random_test_limit: 10
+  scraper_concurrent_requests: 16
+  scraper_concurrent_requests_per_domain: 8
+  scraper_download_timeout_seconds: 35
+  scraper_playwright_timeout_ms: 35000
+  scraper_post_load_wait_ms: 1000
+  scraper_retry_times: 1
   scroll_depth: 2
   urls_run_limit: 500
 date_range:
@@ -51,9 +62,10 @@ input:
   urls: data/urls
 llm:
   anthropic_model: claude-opus-4-20250514
+  fallback_enabled: false
   mistral_model: mistral-large-2512
   openai_model: gpt-5-mini
-  provider: mistral
+  provider: openai
   spend_money: true
 location:
   epicentre: Victoria, British Columbia, Canada

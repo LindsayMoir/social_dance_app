@@ -319,6 +319,12 @@ class FacebookEventScraper():
 
         # Get keywords (deferred if handlers not initialized)
         self.keywords_list = llm_handler.get_keywords() if llm_handler else []
+        crawling_cfg = self.config.get("crawling", {})
+        self.fb_base_urls_limit = int(crawling_cfg.get("fb_base_urls_limit", 0) or 0)
+        self.fb_event_links_per_base_limit = int(crawling_cfg.get("fb_event_links_per_base_limit", 0) or 0)
+        self.fb_post_nav_wait_ms = int(crawling_cfg.get("fb_post_nav_wait_ms", 1800) or 1800)
+        self.fb_post_expand_wait_ms = int(crawling_cfg.get("fb_post_expand_wait_ms", 900) or 900)
+        self.fb_final_wait_ms = int(crawling_cfg.get("fb_final_wait_ms", 700) or 700)
 
 
     def _safe_shutdown_browser(self) -> None:
@@ -652,15 +658,15 @@ class FacebookEventScraper():
                 logging.error(f"extract_event_text: timeout on {link}")
                 return None
         
-        page.wait_for_timeout(random.randint(4000, 7000))
+        page.wait_for_timeout(self.fb_post_nav_wait_ms)
         for btn in page.query_selector_all("text=/See more/i"):
             try:
                 btn.click()
-                page.wait_for_timeout(random.randint(3000, 6000))
+                page.wait_for_timeout(self.fb_post_expand_wait_ms)
             except:
                 break
 
-        page.wait_for_timeout(random.randint(3000, 5000))
+        page.wait_for_timeout(self.fb_final_wait_ms)
         html = page.content()
         soup = BeautifulSoup(html, 'html.parser')
         full_text = ' '.join(soup.stripped_strings)
@@ -1029,6 +1035,32 @@ class FacebookEventScraper():
         # 2) Add checkpoint columns
         fb_urls_df['processed'] = False
         fb_urls_df['events_processed'] = False
+        if not fb_urls_df.empty:
+            def _safe_is_whitelisted(value: str) -> bool:
+                try:
+                    return bool(db_handler.is_whitelisted_url(value))
+                except Exception:
+                    return False
+
+            fb_urls_df["is_whitelisted"] = fb_urls_df["link"].astype(str).map(_safe_is_whitelisted)
+            if "relevant" not in fb_urls_df.columns:
+                fb_urls_df["relevant"] = False
+            fb_urls_df["priority"] = (
+                fb_urls_df["is_whitelisted"].astype(int) * 100
+                + fb_urls_df["relevant"].fillna(False).astype(int) * 10
+                + fb_urls_df["link"].astype(str).str.contains("/events/").astype(int) * 5
+                + fb_urls_df["link"].astype(str).str.contains("/groups/").astype(int) * 3
+            )
+            fb_urls_df = fb_urls_df.sort_values(by=["priority"], ascending=False).reset_index(drop=True)
+            if self.fb_base_urls_limit > 0:
+                before_limit = len(fb_urls_df)
+                fb_urls_df = fb_urls_df.head(self.fb_base_urls_limit).copy()
+                logging.info(
+                    "def driver_fb_urls(): Applying fb_base_urls_limit=%d (kept %d/%d base URLs).",
+                    self.fb_base_urls_limit,
+                    len(fb_urls_df),
+                    before_limit,
+                )
         if os.getenv('RENDER') != 'true':
             fb_urls_df.to_csv(self.config['checkpoint']['fb_urls'], index=False)
         checkpoint_write_every = int(self.config.get('checkpoint', {}).get('fb_urls_write_every', 10) or 10)
@@ -1118,6 +1150,14 @@ class FacebookEventScraper():
 
                 # 4) Now scrape *all* event links by auto-navigating to /events/
                 fb_event_links = self.extract_event_links(base_url)
+                if self.fb_event_links_per_base_limit > 0 and len(fb_event_links) > self.fb_event_links_per_base_limit:
+                    logging.info(
+                        "def driver_fb_urls(): Limiting discovered event links for %s from %d to %d.",
+                        base_url,
+                        len(fb_event_links),
+                        self.fb_event_links_per_base_limit,
+                    )
+                    fb_event_links = fb_event_links[: self.fb_event_links_per_base_limit]
                 if not fb_event_links:
                     logging.info(f"driver_fb_urls(): No events tab or no events found on {base_url}")
 

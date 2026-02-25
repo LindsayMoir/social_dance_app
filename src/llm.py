@@ -459,6 +459,12 @@ class LLMHandler:
                 self.mistral_rate_limit_strikes,
             )
 
+    def _fallback_enabled(self) -> bool:
+        """
+        Return whether cross-provider fallback is enabled.
+        """
+        return bool(self.config.get("llm", {}).get("fallback_enabled", True))
+
 
     def query_llm(self, url, prompt, schema_type=None, tools=None, max_iterations=3):
         """
@@ -497,6 +503,8 @@ class LLMHandler:
         else:
             provider = self.config['llm']['provider']
 
+        fallback_enabled = self._fallback_enabled()
+
         if provider == 'openai':
             # Try OpenAI first
             try:
@@ -511,7 +519,9 @@ class LLMHandler:
                 logging.warning(f"query_llm(): OpenAI query failed: {error_message}")
 
             # Fallback to Mistral
-            if self._mistral_in_cooldown():
+            if not fallback_enabled:
+                logging.info("query_llm(): Provider fallback disabled; not attempting Mistral fallback.")
+            elif self._mistral_in_cooldown():
                 logging.warning("query_llm(): Skipping Mistral fallback due to active cooldown.")
             else:
                 try:
@@ -547,17 +557,20 @@ class LLMHandler:
                     logging.warning(f"query_llm(): Mistral query failed: {error_message}")
 
             # Fallback to OpenAI
-            try:
-                openai_model = self.config['llm']['openai_model']
-                logging.info("query_llm(): Falling back to OpenAI")
-                response = self.query_openai(prompt, openai_model, schema_type=schema_type)
-                if response:
-                    logging.info(f"query_llm(): OpenAI response received: {response}")
-                else:
-                    logging.warning("query_llm(): OpenAI returned no response.")
-            except Exception as e:
-                error_message = str(e).replace('error', 'rejection')
-                logging.warning(f"query_llm(): OpenAI query failed: {error_message}")
+            if not fallback_enabled:
+                logging.info("query_llm(): Provider fallback disabled; not attempting OpenAI fallback.")
+            else:
+                try:
+                    openai_model = self.config['llm']['openai_model']
+                    logging.info("query_llm(): Falling back to OpenAI")
+                    response = self.query_openai(prompt, openai_model, schema_type=schema_type)
+                    if response:
+                        logging.info(f"query_llm(): OpenAI response received: {response}")
+                    else:
+                        logging.warning("query_llm(): OpenAI returned no response.")
+                except Exception as e:
+                    error_message = str(e).replace('error', 'rejection')
+                    logging.warning(f"query_llm(): OpenAI query failed: {error_message}")
 
         else:
             logging.error("query_llm(): Invalid LLM provider specified.")
@@ -602,6 +615,7 @@ class LLMHandler:
             provider = 'openai'
         else:
             provider = self.config['llm']['provider']
+        fallback_enabled = self._fallback_enabled()
 
         # Initialize conversation messages
         messages = [{"role": "user", "content": prompt}]
@@ -615,14 +629,20 @@ class LLMHandler:
                 response = self._query_mistral_with_tools(messages, tools)
                 # Fallback only if truly no response and no tool calls
                 if not response or (not response.get("content") and not response.get("tool_calls")):
-                    logging.warning("query_llm(): Mistral tools returned no content; falling back to OpenAI")
-                    response = self._query_openai_with_tools(messages, tools)
+                    if fallback_enabled:
+                        logging.warning("query_llm(): Mistral tools returned no content; falling back to OpenAI")
+                        response = self._query_openai_with_tools(messages, tools)
+                    else:
+                        logging.info("query_llm(): Fallback disabled for tool calls; not falling back from Mistral.")
             elif provider == 'openai':
                 response = self._query_openai_with_tools(messages, tools)
                 # Fallback only if truly no response and no tool calls
                 if not response or (not response.get("content") and not response.get("tool_calls")):
-                    logging.warning("query_llm(): OpenAI tools returned no content; falling back to Mistral")
-                    response = self._query_mistral_with_tools(messages, tools)
+                    if fallback_enabled:
+                        logging.warning("query_llm(): OpenAI tools returned no content; falling back to Mistral")
+                        response = self._query_mistral_with_tools(messages, tools)
+                    else:
+                        logging.info("query_llm(): Fallback disabled for tool calls; not falling back from OpenAI.")
             else:
                 logging.error("query_llm(): Invalid LLM provider")
                 return {"content": None, "tool_calls": [], "iterations": iteration}

@@ -168,6 +168,20 @@ def prioritize_links_for_crawl(links: list[str], max_links: int) -> list[str]:
     scored.sort(key=lambda item: (-item[0], item[1]))
     return [link for _, _, link in scored[:max_links]]
 
+
+def has_event_signal(text: str) -> bool:
+    """
+    Fast lexical gate to avoid expensive LLM calls on low-signal pages.
+    """
+    low = (text or "").lower()
+    event_tokens = (
+        "event", "events", "calendar", "schedule", "social", "dance",
+        "workshop", "class", "lesson", "friday", "saturday", "sunday",
+        "monday", "tuesday", "wednesday", "thursday",
+    )
+    return any(token in low for token in event_tokens)
+
+
 def get_handlers():
     """Initialize and return handlers only when needed."""
     global _handlers_cache
@@ -315,7 +329,10 @@ class EventSpider(scrapy.Spider):
                     "playwright_page_methods": [
                         PageMethod("wait_for_selector", "body"),
                         PageMethod("wait_for_load_state", "networkidle"),
-                        PageMethod("wait_for_timeout", 2500),
+                        PageMethod(
+                            "wait_for_timeout",
+                            int(self.config.get("crawling", {}).get("scraper_post_load_wait_ms", 1000) or 1000),
+                        ),
                     ],
                 },
             )
@@ -367,17 +384,26 @@ class EventSpider(scrapy.Spider):
 
         if found_keywords:
             logging.info(f"def parse(): Found keywords for URL {url}: {found_keywords}")
-            # Use URL-specific prompt mapping when available; LLMHandler falls back to default.
-            prompt_type = url
-            llm_status = llm_handler.process_llm_response(url, parent_url, extracted_text, source, keywords, prompt_type)
-            if llm_status:
-                # mark as relevant
-                url_row[4] = True
-                db_handler.write_url_to_db(url_row)
-                logging.info(f"def parse(): URL {url} marked as relevant (LLM positive).")
+            should_run_llm = (
+                is_whitelisted_origin
+                or is_calendar_candidate(url, self.calendar_urls_set)
+                or has_event_signal(extracted_text)
+            )
+            if should_run_llm:
+                # Use URL-specific prompt mapping when available; LLMHandler falls back to default.
+                prompt_type = url
+                llm_status = llm_handler.process_llm_response(url, parent_url, extracted_text, source, keywords, prompt_type)
+                if llm_status:
+                    # mark as relevant
+                    url_row[4] = True
+                    db_handler.write_url_to_db(url_row)
+                    logging.info(f"def parse(): URL {url} marked as relevant (LLM positive).")
+                else:
+                    db_handler.write_url_to_db(url_row)
+                    logging.info(f"def parse(): URL {url} marked as irrelevant (LLM negative).")
             else:
                 db_handler.write_url_to_db(url_row)
-                logging.info(f"def parse(): URL {url} marked as irrelevant (LLM negative).")
+                logging.info("def parse(): URL %s skipped LLM due to low event signal.", url)
         else:
             db_handler.write_url_to_db(url_row)
             logging.info(f"def parse(): URL {url} marked as irrelevant (no keywords).")
@@ -485,7 +511,10 @@ class EventSpider(scrapy.Spider):
                     "playwright_page_methods": [
                         PageMethod("wait_for_selector", "body"),
                         PageMethod("wait_for_load_state", "networkidle"),
-                        PageMethod("wait_for_timeout", 2500),
+                        PageMethod(
+                            "wait_for_timeout",
+                            int(self.config.get("crawling", {}).get("scraper_post_load_wait_ms", 1000) or 1000),
+                        ),
                     ],
                 },
             )
@@ -686,9 +715,13 @@ class EventSpider(scrapy.Spider):
             },
             # Allow 406 so your parse() or Playwright steps still see it
             "HTTPERROR_ALLOWED_CODES": [406],
-            # Add timeouts to prevent hanging
-            "DOWNLOAD_TIMEOUT": 60,  # 60 seconds timeout for HTTP requests
-            "PLAYWRIGHT_TIMEOUT": 60000,  # 60 seconds timeout for Playwright (in milliseconds)
+            # Timeouts/retry tuning to reduce long tail hangs.
+            "DOWNLOAD_TIMEOUT": int(self.config.get("crawling", {}).get("scraper_download_timeout_seconds", 35) or 35),
+            "PLAYWRIGHT_TIMEOUT": int(self.config.get("crawling", {}).get("scraper_playwright_timeout_ms", 35000) or 35000),
+            "RETRY_ENABLED": True,
+            "RETRY_TIMES": int(self.config.get("crawling", {}).get("scraper_retry_times", 1) or 1),
+            "CONCURRENT_REQUESTS": int(self.config.get("crawling", {}).get("scraper_concurrent_requests", 16) or 16),
+            "CONCURRENT_REQUESTS_PER_DOMAIN": int(self.config.get("crawling", {}).get("scraper_concurrent_requests_per_domain", 8) or 8),
         })
 
         process.crawl(EventSpider, config=self.config)

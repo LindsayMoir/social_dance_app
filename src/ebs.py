@@ -56,6 +56,7 @@ import random
 import re
 from sqlalchemy import text
 import sys
+from urllib.parse import urlparse
 import yaml
 
 from db import DatabaseHandler
@@ -95,6 +96,35 @@ class EventbriteScraper:
         self.urls_with_extracted_text = 0
         self.urls_with_found_keywords = 0
         self.events_written_to_db = 0
+
+    def _is_url_likely_relevant_without_llm(self, event_url: str) -> bool | None:
+        """
+        Fast URL heuristic for Eventbrite relevance filtering.
+        Returns:
+            True: likely relevant
+            False: likely not relevant
+            None: uncertain, requires LLM check
+        """
+        low = (event_url or "").lower()
+        parsed = urlparse(low)
+        slug = f"{parsed.path} {parsed.query}".replace("-", " ").replace("_", " ")
+
+        positive_tokens = {
+            "dance", "salsa", "bachata", "kizomba", "zou", "swing", "lindy",
+            "ballroom", "west coast", "wcs", "tango", "milonga", "latin",
+            "social dance", "rueda", "blues dance", "contra dance",
+        }
+        negative_tokens = {
+            "comedy", "standup", "startup", "business", "networking", "tech",
+            "coding", "hackathon", "crypto", "real estate", "church service",
+            "worship", "politics", "seminar", "conference",
+        }
+
+        if any(tok in slug for tok in positive_tokens):
+            return True
+        if any(tok in slug for tok in negative_tokens):
+            return False
+        return None
 
 
     async def eventbrite_search(self, query, source, keywords_list, prompt_type):
@@ -175,19 +205,23 @@ class EventbriteScraper:
                 )
                 break
 
-           # Check if the words in the url make it likely to be relevant
-            prompt_type = 'relevant_dance_url'
-            prompt_text, schema_type = self.llm_handler.generate_prompt(event_url, event_url, prompt_type)
-
-            # 1) Get the raw LLM output
-            raw = self.llm_handler.query_llm(event_url, prompt_text, schema_type)
-            logging.info(f"def eventbrite_search(): Raw LLM output for {event_url} → {repr(raw)}")
-
-            # 2) Convert to a proper boolean
-            if isinstance(raw, str):
-                is_relevant = raw.strip().lower() == "true"
+            is_relevant = self._is_url_likely_relevant_without_llm(event_url)
+            if is_relevant is None:
+                # Only call LLM when URL signal is ambiguous.
+                prompt_type = 'relevant_dance_url'
+                prompt_text, schema_type = self.llm_handler.generate_prompt(event_url, event_url, prompt_type)
+                raw = self.llm_handler.query_llm(event_url, prompt_text, schema_type)
+                logging.info(f"def eventbrite_search(): Raw LLM output for {event_url} → {repr(raw)}")
+                if isinstance(raw, str):
+                    is_relevant = raw.strip().lower() == "true"
+                else:
+                    is_relevant = bool(raw)
             else:
-                is_relevant = bool(raw)
+                logging.info(
+                    "def eventbrite_search(): URL heuristic classified %s as relevant=%s without LLM.",
+                    event_url,
+                    is_relevant,
+                )
 
             # 3) Act accordingly
             if not is_relevant:
