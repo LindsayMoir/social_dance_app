@@ -55,6 +55,7 @@ class DatabaseHandler():
             - Creates a DataFrame from the URLs table and computes grouped statistics for URL usefulness.
         """
         self.config = config
+        self.event_overrides = self._load_event_overrides()
         self.load_blacklist_domains()
         # Pre-load whitelist entries and normalize them for robust checks
         try:
@@ -208,6 +209,105 @@ class DatabaseHandler():
         except Exception as e:
             logging.warning(f'is_whitelisted_url: error {e}')
             return False
+
+    def _load_event_overrides(self) -> List[Dict[str, Any]]:
+        """
+        Load optional event normalization overrides from config.
+
+        Expected config shape:
+            normalization:
+              event_overrides:
+                - name: some_rule
+                  match:
+                    url_contains: example.com/path
+                  set:
+                    event_type: "social dance, live music"
+        """
+        try:
+            overrides = (
+                self.config
+                .get("normalization", {})
+                .get("event_overrides", [])
+            )
+            if not isinstance(overrides, list):
+                logging.warning("_load_event_overrides: Expected list, got %s", type(overrides).__name__)
+                return []
+            valid_overrides = [o for o in overrides if isinstance(o, dict)]
+            if len(valid_overrides) != len(overrides):
+                logging.warning("_load_event_overrides: Ignoring non-dict override entries.")
+            logging.info("_load_event_overrides: Loaded %d event override rule(s)", len(valid_overrides))
+            return valid_overrides
+        except Exception as e:
+            logging.warning("_load_event_overrides: Failed to load overrides: %s", e)
+            return []
+
+    @staticmethod
+    def _url_matches_rule(normalized_url: str, match_rule: Dict[str, Any]) -> bool:
+        """
+        Evaluate whether a normalized URL matches a rule.
+
+        Supported match keys:
+            - url_contains: substring match
+            - url_equals: exact normalized URL match
+            - domain_equals: exact hostname match
+        """
+        if not normalized_url or not isinstance(match_rule, dict):
+            return False
+
+        contains_value = str(match_rule.get("url_contains", "")).strip().lower()
+        if contains_value and contains_value in normalized_url:
+            return True
+
+        equals_value = str(match_rule.get("url_equals", "")).strip().lower().rstrip("/")
+        if equals_value and normalized_url.rstrip("/") == equals_value:
+            return True
+
+        domain_value = str(match_rule.get("domain_equals", "")).strip().lower()
+        if domain_value:
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(normalized_url)
+                if parsed.netloc == domain_value:
+                    return True
+            except Exception:
+                return False
+
+        return False
+
+    def _apply_event_overrides(self, df: pd.DataFrame, url: str, parent_url: str) -> pd.DataFrame:
+        """
+        Apply config-driven field overrides for specific URL rules.
+        """
+        if df.empty or not self.event_overrides:
+            return df
+
+        normalized_candidates = {
+            self._normalize_for_compare(str(url or "")),
+            self._normalize_for_compare(str(parent_url or "")),
+        }
+        normalized_candidates.discard("")
+
+        if not normalized_candidates:
+            return df
+
+        for override in self.event_overrides:
+            match_rule = override.get("match", {})
+            set_fields = override.get("set", {})
+            rule_name = override.get("name", "unnamed_rule")
+
+            if not isinstance(set_fields, dict) or not set_fields:
+                continue
+
+            if any(self._url_matches_rule(candidate, match_rule) for candidate in normalized_candidates):
+                for col, value in set_fields.items():
+                    df[col] = value
+                logging.info(
+                    "_apply_event_overrides: Applied override '%s' to %d event row(s).",
+                    rule_name,
+                    len(df),
+                )
+
+        return df
 
     def get_db_connection(self):
         """
@@ -1180,6 +1280,7 @@ class DatabaseHandler():
         source = source if source else (url.split('.')[-2] if url and '.' in url and len(url.split('.')) >= 2 else 'unknown')
         df['source'] = df.get('source', pd.Series([''] * len(df))).replace('', source).fillna(source)
         df['url'] = df.get('url', pd.Series([''] * len(df))).replace('', url).fillna(url)
+        df = self._apply_event_overrides(df, url=url, parent_url=parent_url)
 
         self._convert_datetime_fields(df)
 

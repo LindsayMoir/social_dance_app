@@ -11,21 +11,6 @@ constants:
   delete_known_bad_urls: nuline, myglobaleventreports
   fb_base_url: https://www.facebook.com/search/events?q=
   fb_location_id: '&filters=eyJycF9ldmVudHNfbG9jYXRpb246MCI6IntcIm5hbWVcIjpcImZpbHRlcl9ldmVudHNfbG9jYXRpb25cIixcImFyZ3NcIjpcIjEwMzEzNTg3OTcyNzM4MlwifSJ9'
-  uvic_rueda_dict:
-    dance_style: cuban salsa, rueda, salsa
-    day_of_week: Wednesday
-    description: Weekly UVic cuban rueda salsa lesson, followed by a social dance.
-      This happens most Wednesdays. Usually outside of the Students Union Building
-      and sometimes inside at Vertigo. Please check and see if it is on this week.
-    end_time: '21:00'
-    event_name: UVic Salsa Rueda
-    event_type: class, social dance
-    location: Uvic Students Union Building, 3800 Finnerty Rd A101E, Victoria, BC V8P
-      5C2
-    source: Uvic Cuban Salsa Club
-    start_date: ''
-    start_time: '19:00'
-    url: https://www.facebook.com/groups/cubansalsaclub/
 crawling:
   depth_limit: 2
   headless: true
@@ -87,6 +72,39 @@ output:
   gs_search_results: output/gs_search_results.csv
   irrelevant_rows: output/irrelevant_rows.csv
   is_foreign: output/is_foreign.csv
+normalization:
+  event_overrides:
+  - name: debrhymer_shows_event_type
+    match:
+      url_contains: debrhymerband.com/shows
+    set:
+      event_type: social dance, live music
+  source_score_penalties:
+  - name: vlda_dedup_penalty
+    match:
+      source_equals: Victoria Latin Dance Association
+    penalty: 100
+  synthetic_events:
+  - name: uvic_rueda_weekly
+    enabled: true
+    event:
+      source: Uvic Cuban Salsa Club
+      dance_style: cuban salsa, rueda, salsa
+      url: https://www.facebook.com/groups/cubansalsaclub/
+      event_type: class, social dance
+      event_name: UVic Salsa Rueda
+      day_of_week: Wednesday
+      start_date: ''
+      end_date: ''
+      start_time: '19:00'
+      end_time: '21:00'
+      price: '0'
+      location: Uvic Students Union Building, 3800 Finnerty Rd A101E, Victoria, BC V8P 5C2
+      description: Weekly UVic cuban rueda salsa lesson, followed by a social dance. This happens most Wednesdays. Usually outside of the Students Union Building and sometimes inside at Vertigo. Please check and see if it is on this week.
+    recurrence:
+      type: weekly_weekday
+      weekday: Wednesday
+      include_today: true
 prompts:
   address:
     file: prompts/address_from_raw_page.txt

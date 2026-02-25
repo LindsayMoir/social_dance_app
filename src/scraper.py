@@ -367,7 +367,8 @@ class EventSpider(scrapy.Spider):
 
         if found_keywords:
             logging.info(f"def parse(): Found keywords for URL {url}: {found_keywords}")
-            prompt_type = 'default'
+            # Use URL-specific prompt mapping when available; LLMHandler falls back to default.
+            prompt_type = url
             llm_status = llm_handler.process_llm_response(url, parent_url, extracted_text, source, keywords, prompt_type)
             if llm_status:
                 # mark as relevant

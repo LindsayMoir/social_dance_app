@@ -50,6 +50,7 @@ class DeduplicationHandler:
         Initializes the DeduplicationHandler with configuration, database, and API connections.
         """
         self._load_config(config_path)
+        self.source_score_penalties = self._load_source_score_penalties()
         self._setup_logging()
         self.llm_handler = LLMHandler(config_path)
         self.db_handler = self.llm_handler.db_handler  # Use connected handler
@@ -78,6 +79,44 @@ class DeduplicationHandler:
         load_dotenv()
         self.db_conn_str = os.getenv("DATABASE_CONNECTION_STRING")
         self.engine = create_engine(self.db_conn_str)
+
+    def _load_source_score_penalties(self) -> List[Dict[str, Any]]:
+        """
+        Load optional source-penalty rules for dedup canonical scoring.
+
+        Expected config shape:
+            normalization:
+              source_score_penalties:
+                - match:
+                    source_equals: "Some Source"
+                  penalty: 25
+        """
+        try:
+            penalties = (
+                self.config
+                .get("normalization", {})
+                .get("source_score_penalties", [])
+            )
+            if not isinstance(penalties, list):
+                logging.warning("_load_source_score_penalties: Expected list, got %s", type(penalties).__name__)
+                return []
+            return [p for p in penalties if isinstance(p, dict)]
+        except Exception as e:
+            logging.warning("_load_source_score_penalties: Failed to load penalties: %s", e)
+            return []
+
+    @staticmethod
+    def _source_matches_rule(source: str, match_rule: Dict[str, Any]) -> bool:
+        if not source or not isinstance(match_rule, dict):
+            return False
+        source_norm = str(source).strip().lower()
+        equals_value = str(match_rule.get("source_equals", "")).strip().lower()
+        if equals_value and source_norm == equals_value:
+            return True
+        contains_value = str(match_rule.get("source_contains", "")).strip().lower()
+        if contains_value and contains_value in source_norm:
+            return True
+        return False
 
     def load_prompt(self, chunk):
         """
@@ -1137,8 +1176,8 @@ class DeduplicationHandler:
         'dance_style', 'event_type', 'start_time', and 'url' contribute fractional points if present.
         The length of the 'description' field also slightly increases the score.
 
-        Events from "Victoria Latin Dance Association" receive a significant penalty as their information
-        is often incorrect when copied from other sources.
+        Optional source penalties can be configured under normalization.source_score_penalties
+        and are applied here to deprioritize known noisy sources.
 
         Args:
             row (pd.Series): A pandas Series representing a single event row with expected fields.
@@ -1167,9 +1206,16 @@ class DeduplicationHandler:
 
         score += 0.01 * len(row['description']) if row['description'] else 0
 
-        # Deprioritize Victoria Latin Dance Association events as they often have incorrect information
-        if row.get('source') == 'Victoria Latin Dance Association':
-            score -= 100
+        source = row.get('source', '')
+        for rule in self.source_score_penalties:
+            match_rule = rule.get("match", {})
+            if self._source_matches_rule(source, match_rule):
+                try:
+                    penalty_value = float(rule.get("penalty", 0))
+                except (TypeError, ValueError):
+                    penalty_value = 0
+                if penalty_value:
+                    score -= penalty_value
 
         return score
 

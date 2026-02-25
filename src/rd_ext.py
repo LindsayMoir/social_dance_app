@@ -58,6 +58,39 @@ class ReadExtract:
         self.context = None
         self.page = None
         self.logged_in = False
+
+    def _next_weekday_date(self, weekday_name: str, include_today: bool = True) -> date:
+        """
+        Return the next date for the given weekday name.
+        """
+        weekday_map = {
+            "monday": 0,
+            "tuesday": 1,
+            "wednesday": 2,
+            "thursday": 3,
+            "friday": 4,
+            "saturday": 5,
+            "sunday": 6,
+        }
+        target = weekday_map.get(str(weekday_name).strip().lower())
+        if target is None:
+            raise ValueError(f"Unsupported weekday: {weekday_name}")
+
+        today = date.today()
+        days_ahead = (target - today.weekday() + 7) % 7
+        if days_ahead == 0 and not include_today:
+            days_ahead = 7
+        return today + timedelta(days=days_ahead)
+
+    def _resolve_synthetic_event_base(self, rule: dict) -> dict:
+        """
+        Resolve base synthetic event payload from an inline `event` block.
+        """
+        inline_event = rule.get("event")
+        if isinstance(inline_event, dict):
+            return inline_event.copy()
+
+        return {}
         
 
     def extract_text_with_playwright(self, url):
@@ -649,37 +682,76 @@ class ReadExtract:
 
 
 
+    def add_configured_synthetic_events(self):
+        """
+        Add synthetic events defined in config.normalization.synthetic_events.
+        """
+        rules = (
+            self.config
+            .get("normalization", {})
+            .get("synthetic_events", [])
+        )
+        if not isinstance(rules, list):
+            logging.warning("add_configured_synthetic_events(): Expected list, got %s", type(rules).__name__)
+            return
+
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            if not rule.get("enabled", True):
+                continue
+
+            recurrence = rule.get("recurrence", {})
+            if recurrence.get("type") != "weekly_weekday":
+                logging.warning(
+                    "add_configured_synthetic_events(): Unsupported recurrence type '%s' for rule '%s'",
+                    recurrence.get("type"),
+                    rule.get("name", "unnamed_rule"),
+                )
+                continue
+
+            event_dict = self._resolve_synthetic_event_base(rule)
+            if not event_dict:
+                logging.warning(
+                    "add_configured_synthetic_events(): Missing event payload for rule '%s'",
+                    rule.get("name", "unnamed_rule"),
+                )
+                continue
+
+            weekday_name = recurrence.get("weekday", "")
+            include_today = bool(recurrence.get("include_today", True))
+            try:
+                target_day = self._next_weekday_date(weekday_name, include_today=include_today)
+            except ValueError as e:
+                logging.warning(
+                    "add_configured_synthetic_events(): %s (rule '%s')",
+                    e,
+                    rule.get("name", "unnamed_rule"),
+                )
+                continue
+
+            event_dict['start_date'] = target_day.isoformat()
+            event_dict['end_date'] = event_dict['start_date']
+
+            df = pd.DataFrame([event_dict])
+            get_db_handler().write_events_to_db(
+                df,
+                url=event_dict.get('url', ''),
+                parent_url='',
+                source=event_dict.get('source', ''),
+                keywords=event_dict.get('dance_style', ''),
+            )
+            logging.info(
+                "add_configured_synthetic_events(): Added synthetic event '%s' for %s.",
+                rule.get("name", "unnamed_rule"),
+                target_day.isoformat(),
+            )
+
     def uvic_rueda(self):
         """
-        Reads the UVic Rueda event definition from config, updates the 'date'
-        to the next Wednesday (inclusive), and writes it to the DB.
+        Backward-compatible wrapper. Uses config-driven synthetic event rules.
         """
-        # 1. grab the dict
-        event_dict = config['constants']['uvic_rueda_dict']
-
-        # ─── compute next Wednesday (0=Mon, 1=Tue, 2=Wed … 6=Sun)
-        today = date.today()
-        days_ahead = (2 - today.weekday() + 7) % 7
-        next_wed = today + timedelta(days=days_ahead)
-
-        # 2. overwrite the date field in your dict
-        event_dict['start_date'] = next_wed.isoformat()   # e.g. "2025-05-14"
-        event_dict['end_date'] = event_dict['start_date']
-
-        # 2A Set the price
-        event_dict['price'] = '0'
-
-        # 3. build your one‑row DataFrame
-        df = pd.DataFrame([event_dict])
-
-        # 3. write to Postgres via db_handler
-        get_db_handler().write_events_to_db(df, 
-                                      url=event_dict['url'], 
-                                      parent_url = '',
-                                      source=event_dict['source'], 
-                                      keywords=event_dict['dance_style'])
-        # 4. log the action
-        logging.info(f"uvic_rueda(): Added UVic Rueda event for {next_wed.isoformat()} to DB.")
+        self.add_configured_synthetic_events()
 
 
     async def close(self):
@@ -749,8 +821,8 @@ if __name__ == "__main__":
     # Run the async function
     asyncio.run(process_all_urls())
 
-    # Add uvic wednesday rueda event. This event sometimes appears and then it dissapears. Lets just put it in.
-    read_extract.uvic_rueda()
+    # Add configured synthetic events that are intentionally injected by policy.
+    read_extract.add_configured_synthetic_events()
 
     # Count events and urls after rd_ext.py
     db_handler.count_events_urls_end(start_df, file_name)

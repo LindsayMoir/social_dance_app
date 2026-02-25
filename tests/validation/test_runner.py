@@ -345,14 +345,33 @@ class ValidationTestRunner:
         """
 
         if scraping_data.get('critical_failures'):
-            html += "<table><tr><th>URL</th><th>Source</th><th>Type</th><th>Failure Type</th><th>Recommendation</th></tr>"
+            html += (
+                "<table><tr>"
+                "<th>URL</th><th>Source</th><th>Type</th><th>Failure Type</th>"
+                "<th>Reason Code</th><th>Probable Cause</th>"
+                "<th>Last Attempt</th><th>Child Successes</th><th>Evidence</th><th>Recommendation</th>"
+                "</tr>"
+            )
             for failure in scraping_data['critical_failures'][:20]:  # Limit to 20
+                evidence_lines = failure.get('evidence') or []
+                if evidence_lines:
+                    evidence_html = "<br>".join(
+                        line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        for line in evidence_lines
+                    )
+                else:
+                    evidence_html = ""
                 html += f"""
                 <tr class="problematic">
                     <td>{failure['url'][:60]}...</td>
                     <td>{failure['source']}</td>
                     <td>{failure['importance']}</td>
                     <td>{failure['failure_type']}</td>
+                    <td>{failure.get('reason_code', '')}</td>
+                    <td>{failure.get('probable_cause', '')}</td>
+                    <td>{failure.get('last_attempt_time', '')}</td>
+                    <td>{failure.get('recent_relevant_child_count', '')}</td>
+                    <td style="font-size:0.85em;">{evidence_html}</td>
                     <td>{failure['recommendation']}</td>
                 </tr>
                 """

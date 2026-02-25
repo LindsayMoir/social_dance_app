@@ -16,7 +16,7 @@ from datetime import datetime
 import json
 import logging
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List
 import pandas as pd
 
 
@@ -58,6 +58,219 @@ class ScrapingValidator:
         self.edge_cases_file = self.scraping_config.get('edge_cases_file', 'data/other/edge_cases.csv')
         self.min_hit_ratio = self.scraping_config.get('min_hit_ratio', 0.50)
         self.min_attempts = self.scraping_config.get('min_attempts', 3)
+        self.max_log_evidence_lines = int(self.scraping_config.get('max_log_evidence_lines', 3))
+        self.log_evidence_window = int(self.scraping_config.get('log_evidence_window', 2))
+        self._log_files = self._resolve_log_files()
+
+    def _resolve_log_files(self) -> List[str]:
+        """Resolve existing log files used for failure evidence."""
+        configured_logs = self.config.get('logging', {})
+        candidates = [
+            configured_logs.get('scraper_log_file'),
+            configured_logs.get('log_file'),
+            'logs/fb_log.txt',
+            'logs/rd_ext_log.txt',
+            'logs/credential_validator_log.txt',
+            'logs/ebs_log.txt',
+            'logs/emails_log.txt',
+        ]
+        files: List[str] = []
+        for path in candidates:
+            if path and path not in files and os.path.exists(path):
+                files.append(path)
+        return files
+
+    def _normalize_link_variants(self, u: str) -> List[str]:
+        """Build URL variants for robust link matching."""
+        try:
+            from urllib.parse import urlsplit, urlunsplit
+            parts = urlsplit(u)
+            base = parts._replace(query='', fragment='')
+            path = base.path[:-1] if base.path.endswith('/') and base.path != '/' else base.path
+            base = base._replace(path=path)
+            variants = set()
+            variants.add(u)
+            variants.add(urlunsplit(base))
+            if not path.endswith('/') and path:
+                variants.add(urlunsplit(base._replace(path=path + '/')))
+            if base.scheme == 'https':
+                variants.add(urlunsplit(base._replace(scheme='http')))
+            elif base.scheme == 'http':
+                variants.add(urlunsplit(base._replace(scheme='https')))
+
+            expanded = set()
+            for v in variants:
+                expanded.add(v)
+                p = urlsplit(v)
+                if p.path and p.path != '/':
+                    if p.path.endswith('/'):
+                        expanded.add(urlunsplit(p._replace(path=p.path.rstrip('/'))))
+                    else:
+                        expanded.add(urlunsplit(p._replace(path=p.path + '/')))
+            return list(expanded)
+        except Exception:
+            return [u]
+
+    def _query_recent_url_rows(self, url_variants: List[str], window_days: int) -> List:
+        params = {"days": int(window_days)}
+        where_or = []
+        for i, v in enumerate(url_variants[:8]):
+            key = f"l{i}"
+            params[key] = v
+            where_or.append(f"link = :{key}")
+
+        where_clause = " OR ".join(where_or) if where_or else "link = :l0"
+        query = f"""
+            SELECT link, source, relevant, crawl_try, time_stamp, keywords
+            FROM urls
+            WHERE ({where_clause})
+              AND time_stamp >= NOW() - (:days * INTERVAL '1 day')
+            ORDER BY time_stamp DESC
+            LIMIT 5
+        """
+        return self.db_handler.execute_query(query, params)
+
+    def _query_recent_child_success_count(self, url_variants: List[str], window_days: int) -> int:
+        params = {"days": int(window_days)}
+        where_or = []
+        for i, v in enumerate(url_variants[:8]):
+            key = f"p{i}"
+            params[key] = v
+            where_or.append(f"parent_url = :{key}")
+        where_clause = " OR ".join(where_or) if where_or else "parent_url = :p0"
+        query = f"""
+            SELECT COUNT(*)
+            FROM urls
+            WHERE ({where_clause})
+              AND relevant = true
+              AND time_stamp >= NOW() - (:days * INTERVAL '1 day')
+        """
+        rows = self.db_handler.execute_query(query, params)
+        return int(rows[0][0]) if rows else 0
+
+    def _query_latest_overall_row(self, url_variants: List[str]):
+        params = {}
+        where_or = []
+        for i, v in enumerate(url_variants[:8]):
+            key = f"o{i}"
+            params[key] = v
+            where_or.append(f"link = :{key}")
+        where_clause = " OR ".join(where_or) if where_or else "link = :o0"
+        query = f"""
+            SELECT link, relevant, crawl_try, time_stamp, keywords
+            FROM urls
+            WHERE ({where_clause})
+            ORDER BY time_stamp DESC
+            LIMIT 1
+        """
+        rows = self.db_handler.execute_query(query, params)
+        return rows[0] if rows else None
+
+    def _build_failure_details(
+        self,
+        failure_type: str,
+        window_days: int,
+        result_rows: List,
+        child_success_count: int,
+        latest_overall_row,
+    ) -> Dict[str, object]:
+        relevants = [bool(r[2]) for r in result_rows] if result_rows else []
+        recent_true = int(sum(1 for v in relevants if v))
+        recent_false = int(sum(1 for v in relevants if not v))
+        consecutive_irrelevant = 0
+        for v in relevants:
+            if not v:
+                consecutive_irrelevant += 1
+            else:
+                break
+
+        reason_code = "unknown"
+        probable_cause = "Unknown"
+        if failure_type == "not_attempted":
+            reason_code = "no_recent_url_rows"
+            probable_cause = f"No matching urls rows in the last {window_days} days"
+            if latest_overall_row is not None:
+                reason_code = "not_seen_in_window_historical_exists"
+                probable_cause = "Historically seen, but not recorded in current validation window"
+        elif failure_type == "marked_irrelevant":
+            reason_code = "recent_irrelevant_threshold_reached"
+            probable_cause = "Recent attempts were irrelevant and crossed threshold"
+            if child_success_count > 0:
+                reason_code = "base_irrelevant_child_success_exists"
+                probable_cause = "Base URL looked irrelevant but child URLs succeeded"
+        elif failure_type == "multiple_retries":
+            reason_code = "retry_threshold_with_no_success"
+            probable_cause = "High retry count with no recent successful extraction"
+        elif failure_type == "error":
+            reason_code = "validator_exception"
+            probable_cause = "Exception during validation"
+
+        last_attempt_time = str(result_rows[0][4]) if result_rows and result_rows[0][4] else None
+        last_relevant_time = None
+        for row in result_rows:
+            if bool(row[2]):
+                last_relevant_time = str(row[4]) if row[4] else None
+                break
+
+        return {
+            'reason_code': reason_code,
+            'probable_cause': probable_cause,
+            'validation_window_days': int(window_days),
+            'recent_base_rows': int(len(result_rows)),
+            'recent_base_relevant_true': recent_true,
+            'recent_base_relevant_false': recent_false,
+            'recent_consecutive_irrelevant': consecutive_irrelevant,
+            'recent_relevant_child_count': int(child_success_count),
+            'last_attempt_time': last_attempt_time,
+            'last_relevant_time': last_relevant_time,
+            'latest_seen_time_overall': str(latest_overall_row[3]) if latest_overall_row and latest_overall_row[3] else None,
+            'latest_seen_relevant_overall': bool(latest_overall_row[1]) if latest_overall_row is not None else None,
+            'latest_seen_crawl_try_overall': int(latest_overall_row[2]) if latest_overall_row is not None and latest_overall_row[2] is not None else None,
+        }
+
+    def _collect_log_evidence(self, url: str) -> List[str]:
+        """Collect concise log evidence snippets for a URL."""
+        if not url or not self._log_files:
+            return []
+
+        snippets: List[str] = []
+        markers = (
+            "Failed to process LLM response",
+            "Both LLM providers failed",
+            "Request timed out",
+            "marked as irrelevant",
+            "marked as relevant",
+            "process_fb_url: no text",
+            "No day of the week found before 'More About Discussion'",
+            "extract_event_links(): Found",
+            "write_url_to_db(): appended URL",
+            "Skipping URL",
+        )
+
+        for log_path in self._log_files:
+            if len(snippets) >= self.max_log_evidence_lines:
+                break
+            try:
+                with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+                for idx, line in enumerate(lines):
+                    if url not in line:
+                        continue
+                    start = max(0, idx - self.log_evidence_window)
+                    end = min(len(lines), idx + self.log_evidence_window + 1)
+                    for j in range(start, end):
+                        candidate = lines[j].rstrip('\n')
+                        if url in candidate or any(m in candidate for m in markers):
+                            snippet = f"{log_path}:{j+1}: {candidate}"
+                            if snippet not in snippets:
+                                snippets.append(snippet)
+                                if len(snippets) >= self.max_log_evidence_lines:
+                                    break
+                    if len(snippets) >= self.max_log_evidence_lines:
+                        break
+            except Exception:
+                continue
+        return snippets
 
     def classify_important_urls(self) -> pd.DataFrame:
         """
@@ -193,46 +406,9 @@ class ScrapingValidator:
 
         failures = []
 
-        def _normalize_link_variants(u: str) -> list:
-            try:
-                from urllib.parse import urlsplit, urlunsplit
-                parts = urlsplit(u)
-                # strip query and fragment
-                base = parts._replace(query='', fragment='')
-                # remove trailing slash from path (except root)
-                path = base.path[:-1] if base.path.endswith('/') and base.path != '/' else base.path
-                base = base._replace(path=path)
-                variants = set()
-                # original
-                variants.add(u)
-                # no query/fragment
-                variants.add(urlunsplit(base))
-                # ensure trailing slash variant
-                if not path.endswith('/') and path:
-                    variants.add(urlunsplit(base._replace(path=path + '/')))
-                # protocol swap http<->https
-                if base.scheme == 'https':
-                    variants.add(urlunsplit(base._replace(scheme='http')))
-                elif base.scheme == 'http':
-                    variants.add(urlunsplit(base._replace(scheme='https')))
-                # Keep exact trailing-slash variants because urls.link stores both forms.
-                # Also add opposite slash form for non-root paths to maximize matching.
-                expanded = set()
-                for v in variants:
-                    expanded.add(v)
-                    p = urlsplit(v)
-                    if p.path and p.path != '/':
-                        if p.path.endswith('/'):
-                            expanded.add(urlunsplit(p._replace(path=p.path.rstrip('/'))))
-                        else:
-                            expanded.add(urlunsplit(p._replace(path=p.path + '/')))
-                return list(expanded)
-            except Exception:
-                return [u]
-
         for idx, url_row in important_urls_df.iterrows():
             url = url_row['url']
-            url_variants = _normalize_link_variants(url)
+            url_variants = self._normalize_link_variants(url)
 
             try:
                 # Choose window and thresholds based on importance
@@ -243,47 +419,9 @@ class ScrapingValidator:
                     window_days = int(self.days_back)
                     fail_thresh = int(self.consecutive_failures_threshold)
 
-                # Build dynamic SQL with variants
-                placeholders = []
-                params = {"days": window_days}
-                where_or = []
-                for i, v in enumerate(url_variants[:8]):
-                    key = f"l{i}"
-                    placeholders.append(key)
-                    params[key] = v
-                    where_or.append(f"link = :{key}")
-
-                where_clause = " OR ".join(where_or) if where_or else "link = :l0"
-                query = f"""
-                    SELECT link, source, relevant, crawl_try, time_stamp, keywords
-                    FROM urls
-                    WHERE ({where_clause})
-                      AND time_stamp >= NOW() - (:days * INTERVAL '1 day')
-                    ORDER BY time_stamp DESC
-                    LIMIT 5
-                """
-
-                result = self.db_handler.execute_query(query, params)
-
-                # Count recent successful child URL attempts under this base URL.
-                # This avoids false negatives where base URL parsing fails but
-                # child event pages were successfully extracted and marked relevant.
-                child_where_or = []
-                child_params = {"days": window_days}
-                for i, v in enumerate(url_variants[:8]):
-                    key = f"p{i}"
-                    child_params[key] = v
-                    child_where_or.append(f"parent_url = :{key}")
-                child_where_clause = " OR ".join(child_where_or) if child_where_or else "parent_url = :p0"
-                child_query = f"""
-                    SELECT COUNT(*)
-                    FROM urls
-                    WHERE ({child_where_clause})
-                      AND relevant = true
-                      AND time_stamp >= NOW() - (:days * INTERVAL '1 day')
-                """
-                child_result = self.db_handler.execute_query(child_query, child_params)
-                child_success_count = int(child_result[0][0]) if child_result else 0
+                result = self._query_recent_url_rows(url_variants, window_days)
+                child_success_count = self._query_recent_child_success_count(url_variants, window_days)
+                latest_overall_row = self._query_latest_overall_row(url_variants)
 
                 if not result:
                     if child_success_count > 0:
@@ -300,7 +438,14 @@ class ScrapingValidator:
                         'importance': url_row['importance_type'],
                         'crawl_attempts': 0,
                         'keywords_found': None,
-                        'recommendation': f'URL not in recent scraping run (last {window_days} days) - verify URL lists and normalization'
+                        'recommendation': f'URL not in recent scraping run (last {window_days} days) - verify URL lists and normalization',
+                        **self._build_failure_details(
+                            failure_type='not_attempted',
+                            window_days=window_days,
+                            result_rows=result,
+                            child_success_count=child_success_count,
+                            latest_overall_row=latest_overall_row,
+                        ),
                     })
                     continue
 
@@ -334,7 +479,14 @@ class ScrapingValidator:
                         'importance': url_row['importance_type'],
                         'crawl_attempts': crawl_try_vals[0] if crawl_try_vals else None,
                         'keywords_found': keywords_recent,
-                        'recommendation': 'Repeated recent attempts found page irrelevant - check content/keywords; whitelisted URLs use stricter criteria'
+                        'recommendation': 'Repeated recent attempts found page irrelevant - check content/keywords; whitelisted URLs use stricter criteria',
+                        **self._build_failure_details(
+                            failure_type='marked_irrelevant',
+                            window_days=window_days,
+                            result_rows=result,
+                            child_success_count=child_success_count,
+                            latest_overall_row=latest_overall_row,
+                        ),
                     })
                     continue
 
@@ -347,7 +499,14 @@ class ScrapingValidator:
                         'importance': url_row['importance_type'],
                         'crawl_attempts': latest_crawl_try,
                         'keywords_found': keywords_recent,
-                        'recommendation': 'High retry count with no recent success - check anti-scraping measures or timeouts'
+                        'recommendation': 'High retry count with no recent success - check anti-scraping measures or timeouts',
+                        **self._build_failure_details(
+                            failure_type='multiple_retries',
+                            window_days=window_days,
+                            result_rows=result,
+                            child_success_count=child_success_count,
+                            latest_overall_row=latest_overall_row,
+                        ),
                     })
                     continue
 
@@ -366,7 +525,14 @@ class ScrapingValidator:
                     'importance': url_row['importance_type'],
                     'crawl_attempts': None,
                     'keywords_found': None,
-                    'recommendation': f'Error checking URL: {str(e)}'
+                    'recommendation': f'Error checking URL: {str(e)}',
+                    **self._build_failure_details(
+                        failure_type='error',
+                        window_days=self.whitelist_days_back if url_row['importance_type'] == 'whitelist' else self.days_back,
+                        result_rows=[],
+                        child_success_count=0,
+                        latest_overall_row=None,
+                    ),
                 })
 
         if failures:
@@ -562,7 +728,10 @@ class ScrapingValidator:
             # Critical failures (whitelist + edge_case)
             critical_df = failures_df[failures_df['importance'].isin(['whitelist', 'edge_case'])]
             if not critical_df.empty:
-                report['critical_failures'] = critical_df.to_dict('records')
+                critical_records = critical_df.to_dict('records')
+                for record in critical_records:
+                    record['evidence'] = self._collect_log_evidence(record.get('url', ''))
+                report['critical_failures'] = critical_records
 
             # Performance degradation (high_performer)
             degradation_df = failures_df[failures_df['importance'] == 'high_performer']
