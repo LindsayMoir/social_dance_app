@@ -1092,8 +1092,14 @@ class FacebookEventScraper():
                     logging.info(f"def eventbrite_search(): Skipping URL {base_url} based on historical relevancy.")
                     continue
 
+                # Track whether this base URL yields events either directly or via /events/.
+                base_events_before = self.events_written_to_db
+                base_yielded_events = False
+
                 # Process the base URL itself (writes any events found on that exact page)
                 self.process_fb_url(base_url, parent_url, source, keywords)
+                if self.events_written_to_db > base_events_before:
+                    base_yielded_events = True
                 self.urls_visited.add(base_url)
                 processed_base_urls.add(base_url)
 
@@ -1136,7 +1142,10 @@ class FacebookEventScraper():
                         logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
                         continue
 
+                    event_events_before = self.events_written_to_db
                     self.process_fb_url(event_url, base_url, source, keywords)
+                    if self.events_written_to_db > event_events_before:
+                        base_yielded_events = True
                     self.urls_visited.add(event_url)
 
                     # Add or update checkpoint row
@@ -1171,6 +1180,15 @@ class FacebookEventScraper():
                     logging.info(f"def driver_fb_urls(): Events_scraped flag set for base URL: {base_url}")
                 else:
                     logging.info(f"def driver_fb_urls(): Skipping checkpoint write on Render")
+
+                # If any downstream event was yielded, persist an explicit relevant=True
+                # row for the base URL so validation reflects actual extraction success.
+                if base_yielded_events:
+                    db_handler.write_url_to_db([base_url, parent_url, source, keywords, True, 1, datetime.now()])
+                    logging.info(
+                        "def driver_fb_urls(): Base URL marked relevant due to yielded events: %s",
+                        base_url,
+                    )
 
         else:
             logging.warning("def driver_fb_urls(): No Facebook URLs returned from the database.")

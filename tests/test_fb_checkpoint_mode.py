@@ -2,7 +2,9 @@ import sys
 
 sys.path.insert(0, "src")
 
+import fb as fb_module
 from fb import should_use_fb_checkpoint
+from fb import FacebookEventScraper
 from fb import canonicalize_facebook_url, is_facebook_login_redirect, is_non_content_facebook_url
 from fb import sanitize_facebook_seed_urls
 from fb import classify_facebook_access_state
@@ -99,3 +101,102 @@ def test_classify_facebook_access_state_does_not_false_positive_on_generic_login
         "Some footer text saying log in to facebook to comment",
     )
     assert state == "ok"
+
+
+def test_driver_fb_urls_marks_base_relevant_when_child_events_yield(monkeypatch):
+    class DummyDB:
+        def __init__(self):
+            self.conn = object()
+            self.rows = []
+
+        def should_process_url(self, _url):
+            return True
+
+        def write_url_to_db(self, row):
+            self.rows.append(row)
+
+    dummy_db = DummyDB()
+    monkeypatch.setattr(fb_module, "db_handler", dummy_db, raising=False)
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setattr(
+        fb_module.pd,
+        "read_sql",
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {
+                    "link": "https://www.facebook.com/groups/1634269246863069/",
+                    "parent_url": "",
+                    "source": "Victoria Kizomba Lovers Group",
+                    "keywords": "kizomba",
+                }
+            ]
+        ),
+    )
+
+    scraper = FacebookEventScraper.__new__(FacebookEventScraper)
+    scraper.config = {"crawling": {"urls_run_limit": 10}, "checkpoint": {"fb_urls_write_every": 10}}
+    scraper.urls_visited = set()
+    scraper.events_written_to_db = 0
+    scraper._ensure_authenticated_or_raise = lambda: None
+    scraper.normalize_facebook_url = lambda u: u
+    scraper.extract_event_links = lambda _u: ["https://www.facebook.com/events/1018836737121988/"]
+
+    def process_fb_url(url, _parent_url, _source, _keywords):
+        if "/events/" in url:
+            scraper.events_written_to_db += 1
+
+    scraper.process_fb_url = process_fb_url
+
+    scraper.driver_fb_urls()
+
+    assert any(
+        row[0] == "https://www.facebook.com/groups/1634269246863069/" and row[4] is True
+        for row in dummy_db.rows
+    )
+
+
+def test_driver_fb_urls_does_not_mark_base_relevant_when_no_events_yield(monkeypatch):
+    class DummyDB:
+        def __init__(self):
+            self.conn = object()
+            self.rows = []
+
+        def should_process_url(self, _url):
+            return True
+
+        def write_url_to_db(self, row):
+            self.rows.append(row)
+
+    dummy_db = DummyDB()
+    monkeypatch.setattr(fb_module, "db_handler", dummy_db, raising=False)
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setattr(
+        fb_module.pd,
+        "read_sql",
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {
+                    "link": "https://www.facebook.com/groups/1634269246863069/",
+                    "parent_url": "",
+                    "source": "Victoria Kizomba Lovers Group",
+                    "keywords": "kizomba",
+                }
+            ]
+        ),
+    )
+
+    scraper = FacebookEventScraper.__new__(FacebookEventScraper)
+    scraper.config = {"crawling": {"urls_run_limit": 10}, "checkpoint": {"fb_urls_write_every": 10}}
+    scraper.urls_visited = set()
+    scraper.events_written_to_db = 0
+    scraper._ensure_authenticated_or_raise = lambda: None
+    scraper.normalize_facebook_url = lambda u: u
+    scraper.extract_event_links = lambda _u: []
+    scraper.process_fb_url = lambda *_args, **_kwargs: None
+
+    scraper.driver_fb_urls()
+
+    assert not any(
+        row[0] == "https://www.facebook.com/groups/1634269246863069/" and row[4] is True
+        for row in dummy_db.rows
+    )
