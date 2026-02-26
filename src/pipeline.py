@@ -1541,6 +1541,39 @@ def send_text_message(message: str):
     logger.info(f"def send_text_message(): Sending text message: {message}")
     # TODO: Integrate with an SMS API like Twilio
 
+
+# ------------------------
+# TASKS FOR LLM MODEL VALIDATION STEP
+# ------------------------
+@task
+def run_validate_llm_models():
+    """
+    Resolve provider model names at startup so model deprecations fail fast.
+    """
+    try:
+        from llm import LLMHandler
+        handler = LLMHandler(config_path='config/config.yaml')
+        resolved = handler.resolve_models_for_startup()
+        logger.info("run_validate_llm_models(): Resolved models: %s", resolved)
+        unresolved = {k: v for k, v in resolved.items() if str(v).startswith("unresolved:")}
+        if unresolved:
+            logger.warning("run_validate_llm_models(): Some providers unresolved: %s", unresolved)
+        return resolved
+    except Exception as e:
+        logger.error("run_validate_llm_models(): failed: %s", e)
+        raise
+
+
+@flow(name="Validate LLM Models Step")
+def validate_llm_models_step():
+    original_config = backup_and_update_config("validate_llm_models", updates=COMMON_CONFIG_UPDATES)
+    write_run_config.submit("validate_llm_models", original_config)
+    try:
+        run_validate_llm_models()
+        return True
+    finally:
+        restore_config(original_config, "validate_llm_models")
+
 # ------------------------
 # PIPELINE EXECUTION
 # ------------------------
@@ -1551,6 +1584,7 @@ PIPELINE_STEPS = [
     ("sync_address_sequence", sync_address_sequence),
     ("emails", emails_step),
     ("gs", gs_step),
+    ("validate_llm_models", validate_llm_models_step),
     ("rd_ext", rd_ext_step),
     ("ebs", ebs_step),
     ("scraper", scraper_step),

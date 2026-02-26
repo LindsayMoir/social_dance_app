@@ -74,9 +74,32 @@ llm:
   - mistral
   fallback_enabled: true
   gemini_model: gemini-2.5-flash
+  gemini_model_candidates:
+  - gemini-2.5-flash
+  - gemini-flash-latest
   gemini_timeout_seconds: 60
+  mistral_model_candidates:
+  - mistral-large-2512
+  - mistral-large-latest
   mistral_model: mistral-large-2512
+  model_alias: default_fast
+  model_candidates:
+    gemini:
+      default_fast:
+      - gemini-2.5-flash
+      - gemini-flash-latest
+    mistral:
+      default_fast:
+      - mistral-large-2512
+      - mistral-large-latest
+    openai:
+      default_fast:
+      - gpt-5-mini
+      - gpt-4.1-mini
   openai_model: gpt-5-mini
+  openai_model_candidates:
+  - gpt-5-mini
+  - gpt-4.1-mini
   provider: round_robin
   provider_rotation_enabled: true
   provider_rotation_order:

@@ -131,6 +131,7 @@ class LLMHandler:
         self.gemini_timeout_seconds = int(llm_config.get("gemini_timeout_seconds", 60) or 60)
         self.provider_rotation_enabled = bool(llm_config.get("provider_rotation_enabled", False))
         self.provider_rotation_index = 0
+        self._resolved_provider_models: dict[str, str] = {}
 
         # Get the keywords      
         self.keywords_list = self.get_keywords()
@@ -521,6 +522,139 @@ class LLMHandler:
             return self._next_round_robin_provider(for_tools=for_tools)
         return configured
 
+    def _provider_model_candidates(self, provider: str) -> list[str]:
+        """
+        Return candidate model names for a provider in priority order.
+        Supports alias-based mapping and direct provider lists.
+        """
+        llm_cfg = self.config.get("llm", {})
+        provider = (provider or "").lower().strip()
+
+        alias = str(llm_cfg.get("model_alias", "default_fast")).strip()
+        alias_map = llm_cfg.get("model_candidates", {})
+        if isinstance(alias_map, dict):
+            by_provider = alias_map.get(provider, {})
+            if isinstance(by_provider, dict):
+                alias_candidates = by_provider.get(alias, [])
+                if isinstance(alias_candidates, list) and alias_candidates:
+                    return [str(m).strip() for m in alias_candidates if str(m).strip()]
+
+        provider_list_key = f"{provider}_model_candidates"
+        provider_candidates = llm_cfg.get(provider_list_key, [])
+        if isinstance(provider_candidates, list) and provider_candidates:
+            return [str(m).strip() for m in provider_candidates if str(m).strip()]
+
+        single_model_map = {
+            "openai": llm_cfg.get("openai_model"),
+            "mistral": llm_cfg.get("mistral_model"),
+            "gemini": llm_cfg.get("gemini_model"),
+        }
+        single = str(single_model_map.get(provider, "") or "").strip()
+        return [single] if single else []
+
+    @staticmethod
+    def _normalize_model_id(model_id: str) -> str:
+        """
+        Normalize provider model ids for comparison.
+        """
+        value = str(model_id or "").strip()
+        if value.startswith("models/"):
+            return value[len("models/"):]
+        return value
+
+    def _list_provider_models(self, provider: str) -> set[str] | None:
+        """
+        Best-effort listing of available models for a provider.
+        Returns None if listing is unavailable/fails.
+        """
+        provider = (provider or "").lower().strip()
+        try:
+            if provider == "openai":
+                resp = self.openai_client.models.list()
+                return {self._normalize_model_id(getattr(m, "id", "")) for m in (resp.data or []) if getattr(m, "id", None)}
+
+            if provider == "gemini":
+                if not self.gemini_token:
+                    return None
+                endpoint = "https://generativelanguage.googleapis.com/v1beta/models"
+                response = requests.get(endpoint, headers={"x-goog-api-key": self.gemini_token}, timeout=self.gemini_timeout_seconds)
+                response.raise_for_status()
+                data = response.json()
+                models = data.get("models", []) or []
+                return {self._normalize_model_id(m.get("name", "")) for m in models if m.get("name")}
+
+            if provider == "mistral":
+                models_api = getattr(self.mistral_client, "models", None)
+                list_fn = getattr(models_api, "list", None) if models_api else None
+                if not callable(list_fn):
+                    return None
+                resp = list_fn()
+                data = getattr(resp, "data", None) or []
+                output: set[str] = set()
+                for model in data:
+                    model_id = getattr(model, "id", None) or getattr(model, "name", None)
+                    if model_id:
+                        output.add(self._normalize_model_id(model_id))
+                return output or None
+        except Exception as e:
+            logging.warning("_list_provider_models(): could not list %s models: %s", provider, e)
+            return None
+        return None
+
+    def _resolve_model_for_provider(self, provider: str, force_refresh: bool = False) -> str:
+        """
+        Resolve and cache a working model name from configured candidates.
+        """
+        provider = (provider or "").lower().strip()
+        if not force_refresh and provider in self._resolved_provider_models:
+            return self._resolved_provider_models[provider]
+
+        candidates = self._provider_model_candidates(provider)
+        if not candidates:
+            raise ValueError(f"No model candidates configured for provider '{provider}'.")
+
+        available = self._list_provider_models(provider)
+        chosen = None
+        if available:
+            normalized_available = {self._normalize_model_id(model) for model in available}
+            for candidate in candidates:
+                if self._normalize_model_id(candidate) in normalized_available:
+                    chosen = candidate
+                    break
+        if chosen is None:
+            chosen = candidates[0]
+
+        self._resolved_provider_models[provider] = chosen
+        logging.info("_resolve_model_for_provider(): provider=%s resolved_model=%s", provider, chosen)
+        return chosen
+
+    @staticmethod
+    def _is_model_not_found_error(error: Exception) -> bool:
+        """
+        Detect provider errors that indicate invalid/deprecated model name.
+        """
+        msg = str(error).lower()
+        patterns = (
+            "model not found",
+            "unknown model",
+            "does not exist",
+            "no longer available",
+            "404",
+        )
+        return any(token in msg for token in patterns)
+
+    def resolve_models_for_startup(self) -> dict[str, str]:
+        """
+        Resolve model names for known providers for startup diagnostics.
+        """
+        resolved = {}
+        for provider in ("openai", "mistral", "gemini"):
+            try:
+                resolved[provider] = self._resolve_model_for_provider(provider, force_refresh=True)
+            except Exception as e:
+                resolved[provider] = f"unresolved: {e}"
+        return resolved
+
     def _query_provider_once(self, provider: str, prompt: str, schema_type: str | None):
         """
         Execute one provider query attempt and return text or None.
@@ -529,9 +663,16 @@ class LLMHandler:
         response = None
 
         if provider == "openai":
-            model = self.config['llm']['openai_model']
+            model = self._resolve_model_for_provider("openai")
             logging.info("query_llm(): Querying OpenAI")
-            response = self.query_openai(prompt, model, schema_type=schema_type)
+            try:
+                response = self.query_openai(prompt, model, schema_type=schema_type)
+            except Exception as e:
+                if self._is_model_not_found_error(e):
+                    model = self._resolve_model_for_provider("openai", force_refresh=True)
+                    response = self.query_openai(prompt, model, schema_type=schema_type)
+                else:
+                    raise
             if response:
                 logging.info("query_llm(): OpenAI response received.")
             else:
@@ -543,9 +684,16 @@ class LLMHandler:
                 logging.warning("query_llm(): Skipping Mistral query due to active cooldown.")
                 return None
             try:
-                model = self.config['llm']['mistral_model']
+                model = self._resolve_model_for_provider("mistral")
                 logging.info("query_llm(): Querying Mistral")
-                response = self.query_mistral(prompt, model, schema_type=schema_type)
+                try:
+                    response = self.query_mistral(prompt, model, schema_type=schema_type)
+                except Exception as e:
+                    if self._is_model_not_found_error(e):
+                        model = self._resolve_model_for_provider("mistral", force_refresh=True)
+                        response = self.query_mistral(prompt, model, schema_type=schema_type)
+                    else:
+                        raise
                 self._record_mistral_result()
                 if response:
                     logging.info("query_llm(): Mistral response received.")
@@ -557,9 +705,16 @@ class LLMHandler:
                 raise
 
         if provider == "gemini":
-            model = self.config.get("llm", {}).get("gemini_model", "gemini-2.0-flash")
+            model = self._resolve_model_for_provider("gemini")
             logging.info("query_llm(): Querying Gemini")
-            response = self.query_gemini(prompt, model, schema_type=schema_type)
+            try:
+                response = self.query_gemini(prompt, model, schema_type=schema_type)
+            except Exception as e:
+                if self._is_model_not_found_error(e):
+                    model = self._resolve_model_for_provider("gemini", force_refresh=True)
+                    response = self.query_gemini(prompt, model, schema_type=schema_type)
+                else:
+                    raise
             if response:
                 logging.info("query_llm(): Gemini response received.")
             else:
@@ -795,14 +950,25 @@ class LLMHandler:
     def _query_mistral_with_tools(self, messages, tools):
         """Query Mistral with tool calling support."""
         try:
-            model = self.config['llm']['mistral_model']
+            model = self._resolve_model_for_provider("mistral")
             logging.info(f"_query_mistral_with_tools(): Querying Mistral model {model}")
 
-            response = self.mistral_client.chat.complete(
-                model=model,
-                messages=messages,
-                tools=tools
-            )
+            try:
+                response = self.mistral_client.chat.complete(
+                    model=model,
+                    messages=messages,
+                    tools=tools
+                )
+            except Exception as e:
+                if self._is_model_not_found_error(e):
+                    model = self._resolve_model_for_provider("mistral", force_refresh=True)
+                    response = self.mistral_client.chat.complete(
+                        model=model,
+                        messages=messages,
+                        tools=tools
+                    )
+                else:
+                    raise
 
             if not response or not response.choices:
                 return None
@@ -837,14 +1003,25 @@ class LLMHandler:
     def _query_openai_with_tools(self, messages, tools):
         """Query OpenAI with tool calling support."""
         try:
-            model = self.config['llm']['openai_model']
+            model = self._resolve_model_for_provider("openai")
             logging.info(f"_query_openai_with_tools(): Querying OpenAI model {model}")
 
-            response = self.openai_client.chat.completions.create(
-                model=model,
-                messages=messages,
-                tools=tools
-            )
+            try:
+                response = self.openai_client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=tools
+                )
+            except Exception as e:
+                if self._is_model_not_found_error(e):
+                    model = self._resolve_model_for_provider("openai", force_refresh=True)
+                    response = self.openai_client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        tools=tools
+                    )
+                else:
+                    raise
 
             if not response or not response.choices:
                 return None
@@ -957,7 +1134,7 @@ class LLMHandler:
                 logging.error("_query_gemini_with_tools(): GEMINI_API_KEY is not configured.")
                 return None
 
-            model = self.config.get("llm", {}).get("gemini_model", "gemini-1.5-flash")
+            model = self._resolve_model_for_provider("gemini")
             endpoint = (
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
                 f"{model}:generateContent"
@@ -973,7 +1150,24 @@ class LLMHandler:
                 json=payload,
                 timeout=self.gemini_timeout_seconds,
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except Exception as e:
+                if self._is_model_not_found_error(e):
+                    model = self._resolve_model_for_provider("gemini", force_refresh=True)
+                    endpoint = (
+                        f"https://generativelanguage.googleapis.com/v1beta/models/"
+                        f"{model}:generateContent"
+                    )
+                    response = requests.post(
+                        endpoint,
+                        headers=headers,
+                        json=payload,
+                        timeout=self.gemini_timeout_seconds,
+                    )
+                    response.raise_for_status()
+                else:
+                    raise
             data = response.json()
             candidates = data.get("candidates", [])
             if not candidates:
