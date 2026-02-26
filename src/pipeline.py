@@ -3,6 +3,7 @@
 import argparse
 import copy
 import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import logging
 import os
@@ -70,6 +71,26 @@ COMMON_CONFIG_UPDATES = {
     },
     "llm": {"provider": "openai", "spend_money": True, "fallback_enabled": False}
 }
+
+PARALLEL_CRAWL_CONFIG_UPDATES = copy.deepcopy(COMMON_CONFIG_UPDATES)
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["urls_run_limit"] = 500
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["max_website_urls"] = 10
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_download_timeout_seconds"] = 35
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_playwright_timeout_ms"] = 35000
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_retry_times"] = 1
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_post_load_wait_ms"] = 1000
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_concurrent_requests"] = 16
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_concurrent_requests_per_domain"] = 8
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_base_urls_limit"] = 180
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_event_links_per_base_limit"] = 20
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_post_nav_wait_ms"] = 1800
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_post_expand_wait_ms"] = 900
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_final_wait_ms"] = 700
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_failures_before_cooldown"] = 2
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_cooldown_base_seconds"] = 300
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_cooldown_max_seconds"] = 1800
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_state_max_scopes"] = 800
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_state_ttl_days"] = 45
 
 # ------------------------
 # HELPER TASKS: Backup and Restore Config
@@ -741,6 +762,54 @@ def fb_step():
     post_process_fb()
     restore_config(original_config, "fb")
     return True
+
+
+@task
+def run_parallel_crawlers_script(script_path: str) -> str:
+    """
+    Execute a crawler script in a subprocess.
+    Returns a success marker string or raises on failure.
+    """
+    logger.info(f"run_parallel_crawlers_script(): starting {script_path}")
+    try:
+        subprocess.run([sys.executable, script_path], check=True)
+        logger.info(f"run_parallel_crawlers_script(): completed {script_path}")
+        return f"{script_path}:ok"
+    except subprocess.CalledProcessError as e:
+        error_message = f"{script_path} failed with return code: {e.returncode}"
+        logger.error(f"run_parallel_crawlers_script(): {error_message}")
+        raise Exception(error_message)
+
+
+@flow(name="Parallel Crawlers Step")
+def parallel_crawlers_step():
+    """
+    Run ebs.py, scraper.py, and fb.py concurrently using one shared config snapshot.
+    This avoids config race conditions from each individual step wrapper.
+    """
+    scripts = ["src/ebs.py", "src/scraper.py", "src/fb.py"]
+    original_config = backup_and_update_config("parallel_crawlers", updates=PARALLEL_CRAWL_CONFIG_UPDATES)
+    write_run_config.submit("parallel_crawlers", original_config)
+
+    failures: list[str] = []
+    try:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            future_to_script = {
+                executor.submit(run_parallel_crawlers_script.fn, script): script
+                for script in scripts
+            }
+            for future in as_completed(future_to_script):
+                script = future_to_script[future]
+                try:
+                    _ = future.result()
+                except Exception as e:
+                    failures.append(f"{script}: {e}")
+
+        if failures:
+            raise Exception("parallel_crawlers_step failures: " + "; ".join(failures))
+        return True
+    finally:
+        restore_config(original_config, "parallel_crawlers")
 
 # ------------------------
 # TASKS FOR IMAGES.PY STEP
@@ -1497,7 +1566,7 @@ def list_available_steps():
     for i, (name, _) in enumerate(PIPELINE_STEPS, start=1):
         print(f" {i}. {name}")
 
-def run_pipeline(start_step: str, end_step: str = None):
+def run_pipeline(start_step: str, end_step: str = None, parallel_crawlers: bool = False):
     step_names = [name for name, _ in PIPELINE_STEPS]
     if start_step not in step_names:
         print(f"Error: start step '{start_step}' not found.")
@@ -1510,7 +1579,44 @@ def run_pipeline(start_step: str, end_step: str = None):
     if start_idx > end_idx:
         print("Error: start step occurs after end step.")
         sys.exit(1)
+    selected_names = [name for name, _ in PIPELINE_STEPS[start_idx:end_idx + 1]]
+    skip_steps: set[str] = set()
+
     for name, step_flow in PIPELINE_STEPS[start_idx:end_idx+1]:
+        if name in skip_steps:
+            logger.info(f"run_pipeline(): Skipping step '{name}' because it was executed in parallel block.")
+            continue
+
+        if (
+            parallel_crawlers
+            and name == "ebs"
+            and {"ebs", "scraper", "fb"}.issubset(set(selected_names))
+        ):
+            print("Running parallel crawler group: ebs + scraper + fb")
+            retry_count = 0
+            while retry_count < 3:
+                try:
+                    parallel_crawlers_step()
+                    skip_steps.update({"scraper", "fb"})
+                    break
+                except Exception as e:
+                    if "database is locked" in str(e).lower():
+                        logger.error(
+                            "parallel crawler group encountered database lock, retrying in 5 seconds. Attempt %d of 3.",
+                            retry_count + 1,
+                        )
+                        time.sleep(5)
+                        retry_count += 1
+                    else:
+                        import traceback
+                        logger.error(f"❌ Parallel crawler group failed: {str(e)}")
+                        logger.error(traceback.format_exc())
+                        sys.exit(1)
+            else:
+                logger.error("Parallel crawler group failed after 3 retries due to database locked errors.")
+                sys.exit(1)
+            continue
+
         print(f"Running step: {name}")
         retry_count = 0
         while retry_count < 3:
@@ -1610,6 +1716,8 @@ def main():
                         help="Starting step number (required for mode 3 and 4).")
     parser.add_argument('--end_step', type=int,
                         help="Ending step number (required for mode 4).")
+    parser.add_argument('--parallel_crawlers', action='store_true',
+                        help="Run ebs.py, scraper.py, and fb.py in parallel when the selected range includes all three.")
     args = parser.parse_args()
     if args.mode:
         mode = args.mode
@@ -1638,7 +1746,7 @@ def main():
         start = PIPELINE_STEPS[start_index][0]
         end = PIPELINE_STEPS[end_index][0]
         print(f"Pipeline will run from '{start}' to '{end}'.")
-        run_pipeline(start, end)
+        run_pipeline(start, end, parallel_crawlers=args.parallel_crawlers)
     else:
         prompt_user()
     
