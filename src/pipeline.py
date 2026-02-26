@@ -1580,11 +1580,11 @@ def validate_llm_models_step():
 PIPELINE_STEPS = [
     ("copy_log_files", copy_log_files),
     ("credential_validation", credential_validation_step),
+    ("validate_llm_models", validate_llm_models_step),
     ("copy_drop_create_events", copy_drop_create_events),
     ("sync_address_sequence", sync_address_sequence),
     ("emails", emails_step),
     ("gs", gs_step),
-    ("validate_llm_models", validate_llm_models_step),
     ("rd_ext", rd_ext_step),
     ("ebs", ebs_step),
     ("scraper", scraper_step),
