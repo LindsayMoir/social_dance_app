@@ -1312,6 +1312,7 @@ class LLMHandler:
             f"{model}:generateContent"
         )
 
+        headers = {"x-goog-api-key": self.gemini_token}
         generation_config = {}
         if schema_type:
             generation_config["responseMimeType"] = "application/json"
@@ -1326,14 +1327,32 @@ class LLMHandler:
         if generation_config:
             payload["generationConfig"] = generation_config
 
-        headers = {"x-goog-api-key": self.gemini_token}
         response = requests.post(
             endpoint,
             headers=headers,
             json=payload,
             timeout=self.gemini_timeout_seconds,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            # Gemini can reject some JSON schemas with 400; retry once without schema constraints.
+            if response.status_code == 400 and schema_type:
+                logging.warning(
+                    "query_gemini(): schema-constrained request rejected (400); retrying without responseSchema."
+                )
+                fallback_payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                }
+                response = requests.post(
+                    endpoint,
+                    headers=headers,
+                    json=fallback_payload,
+                    timeout=self.gemini_timeout_seconds,
+                )
+                response.raise_for_status()
+            else:
+                raise e
         data = response.json()
         candidates = data.get("candidates", [])
         if not candidates:
