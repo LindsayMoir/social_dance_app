@@ -127,8 +127,7 @@ class LLMHandler:
         self.mistral_rate_limit_max_strikes = int(llm_config.get('mistral_rate_limit_max_strikes', 2) or 2)
         self.mistral_cooldown_seconds = int(llm_config.get('mistral_cooldown_seconds', 300) or 300)
         self.mistral_cooldown_until = None
-        gemini_env_keys = ("GEMINI_API" + "_KEY", "GOOGLE_API" + "_KEY")
-        self.gemini_token = next((os.getenv(env_key) for env_key in gemini_env_keys if os.getenv(env_key)), None)
+        self.gemini_token = os.getenv("GEMINI_API" + "_KEY")
         self.gemini_timeout_seconds = int(llm_config.get("gemini_timeout_seconds", 60) or 60)
 
         # Get the keywords      
@@ -943,11 +942,11 @@ class LLMHandler:
             prompt = str(prompt)
 
         if not self.gemini_token:
-            raise RuntimeError("GEMINI_API_KEY (or GOOGLE_API_KEY) is not configured.")
+            raise RuntimeError("GEMINI_API_KEY is not configured.")
 
         endpoint = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent?key={self.gemini_token}"
+            f"{model}:generateContent"
         )
 
         generation_config = {}
@@ -964,7 +963,13 @@ class LLMHandler:
         if generation_config:
             payload["generationConfig"] = generation_config
 
-        response = requests.post(endpoint, json=payload, timeout=self.gemini_timeout_seconds)
+        headers = {"x-goog-api-key": self.gemini_token}
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            json=payload,
+            timeout=self.gemini_timeout_seconds,
+        )
         response.raise_for_status()
         data = response.json()
         candidates = data.get("candidates", [])
