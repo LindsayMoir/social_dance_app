@@ -88,6 +88,7 @@ import os
 import openai
 import pandas as pd
 import re
+import requests
 from sqlalchemy.exc import SQLAlchemyError
 import yaml
 
@@ -126,6 +127,9 @@ class LLMHandler:
         self.mistral_rate_limit_max_strikes = int(llm_config.get('mistral_rate_limit_max_strikes', 2) or 2)
         self.mistral_cooldown_seconds = int(llm_config.get('mistral_cooldown_seconds', 300) or 300)
         self.mistral_cooldown_until = None
+        gemini_env_keys = ("GEMINI_API" + "_KEY", "GOOGLE_API" + "_KEY")
+        self.gemini_token = next((os.getenv(env_key) for env_key in gemini_env_keys if os.getenv(env_key)), None)
+        self.gemini_timeout_seconds = int(llm_config.get("gemini_timeout_seconds", 60) or 60)
 
         # Get the keywords      
         self.keywords_list = self.get_keywords()
@@ -465,6 +469,66 @@ class LLMHandler:
         """
         return bool(self.config.get("llm", {}).get("fallback_enabled", True))
 
+    def _fallback_provider_order(self) -> list[str]:
+        """
+        Return ordered providers to try for fallback attempts.
+        """
+        cfg = self.config.get("llm", {})
+        configured = cfg.get("fallback_provider_order")
+        if isinstance(configured, list):
+            order = [str(item).strip().lower() for item in configured if str(item).strip()]
+        else:
+            order = ["openai", "gemini", "mistral"]
+        valid = {"openai", "mistral", "gemini"}
+        return [provider for provider in order if provider in valid]
+
+    def _query_provider_once(self, provider: str, prompt: str, schema_type: str | None):
+        """
+        Execute one provider query attempt and return text or None.
+        """
+        provider = (provider or "").lower().strip()
+        response = None
+
+        if provider == "openai":
+            model = self.config['llm']['openai_model']
+            logging.info("query_llm(): Querying OpenAI")
+            response = self.query_openai(prompt, model, schema_type=schema_type)
+            if response:
+                logging.info("query_llm(): OpenAI response received.")
+            else:
+                logging.warning("query_llm(): OpenAI returned no response.")
+            return response
+
+        if provider == "mistral":
+            if self._mistral_in_cooldown():
+                logging.warning("query_llm(): Skipping Mistral query due to active cooldown.")
+                return None
+            try:
+                model = self.config['llm']['mistral_model']
+                logging.info("query_llm(): Querying Mistral")
+                response = self.query_mistral(prompt, model, schema_type=schema_type)
+                self._record_mistral_result()
+                if response:
+                    logging.info("query_llm(): Mistral response received.")
+                else:
+                    logging.warning("query_llm(): Mistral returned no response.")
+                return response
+            except Exception as e:
+                self._record_mistral_result(e)
+                raise
+
+        if provider == "gemini":
+            model = self.config.get("llm", {}).get("gemini_model", "gemini-2.0-flash")
+            logging.info("query_llm(): Querying Gemini")
+            response = self.query_gemini(prompt, model, schema_type=schema_type)
+            if response:
+                logging.info("query_llm(): Gemini response received.")
+            else:
+                logging.warning("query_llm(): Gemini returned no response.")
+            return response
+
+        raise ValueError(f"Invalid LLM provider: {provider}")
+
 
     def query_llm(self, url, prompt, schema_type=None, tools=None, max_iterations=3):
         """
@@ -493,9 +557,6 @@ class LLMHandler:
             result = self._query_with_tools(url, prompt, tools, max_iterations)
             return result.get('content') if result else None
         
-        # Instantiate response variable
-        response = None
-
         # Mistral does not process the Bard and Banker website correctly, so we need to check the URL
         lower = url.lower()
         if 'bard' in lower:
@@ -504,81 +565,23 @@ class LLMHandler:
             provider = self.config['llm']['provider']
 
         fallback_enabled = self._fallback_enabled()
-
-        if provider == 'openai':
-            # Try OpenAI first
+        candidates = [str(provider).strip().lower()]
+        if fallback_enabled:
+            for fallback_provider in self._fallback_provider_order():
+                if fallback_provider not in candidates:
+                    candidates.append(fallback_provider)
+        response = None
+        for candidate in candidates:
             try:
-                model = self.config['llm']['openai_model']
-                logging.info("query_llm(): Querying OpenAI")
-                response = self.query_openai(prompt, model, schema_type=schema_type)
+                response = self._query_provider_once(candidate, prompt, schema_type)
                 if response:
-                    logging.info(f"query_llm(): OpenAI response received: {response}")
                     return response
             except Exception as e:
                 error_message = str(e).replace('error', 'rejection')
-                logging.warning(f"query_llm(): OpenAI query failed: {error_message}")
+                logging.warning("query_llm(): %s query failed: %s", candidate.capitalize(), error_message)
 
-            # Fallback to Mistral
-            if not fallback_enabled:
-                logging.info("query_llm(): Provider fallback disabled; not attempting Mistral fallback.")
-            elif self._mistral_in_cooldown():
-                logging.warning("query_llm(): Skipping Mistral fallback due to active cooldown.")
-            else:
-                try:
-                    model = self.config['llm']['mistral_model']
-                    logging.info("query_llm(): Falling back to Mistral")
-                    response = self.query_mistral(prompt, model, schema_type=schema_type)
-                    self._record_mistral_result()
-                    if response:
-                        logging.info(f"query_llm(): Mistral response received: {response}")
-                    else:
-                        logging.warning("query_llm(): Mistral returned no response.")
-                except Exception as e:
-                    self._record_mistral_result(e)
-                    error_message = str(e).replace('error', 'rejection')
-                    logging.warning(f"query_llm(): Mistral query failed: {error_message}")
-
-        elif provider == 'mistral':
-            # Try Mistral first
-            if self._mistral_in_cooldown():
-                logging.warning("query_llm(): Skipping Mistral query due to active cooldown.")
-            else:
-                try:
-                    model = self.config['llm']['mistral_model']
-                    logging.info("query_llm(): Querying Mistral")
-                    response = self.query_mistral(prompt, model, schema_type=schema_type)
-                    self._record_mistral_result()
-                    if response:
-                        logging.info(f"query_llm(): Mistral response received: {response}")
-                        return response
-                except Exception as e:
-                    self._record_mistral_result(e)
-                    error_message = str(e).replace('error', 'rejection')
-                    logging.warning(f"query_llm(): Mistral query failed: {error_message}")
-
-            # Fallback to OpenAI
-            if not fallback_enabled:
-                logging.info("query_llm(): Provider fallback disabled; not attempting OpenAI fallback.")
-            else:
-                try:
-                    openai_model = self.config['llm']['openai_model']
-                    logging.info("query_llm(): Falling back to OpenAI")
-                    response = self.query_openai(prompt, openai_model, schema_type=schema_type)
-                    if response:
-                        logging.info(f"query_llm(): OpenAI response received: {response}")
-                    else:
-                        logging.warning("query_llm(): OpenAI returned no response.")
-                except Exception as e:
-                    error_message = str(e).replace('error', 'rejection')
-                    logging.warning(f"query_llm(): OpenAI query failed: {error_message}")
-
-        else:
-            logging.error("query_llm(): Invalid LLM provider specified.")
-            return None
-
-        if response is None:
-            logging.error("query_llm(): Both LLM providers failed to provide a response.")
-        return response
+        logging.error("query_llm(): All configured LLM providers failed to provide a response.")
+        return None
 
     def _query_with_tools(self, url, prompt, tools, max_iterations=3):
         """
@@ -616,6 +619,9 @@ class LLMHandler:
         else:
             provider = self.config['llm']['provider']
         fallback_enabled = self._fallback_enabled()
+        if provider == "gemini":
+            logging.info("query_llm(): Gemini tool-calling not enabled; using OpenAI tools path.")
+            provider = "openai"
 
         # Initialize conversation messages
         messages = [{"role": "user", "content": prompt}]
@@ -926,6 +932,51 @@ class LLMHandler:
 
         resp = self.mistral_client.chat.complete(**api_params)
         return resp.choices[0].message.content if resp and resp.choices else None
+
+    def query_gemini(self, prompt, model, schema_type=None):
+        """
+        Query Google Gemini via REST API.
+        """
+        if isinstance(prompt, (list, tuple)):
+            prompt = "\n".join(map(str, prompt))
+        elif not isinstance(prompt, str):
+            prompt = str(prompt)
+
+        if not self.gemini_token:
+            raise RuntimeError("GEMINI_API_KEY (or GOOGLE_API_KEY) is not configured.")
+
+        endpoint = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={self.gemini_token}"
+        )
+
+        generation_config = {}
+        if schema_type:
+            generation_config["responseMimeType"] = "application/json"
+            schema = self._get_json_schema_by_type(schema_type, "mistral")
+            if schema:
+                raw_schema = schema.get("schema", schema) if isinstance(schema, dict) else schema
+                generation_config["responseSchema"] = raw_schema
+
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+        }
+        if generation_config:
+            payload["generationConfig"] = generation_config
+
+        response = requests.post(endpoint, json=payload, timeout=self.gemini_timeout_seconds)
+        response.raise_for_status()
+        data = response.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return None
+        parts = (candidates[0].get("content") or {}).get("parts", [])
+        texts = []
+        for part in parts:
+            text_value = part.get("text") if isinstance(part, dict) else None
+            if text_value:
+                texts.append(str(text_value))
+        return "\n".join(texts).strip() if texts else None
 
 
     def _get_json_schema_by_type(self, schema_type, provider="mistral"):
