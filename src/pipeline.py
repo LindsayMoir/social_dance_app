@@ -733,6 +733,8 @@ def fb_step():
     fb_updates["crawling"]["fb_block_failures_before_cooldown"] = 2
     fb_updates["crawling"]["fb_block_cooldown_base_seconds"] = 300
     fb_updates["crawling"]["fb_block_cooldown_max_seconds"] = 1800
+    fb_updates["crawling"]["fb_block_state_max_scopes"] = 800
+    fb_updates["crawling"]["fb_block_state_ttl_days"] = 45
     original_config = backup_and_update_config("fb", updates=fb_updates)
     write_run_config.submit("fb", original_config)
     run_fb_script()

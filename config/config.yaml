@@ -1,5 +1,6 @@
 checkpoint:
   extracted_text: checkpoint/extracted_text.xlsx
+  fb_block_state: checkpoint/fb_block_state.json
   fb_search: checkpoint/fb_search_keywords.csv
   fb_urls: checkpoint/fb_urls.csv
   fb_urls_cp: checkpoint/fb_urls_cp.csv
@@ -18,6 +19,8 @@ crawling:
   fb_block_cooldown_base_seconds: 300
   fb_block_cooldown_max_seconds: 1800
   fb_block_failures_before_cooldown: 2
+  fb_block_state_max_scopes: 800
+  fb_block_state_ttl_days: 45
   fb_event_links_per_base_limit: 20
   fb_final_wait_ms: 700
   fb_post_expand_wait_ms: 900

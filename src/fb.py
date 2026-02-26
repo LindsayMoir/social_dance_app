@@ -65,6 +65,7 @@ Note:
 
 from bs4 import BeautifulSoup
 from datetime import datetime
+import json
 from rapidfuzz import fuzz
 import logging
 from openpyxl import load_workbook
@@ -335,6 +336,14 @@ class FacebookEventScraper():
             crawling_cfg.get("fb_block_cooldown_max_seconds", 1800) or 1800
         )
         self._blocked_scope_state: dict[str, dict[str, float | int]] = {}
+        checkpoint_cfg = self.config.get("checkpoint", {})
+        self.fb_block_state_path = str(
+            checkpoint_cfg.get("fb_block_state", "checkpoint/fb_block_state.json")
+        )
+        self.fb_block_state_max_scopes = int(crawling_cfg.get("fb_block_state_max_scopes", 800) or 800)
+        self.fb_block_state_ttl_days = int(crawling_cfg.get("fb_block_state_ttl_days", 45) or 45)
+        self._load_adaptive_block_state()
+        self._autotune_block_parameters_from_history()
 
 
     def _facebook_scope_key(self, url: str) -> str:
@@ -367,14 +376,136 @@ class FacebookEventScraper():
         state["failures"] = 0
         return False
 
+    def _load_adaptive_block_state(self) -> None:
+        """
+        Load persisted adaptive block state from previous runs.
+        """
+        try:
+            if not os.path.exists(self.fb_block_state_path):
+                logging.info(
+                    "fb adaptive backoff: state file not found, starting fresh (%s)",
+                    self.fb_block_state_path,
+                )
+                return
+            with open(self.fb_block_state_path, "r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+            scopes = payload.get("scopes", {})
+            if isinstance(scopes, dict):
+                cleaned: dict[str, dict[str, float | int]] = {}
+                for scope, state in scopes.items():
+                    if not isinstance(state, dict):
+                        continue
+                    cleaned[str(scope)] = {
+                        "failures": int(state.get("failures", 0) or 0),
+                        "strikes": int(state.get("strikes", 0) or 0),
+                        "cooldown_until": float(state.get("cooldown_until", 0) or 0),
+                        "blocked_events": int(state.get("blocked_events", 0) or 0),
+                        "success_events": int(state.get("success_events", 0) or 0),
+                        "last_blocked_ts": float(state.get("last_blocked_ts", 0) or 0),
+                        "last_success_ts": float(state.get("last_success_ts", 0) or 0),
+                    }
+                self._blocked_scope_state = cleaned
+                logging.info(
+                    "fb adaptive backoff: loaded persisted scope state (%d scopes).",
+                    len(self._blocked_scope_state),
+                )
+        except Exception as e:
+            logging.warning("fb adaptive backoff: failed loading state file: %s", e)
+
+    def _prune_adaptive_block_state(self) -> None:
+        """
+        Prune stale and oversized scope history before persisting.
+        """
+        now_ts = time.time()
+        ttl_seconds = max(1, self.fb_block_state_ttl_days) * 86400
+        survivors: dict[str, dict[str, float | int]] = {}
+        scored: list[tuple[float, str, dict[str, float | int]]] = []
+
+        for scope, state in self._blocked_scope_state.items():
+            last_seen = max(
+                float(state.get("last_success_ts", 0) or 0),
+                float(state.get("last_blocked_ts", 0) or 0),
+                float(state.get("cooldown_until", 0) or 0),
+            )
+            if last_seen > 0 and (now_ts - last_seen) > ttl_seconds:
+                continue
+            scored.append((last_seen, scope, state))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        for _, scope, state in scored[: self.fb_block_state_max_scopes]:
+            survivors[scope] = state
+        self._blocked_scope_state = survivors
+
+    def _autotune_block_parameters_from_history(self) -> None:
+        """
+        Tune cooldown parameters at startup using persisted block/success ratios.
+        """
+        total_blocked = 0
+        total_success = 0
+        for state in self._blocked_scope_state.values():
+            total_blocked += int(state.get("blocked_events", 0) or 0)
+            total_success += int(state.get("success_events", 0) or 0)
+        total = total_blocked + total_success
+        if total < 25:
+            logging.info(
+                "fb adaptive backoff: insufficient history for autotune (samples=%d).",
+                total,
+            )
+            return
+
+        blocked_ratio = total_blocked / max(1, total)
+        original = (
+            self.fb_block_failures_before_cooldown,
+            self.fb_block_cooldown_base_seconds,
+            self.fb_block_cooldown_max_seconds,
+        )
+
+        if blocked_ratio >= 0.40:
+            self.fb_block_failures_before_cooldown = max(1, self.fb_block_failures_before_cooldown - 1)
+            self.fb_block_cooldown_base_seconds = min(
+                self.fb_block_cooldown_max_seconds,
+                self.fb_block_cooldown_base_seconds + 60,
+            )
+        elif blocked_ratio <= 0.12:
+            self.fb_block_failures_before_cooldown = min(4, self.fb_block_failures_before_cooldown + 1)
+            self.fb_block_cooldown_base_seconds = max(120, self.fb_block_cooldown_base_seconds - 30)
+
+        self.fb_block_cooldown_max_seconds = max(
+            self.fb_block_cooldown_base_seconds * 3,
+            self.fb_block_cooldown_max_seconds,
+        )
+
+        tuned = (
+            self.fb_block_failures_before_cooldown,
+            self.fb_block_cooldown_base_seconds,
+            self.fb_block_cooldown_max_seconds,
+        )
+        logging.info(
+            "fb adaptive backoff: autotune blocked_ratio=%.3f samples=%d params %s -> %s",
+            blocked_ratio,
+            total,
+            original,
+            tuned,
+        )
 
     def _record_scope_blocked(self, scope_key: str) -> None:
         """
         Update adaptive block state for a scope. Escalates cooldown exponentially.
         """
         state = self._blocked_scope_state.setdefault(
-            scope_key, {"failures": 0, "strikes": 0, "cooldown_until": 0}
+            scope_key,
+            {
+                "failures": 0,
+                "strikes": 0,
+                "cooldown_until": 0,
+                "blocked_events": 0,
+                "success_events": 0,
+                "last_blocked_ts": 0,
+                "last_success_ts": 0,
+            },
         )
+        state["blocked_events"] = int(state.get("blocked_events", 0)) + 1
+        state["last_blocked_ts"] = time.time()
         state["failures"] = int(state.get("failures", 0)) + 1
 
         if int(state["failures"]) < self.fb_block_failures_before_cooldown:
@@ -402,8 +533,39 @@ class FacebookEventScraper():
         state = self._blocked_scope_state.get(scope_key)
         if not state:
             return
+        state["success_events"] = int(state.get("success_events", 0)) + 1
+        state["last_success_ts"] = time.time()
         state["failures"] = 0
         state["cooldown_until"] = 0
+
+    def flush_adaptive_block_state(self) -> None:
+        """
+        Persist adaptive block state for cross-run learning.
+        """
+        try:
+            self._prune_adaptive_block_state()
+            payload = {
+                "version": 1,
+                "updated_at": datetime.utcnow().isoformat(),
+                "parameters": {
+                    "fb_block_failures_before_cooldown": self.fb_block_failures_before_cooldown,
+                    "fb_block_cooldown_base_seconds": self.fb_block_cooldown_base_seconds,
+                    "fb_block_cooldown_max_seconds": self.fb_block_cooldown_max_seconds,
+                },
+                "scopes": self._blocked_scope_state,
+            }
+            state_dir = os.path.dirname(self.fb_block_state_path)
+            if state_dir:
+                os.makedirs(state_dir, exist_ok=True)
+            with open(self.fb_block_state_path, "w", encoding="utf-8") as fp:
+                json.dump(payload, fp, indent=2, sort_keys=True)
+            logging.info(
+                "fb adaptive backoff: persisted state to %s (%d scopes).",
+                self.fb_block_state_path,
+                len(self._blocked_scope_state),
+            )
+        except Exception as e:
+            logging.warning("fb adaptive backoff: failed persisting state: %s", e)
 
 
     def _safe_shutdown_browser(self) -> None:
@@ -1461,19 +1623,20 @@ def main():
     # Initialize scraper
     fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
 
-    # Run
-    fb_scraper.driver_fb_search()
-    fb_scraper.driver_fb_urls()
+    try:
+        # Run
+        fb_scraper.driver_fb_search()
+        fb_scraper.driver_fb_urls()
 
-    # To be removed in production
-    # fb_scraper.checkpoint_events()
+        # To be removed in production
+        # fb_scraper.checkpoint_events()
 
-    # Write run statistics to the database
-    fb_scraper.write_run_statistics()
-
-    # Close browser and Playwright
-    fb_scraper.browser.close()
-    fb_scraper.playwright.stop()
+        # Write run statistics to the database
+        fb_scraper.write_run_statistics()
+    finally:
+        # Always persist adaptive scope history and close browser resources.
+        fb_scraper.flush_adaptive_block_state()
+        fb_scraper._safe_shutdown_browser()
 
     # Count events and URLs after running
     db_handler.count_events_urls_end(start_df, file_name)
