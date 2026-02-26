@@ -170,6 +170,208 @@ def _format_sql_for_display(sql: str) -> str:
     return formatted.strip()
 
 
+def _is_all_event_types_request(user_text: str) -> bool:
+    """
+    Return True when user explicitly requests all event types (no event_type filtering).
+    """
+    ut = (user_text or "").lower()
+    patterns = [
+        "all event types",
+        "all events",
+        "any event type",
+        "any events",
+        "include all event types",
+        "include all events",
+        "not just social dance",
+        "not only social dance",
+        "not just social dances",
+        "not only social dances",
+    ]
+    return any(p in ut for p in patterns)
+
+
+def _canonical_event_types_from_text(user_text: str) -> set[str]:
+    """
+    Detect canonical event types referenced in user text.
+    """
+    ut = (user_text or "").lower()
+    detected: set[str] = set()
+
+    patterns = {
+        "social dance": [r"\bsocial dance(s|ing)?\b"],
+        "class": [r"\bclass(es)?\b", r"\blesson(s)?\b"],
+        "workshop": [r"\bworkshop(s)?\b"],
+        "live music": [r"\blive music\b"],
+        "rehearsal": [r"\brehearsal(s)?\b"],
+        "other": [r"\bother\b"],
+    }
+    for canonical, pats in patterns.items():
+        if any(re.search(p, ut, flags=re.IGNORECASE) for p in pats):
+            detected.add(canonical)
+    return detected
+
+
+def _detected_only_event_types(user_text: str) -> set[str]:
+    """
+    Detect event types explicitly constrained with "only"/"just"/"<type> only".
+    """
+    ut = (user_text or "").lower()
+    aliases = {
+        "social dance": [r"social dance(?:s|ing)?"],
+        "class": [r"class(?:es)?", r"lesson(?:s)?"],
+        "workshop": [r"workshop(?:s)?"],
+        "live music": [r"live music"],
+        "rehearsal": [r"rehearsal(?:s)?"],
+        "other": [r"other"],
+    }
+    out: set[str] = set()
+    for canonical, pats in aliases.items():
+        for pat in pats:
+            if (
+                re.search(rf"\b(?:only|just)\s+{pat}\b", ut, flags=re.IGNORECASE)
+                or re.search(rf"\b{pat}\s+only\b", ut, flags=re.IGNORECASE)
+            ):
+                out.add(canonical)
+    return out
+
+
+def _detected_excluded_event_types(user_text: str) -> set[str]:
+    """
+    Detect event types explicitly excluded from results.
+    """
+    ut = (user_text or "").lower()
+    aliases = {
+        "social dance": [r"social dance(?:s|ing)?"],
+        "class": [r"class(?:es)?", r"lesson(?:s)?"],
+        "workshop": [r"workshop(?:s)?"],
+        "live music": [r"live music"],
+        "rehearsal": [r"rehearsal(?:s)?"],
+        "other": [r"other"],
+    }
+    out: set[str] = set()
+    for canonical, pats in aliases.items():
+        for pat in pats:
+            if (
+                re.search(rf"\b(?:no|without|exclude|excluding)\s+{pat}\b", ut, flags=re.IGNORECASE)
+                or re.search(rf"\bexcept\s+{pat}\b", ut, flags=re.IGNORECASE)
+            ):
+                out.add(canonical)
+    return out
+
+
+def _build_event_type_clause(selected_types: set[str]) -> str:
+    """
+    Build SQL event_type clause from canonical event types.
+    """
+    order = ["social dance", "class", "workshop", "live music", "rehearsal", "other"]
+    selected = [t for t in order if t in selected_types]
+    if not selected:
+        return ""
+
+    parts = [f"event_type ILIKE '%{t}%'" for t in selected]
+    return "( " + " OR ".join(parts) + " )"
+
+
+def _derive_event_type_policy_clause(user_text: str) -> str:
+    """
+    Derive the desired event_type SQL clause from user intent.
+
+    Returns:
+        str: SQL clause, or empty string for "no event_type filtering".
+    """
+    if _is_all_event_types_request(user_text):
+        return ""
+
+    explicit_types = _canonical_event_types_from_text(user_text)
+    only_types = _detected_only_event_types(user_text)
+    excluded_types = _detected_excluded_event_types(user_text)
+
+    # Strongest signal: explicit "only" constraints.
+    if only_types:
+        selected = set(only_types) - excluded_types
+        return _build_event_type_clause(selected)
+
+    # If user names types, include those; preserve legacy default social dance unless explicitly excluded.
+    if explicit_types:
+        selected = set(explicit_types)
+        if "social dance" not in selected and "social dance" not in excluded_types:
+            selected.add("social dance")
+        selected -= excluded_types
+        return _build_event_type_clause(selected)
+
+    # No explicit type mention: legacy default social dance unless excluded.
+    default_selected = {"social dance"} - excluded_types
+    return _build_event_type_clause(default_selected)
+
+
+def _apply_event_type_clause(sql: str, clause: str) -> str:
+    """
+    Apply event_type clause to SQL after removing existing event_type predicates.
+    """
+    if not sql:
+        return sql
+    s = _remove_event_type_filters(sql)
+    if not clause:
+        return s
+
+    # Append before ORDER BY / GROUP BY / HAVING / LIMIT if present.
+    keywords = [r"\bORDER\s+BY\b", r"\bGROUP\s+BY\b", r"\bHAVING\b", r"\bLIMIT\b"]
+    insert_pt = len(s)
+    for kw in keywords:
+        m = re.search(kw, s, flags=re.IGNORECASE)
+        if m:
+            insert_pt = min(insert_pt, m.start())
+
+    prefix = s[:insert_pt].rstrip()
+    suffix = s[insert_pt:]
+    if re.search(r"\bWHERE\b", prefix, flags=re.IGNORECASE):
+        prefix += f" AND {clause}"
+    else:
+        prefix += f" WHERE {clause}"
+    return (prefix + " " + suffix.lstrip()).strip()
+
+
+def _remove_event_type_filters(sql: str) -> str:
+    """
+    Remove common event_type WHERE predicates from generated SQL.
+
+    This is intentionally conservative and targets the patterns generated by this app.
+    """
+    if not sql:
+        return sql
+    s = sql
+
+    # Remove grouped or single event_type predicates preceded by AND/OR.
+    s = re.sub(
+        r"(?is)\s+(AND|OR)\s+\(\s*event_type\s*(?:ILIKE|LIKE|=)\s*'[^']+'\s*(?:OR\s+event_type\s*(?:ILIKE|LIKE|=)\s*'[^']+'\s*)*\)",
+        "",
+        s,
+    )
+    s = re.sub(
+        r"(?is)\s+(AND|OR)\s+event_type\s*(?:ILIKE|LIKE|=)\s*'[^']+'",
+        "",
+        s,
+    )
+
+    # Remove WHERE-leading event_type predicates.
+    s = re.sub(
+        r"(?is)\bWHERE\s+\(\s*event_type\s*(?:ILIKE|LIKE|=)\s*'[^']+'\s*(?:OR\s+event_type\s*(?:ILIKE|LIKE|=)\s*'[^']+'\s*)*\)\s*(AND\s+)?",
+        lambda m: "WHERE " if m.group(1) else "",
+        s,
+    )
+    s = re.sub(
+        r"(?is)\bWHERE\s+event_type\s*(?:ILIKE|LIKE|=)\s*'[^']+'\s*(AND\s+)?",
+        lambda m: "WHERE " if m.group(1) else "",
+        s,
+    )
+
+    # Clean up residual WHERE/AND artifacts and whitespace.
+    s = re.sub(r"(?is)\bWHERE\s+(ORDER\s+BY|GROUP\s+BY|LIMIT|HAVING)\b", r"\1", s)
+    s = re.sub(r"(?is)\bWHERE\s*$", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def _enforce_default_event_type(sql: str, user_text: str) -> str:
     """
     Ensure SQL includes social dance by default unless the user explicitly restricts event_type.
@@ -183,38 +385,8 @@ def _enforce_default_event_type(sql: str, user_text: str) -> str:
     """
     if not sql:
         return sql
-    s = sql
-    ut = (user_text or "").lower()
-    only_live = any(p in ut for p in ["only live", "only live music", "live only", "just live music"])
-    only_classes = any(p in ut for p in ["only class", "only classes", "classes only", "just classes", "just class"]) 
-
-    if only_live or only_classes:
-        return s
-
-    if "social dance" in s.lower():
-        return s
-
-    # Try to wrap the first event_type condition
-    import re as _re
-    m = _re.search(r"(?i)(event_type\s*(?:ILIKE|LIKE|=)\s*'[^']+')", s)
-    if m:
-        clause = m.group(1)
-        wrapped = f"( event_type ILIKE '%social dance%' OR {clause} )"
-        s = s[:m.start(1)] + wrapped + s[m.end(1):]
-        return s
-
-    # Otherwise, append a default social dance filter before ORDER BY/LIMIT
-    insert_pt = len(s)
-    m2 = _re.search(r"(?i)\bORDER\s+BY\b", s)
-    if m2:
-        insert_pt = m2.start()
-    prefix = s[:insert_pt].rstrip()
-    suffix = s[insert_pt:]
-    if " where " in prefix.lower():
-        prefix += " AND (event_type ILIKE '%social dance%')"
-    else:
-        prefix += " WHERE (event_type ILIKE '%social dance%')"
-    return prefix + " " + suffix.lstrip()
+    clause = _derive_event_type_policy_clause(user_text)
+    return _apply_event_type_clause(sql, clause)
 
 
 def _force_style_in_interpretation(text: str, user_text: str) -> str:
@@ -540,33 +712,14 @@ def process_confirmation(request: ConfirmationRequest):
                     if tf:
                         filters.append(f"start_time >= '{tf}'")
 
-                    # Default event_type behavior: social dance by default unless explicitly restricted by user
-                    # If no explicit event_type filter is present in user-provided conditions, add social dance by default,
-                    # and include classes/live music if the user asked to include them (without excluding social dance).
-                    include_live = ("live music" in cq_l) or ("music" in cq_l)
-                    include_classes = any(w in cq_l for w in ["class", "classes", "workshop", "workshops", "lesson", "lessons"])
-                    only_classes = any(phrase in cq_l for phrase in ["only class", "only classes", "classes only", "just classes", "just class"])
-                    only_live = any(phrase in cq_l for phrase in ["only live", "only live music", "live only", "just live music"]) 
-
-                    # We'll append an OR group only if user hasn't already provided an event_type condition.
-                    # Detect explicit intent in clarification text as well (event_type with operator or shorthand)
+                    # Detect explicit event_type in user text and apply centralized policy when absent.
                     import re as _re_detect
                     explicit_in_text = bool(_re_detect.search(r"(?i)\bevent_type\s*(=|ILIKE|LIKE|>=|<=|>|<|:)", cq))
                     has_explicit_event_type = explicit_in_text or any('event_type' in f.lower() for f in filters)
-
                     if not has_explicit_event_type:
-                        if only_classes:
-                            filters.append("(event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')")
-                        elif only_live:
-                            filters.append("event_type ILIKE '%live music%'")
-                        else:
-                            or_parts = ["event_type ILIKE '%social dance%'"]
-                            if include_classes:
-                                or_parts.append("(event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')")
-                            if include_live:
-                                or_parts.append("event_type ILIKE '%live music%'")
-                            if or_parts:
-                                filters.append("( " + " OR ".join(or_parts) + " )")
+                        policy_clause = _derive_event_type_policy_clause(cq)
+                        if policy_clause:
+                            filters.append(policy_clause)
 
                     # Optional: parse simple column filters from the confirmed question (safe subset)
                     # Pattern: <column> <op> '<value>' where column is a known column and op in =, ILIKE, LIKE, >=, <=, >, <

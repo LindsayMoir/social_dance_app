@@ -79,6 +79,7 @@ def test_confirmation_yes_enforces_style_on_execution(monkeypatch):
     monkeypatch.setattr(app_main.conversation_manager, 'add_message', lambda **kwargs: 'msg-1')
     monkeypatch.setattr(app_main.conversation_manager, 'get_recent_messages', lambda cid, limit=3: [])
     monkeypatch.setattr(app_main.conversation_manager, 'get_conversation_context', lambda cid: {})
+    monkeypatch.setattr(app_main, '_validate_sql_select', lambda *_a, **_k: (True, ""))
 
     req = app_main.ConfirmationRequest(confirmation='yes', session_token='tok-1', clarification="")
     resp = app_main.process_confirmation(req)
@@ -101,8 +102,69 @@ def test_confirmation_yes_no_style_no_filter_added(monkeypatch):
     monkeypatch.setattr(app_main.conversation_manager, 'add_message', lambda **kwargs: 'msg-1')
     monkeypatch.setattr(app_main.conversation_manager, 'get_recent_messages', lambda cid, limit=3: [])
     monkeypatch.setattr(app_main.conversation_manager, 'get_conversation_context', lambda cid: {})
+    monkeypatch.setattr(app_main, '_validate_sql_select', lambda *_a, **_k: (True, ""))
 
     req = app_main.ConfirmationRequest(confirmation='yes', session_token='tok-1', clarification="")
     resp = app_main.process_confirmation(req)
     sql = (resp.get('sql_query') or '').lower()
     assert "dance_style ilike" not in sql
+
+
+def test_enforce_default_event_type_skips_filter_for_all_event_types_request():
+    sql_in = (
+        "SELECT event_name FROM events "
+        "WHERE start_date = '2026-02-26' AND (event_type ILIKE '%social dance%') "
+        "ORDER BY start_date LIMIT 30"
+    )
+    out = app_main._enforce_default_event_type(sql_in, "show me all events today, all event types")
+    assert "event_type ilike '%social dance%'" not in out.lower()
+
+
+def test_confirmation_yes_all_event_types_removes_social_dance_filter(monkeypatch):
+    pending = {
+        'combined_query': 'show me all events today, all event types',
+        'user_input': 'show me all events today, all event types',
+        'sql_query': (
+            "SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, "
+            "start_time, end_time, source, url, price, description, location "
+            "FROM events WHERE start_date = '2026-02-26' AND (event_type ILIKE '%social dance%') "
+            "ORDER BY start_date, start_time LIMIT 30"
+        ),
+        'intent': 'search'
+    }
+    monkeypatch.setattr(app_main.conversation_manager, 'create_or_get_conversation', lambda token: 'conv-1')
+    monkeypatch.setattr(app_main.conversation_manager, 'get_pending_query', lambda cid: pending)
+    monkeypatch.setattr(app_main.conversation_manager, 'clear_pending_query', lambda cid: None)
+    monkeypatch.setattr(app_main.db_handler, 'execute_query', lambda *a, **k: [])
+    monkeypatch.setattr(app_main.conversation_manager, 'add_message', lambda **kwargs: 'msg-1')
+    monkeypatch.setattr(app_main.conversation_manager, 'get_recent_messages', lambda cid, limit=3: [])
+    monkeypatch.setattr(app_main.conversation_manager, 'get_conversation_context', lambda cid: {})
+    monkeypatch.setattr(app_main, '_validate_sql_select', lambda *_a, **_k: (True, ""))
+
+    req = app_main.ConfirmationRequest(confirmation='yes', session_token='tok-1', clarification="")
+    resp = app_main.process_confirmation(req)
+    sql = (resp.get('sql_query') or '').lower()
+    assert "event_type ilike '%social dance%'" not in sql
+
+
+def test_enforce_default_event_type_only_live_music():
+    sql_in = (
+        "SELECT event_name FROM events "
+        "WHERE start_date = '2026-02-26' "
+        "ORDER BY start_date LIMIT 30"
+    )
+    out = app_main._enforce_default_event_type(sql_in, "show me only live music events today")
+    low = out.lower()
+    assert "event_type ilike '%live music%'" in low
+    assert "event_type ilike '%social dance%'" not in low
+
+
+def test_enforce_default_event_type_without_social_dance():
+    sql_in = (
+        "SELECT event_name FROM events "
+        "WHERE start_date = '2026-02-26' "
+        "ORDER BY start_date LIMIT 30"
+    )
+    out = app_main._enforce_default_event_type(sql_in, "events today without social dance")
+    low = out.lower()
+    assert "event_type ilike '%social dance%'" not in low
