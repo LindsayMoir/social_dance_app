@@ -325,6 +325,85 @@ class FacebookEventScraper():
         self.fb_post_nav_wait_ms = int(crawling_cfg.get("fb_post_nav_wait_ms", 1800) or 1800)
         self.fb_post_expand_wait_ms = int(crawling_cfg.get("fb_post_expand_wait_ms", 900) or 900)
         self.fb_final_wait_ms = int(crawling_cfg.get("fb_final_wait_ms", 700) or 700)
+        self.fb_block_failures_before_cooldown = int(
+            crawling_cfg.get("fb_block_failures_before_cooldown", 2) or 2
+        )
+        self.fb_block_cooldown_base_seconds = int(
+            crawling_cfg.get("fb_block_cooldown_base_seconds", 300) or 300
+        )
+        self.fb_block_cooldown_max_seconds = int(
+            crawling_cfg.get("fb_block_cooldown_max_seconds", 1800) or 1800
+        )
+        self._blocked_scope_state: dict[str, dict[str, float | int]] = {}
+
+
+    def _facebook_scope_key(self, url: str) -> str:
+        """
+        Build a stable scope key for Facebook throttling decisions.
+        Prefer group/event granularity over whole-domain to avoid over-skipping.
+        """
+        parsed = urlparse(url or "")
+        host = (parsed.netloc or "").lower()
+        segments = [s for s in (parsed.path or "").split("/") if s]
+        if len(segments) >= 2 and segments[0] in {"groups", "events"}:
+            return f"{host}/{segments[0]}/{segments[1]}"
+        if segments:
+            return f"{host}/{segments[0]}"
+        return host
+
+
+    def _scope_in_cooldown(self, scope_key: str) -> bool:
+        """
+        Return True when the scope is still in cooldown.
+        """
+        state = self._blocked_scope_state.get(scope_key)
+        if not state:
+            return False
+        cooldown_until = float(state.get("cooldown_until", 0))
+        now_ts = time.time()
+        if now_ts < cooldown_until:
+            return True
+        state["cooldown_until"] = 0
+        state["failures"] = 0
+        return False
+
+
+    def _record_scope_blocked(self, scope_key: str) -> None:
+        """
+        Update adaptive block state for a scope. Escalates cooldown exponentially.
+        """
+        state = self._blocked_scope_state.setdefault(
+            scope_key, {"failures": 0, "strikes": 0, "cooldown_until": 0}
+        )
+        state["failures"] = int(state.get("failures", 0)) + 1
+
+        if int(state["failures"]) < self.fb_block_failures_before_cooldown:
+            return
+
+        state["strikes"] = int(state.get("strikes", 0)) + 1
+        cooldown_seconds = min(
+            self.fb_block_cooldown_max_seconds,
+            self.fb_block_cooldown_base_seconds * (2 ** (int(state["strikes"]) - 1)),
+        )
+        state["cooldown_until"] = time.time() + cooldown_seconds
+        state["failures"] = 0
+        logging.warning(
+            "fb adaptive backoff: scope=%s cooldown=%ss strikes=%s",
+            scope_key,
+            cooldown_seconds,
+            state["strikes"],
+        )
+
+
+    def _record_scope_success(self, scope_key: str) -> None:
+        """
+        Reset short-term failure counter when a scope recovers.
+        """
+        state = self._blocked_scope_state.get(scope_key)
+        if not state:
+            return
+        state["failures"] = 0
+        state["cooldown_until"] = 0
 
 
     def _safe_shutdown_browser(self) -> None:
@@ -523,6 +602,14 @@ class FacebookEventScraper():
             bool: True if navigation was successful, False otherwise.
         """
         real_url = self.normalize_facebook_url(incoming_url)
+        scope_key = self._facebook_scope_key(real_url)
+        if self._scope_in_cooldown(scope_key):
+            logging.info(
+                "navigate_and_maybe_login: skipping URL in cooldown scope=%s url=%s",
+                scope_key,
+                real_url,
+            )
+            return False
         page = self.logged_in_page
 
         attempts = max(1, int(max_attempts))
@@ -539,6 +626,7 @@ class FacebookEventScraper():
                 state = classify_facebook_access_state(page.url, "")
 
             if state == "ok":
+                self._record_scope_success(scope_key)
                 return True
 
             if state == "login":
@@ -556,16 +644,19 @@ class FacebookEventScraper():
                 except Exception:
                     post_login_state = classify_facebook_access_state(page.url, "")
                 if post_login_state == "ok":
+                    self._record_scope_success(scope_key)
                     return True
                 if post_login_state == "blocked":
                     logging.warning(f"navigate_and_maybe_login: blocked or rate-limited on {real_url}")
+                    self._record_scope_blocked(scope_key)
                     return False
                 # Still appears to require login.
                 continue
 
             logging.warning(f"navigate_and_maybe_login: blocked or rate-limited on {real_url}")
+            self._record_scope_blocked(scope_key)
             if attempt < attempts - 1:
-                cooldown_ms = random.randint(6000, 12000)
+                cooldown_ms = random.randint(3000, 7000)
                 page.wait_for_timeout(cooldown_ms)
                 continue
             return False
