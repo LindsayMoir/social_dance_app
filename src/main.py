@@ -381,7 +381,7 @@ def generate_interpretation(user_query: str, config: dict) -> str:
 
     # Query LLM for interpretation WITH date calculator tool
     from date_calculator import CALCULATE_DATE_RANGE_TOOL
-    interpretation = llm_handler.query_llm('', formatted_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+    interpretation = llm_handler.query_llm('chatbot', formatted_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
 
     if interpretation:
         text = interpretation.strip()
@@ -484,7 +484,7 @@ def process_confirmation(request: ConfirmationRequest):
                     prompt += f"\n\nCurrent User Question: \"{combined_q}\""
 
                 from date_calculator import CALCULATE_DATE_RANGE_TOOL
-                sql_raw = llm_handler.query_llm('', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+                sql_raw = llm_handler.query_llm('chatbot', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
                 if sql_raw:
                     s = sql_raw.replace("```sql", "").replace("```", "").strip()
                     si = s.upper().find("SELECT")
@@ -501,7 +501,7 @@ def process_confirmation(request: ConfirmationRequest):
                             "Call calculate_date_range internally and embed the dates directly in WHERE clauses."
                         )
                         strict_prompt = f"{prompt}\n{sql_only_suffix}"
-                        sql_raw2 = llm_handler.query_llm('', strict_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+                        sql_raw2 = llm_handler.query_llm('chatbot', strict_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
                         if sql_raw2:
                             s2 = sql_raw2.replace("```sql", "").replace("```", "").strip()
                             si2 = s2.upper().find("SELECT")
@@ -846,7 +846,7 @@ def process_query(request: QueryRequest):
 
     # Query the language model for a raw SQL query with date calculator tool support
     from date_calculator import CALCULATE_DATE_RANGE_TOOL
-    sql_query = llm_handler.query_llm('', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+    sql_query = llm_handler.query_llm('chatbot', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
     logging.info(f"Raw SQL Query: {sql_query}")
 
     # Always generate interpretation and confirmation, even if SQL didn't come back yet
@@ -868,7 +868,7 @@ def process_query(request: QueryRequest):
                 "but prefer explicit dates from the tool. Return ONLY SQL."
             )
             strict_prompt = f"{prompt}\n{strict_suffix}"
-            sql_query2 = llm_handler.query_llm('', strict_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+            sql_query2 = llm_handler.query_llm('chatbot', strict_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
             if sql_query2:
                 sanitized_query2 = sql_query2.replace("```sql", "").replace("```", "").strip()
                 select_index2 = sanitized_query2.find("SELECT")
@@ -889,7 +889,7 @@ def process_query(request: QueryRequest):
                 "Call calculate_date_range internally and embed the dates directly in WHERE clauses."
             )
             sql_only_prompt = f"{prompt}\n{sql_only_suffix}"
-            sql_query3 = llm_handler.query_llm('', sql_only_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+            sql_query3 = llm_handler.query_llm('chatbot', sql_only_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
             if sql_query3:
                 s3 = sql_query3.replace("```sql", "").replace("```", "").strip()
                 si3 = s3.upper().find("SELECT")

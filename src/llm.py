@@ -122,6 +122,10 @@ class LLMHandler:
             timeout=self.openai_timeout_seconds,
             max_retries=self.openai_max_retries,
         )
+        self.openai_timeout_strikes = 0
+        self.openai_timeout_max_strikes = int(llm_config.get("openai_timeout_max_strikes", 2) or 2)
+        self.openai_timeout_cooldown_seconds = int(llm_config.get("openai_timeout_cooldown_seconds", 300) or 300)
+        self.openai_timeout_cooldown_until = None
 
         # Set up Mistral client with timeout
         mistral_api_key = os.environ["MISTRAL_API_KEY"]
@@ -134,6 +138,10 @@ class LLMHandler:
         self.mistral_cooldown_until = None
         self.gemini_token = os.getenv("GEMINI_API" + "_KEY")
         self.gemini_timeout_seconds = int(llm_config.get("gemini_timeout_seconds", 60) or 60)
+        self.gemini_timeout_strikes = 0
+        self.gemini_timeout_max_strikes = int(llm_config.get("gemini_timeout_max_strikes", 2) or 2)
+        self.gemini_timeout_cooldown_seconds = int(llm_config.get("gemini_timeout_cooldown_seconds", 300) or 300)
+        self.gemini_timeout_cooldown_until = None
         self.openrouter_token = os.getenv("OPENROUTER_API" + "_KEY")
         self.openrouter_base_url = str(
             llm_config.get("openrouter_base_url", "https://openrouter.ai/api/v1")
@@ -503,6 +511,18 @@ class LLMHandler:
         message = str(error).lower()
         return "429" in message or "rate limit" in message or "too many requests" in message
 
+    @staticmethod
+    def _is_timeout_error(error: Exception) -> bool:
+        """Return True when an exception looks like a request timeout."""
+        message = str(error).lower()
+        timeout_tokens = (
+            "timed out",
+            "timeout",
+            "read timeout",
+            "request timed out",
+        )
+        return any(token in message for token in timeout_tokens)
+
     def _mistral_in_cooldown(self) -> bool:
         """Return True while Mistral rate-limit cooldown window is active."""
         if self.mistral_cooldown_until is None:
@@ -559,6 +579,66 @@ class LLMHandler:
                 self.openrouter_rate_limit_strikes,
             )
 
+    def _openai_in_timeout_cooldown(self) -> bool:
+        """Return True while OpenAI timeout cooldown window is active."""
+        if self.openai_timeout_cooldown_until is None:
+            return False
+        now = datetime.now()
+        if now >= self.openai_timeout_cooldown_until:
+            self.openai_timeout_cooldown_until = None
+            self.openai_timeout_strikes = 0
+            return False
+        return True
+
+    def _record_openai_result(self, error: Exception = None) -> None:
+        """Update OpenAI timeout strike/cooldown state after an attempt."""
+        if error is None:
+            self.openai_timeout_strikes = 0
+            self.openai_timeout_cooldown_until = None
+            return
+        if not self._is_timeout_error(error):
+            return
+        self.openai_timeout_strikes += 1
+        if self.openai_timeout_strikes >= self.openai_timeout_max_strikes:
+            self.openai_timeout_cooldown_until = datetime.now() + timedelta(
+                seconds=self.openai_timeout_cooldown_seconds
+            )
+            logging.warning(
+                "query_llm(): Entering OpenAI timeout cooldown until %s after %s consecutive timeouts",
+                self.openai_timeout_cooldown_until.isoformat(),
+                self.openai_timeout_strikes,
+            )
+
+    def _gemini_in_timeout_cooldown(self) -> bool:
+        """Return True while Gemini timeout cooldown window is active."""
+        if self.gemini_timeout_cooldown_until is None:
+            return False
+        now = datetime.now()
+        if now >= self.gemini_timeout_cooldown_until:
+            self.gemini_timeout_cooldown_until = None
+            self.gemini_timeout_strikes = 0
+            return False
+        return True
+
+    def _record_gemini_result(self, error: Exception = None) -> None:
+        """Update Gemini timeout strike/cooldown state after an attempt."""
+        if error is None:
+            self.gemini_timeout_strikes = 0
+            self.gemini_timeout_cooldown_until = None
+            return
+        if not self._is_timeout_error(error):
+            return
+        self.gemini_timeout_strikes += 1
+        if self.gemini_timeout_strikes >= self.gemini_timeout_max_strikes:
+            self.gemini_timeout_cooldown_until = datetime.now() + timedelta(
+                seconds=self.gemini_timeout_cooldown_seconds
+            )
+            logging.warning(
+                "query_llm(): Entering Gemini timeout cooldown until %s after %s consecutive timeouts",
+                self.gemini_timeout_cooldown_until.isoformat(),
+                self.gemini_timeout_strikes,
+            )
+
     def _fallback_enabled(self) -> bool:
         """
         Return whether cross-provider fallback is enabled.
@@ -593,6 +673,41 @@ class LLMHandler:
         filtered = [provider for provider in order if provider in valid]
         return filtered or ["openrouter", "openai", "mistral", "gemini"]
 
+    @staticmethod
+    def _is_chatbot_request(url: str) -> bool:
+        """Return True when this LLM request is from chatbot SQL/interpretation flows."""
+        return "chatbot" in str(url or "").lower()
+
+    def _chatbot_provider_order(self) -> list[str]:
+        """
+        Provider order dedicated to chatbot flows.
+
+        Defaults to: OpenAI -> OpenRouter (DeepSeek) -> Gemini.
+        """
+        llm_cfg = self.config.get("llm", {})
+        configured = llm_cfg.get("chatbot_provider_order")
+        if isinstance(configured, list):
+            order = [str(item).strip().lower() for item in configured if str(item).strip()]
+        else:
+            order = ["openai", "openrouter", "gemini"]
+        valid = {"openai", "mistral", "gemini", "openrouter"}
+        filtered = [provider for provider in order if provider in valid]
+        return filtered or ["openai", "openrouter", "gemini"]
+
+    def _candidate_providers_for_request(self, url: str, primary_provider: str) -> list[str]:
+        """Build ordered provider candidates for a single request."""
+        if self._is_chatbot_request(url):
+            return self._chatbot_provider_order()
+
+        fallback_enabled = self._fallback_enabled()
+        candidates = [str(primary_provider).strip().lower()]
+        if fallback_enabled:
+            for fallback_provider in self._fallback_provider_order():
+                if fallback_provider not in candidates:
+                    candidates.append(fallback_provider)
+
+        return candidates
+
     def _next_round_robin_provider(self, for_tools: bool = False) -> str:
         """
         Select the next provider in round-robin order.
@@ -609,6 +724,10 @@ class LLMHandler:
             if provider == "mistral" and self._mistral_in_cooldown() and len(order) > 1:
                 continue
             if provider == "openrouter" and self._openrouter_in_cooldown() and len(order) > 1:
+                continue
+            if provider == "openai" and self._openai_in_timeout_cooldown() and len(order) > 1:
+                continue
+            if provider == "gemini" and self._gemini_in_timeout_cooldown() and len(order) > 1:
                 continue
             self.provider_rotation_index = (idx + 1) % len(order)
             return provider
@@ -782,13 +901,21 @@ class LLMHandler:
         ) % len(candidates)
         return model
 
-    def _openrouter_candidates_for_attempt(self) -> list[str]:
+    def _openrouter_candidates_for_attempt(self, request_url: str | None = None) -> list[str]:
         """
         Return OpenRouter candidates in attempt order.
         - When rotation is disabled: strict configured order (cost order).
         - When rotation is enabled: start at current rotation index and cycle.
         """
-        candidates = self._provider_model_candidates("openrouter")
+        llm_cfg = self.config.get("llm", {})
+        if self._is_chatbot_request(request_url or ""):
+            chatbot_models = llm_cfg.get("chatbot_openrouter_model_candidates")
+            if isinstance(chatbot_models, list) and chatbot_models:
+                candidates = [str(m).strip() for m in chatbot_models if str(m).strip()]
+            else:
+                candidates = self._provider_model_candidates("openrouter")
+        else:
+            candidates = self._provider_model_candidates("openrouter")
         if not candidates:
             raise ValueError("No OpenRouter model candidates configured.")
 
@@ -837,7 +964,7 @@ class LLMHandler:
                 resolved[provider] = f"unresolved: {e}"
         return resolved
 
-    def _query_provider_once(self, provider: str, prompt: str, schema_type: str | None):
+    def _query_provider_once(self, provider: str, prompt: str, schema_type: str | None, request_url: str | None = None):
         """
         Execute one provider query attempt and return text or None.
         """
@@ -845,6 +972,9 @@ class LLMHandler:
         response = None
 
         if provider == "openai":
+            if self._openai_in_timeout_cooldown():
+                logging.warning("query_llm(): Skipping OpenAI query due to active timeout cooldown.")
+                return None
             model = self._resolve_model_for_provider("openai")
             logging.info("query_llm(): Querying OpenAI")
             try:
@@ -854,7 +984,9 @@ class LLMHandler:
                     model = self._resolve_model_for_provider("openai", force_refresh=True)
                     response = self.query_openai(prompt, model, schema_type=schema_type)
                 else:
+                    self._record_openai_result(e)
                     raise
+            self._record_openai_result()
             if response:
                 logging.info("query_llm(): OpenAI response received.")
             else:
@@ -866,7 +998,7 @@ class LLMHandler:
                 logging.warning("query_llm(): Skipping OpenRouter query due to active cooldown.")
                 return None
             last_error = None
-            for model in self._openrouter_candidates_for_attempt():
+            for model in self._openrouter_candidates_for_attempt(request_url=request_url):
                 logging.info("query_llm(): Querying OpenRouter model %s", model)
                 try:
                     response = self.query_openrouter(prompt, model, schema_type=schema_type)
@@ -914,6 +1046,9 @@ class LLMHandler:
                 raise
 
         if provider == "gemini":
+            if self._gemini_in_timeout_cooldown():
+                logging.warning("query_llm(): Skipping Gemini query due to active timeout cooldown.")
+                return None
             model = self._resolve_model_for_provider("gemini")
             logging.info("query_llm(): Querying Gemini")
             try:
@@ -923,7 +1058,9 @@ class LLMHandler:
                     model = self._resolve_model_for_provider("gemini", force_refresh=True)
                     response = self.query_gemini(prompt, model, schema_type=schema_type)
                 else:
+                    self._record_gemini_result(e)
                     raise
+            self._record_gemini_result()
             if response:
                 logging.info("query_llm(): Gemini response received.")
             else:
@@ -962,23 +1099,22 @@ class LLMHandler:
         
         provider = self._select_primary_provider(url, for_tools=False)
 
-        fallback_enabled = self._fallback_enabled()
-        candidates = [str(provider).strip().lower()]
-        if fallback_enabled:
-            for fallback_provider in self._fallback_provider_order():
-                if fallback_provider not in candidates:
-                    candidates.append(fallback_provider)
+        candidates = self._candidate_providers_for_request(url, provider)
 
         # Deprioritize providers during active cooldown windows.
         if self._mistral_in_cooldown() and len(candidates) > 1:
             candidates = [p for p in candidates if p != "mistral"] + (["mistral"] if "mistral" in candidates else [])
         if self._openrouter_in_cooldown() and len(candidates) > 1:
             candidates = [p for p in candidates if p != "openrouter"] + (["openrouter"] if "openrouter" in candidates else [])
+        if self._openai_in_timeout_cooldown() and len(candidates) > 1:
+            candidates = [p for p in candidates if p != "openai"] + (["openai"] if "openai" in candidates else [])
+        if self._gemini_in_timeout_cooldown() and len(candidates) > 1:
+            candidates = [p for p in candidates if p != "gemini"] + (["gemini"] if "gemini" in candidates else [])
 
         response = None
         for candidate in candidates:
             try:
-                response = self._query_provider_once(candidate, prompt, schema_type)
+                response = self._query_provider_once(candidate, prompt, schema_type, request_url=url)
                 if response:
                     return response
             except Exception as e:
@@ -1017,9 +1153,9 @@ class LLMHandler:
             "calculate_date_range": calculate_date_range
         }
 
-        # Determine provider (same logic as query_llm)
-        provider = self._select_primary_provider(url, for_tools=True)
-        fallback_enabled = self._fallback_enabled()
+        # Determine provider candidate order (same logic as query_llm, but tool-capable)
+        primary_provider = self._select_primary_provider(url, for_tools=True)
+        provider_candidates = self._candidate_providers_for_request(url, primary_provider)
 
         # Initialize conversation messages
         messages = [{"role": "user", "content": prompt}]
@@ -1028,51 +1164,37 @@ class LLMHandler:
         for iteration in range(max_iterations):
             logging.info(f"query_llm(): Tool calling iteration {iteration + 1}/{max_iterations}")
 
-            # Query LLM with tools
-            if provider == 'mistral':
-                response = self._query_mistral_with_tools(messages, tools)
-                # Fallback only if truly no response and no tool calls
-                if not response or (not response.get("content") and not response.get("tool_calls")):
-                    if fallback_enabled:
-                        logging.warning("query_llm(): Mistral tools returned no content; falling back to OpenAI")
-                        response = self._query_openai_with_tools(messages, tools)
-                    else:
-                        logging.info("query_llm(): Fallback disabled for tool calls; not falling back from Mistral.")
-            elif provider == 'openrouter':
-                response = self._query_openrouter_with_tools(messages, tools)
-                if not response or (not response.get("content") and not response.get("tool_calls")):
-                    if fallback_enabled:
-                        logging.warning("query_llm(): OpenRouter tools returned no content; falling back to OpenAI")
-                        response = self._query_openai_with_tools(messages, tools)
-                        if not response or (not response.get("content") and not response.get("tool_calls")):
-                            logging.warning("query_llm(): OpenAI tools fallback returned no content; falling back to Gemini")
-                            response = self._query_gemini_with_tools(messages, tools)
-                    else:
-                        logging.info("query_llm(): Fallback disabled for tool calls; not falling back from OpenRouter.")
-            elif provider == 'gemini':
-                response = self._query_gemini_with_tools(messages, tools)
-                # Fallback only if truly no response and no tool calls
-                if not response or (not response.get("content") and not response.get("tool_calls")):
-                    if fallback_enabled:
-                        logging.warning("query_llm(): Gemini tools returned no content; falling back to OpenAI")
-                        response = self._query_openai_with_tools(messages, tools)
-                        if not response or (not response.get("content") and not response.get("tool_calls")):
-                            logging.warning("query_llm(): OpenAI tools fallback returned no content; falling back to Mistral")
-                            response = self._query_mistral_with_tools(messages, tools)
-                    else:
-                        logging.info("query_llm(): Fallback disabled for tool calls; not falling back from Gemini.")
-            elif provider == 'openai':
-                response = self._query_openai_with_tools(messages, tools)
-                # Fallback only if truly no response and no tool calls
-                if not response or (not response.get("content") and not response.get("tool_calls")):
-                    if fallback_enabled:
-                        logging.warning("query_llm(): OpenAI tools returned no content; falling back to Mistral")
-                        response = self._query_mistral_with_tools(messages, tools)
-                    else:
-                        logging.info("query_llm(): Fallback disabled for tool calls; not falling back from OpenAI.")
-            else:
-                logging.error("query_llm(): Invalid LLM provider")
-                return {"content": None, "tool_calls": [], "iterations": iteration}
+            response = None
+            for provider in provider_candidates:
+                # Respect cooldowns where possible
+                if provider == "mistral" and self._mistral_in_cooldown():
+                    logging.warning("query_llm(): Skipping Mistral tool query due to active cooldown.")
+                    continue
+                if provider == "openrouter" and self._openrouter_in_cooldown():
+                    logging.warning("query_llm(): Skipping OpenRouter tool query due to active cooldown.")
+                    continue
+                if provider == "openai" and self._openai_in_timeout_cooldown():
+                    logging.warning("query_llm(): Skipping OpenAI tool query due to active timeout cooldown.")
+                    continue
+                if provider == "gemini" and self._gemini_in_timeout_cooldown():
+                    logging.warning("query_llm(): Skipping Gemini tool query due to active timeout cooldown.")
+                    continue
+
+                if provider == "openai":
+                    response = self._query_openai_with_tools(messages, tools)
+                elif provider == "openrouter":
+                    response = self._query_openrouter_with_tools(messages, tools, request_url=url)
+                elif provider == "gemini":
+                    response = self._query_gemini_with_tools(messages, tools)
+                elif provider == "mistral":
+                    response = self._query_mistral_with_tools(messages, tools)
+                else:
+                    logging.warning("query_llm(): Unsupported tool-call provider '%s'; skipping.", provider)
+                    continue
+
+                has_content_or_calls = bool(response and (response.get("content") or response.get("tool_calls")))
+                if has_content_or_calls:
+                    break
 
             if not response:
                 logging.error(f"query_llm(): No response from providers during tool call")
@@ -1279,7 +1401,7 @@ class LLMHandler:
             logging.error(f"_query_openai_with_tools(): Error: {e}")
             return None
 
-    def _query_openrouter_with_tools(self, messages, tools):
+    def _query_openrouter_with_tools(self, messages, tools, request_url: str | None = None):
         """
         Query OpenRouter with OpenAI-compatible tool calling.
         """
@@ -1288,7 +1410,8 @@ class LLMHandler:
                 logging.error("_query_openrouter_with_tools(): OPENROUTER_API_KEY is not configured.")
                 return None
 
-            model = self._next_openrouter_model()
+            candidates = self._openrouter_candidates_for_attempt(request_url=request_url)
+            model = candidates[0]
             endpoint = f"{self.openrouter_base_url}/chat/completions"
             headers = {
                 "Authorization": f"Bearer {self.openrouter_token}",
@@ -1309,15 +1432,24 @@ class LLMHandler:
                 response.raise_for_status()
             except Exception as e:
                 if self._is_model_not_found_error(e):
-                    model = self._next_openrouter_model()
-                    payload["model"] = model
-                    response = requests.post(
-                        endpoint,
-                        headers=headers,
-                        json=payload,
-                        timeout=self.openrouter_timeout_seconds,
-                    )
-                    response.raise_for_status()
+                    for candidate in candidates[1:]:
+                        model = candidate
+                        payload["model"] = model
+                        response = requests.post(
+                            endpoint,
+                            headers=headers,
+                            json=payload,
+                            timeout=self.openrouter_timeout_seconds,
+                        )
+                        try:
+                            response.raise_for_status()
+                            break
+                        except Exception as model_err:
+                            if self._is_model_not_found_error(model_err):
+                                continue
+                            raise
+                    else:
+                        raise
                 else:
                     raise
 

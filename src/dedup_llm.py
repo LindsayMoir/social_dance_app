@@ -624,9 +624,20 @@ class DeduplicationHandler:
             - Appends proposed updates to fix_events if dry_run is True.
             - Logs information about the matching process.
         """
+        if self._is_low_quality_location_text(location):
+            logging.info(
+                "match_location_to_building: Skipping low-quality location '%s' to avoid propagating bad address matches.",
+                location,
+            )
+            return False
+
         building_query = "SELECT address_id, building_name, full_address FROM address WHERE building_name IS NOT NULL"
         building_df = pd.read_sql(text(building_query), self.engine)
-        building_list = building_df.to_dict('records')
+        building_list = [
+            r for r in building_df.to_dict('records')
+            if not self._is_low_quality_building_name(r.get('building_name'))
+            and not self._is_low_quality_location_text(r.get('full_address'))
+        ]
 
         best_score = 0
         best_record = None
@@ -651,6 +662,34 @@ class DeduplicationHandler:
             return True
         else:
             logging.info(f"match_location_to_building: No suitable fuzzy match found for location '{location}'. Best score: {best_score}.")
+        return False
+
+    @staticmethod
+    def _is_low_quality_building_name(name: Optional[str]) -> bool:
+        """Reject building names that are too short/noisy for reliable fuzzy matching."""
+        if not isinstance(name, str):
+            return True
+        cleaned = re.sub(r"\s+", " ", name).strip()
+        if len(cleaned) < 6:
+            return True
+        if re.fullmatch(r"[A-Z]{2,6}", cleaned):
+            return True
+        return False
+
+    @staticmethod
+    def _is_low_quality_location_text(location: Optional[str]) -> bool:
+        """Identify truncated/garbage location strings that should never be canonicalized."""
+        if not isinstance(location, str):
+            return True
+        cleaned = re.sub(r"\s+", " ", location).strip()
+        if not cleaned:
+            return True
+        # Common truncation artifact observed in logs (e.g., "UDIO, CA").
+        if re.fullmatch(r"[A-Z]{2,6},\s*CA", cleaned):
+            return True
+        # Country-only / nearly-empty location forms are too ambiguous.
+        if re.fullmatch(r"(CA|Canada|BC|Victoria|Vancouver)", cleaned, flags=re.IGNORECASE):
+            return True
         return False
 
 
@@ -1223,6 +1262,9 @@ class DeduplicationHandler:
             return -float('inf')
 
         score = 0
+        if self._is_low_quality_location_text(str(row.get('location', ''))):
+            # Keep row eligible, but strongly discourage choosing noisy location text as canonical.
+            score -= 5
 
         if pd.notnull(row['address_id']):
             score += 1

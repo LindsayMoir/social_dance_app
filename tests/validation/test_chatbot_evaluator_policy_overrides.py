@@ -114,3 +114,35 @@ def test_weekday_on_monday_single_date_not_penalized():
     assert out["score"] == 100
     assert "weekday_single_date_policy" in out["criteria_matched"]
     assert all("monday" not in issue.lower() for issue in out["sql_issues"])
+
+
+def test_next_week_sunday_to_saturday_window_not_penalized():
+    scorer = ChatbotScorer(_DummyLLM())
+
+    test_result = {
+        "question": "Show me lindy hop events next week",
+        "sql_query": (
+            "SELECT * FROM events WHERE (dance_style ILIKE '%lindy hop%' OR dance_style ILIKE '%lindy%') "
+            "AND start_date >= '2026-03-01' AND start_date <= '2026-03-07' "
+            "AND event_type ILIKE '%social dance%'"
+        ),
+        "current_date_used": "2026-02-24",
+    }
+    eval_result = {
+        "score": 85,
+        "reasoning": (
+            'The date range does not match the definition of "next week" '
+            "(it starts on 2026-03-01 instead of 2026-02-27)."
+        ),
+        "criteria_matched": ["dance_style", "event_type"],
+        "criteria_missed": ["timeframe"],
+        "sql_issues": ['Date range does not match definition of "next week"'],
+    }
+
+    out = scorer._apply_policy_overrides(test_result, eval_result)
+
+    assert out["score"] == 100
+    assert "next_week_window_policy" in out["criteria_matched"]
+    assert "timeframe" in out["criteria_matched"]
+    assert "timeframe" not in [c.lower() for c in out["criteria_missed"]]
+    assert all("next week" not in issue.lower() for issue in out["sql_issues"])
