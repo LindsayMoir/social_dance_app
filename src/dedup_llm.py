@@ -276,7 +276,19 @@ class DeduplicationHandler:
 
             response_df = self.process_chunk_with_llm(chunk, i)
             if response_df is not None:
+                logging.info(
+                    "def process_in_chunks(): chunk_start=%s input_rows=%s response_rows=%s",
+                    i,
+                    len(chunk),
+                    len(response_df),
+                )
                 response_dfs.append(response_df)
+            else:
+                logging.warning(
+                    "def process_in_chunks(): chunk_start=%s input_rows=%s produced no usable response.",
+                    i,
+                    len(chunk),
+                )
 
         return response_dfs
 
@@ -386,10 +398,32 @@ class DeduplicationHandler:
             int: The number of duplicate events deleted after merging and saving the results.
         """
         response_df = pd.concat(response_dfs, ignore_index=True)
+        logging.info(
+            "def merge_and_save_results(): input_rows=%s llm_response_rows=%s",
+            len(df),
+            len(response_df),
+        )
+
         df = df.merge(response_df, on="event_id", how="left")
+        labeled_rows = int(df["Label"].notna().sum()) if "Label" in df.columns else 0
+        duplicates_marked = int((df["Label"] == 1).sum()) if "Label" in df.columns else 0
+        logging.info(
+            "def merge_and_save_results(): merged_rows=%s labeled_rows=%s duplicates_marked_for_delete=%s",
+            len(df),
+            labeled_rows,
+            duplicates_marked,
+        )
 
         df.to_csv(self.config['output']['dedup'], index=False)
+        logging.info(
+            "def merge_and_save_results(): Wrote merged dedup decisions to %s",
+            self.config['output']['dedup'],
+        )
         deleted_count = self.delete_duplicates(df)
+        logging.info(
+            "def merge_and_save_results(): delete_duplicates() removed %s events.",
+            deleted_count,
+        )
         return deleted_count
 
     def delete_duplicates(self, df):
