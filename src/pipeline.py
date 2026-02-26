@@ -69,7 +69,14 @@ COMMON_CONFIG_UPDATES = {
          "max_website_urls": 10,
          "urls_run_limit": 500,  # default for all steps
     },
-    "llm": {"provider": "openai", "spend_money": True, "fallback_enabled": False}
+    "llm": {
+        "provider": "round_robin",
+        "provider_rotation_enabled": True,
+        "provider_rotation_order": ["openai", "mistral", "gemini"],
+        "fallback_enabled": True,
+        "fallback_provider_order": ["openai", "gemini", "mistral"],
+        "spend_money": True,
+    }
 }
 
 PARALLEL_CRAWL_CONFIG_UPDATES = copy.deepcopy(COMMON_CONFIG_UPDATES)

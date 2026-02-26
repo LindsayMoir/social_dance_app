@@ -129,6 +129,8 @@ class LLMHandler:
         self.mistral_cooldown_until = None
         self.gemini_token = os.getenv("GEMINI_API" + "_KEY")
         self.gemini_timeout_seconds = int(llm_config.get("gemini_timeout_seconds", 60) or 60)
+        self.provider_rotation_enabled = bool(llm_config.get("provider_rotation_enabled", False))
+        self.provider_rotation_index = 0
 
         # Get the keywords      
         self.keywords_list = self.get_keywords()
@@ -481,6 +483,47 @@ class LLMHandler:
         valid = {"openai", "mistral", "gemini"}
         return [provider for provider in order if provider in valid]
 
+    def _provider_rotation_order(self, for_tools: bool = False) -> list[str]:
+        """
+        Return ordered providers for round-robin primary selection.
+        """
+        llm_cfg = self.config.get("llm", {})
+        configured = llm_cfg.get("provider_rotation_order")
+        if isinstance(configured, list):
+            order = [str(item).strip().lower() for item in configured if str(item).strip()]
+        else:
+            order = ["openai", "mistral", "gemini"]
+
+        valid = {"openai", "mistral", "gemini"}
+        if for_tools:
+            # Gemini tool-calling is not enabled in this code path.
+            valid = {"openai", "mistral"}
+        filtered = [provider for provider in order if provider in valid]
+        return filtered or (["openai", "mistral"] if for_tools else ["openai", "mistral", "gemini"])
+
+    def _next_round_robin_provider(self, for_tools: bool = False) -> str:
+        """
+        Select the next provider in round-robin order.
+        """
+        order = self._provider_rotation_order(for_tools=for_tools)
+        provider = order[self.provider_rotation_index % len(order)]
+        self.provider_rotation_index = (self.provider_rotation_index + 1) % len(order)
+        return provider
+
+    def _select_primary_provider(self, url: str, for_tools: bool = False) -> str:
+        """
+        Select the primary provider for a request.
+        """
+        lower_url = (url or "").lower()
+        if "bard" in lower_url:
+            return "openai"
+
+        configured = str(self.config.get("llm", {}).get("provider", "openai")).strip().lower()
+        use_rotation = self.provider_rotation_enabled or configured == "round_robin"
+        if use_rotation:
+            return self._next_round_robin_provider(for_tools=for_tools)
+        return configured
+
     def _query_provider_once(self, provider: str, prompt: str, schema_type: str | None):
         """
         Execute one provider query attempt and return text or None.
@@ -556,12 +599,7 @@ class LLMHandler:
             result = self._query_with_tools(url, prompt, tools, max_iterations)
             return result.get('content') if result else None
         
-        # Mistral does not process the Bard and Banker website correctly, so we need to check the URL
-        lower = url.lower()
-        if 'bard' in lower:
-            provider = 'openai'
-        else:
-            provider = self.config['llm']['provider']
+        provider = self._select_primary_provider(url, for_tools=False)
 
         fallback_enabled = self._fallback_enabled()
         candidates = [str(provider).strip().lower()]
@@ -612,11 +650,7 @@ class LLMHandler:
         }
 
         # Determine provider (same logic as query_llm)
-        lower = url.lower()
-        if 'bard' in lower:
-            provider = 'openai'
-        else:
-            provider = self.config['llm']['provider']
+        provider = self._select_primary_provider(url, for_tools=True)
         fallback_enabled = self._fallback_enabled()
         if provider == "gemini":
             logging.info("query_llm(): Gemini tool-calling not enabled; using OpenAI tools path.")
