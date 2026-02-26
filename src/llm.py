@@ -111,11 +111,17 @@ class LLMHandler:
         # Inject LLMHandler back into DatabaseHandler to break circular import
         self.db_handler.set_llm_handler(self)
 
-        # Set up OpenAI client with timeout
+        llm_config = self.config.get('llm', {})
+
+        # Set up OpenAI client with timeout/retry controls
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         openai.api_key = self.openai_api_key
-        # Set reasonable timeout for OpenAI API calls (60 seconds)
-        self.openai_client = OpenAI(timeout=60.0)
+        self.openai_timeout_seconds = float(llm_config.get("openai_timeout_seconds", 35) or 35)
+        self.openai_max_retries = int(llm_config.get("openai_max_retries", 0) or 0)
+        self.openai_client = OpenAI(
+            timeout=self.openai_timeout_seconds,
+            max_retries=self.openai_max_retries,
+        )
 
         # Set up Mistral client with timeout
         mistral_api_key = os.environ["MISTRAL_API_KEY"]
@@ -123,7 +129,6 @@ class LLMHandler:
         # Note: Mistral uses timeout_ms (milliseconds) instead of timeout (seconds)
         self.mistral_client = Mistral(api_key=mistral_api_key, timeout_ms=60000)
         self.mistral_rate_limit_strikes = 0
-        llm_config = self.config.get('llm', {})
         self.mistral_rate_limit_max_strikes = int(llm_config.get('mistral_rate_limit_max_strikes', 2) or 2)
         self.mistral_cooldown_seconds = int(llm_config.get('mistral_cooldown_seconds', 300) or 300)
         self.mistral_cooldown_until = None
@@ -138,6 +143,10 @@ class LLMHandler:
             llm_config.get("openrouter_model_rotation_enabled", True)
         )
         self.openrouter_model_rotation_index = 0
+        self.openrouter_rate_limit_strikes = 0
+        self.openrouter_rate_limit_max_strikes = int(llm_config.get("openrouter_rate_limit_max_strikes", 2) or 2)
+        self.openrouter_cooldown_seconds = int(llm_config.get("openrouter_cooldown_seconds", 300) or 300)
+        self.openrouter_cooldown_until = None
         self.provider_rotation_enabled = bool(llm_config.get("provider_rotation_enabled", False))
         self.provider_rotation_index = 0
         self._resolved_provider_models: dict[str, str] = {}
@@ -290,46 +299,89 @@ class LLMHandler:
                 len(extracted_text or ""),
                 len(trimmed_text or ""),
             )
-        llm_response = self.query_llm(url, prompt_text, schema_type)
 
-        if llm_response:
-            # Check if this is a schema type that expects JSON parsing
-            if schema_type is None:
-                # For prompts with no schema (like relevance checks), don't try to parse JSON
-                logging.warning(f"def process_llm_response: Called with schema_type=None for URL {url}. This method is for event extraction, not relevance checking.")
-                return False
-            
-            parsed_result = self.extract_and_parse_json(llm_response, url, schema_type)
+        logging.info(
+            "def process_llm_response: URL %s extracted_text_len=%d prompt_len=%d schema_type=%s",
+            url,
+            len(extracted_text or ""),
+            len(prompt_text or ""),
+            schema_type,
+        )
 
-            if parsed_result:
-                # If the OCR layer provided a Detected_Date/Detected_Day hint, override parsed dates to match it.
-                try:
-                    import re as _re
-                    m = _re.search(r"(?im)^Detected_Date:\s*(\d{4}-\d{2}-\d{2})", extracted_text or "")
-                    detected_date = m.group(1) if m else None
-                except Exception:
-                    detected_date = None
-                events_df = pd.DataFrame(parsed_result)
-                if detected_date:
+        # One controlled retry for non-parseable outputs.
+        retry_suffix = (
+            "\n\nReturn ONLY valid JSON matching the required schema. "
+            "Do not include prose, markdown fences, or explanations."
+        )
+        prompt_attempts = [prompt_text, prompt_text + retry_suffix]
+
+        for attempt_index, prompt_attempt in enumerate(prompt_attempts, start=1):
+            llm_response = self.query_llm(url, prompt_attempt, schema_type)
+
+            if llm_response:
+                logging.info(
+                    "def process_llm_response: URL %s attempt=%d llm_response_len=%d",
+                    url,
+                    attempt_index,
+                    len(llm_response),
+                )
+                # Check if this is a schema type that expects JSON parsing
+                if schema_type is None:
+                    # For prompts with no schema (like relevance checks), don't try to parse JSON
+                    logging.warning(
+                        "def process_llm_response: Called with schema_type=None for URL %s. "
+                        "This method is for event extraction, not relevance checking.",
+                        url,
+                    )
+                    return False
+
+                parsed_result = self.extract_and_parse_json(llm_response, url, schema_type)
+
+                if parsed_result:
+                    # If the OCR layer provided a Detected_Date/Detected_Day hint, override parsed dates to match it.
                     try:
-                        events_df['start_date'] = detected_date
-                        events_df['end_date'] = events_df.get('end_date', '')
-                        events_df['end_date'] = events_df['end_date'].where(events_df['end_date'].astype(str).str.len() > 0, detected_date)
-                        import pandas as _pd
-                        _sd = _pd.to_datetime(detected_date, errors='coerce')
-                        wd = _sd.day_name() if _sd is not _pd.NaT else None
-                        if wd:
-                            events_df['day_of_week'] = wd
-                        logging.info(f"process_llm_response: Overrode dates from Detected_Date hint: {detected_date}")
-                    except Exception as _e:
-                        logging.warning(f"process_llm_response: Failed to apply Detected_Date override: {_e}")
-                self.db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_list)
-                logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
-                return True
-        
-        else:
-            logging.error(f"def process_llm_response: Failed to process LLM response for URL: {url}")
-            return False
+                        import re as _re
+                        m = _re.search(r"(?im)^Detected_Date:\s*(\d{4}-\d{2}-\d{2})", extracted_text or "")
+                        detected_date = m.group(1) if m else None
+                    except Exception:
+                        detected_date = None
+                    events_df = pd.DataFrame(parsed_result)
+                    if detected_date:
+                        try:
+                            events_df['start_date'] = detected_date
+                            events_df['end_date'] = events_df.get('end_date', '')
+                            events_df['end_date'] = events_df['end_date'].where(events_df['end_date'].astype(str).str.len() > 0, detected_date)
+                            import pandas as _pd
+                            _sd = _pd.to_datetime(detected_date, errors='coerce')
+                            wd = _sd.day_name() if _sd is not _pd.NaT else None
+                            if wd:
+                                events_df['day_of_week'] = wd
+                            logging.info(f"process_llm_response: Overrode dates from Detected_Date hint: {detected_date}")
+                        except Exception as _e:
+                            logging.warning(f"process_llm_response: Failed to apply Detected_Date override: {_e}")
+                    self.db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_list)
+                    logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
+                    return True
+
+                if attempt_index < len(prompt_attempts):
+                    logging.warning(
+                        "def process_llm_response: URL %s attempt=%d returned non-parseable response; retrying once with strict JSON instruction.",
+                        url,
+                        attempt_index,
+                    )
+                    continue
+
+            else:
+                logging.warning(
+                    "def process_llm_response: URL %s attempt=%d returned empty LLM response.",
+                    url,
+                    attempt_index,
+                )
+                if attempt_index < len(prompt_attempts):
+                    continue
+
+        logging.error(f"def process_llm_response: Failed to process LLM response for URL: {url}")
+        return False
 
     @staticmethod
     def _trim_extracted_text_for_budget(extracted_text: str, max_chars: int) -> str:
@@ -446,6 +498,11 @@ class LLMHandler:
         message = str(error).lower()
         return "429" in message or "rate limit" in message or "too many requests" in message
 
+    def _is_openrouter_rate_limited(self, error: Exception) -> bool:
+        """Return True when the OpenRouter failure looks like a rate limit."""
+        message = str(error).lower()
+        return "429" in message or "rate limit" in message or "too many requests" in message
+
     def _mistral_in_cooldown(self) -> bool:
         """Return True while Mistral rate-limit cooldown window is active."""
         if self.mistral_cooldown_until is None:
@@ -472,6 +529,34 @@ class LLMHandler:
                 "query_llm(): Entering Mistral cooldown until %s after %s consecutive rate limits",
                 self.mistral_cooldown_until.isoformat(),
                 self.mistral_rate_limit_strikes,
+            )
+
+    def _openrouter_in_cooldown(self) -> bool:
+        """Return True while OpenRouter rate-limit cooldown window is active."""
+        if self.openrouter_cooldown_until is None:
+            return False
+        now = datetime.now()
+        if now >= self.openrouter_cooldown_until:
+            self.openrouter_cooldown_until = None
+            self.openrouter_rate_limit_strikes = 0
+            return False
+        return True
+
+    def _record_openrouter_result(self, error: Exception = None) -> None:
+        """Update strike/cooldown state after an OpenRouter attempt."""
+        if error is None:
+            self.openrouter_rate_limit_strikes = 0
+            self.openrouter_cooldown_until = None
+            return
+        if not self._is_openrouter_rate_limited(error):
+            return
+        self.openrouter_rate_limit_strikes += 1
+        if self.openrouter_rate_limit_strikes >= self.openrouter_rate_limit_max_strikes:
+            self.openrouter_cooldown_until = datetime.now() + timedelta(seconds=self.openrouter_cooldown_seconds)
+            logging.warning(
+                "query_llm(): Entering OpenRouter cooldown until %s after %s consecutive rate limits",
+                self.openrouter_cooldown_until.isoformat(),
+                self.openrouter_rate_limit_strikes,
             )
 
     def _fallback_enabled(self) -> bool:
@@ -520,8 +605,10 @@ class LLMHandler:
         for offset in range(len(order)):
             idx = (start_index + offset) % len(order)
             provider = order[idx]
-            # Deprioritize Mistral while in cooldown when alternatives exist.
+            # Deprioritize providers while in cooldown when alternatives exist.
             if provider == "mistral" and self._mistral_in_cooldown() and len(order) > 1:
+                continue
+            if provider == "openrouter" and self._openrouter_in_cooldown() and len(order) > 1:
                 continue
             self.provider_rotation_index = (idx + 1) % len(order)
             return provider
@@ -747,6 +834,9 @@ class LLMHandler:
             return response
 
         if provider == "openrouter":
+            if self._openrouter_in_cooldown():
+                logging.warning("query_llm(): Skipping OpenRouter query due to active cooldown.")
+                return None
             model = self._next_openrouter_model()
             logging.info("query_llm(): Querying OpenRouter")
             try:
@@ -756,7 +846,9 @@ class LLMHandler:
                     model = self._next_openrouter_model()
                     response = self.query_openrouter(prompt, model, schema_type=schema_type)
                 else:
+                    self._record_openrouter_result(e)
                     raise
+            self._record_openrouter_result()
             if response:
                 logging.info("query_llm(): OpenRouter response received.")
             else:
@@ -844,9 +936,11 @@ class LLMHandler:
                 if fallback_provider not in candidates:
                     candidates.append(fallback_provider)
 
-        # Deprioritize Mistral during active cooldown when alternatives are present.
+        # Deprioritize providers during active cooldown windows.
         if self._mistral_in_cooldown() and len(candidates) > 1:
             candidates = [p for p in candidates if p != "mistral"] + (["mistral"] if "mistral" in candidates else [])
+        if self._openrouter_in_cooldown() and len(candidates) > 1:
+            candidates = [p for p in candidates if p != "openrouter"] + (["openrouter"] if "openrouter" in candidates else [])
 
         response = None
         for candidate in candidates:
@@ -1606,6 +1700,56 @@ class LLMHandler:
             return "\n".join(text_parts).strip()
         return str(content).strip() if content is not None else None
 
+    def _sanitize_schema_for_gemini(self, schema_fragment):
+        """
+        Convert JSON Schema to a Gemini-friendly subset.
+        """
+        if isinstance(schema_fragment, list):
+            return [self._sanitize_schema_for_gemini(item) for item in schema_fragment]
+        if not isinstance(schema_fragment, dict):
+            return schema_fragment
+
+        sanitized = {}
+        for key, value in schema_fragment.items():
+            if key in {"name", "strict", "$schema"}:
+                continue
+            if key == "additionalProperties":
+                # Gemini frequently rejects strict additionalProperties constraints.
+                continue
+            if key in {"oneOf", "anyOf", "allOf"}:
+                # Keep first branch for provider compatibility.
+                if isinstance(value, list) and value:
+                    first_branch = self._sanitize_schema_for_gemini(value[0])
+                    if isinstance(first_branch, dict):
+                        for branch_key, branch_value in first_branch.items():
+                            sanitized[branch_key] = branch_value
+                continue
+            if key == "type" and isinstance(value, list):
+                non_null = [t for t in value if t != "null"]
+                if non_null:
+                    sanitized["type"] = non_null[0]
+                if "null" in value:
+                    sanitized["nullable"] = True
+                continue
+
+            sanitized[key] = self._sanitize_schema_for_gemini(value)
+
+        schema_type = sanitized.get("type")
+        if schema_type == "object" and "properties" not in sanitized:
+            sanitized["properties"] = {}
+        if schema_type == "object" and "required" in sanitized and not sanitized.get("properties"):
+            sanitized.pop("required", None)
+        return sanitized
+
+    def _gemini_schema_for_type(self, schema_type: str):
+        """
+        Build provider-compatible Gemini response schema from OpenAI base schema.
+        """
+        openai_schema = self._get_json_schema_by_type(schema_type, "openai")
+        if not isinstance(openai_schema, dict):
+            return None
+        raw_schema = openai_schema.get("schema", openai_schema)
+        return self._sanitize_schema_for_gemini(raw_schema)
 
     def _get_json_schema_by_type(self, schema_type, provider="mistral"):
         """
@@ -1614,6 +1758,10 @@ class LLMHandler:
         """
         if not schema_type:
             return None
+        provider_lower = str(provider or "").lower()
+
+        if provider_lower == "gemini":
+            return self._gemini_schema_for_type(schema_type)
         
         # Define event properties once to avoid duplication
         event_properties = {
@@ -1636,7 +1784,7 @@ class LLMHandler:
                          "price", "location", "description"]
             
         # Provider-specific schemas
-        if provider.lower() == "openai":
+        if provider_lower == "openai":
             schemas = {
                 "event_extraction": {
                     "name": "event_extraction",
@@ -1760,16 +1908,6 @@ class LLMHandler:
                     }
                 }
             }
-            # Gemini uses the same structural schema as OpenAI response schema,
-            # but does not use OpenAI's wrapper fields like name/strict.
-            if provider.lower() == "gemini":
-                gemini_schemas = {}
-                for schema_name, schema_payload in schemas.items():
-                    if isinstance(schema_payload, dict) and "schema" in schema_payload:
-                        gemini_schemas[schema_name] = schema_payload["schema"]
-                    else:
-                        gemini_schemas[schema_name] = schema_payload
-                return gemini_schemas.get(schema_type)
         else:  # Mistral and others
             schemas = {
                 "event_extraction": {

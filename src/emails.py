@@ -232,6 +232,12 @@ class GmailProcessor:
             extracted_text = self.fetch_latest_email(email)
 
             if extracted_text:
+                extracted_len = len(extracted_text or "")
+                logging.info(
+                    "def _process_from_gmail(): Email %s extracted_text length=%d chars",
+                    email,
+                    extracted_len,
+                )
                 # Process extracted text with LLMHandler (this will call write_events_to_db)
                 parent_url = 'email inbox'
                 llm_status = self.llm_handler.process_llm_response(email, parent_url, extracted_text, source, keywords, prompt_type)

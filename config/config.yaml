@@ -106,6 +106,8 @@ llm:
   openai_model_candidates:
   - gpt-5-mini
   - gpt-4.1-mini
+  openai_max_retries: 0
+  openai_timeout_seconds: 35
   openrouter_base_url: https://openrouter.ai/api/v1
   openrouter_model: openai/gpt-oss-120b:free
   openrouter_model_candidates:
@@ -113,6 +115,8 @@ llm:
   - qwen/qwen3-coder:free
   - mistralai/mistral-small-3.1-24b-instruct:free
   openrouter_model_rotation_enabled: true
+  openrouter_rate_limit_max_strikes: 2
+  openrouter_cooldown_seconds: 300
   openrouter_timeout_seconds: 60
   provider: round_robin
   provider_rotation_enabled: true
