@@ -495,11 +495,8 @@ class LLMHandler:
             order = ["openai", "mistral", "gemini"]
 
         valid = {"openai", "mistral", "gemini"}
-        if for_tools:
-            # Gemini tool-calling is not enabled in this code path.
-            valid = {"openai", "mistral"}
         filtered = [provider for provider in order if provider in valid]
-        return filtered or (["openai", "mistral"] if for_tools else ["openai", "mistral", "gemini"])
+        return filtered or ["openai", "mistral", "gemini"]
 
     def _next_round_robin_provider(self, for_tools: bool = False) -> str:
         """
@@ -652,9 +649,6 @@ class LLMHandler:
         # Determine provider (same logic as query_llm)
         provider = self._select_primary_provider(url, for_tools=True)
         fallback_enabled = self._fallback_enabled()
-        if provider == "gemini":
-            logging.info("query_llm(): Gemini tool-calling not enabled; using OpenAI tools path.")
-            provider = "openai"
 
         # Initialize conversation messages
         messages = [{"role": "user", "content": prompt}]
@@ -673,6 +667,18 @@ class LLMHandler:
                         response = self._query_openai_with_tools(messages, tools)
                     else:
                         logging.info("query_llm(): Fallback disabled for tool calls; not falling back from Mistral.")
+            elif provider == 'gemini':
+                response = self._query_gemini_with_tools(messages, tools)
+                # Fallback only if truly no response and no tool calls
+                if not response or (not response.get("content") and not response.get("tool_calls")):
+                    if fallback_enabled:
+                        logging.warning("query_llm(): Gemini tools returned no content; falling back to OpenAI")
+                        response = self._query_openai_with_tools(messages, tools)
+                        if not response or (not response.get("content") and not response.get("tool_calls")):
+                            logging.warning("query_llm(): OpenAI tools fallback returned no content; falling back to Mistral")
+                            response = self._query_mistral_with_tools(messages, tools)
+                    else:
+                        logging.info("query_llm(): Fallback disabled for tool calls; not falling back from Gemini.")
             elif provider == 'openai':
                 response = self._query_openai_with_tools(messages, tools)
                 # Fallback only if truly no response and no tool calls
@@ -869,6 +875,135 @@ class LLMHandler:
             logging.error(f"_query_openai_with_tools(): Error: {e}")
             return None
 
+    def _convert_tools_to_gemini(self, tools):
+        """
+        Convert OpenAI-style tools payload to Gemini functionDeclarations format.
+        """
+        function_declarations = []
+        for tool in tools or []:
+            function_obj = None
+            if isinstance(tool, dict):
+                function_obj = tool.get("function") if tool.get("type") == "function" else tool.get("function", tool)
+            if not isinstance(function_obj, dict):
+                continue
+            name = function_obj.get("name")
+            if not name:
+                continue
+            declaration = {
+                "name": name,
+                "description": function_obj.get("description", ""),
+                "parameters": function_obj.get("parameters", {"type": "object", "properties": {}}),
+            }
+            function_declarations.append(declaration)
+        if not function_declarations:
+            return []
+        return [{"functionDeclarations": function_declarations}]
+
+    def _convert_messages_to_gemini_contents(self, messages):
+        """
+        Convert internal message format to Gemini contents array.
+        """
+        contents = []
+        for msg in messages or []:
+            role = (msg.get("role") or "").lower()
+            if role == "user":
+                text = msg.get("content") or ""
+                contents.append({"role": "user", "parts": [{"text": str(text)}]})
+                continue
+
+            if role == "assistant":
+                parts = []
+                content_text = msg.get("content")
+                if content_text:
+                    parts.append({"text": str(content_text)})
+                for tool_call in msg.get("tool_calls", []) or []:
+                    fn = (tool_call or {}).get("function", {})
+                    fn_name = fn.get("name")
+                    fn_args_raw = fn.get("arguments", "{}")
+                    try:
+                        fn_args = json.loads(fn_args_raw) if isinstance(fn_args_raw, str) else (fn_args_raw or {})
+                    except Exception:
+                        fn_args = {}
+                    if fn_name:
+                        parts.append({"functionCall": {"name": fn_name, "args": fn_args}})
+                if parts:
+                    contents.append({"role": "model", "parts": parts})
+                continue
+
+            if role == "tool":
+                fn_name = msg.get("name")
+                raw_content = msg.get("content", "")
+                try:
+                    parsed = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+                except Exception:
+                    parsed = {"result": str(raw_content)}
+                if not isinstance(parsed, dict):
+                    parsed = {"result": parsed}
+                if fn_name:
+                    contents.append({
+                        "role": "user",
+                        "parts": [{"functionResponse": {"name": fn_name, "response": parsed}}],
+                    })
+                continue
+
+        return contents
+
+    def _query_gemini_with_tools(self, messages, tools):
+        """
+        Query Gemini with tool calling support using REST generateContent.
+        """
+        try:
+            if not self.gemini_token:
+                logging.error("_query_gemini_with_tools(): GEMINI_API_KEY is not configured.")
+                return None
+
+            model = self.config.get("llm", {}).get("gemini_model", "gemini-1.5-flash")
+            endpoint = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model}:generateContent"
+            )
+            payload = {
+                "contents": self._convert_messages_to_gemini_contents(messages),
+                "tools": self._convert_tools_to_gemini(tools),
+            }
+            headers = {"x-goog-api-key": self.gemini_token}
+            response = requests.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=self.gemini_timeout_seconds,
+            )
+            response.raise_for_status()
+            data = response.json()
+            candidates = data.get("candidates", [])
+            if not candidates:
+                return None
+
+            parts = (candidates[0].get("content") or {}).get("parts", [])
+            text_parts = []
+            tool_calls = []
+            for idx, part in enumerate(parts):
+                if not isinstance(part, dict):
+                    continue
+                if part.get("text"):
+                    text_parts.append(str(part.get("text")))
+                function_call = part.get("functionCall")
+                if isinstance(function_call, dict):
+                    tool_calls.append({
+                        "id": f"gemini{idx:03d}",
+                        "function": {
+                            "name": function_call.get("name"),
+                            "arguments": json.dumps(function_call.get("args", {})),
+                        },
+                    })
+
+            if tool_calls:
+                return {"content": "\n".join(text_parts).strip() if text_parts else "", "tool_calls": tool_calls}
+            return {"content": "\n".join(text_parts).strip() if text_parts else None}
+        except Exception as e:
+            logging.error(f"_query_gemini_with_tools(): Error: {e}")
+            return None
+
     def query_openai(self, prompt, model, image_url=None, schema_type=None):
         """
         Handles querying OpenAI LLM, optionally attaching an image.
@@ -986,7 +1121,7 @@ class LLMHandler:
         generation_config = {}
         if schema_type:
             generation_config["responseMimeType"] = "application/json"
-            schema = self._get_json_schema_by_type(schema_type, "mistral")
+            schema = self._get_json_schema_by_type(schema_type, "gemini")
             if schema:
                 raw_schema = schema.get("schema", schema) if isinstance(schema, dict) else schema
                 generation_config["responseSchema"] = raw_schema
@@ -1171,6 +1306,16 @@ class LLMHandler:
                     }
                 }
             }
+            # Gemini uses the same structural schema as OpenAI response schema,
+            # but does not use OpenAI's wrapper fields like name/strict.
+            if provider.lower() == "gemini":
+                gemini_schemas = {}
+                for schema_name, schema_payload in schemas.items():
+                    if isinstance(schema_payload, dict) and "schema" in schema_payload:
+                        gemini_schemas[schema_name] = schema_payload["schema"]
+                    else:
+                        gemini_schemas[schema_name] = schema_payload
+                return gemini_schemas.get(schema_type)
         else:  # Mistral and others
             schemas = {
                 "event_extraction": {
