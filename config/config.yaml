@@ -14,7 +14,6 @@ constants:
   fb_location_id: '&filters=eyJycF9ldmVudHNfbG9jYXRpb246MCI6IntcIm5hbWVcIjpcImZpbHRlcl9ldmVudHNfbG9jYXRpb25cIixcImFyZ3NcIjpcIjEwMzEzNTg3OTcyNzM4MlwifSJ9'
 crawling:
   depth_limit: 2
-  headless: true
   fb_base_urls_limit: 180
   fb_block_cooldown_base_seconds: 300
   fb_block_cooldown_max_seconds: 1800
@@ -25,6 +24,7 @@ crawling:
   fb_final_wait_ms: 700
   fb_post_expand_wait_ms: 900
   fb_post_nav_wait_ms: 1800
+  headless: true
   max_attempts: 3
   max_crawl_trys: 3
   max_website_urls: 10
@@ -68,20 +68,21 @@ input:
   urls: data/urls
 llm:
   anthropic_model: claude-opus-4-20250514
+  fallback_enabled: true
   fallback_provider_order:
+  - openrouter
   - openai
   - gemini
   - mistral
-  fallback_enabled: true
   gemini_model: gemini-2.5-flash
   gemini_model_candidates:
   - gemini-2.5-flash
   - gemini-flash-latest
   gemini_timeout_seconds: 60
+  mistral_model: mistral-large-2512
   mistral_model_candidates:
   - mistral-large-2512
   - mistral-large-latest
-  mistral_model: mistral-large-2512
   model_alias: default_fast
   model_candidates:
     gemini:
@@ -92,6 +93,11 @@ llm:
       default_fast:
       - mistral-large-2512
       - mistral-large-latest
+    openrouter:
+      default_fast:
+      - openai/gpt-oss-120b:free
+      - qwen/qwen3-coder:free
+      - mistralai/mistral-small-3.1-24b-instruct:free
     openai:
       default_fast:
       - gpt-5-mini
@@ -100,9 +106,18 @@ llm:
   openai_model_candidates:
   - gpt-5-mini
   - gpt-4.1-mini
+  openrouter_base_url: https://openrouter.ai/api/v1
+  openrouter_model: openai/gpt-oss-120b:free
+  openrouter_model_candidates:
+  - openai/gpt-oss-120b:free
+  - qwen/qwen3-coder:free
+  - mistralai/mistral-small-3.1-24b-instruct:free
+  openrouter_model_rotation_enabled: true
+  openrouter_timeout_seconds: 60
   provider: round_robin
   provider_rotation_enabled: true
   provider_rotation_order:
+  - openrouter
   - openai
   - mistral
   - gemini
@@ -114,6 +129,42 @@ logging:
   log_file: logs/pipeline_4938_20250728_113202680395.log
   log_file_p2: logs/log_file_p2.txt
   scraper_log_file: logs/scraper_log.txt
+normalization:
+  event_overrides:
+  - match:
+      url_contains: debrhymerband.com/shows
+    name: debrhymer_shows_event_type
+    set:
+      event_type: social dance, live music
+  source_score_penalties:
+  - match:
+      source_equals: Victoria Latin Dance Association
+    name: vlda_dedup_penalty
+    penalty: 100
+  synthetic_events:
+  - enabled: true
+    event:
+      dance_style: cuban salsa, rueda, salsa
+      day_of_week: Wednesday
+      description: Weekly UVic cuban rueda salsa lesson, followed by a social dance.
+        This happens most Wednesdays. Usually outside of the Students Union Building
+        and sometimes inside at Vertigo. Please check and see if it is on this week.
+      end_date: ''
+      end_time: '21:00'
+      event_name: UVic Salsa Rueda
+      event_type: class, social dance
+      location: Uvic Students Union Building, 3800 Finnerty Rd A101E, Victoria, BC
+        V8P 5C2
+      price: '0'
+      source: Uvic Cuban Salsa Club
+      start_date: ''
+      start_time: '19:00'
+      url: https://www.facebook.com/groups/cubansalsaclub/
+    name: uvic_rueda_weekly
+    recurrence:
+      include_today: true
+      type: weekly_weekday
+      weekday: Wednesday
 output:
   dedup: output/dedup.csv
   ebs_events: data/other/ebs_events.csv
@@ -124,39 +175,6 @@ output:
   gs_search_results: output/gs_search_results.csv
   irrelevant_rows: output/irrelevant_rows.csv
   is_foreign: output/is_foreign.csv
-normalization:
-  event_overrides:
-  - name: debrhymer_shows_event_type
-    match:
-      url_contains: debrhymerband.com/shows
-    set:
-      event_type: social dance, live music
-  source_score_penalties:
-  - name: vlda_dedup_penalty
-    match:
-      source_equals: Victoria Latin Dance Association
-    penalty: 100
-  synthetic_events:
-  - name: uvic_rueda_weekly
-    enabled: true
-    event:
-      source: Uvic Cuban Salsa Club
-      dance_style: cuban salsa, rueda, salsa
-      url: https://www.facebook.com/groups/cubansalsaclub/
-      event_type: class, social dance
-      event_name: UVic Salsa Rueda
-      day_of_week: Wednesday
-      start_date: ''
-      end_date: ''
-      start_time: '19:00'
-      end_time: '21:00'
-      price: '0'
-      location: Uvic Students Union Building, 3800 Finnerty Rd A101E, Victoria, BC V8P 5C2
-      description: Weekly UVic cuban rueda salsa lesson, followed by a social dance. This happens most Wednesdays. Usually outside of the Students Union Building and sometimes inside at Vertigo. Please check and see if it is on this week.
-    recurrence:
-      type: weekly_weekday
-      weekday: Wednesday
-      include_today: true
 prompts:
   address:
     file: prompts/address_from_raw_page.txt

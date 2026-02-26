@@ -129,6 +129,15 @@ class LLMHandler:
         self.mistral_cooldown_until = None
         self.gemini_token = os.getenv("GEMINI_API" + "_KEY")
         self.gemini_timeout_seconds = int(llm_config.get("gemini_timeout_seconds", 60) or 60)
+        self.openrouter_token = os.getenv("OPENROUTER_API" + "_KEY")
+        self.openrouter_base_url = str(
+            llm_config.get("openrouter_base_url", "https://openrouter.ai/api/v1")
+        ).rstrip("/")
+        self.openrouter_timeout_seconds = int(llm_config.get("openrouter_timeout_seconds", 60) or 60)
+        self.openrouter_model_rotation_enabled = bool(
+            llm_config.get("openrouter_model_rotation_enabled", True)
+        )
+        self.openrouter_model_rotation_index = 0
         self.provider_rotation_enabled = bool(llm_config.get("provider_rotation_enabled", False))
         self.provider_rotation_index = 0
         self._resolved_provider_models: dict[str, str] = {}
@@ -481,7 +490,7 @@ class LLMHandler:
             order = [str(item).strip().lower() for item in configured if str(item).strip()]
         else:
             order = ["openai", "gemini", "mistral"]
-        valid = {"openai", "mistral", "gemini"}
+        valid = {"openai", "mistral", "gemini", "openrouter"}
         return [provider for provider in order if provider in valid]
 
     def _provider_rotation_order(self, for_tools: bool = False) -> list[str]:
@@ -493,11 +502,11 @@ class LLMHandler:
         if isinstance(configured, list):
             order = [str(item).strip().lower() for item in configured if str(item).strip()]
         else:
-            order = ["openai", "mistral", "gemini"]
+            order = ["openrouter", "openai", "mistral", "gemini"]
 
-        valid = {"openai", "mistral", "gemini"}
+        valid = {"openai", "mistral", "gemini", "openrouter"}
         filtered = [provider for provider in order if provider in valid]
-        return filtered or ["openai", "mistral", "gemini"]
+        return filtered or ["openrouter", "openai", "mistral", "gemini"]
 
     def _next_round_robin_provider(self, for_tools: bool = False) -> str:
         """
@@ -562,6 +571,7 @@ class LLMHandler:
             "openai": llm_cfg.get("openai_model"),
             "mistral": llm_cfg.get("mistral_model"),
             "gemini": llm_cfg.get("gemini_model"),
+            "openrouter": llm_cfg.get("openrouter_model"),
         }
         single = str(single_model_map.get(provider, "") or "").strip()
         return [single] if single else []
@@ -610,6 +620,22 @@ class LLMHandler:
                     if model_id:
                         output.add(self._normalize_model_id(model_id))
                 return output or None
+
+            if provider == "openrouter":
+                endpoint = f"{self.openrouter_base_url}/models"
+                headers = {}
+                if self.openrouter_token:
+                    headers["Authorization"] = f"Bearer {self.openrouter_token}"
+                response = requests.get(endpoint, headers=headers, timeout=self.openrouter_timeout_seconds)
+                response.raise_for_status()
+                data = response.json()
+                models = data.get("data", []) or []
+                output: set[str] = set()
+                for model in models:
+                    model_id = model.get("id")
+                    if model_id:
+                        output.add(self._normalize_model_id(model_id))
+                return output or None
         except Exception as e:
             logging.warning("_list_provider_models(): could not list %s models: %s", provider, e)
             return None
@@ -642,6 +668,33 @@ class LLMHandler:
         logging.info("_resolve_model_for_provider(): provider=%s resolved_model=%s", provider, chosen)
         return chosen
 
+    def _next_openrouter_model(self) -> str:
+        """
+        Select next OpenRouter model from configured candidate pool.
+        """
+        candidates = self._provider_model_candidates("openrouter")
+        if not candidates:
+            raise ValueError("No OpenRouter model candidates configured.")
+
+        available = self._list_provider_models("openrouter")
+        if available:
+            normalized_available = {self._normalize_model_id(model) for model in available}
+            filtered = [
+                candidate for candidate in candidates
+                if self._normalize_model_id(candidate) in normalized_available
+            ]
+            if filtered:
+                candidates = filtered
+
+        if not self.openrouter_model_rotation_enabled:
+            return candidates[0]
+
+        model = candidates[self.openrouter_model_rotation_index % len(candidates)]
+        self.openrouter_model_rotation_index = (
+            self.openrouter_model_rotation_index + 1
+        ) % len(candidates)
+        return model
+
     @staticmethod
     def _is_model_not_found_error(error: Exception) -> bool:
         """
@@ -662,7 +715,7 @@ class LLMHandler:
         Resolve model names for known providers for startup diagnostics.
         """
         resolved = {}
-        for provider in ("openai", "mistral", "gemini"):
+        for provider in ("openrouter", "openai", "mistral", "gemini"):
             try:
                 resolved[provider] = self._resolve_model_for_provider(provider, force_refresh=True)
             except Exception as e:
@@ -691,6 +744,23 @@ class LLMHandler:
                 logging.info("query_llm(): OpenAI response received.")
             else:
                 logging.warning("query_llm(): OpenAI returned no response.")
+            return response
+
+        if provider == "openrouter":
+            model = self._next_openrouter_model()
+            logging.info("query_llm(): Querying OpenRouter")
+            try:
+                response = self.query_openrouter(prompt, model, schema_type=schema_type)
+            except Exception as e:
+                if self._is_model_not_found_error(e):
+                    model = self._next_openrouter_model()
+                    response = self.query_openrouter(prompt, model, schema_type=schema_type)
+                else:
+                    raise
+            if response:
+                logging.info("query_llm(): OpenRouter response received.")
+            else:
+                logging.warning("query_llm(): OpenRouter returned no response.")
             return response
 
         if provider == "mistral":
@@ -841,6 +911,17 @@ class LLMHandler:
                         response = self._query_openai_with_tools(messages, tools)
                     else:
                         logging.info("query_llm(): Fallback disabled for tool calls; not falling back from Mistral.")
+            elif provider == 'openrouter':
+                response = self._query_openrouter_with_tools(messages, tools)
+                if not response or (not response.get("content") and not response.get("tool_calls")):
+                    if fallback_enabled:
+                        logging.warning("query_llm(): OpenRouter tools returned no content; falling back to OpenAI")
+                        response = self._query_openai_with_tools(messages, tools)
+                        if not response or (not response.get("content") and not response.get("tool_calls")):
+                            logging.warning("query_llm(): OpenAI tools fallback returned no content; falling back to Gemini")
+                            response = self._query_gemini_with_tools(messages, tools)
+                    else:
+                        logging.info("query_llm(): Fallback disabled for tool calls; not falling back from OpenRouter.")
             elif provider == 'gemini':
                 response = self._query_gemini_with_tools(messages, tools)
                 # Fallback only if truly no response and no tool calls
@@ -1069,6 +1150,70 @@ class LLMHandler:
 
         except Exception as e:
             logging.error(f"_query_openai_with_tools(): Error: {e}")
+            return None
+
+    def _query_openrouter_with_tools(self, messages, tools):
+        """
+        Query OpenRouter with OpenAI-compatible tool calling.
+        """
+        try:
+            if not self.openrouter_token:
+                logging.error("_query_openrouter_with_tools(): OPENROUTER_API_KEY is not configured.")
+                return None
+
+            model = self._next_openrouter_model()
+            endpoint = f"{self.openrouter_base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.openrouter_token}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": model,
+                "messages": messages,
+                "tools": tools,
+            }
+            response = requests.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=self.openrouter_timeout_seconds,
+            )
+            try:
+                response.raise_for_status()
+            except Exception as e:
+                if self._is_model_not_found_error(e):
+                    model = self._next_openrouter_model()
+                    payload["model"] = model
+                    response = requests.post(
+                        endpoint,
+                        headers=headers,
+                        json=payload,
+                        timeout=self.openrouter_timeout_seconds,
+                    )
+                    response.raise_for_status()
+                else:
+                    raise
+
+            data = response.json()
+            choices = data.get("choices", []) or []
+            if not choices:
+                return None
+            message = (choices[0] or {}).get("message", {}) or {}
+            tool_calls_raw = message.get("tool_calls", []) or []
+            if tool_calls_raw:
+                return {
+                    "content": message.get("content"),
+                    "tool_calls": [
+                        {
+                            "id": tc.get("id", ""),
+                            "function": tc.get("function", {}),
+                        }
+                        for tc in tool_calls_raw
+                    ],
+                }
+            return {"content": message.get("content")}
+        except Exception as e:
+            logging.error(f"_query_openrouter_with_tools(): Error: {e}")
             return None
 
     def _convert_tools_to_gemini(self, tools):
@@ -1383,6 +1528,83 @@ class LLMHandler:
             if text_value:
                 texts.append(str(text_value))
         return "\n".join(texts).strip() if texts else None
+
+    def query_openrouter(self, prompt, model, schema_type=None):
+        """
+        Query OpenRouter via OpenAI-compatible chat completions.
+        """
+        if isinstance(prompt, (list, tuple)):
+            prompt = "\n".join(map(str, prompt))
+        elif not isinstance(prompt, str):
+            prompt = str(prompt)
+
+        if not self.openrouter_token:
+            raise RuntimeError("OPENROUTER_API_KEY is not configured.")
+
+        endpoint = f"{self.openrouter_base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.openrouter_token}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+
+        json_schema = self._get_json_schema_by_type(schema_type, "openai") if schema_type else None
+        if json_schema:
+            payload_schema = json_schema
+            if not (isinstance(payload_schema, dict) and "name" in payload_schema and "schema" in payload_schema):
+                payload_schema = {
+                    "name": schema_type or "StructuredOutput",
+                    "schema": payload_schema,
+                    "strict": True,
+                }
+            payload["response_format"] = {"type": "json_schema", "json_schema": payload_schema}
+
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            json=payload,
+            timeout=self.openrouter_timeout_seconds,
+        )
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            if response.status_code == 400 and schema_type:
+                logging.warning(
+                    "query_openrouter(): schema-constrained request rejected (400); retrying without response_format."
+                )
+                fallback_payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+                response = requests.post(
+                    endpoint,
+                    headers=headers,
+                    json=fallback_payload,
+                    timeout=self.openrouter_timeout_seconds,
+                )
+                response.raise_for_status()
+            else:
+                raise e
+
+        data = response.json()
+        choices = data.get("choices", []) or []
+        if not choices:
+            return None
+        message = (choices[0] or {}).get("message", {}) or {}
+        content = message.get("content")
+        if isinstance(content, list):
+            text_parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text_parts.append(str(part.get("text", "")))
+                elif isinstance(part, str):
+                    text_parts.append(part)
+            return "\n".join(text_parts).strip()
+        return str(content).strip() if content is not None else None
 
 
     def _get_json_schema_by_type(self, schema_type, provider="mistral"):

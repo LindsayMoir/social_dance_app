@@ -72,9 +72,9 @@ COMMON_CONFIG_UPDATES = {
     "llm": {
         "provider": "round_robin",
         "provider_rotation_enabled": True,
-        "provider_rotation_order": ["openai", "mistral", "gemini"],
+        "provider_rotation_order": ["openrouter", "openai", "mistral", "gemini"],
         "fallback_enabled": True,
-        "fallback_provider_order": ["openai", "gemini", "mistral"],
+        "fallback_provider_order": ["openrouter", "openai", "gemini", "mistral"],
         "spend_money": True,
     }
 }
