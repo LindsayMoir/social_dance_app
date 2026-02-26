@@ -504,8 +504,22 @@ class LLMHandler:
         Select the next provider in round-robin order.
         """
         order = self._provider_rotation_order(for_tools=for_tools)
-        provider = order[self.provider_rotation_index % len(order)]
-        self.provider_rotation_index = (self.provider_rotation_index + 1) % len(order)
+        if not order:
+            return "openai"
+
+        start_index = self.provider_rotation_index % len(order)
+        for offset in range(len(order)):
+            idx = (start_index + offset) % len(order)
+            provider = order[idx]
+            # Deprioritize Mistral while in cooldown when alternatives exist.
+            if provider == "mistral" and self._mistral_in_cooldown() and len(order) > 1:
+                continue
+            self.provider_rotation_index = (idx + 1) % len(order)
+            return provider
+
+        # If all providers were skipped by policy, fall back to the current slot.
+        provider = order[start_index]
+        self.provider_rotation_index = (start_index + 1) % len(order)
         return provider
 
     def _select_primary_provider(self, url: str, for_tools: bool = False) -> str:
@@ -759,6 +773,11 @@ class LLMHandler:
             for fallback_provider in self._fallback_provider_order():
                 if fallback_provider not in candidates:
                     candidates.append(fallback_provider)
+
+        # Deprioritize Mistral during active cooldown when alternatives are present.
+        if self._mistral_in_cooldown() and len(candidates) > 1:
+            candidates = [p for p in candidates if p != "mistral"] + (["mistral"] if "mistral" in candidates else [])
+
         response = None
         for candidate in candidates:
             try:
