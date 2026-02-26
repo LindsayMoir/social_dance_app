@@ -33,11 +33,11 @@ crawling:
   scraper_concurrent_requests: 16
   scraper_concurrent_requests_per_domain: 8
   scraper_download_timeout_seconds: 35
-  scraper_priority_download_timeout_seconds: 90
   scraper_playwright_timeout_ms: 35000
   scraper_post_load_wait_ms: 1000
-  scraper_retry_times: 1
+  scraper_priority_download_timeout_seconds: 90
   scraper_priority_retry_times: 3
+  scraper_retry_times: 1
   scroll_depth: 2
   urls_run_limit: 30
 date_range:
@@ -71,6 +71,12 @@ input:
 llm:
   anthropic_model: claude-opus-4-20250514
   fallback_enabled: true
+  chatbot_provider_order:
+  - openai
+  - openrouter
+  - gemini
+  chatbot_openrouter_model_candidates:
+  - deepseek/deepseek-v3.2
   fallback_provider_order:
   - mistral
   - openrouter
@@ -105,12 +111,14 @@ llm:
       - qwen/qwen3-coder:free
       - mistralai/mistral-small-3.1-24b-instruct:free
       - deepseek/deepseek-v3.2
-  openai_max_retries: 0
+  openai_max_retries: 1
   openai_model: gpt-5-mini
   openai_model_candidates:
   - gpt-5-mini
   - gpt-4.1-mini
-  openai_timeout_seconds: 35
+  openai_timeout_seconds: 90
+  openai_timeout_max_strikes: 3
+  openai_timeout_cooldown_seconds: 180
   openrouter_base_url: https://openrouter.ai/api/v1
   openrouter_cooldown_seconds: 300
   openrouter_model: openai/gpt-oss-120b:free
@@ -138,6 +146,27 @@ logging:
   log_file_p2: logs/log_file_p2.txt
   scraper_log_file: logs/scraper_log.txt
 normalization:
+  address_aliases:
+  - aliases:
+    - The Wicket Hall
+    - Wicket Hall
+    - Studio 919
+    - Studio 919 (Strathcona Hotel)
+    - The Strath
+    - Strathcona Hotel
+    - The Strathcona Hotel
+    - 919 Douglas St, Victoria, BC V8W 2C2, CA
+    canonical:
+      address_id: 109
+      building_name: The Wicket Hall (Strathcona Hotel)
+      city: Victoria
+      country_id: CA
+      full_address: The Wicket Hall (Strathcona Hotel), 919 Douglas St, Victoria, BC V8W 2C2, CA
+      postal_code: V8W 2C2
+      province_or_state: BC
+      street_name: Douglas St
+      street_number: '919'
+    name: wicket_hall_strathcona_aliases
   event_overrides:
   - match:
       url_contains: debrhymerband.com/shows
@@ -174,6 +203,7 @@ normalization:
       type: weekly_weekday
       weekday: Wednesday
 output:
+  address_alias_audit: output/address_alias_hits.csv
   dedup: output/dedup.csv
   ebs_events: data/other/ebs_events.csv
   ebs_keywords_processed: output/ebs_keywords_processed.csv
@@ -302,6 +332,20 @@ testing:
       question_templates: tests/data/chatbot_test_questions.yaml
       score_threshold: 70
     reporting:
+      llm_activity_hours: 24
+      llm_activity_thresholds:
+        high:
+          attempts: 150
+          gemini_attempts: 20
+          provider_exhausted: 10
+          rate_limits: 25
+          timeouts: 15
+        medium:
+          attempts: 60
+          gemini_attempts: 5
+          provider_exhausted: 3
+          rate_limits: 10
+          timeouts: 5
       generate_csv: true
       generate_html: true
       output_dir: output

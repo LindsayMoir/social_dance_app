@@ -10,6 +10,7 @@ It also includes methods for fuzzy matching addresses and deduplicating the addr
 """
 
 from datetime import datetime, timedelta
+import csv
 from dotenv import load_dotenv
 load_dotenv()
 from rapidfuzz import fuzz
@@ -56,6 +57,7 @@ class DatabaseHandler():
         """
         self.config = config
         self.event_overrides = self._load_event_overrides()
+        self.address_aliases = self._load_address_aliases()
         self.load_blacklist_domains()
         # Pre-load whitelist entries and normalize them for robust checks
         try:
@@ -240,6 +242,253 @@ class DatabaseHandler():
         except Exception as e:
             logging.warning("_load_event_overrides: Failed to load overrides: %s", e)
             return []
+
+    @staticmethod
+    def _normalize_address_alias_text(value: str) -> str:
+        """Normalize venue/address text for robust alias comparison."""
+        if not value:
+            return ""
+        normalized = str(value).lower().strip()
+        normalized = normalized.replace("&", " and ")
+        normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized
+
+    def _load_address_aliases(self) -> List[Dict[str, Any]]:
+        """
+        Load optional address alias normalization rules from config.
+
+        Expected shape:
+            normalization:
+              address_aliases:
+                - name: some_alias_rule
+                  aliases: [studio 919, the strath]
+                  canonical:
+                    address_id: 109
+                    full_address: ...
+        """
+        try:
+            alias_entries = (
+                self.config
+                .get("normalization", {})
+                .get("address_aliases", [])
+            )
+            if not isinstance(alias_entries, list):
+                logging.warning("_load_address_aliases: Expected list, got %s", type(alias_entries).__name__)
+                return []
+
+            normalized_rules: List[Dict[str, Any]] = []
+            for entry in alias_entries:
+                if not isinstance(entry, dict):
+                    continue
+
+                aliases = entry.get("aliases", entry.get("match_any", []))
+                canonical = entry.get("canonical", {})
+                match_rule = entry.get("match", {})
+                if not isinstance(aliases, list) or not isinstance(canonical, dict):
+                    continue
+                if match_rule and not isinstance(match_rule, dict):
+                    continue
+
+                normalized_aliases = {
+                    self._normalize_address_alias_text(alias)
+                    for alias in aliases
+                    if isinstance(alias, str) and self._normalize_address_alias_text(alias)
+                }
+                if not normalized_aliases or not canonical:
+                    continue
+
+                normalized_rules.append({
+                    "name": entry.get("name", "unnamed_address_alias"),
+                    "aliases": normalized_aliases,
+                    "canonical": canonical,
+                    "match": match_rule,
+                })
+
+            logging.info("_load_address_aliases: Loaded %d address alias rule(s)", len(normalized_rules))
+            return normalized_rules
+        except Exception as e:
+            logging.warning("_load_address_aliases: Failed to load aliases: %s", e)
+            return []
+
+    @staticmethod
+    def _is_specific_alias_for_substring(alias: str) -> bool:
+        """Require alias specificity before allowing substring matching."""
+        alias_tokens = alias.split()
+        return len(alias) >= 10 or len(alias_tokens) >= 2
+
+    @staticmethod
+    def _normalize_postal_code(value: Optional[str]) -> str:
+        if not value:
+            return ""
+        return re.sub(r"\s+", "", str(value).upper().strip())
+
+    @staticmethod
+    def _safe_lower(value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    def _address_alias_context_matches(self, match_rule: Dict[str, Any], context: Optional[Dict[str, Any]]) -> bool:
+        """Check optional alias rule constraints against event/address context."""
+        if not match_rule:
+            return True
+        if not isinstance(context, dict):
+            return False
+
+        source_equals = self._safe_lower(match_rule.get("source_equals"))
+        if source_equals:
+            source_value = self._safe_lower(context.get("source"))
+            if source_value != source_equals:
+                return False
+
+        url_contains = self._safe_lower(match_rule.get("url_contains"))
+        if url_contains:
+            url_value = self._safe_lower(context.get("url"))
+            if url_contains not in url_value:
+                return False
+
+        return True
+
+    def _find_address_alias_match(
+        self,
+        candidate_texts: List[str],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Return alias match details when any configured alias matches candidate text."""
+        if not candidate_texts or not self.address_aliases:
+            return None
+
+        normalized_candidates = [
+            self._normalize_address_alias_text(text)
+            for text in candidate_texts
+            if isinstance(text, str) and text.strip()
+        ]
+        if not normalized_candidates:
+            return None
+
+        # Pass 1: exact normalized equality only.
+        for rule in self.address_aliases:
+            aliases = rule.get("aliases", set())
+            canonical = rule.get("canonical", {})
+            match_rule = rule.get("match", {})
+            if not aliases or not canonical:
+                continue
+            if not self._address_alias_context_matches(match_rule, context):
+                continue
+
+            for candidate in normalized_candidates:
+                for alias in aliases:
+                    if alias == candidate:
+                        return {
+                            "canonical": canonical,
+                            "rule_name": rule.get("name", "unnamed_address_alias"),
+                            "matched_alias": alias,
+                            "candidate": candidate,
+                            "match_type": "exact",
+                        }
+
+        # Pass 2: constrained substring matching.
+        for rule in self.address_aliases:
+            aliases = rule.get("aliases", set())
+            canonical = rule.get("canonical", {})
+            match_rule = rule.get("match", {})
+            if not aliases or not canonical:
+                continue
+            if not self._address_alias_context_matches(match_rule, context):
+                continue
+
+            for candidate in normalized_candidates:
+                for alias in aliases:
+                    if not self._is_specific_alias_for_substring(alias):
+                        continue
+                    if alias in candidate or candidate in alias:
+                        return {
+                            "canonical": canonical,
+                            "rule_name": rule.get("name", "unnamed_address_alias"),
+                            "matched_alias": alias,
+                            "candidate": candidate,
+                            "match_type": "substring",
+                        }
+
+        return None
+
+    def _audit_address_alias_hit(self, payload: Dict[str, Any]) -> None:
+        """Append alias-match telemetry to CSV for traceability."""
+        try:
+            output_cfg = self.config.get("output", {})
+            audit_path = output_cfg.get("address_alias_audit", "output/address_alias_hits.csv")
+            audit_dir = os.path.dirname(audit_path)
+            if audit_dir:
+                os.makedirs(audit_dir, exist_ok=True)
+
+            columns = [
+                "timestamp",
+                "decision",
+                "rule_name",
+                "match_type",
+                "matched_alias",
+                "candidate",
+                "canonical_address_id",
+                "canonical_full_address",
+                "url",
+                "source",
+            ]
+
+            file_exists = os.path.exists(audit_path)
+            with open(audit_path, "a", newline="", encoding="utf-8") as file:
+                writer = csv.DictWriter(file, fieldnames=columns)
+                if not file_exists:
+                    writer.writeheader()
+                writer.writerow({
+                    "timestamp": datetime.now().isoformat(),
+                    "decision": payload.get("decision", ""),
+                    "rule_name": payload.get("rule_name", ""),
+                    "match_type": payload.get("match_type", ""),
+                    "matched_alias": payload.get("matched_alias", ""),
+                    "candidate": payload.get("candidate", ""),
+                    "canonical_address_id": payload.get("canonical_address_id", ""),
+                    "canonical_full_address": payload.get("canonical_full_address", ""),
+                    "url": payload.get("url", ""),
+                    "source": payload.get("source", ""),
+                })
+        except Exception as e:
+            logging.warning("_audit_address_alias_hit: Failed to write audit row: %s", e)
+
+    def _alias_conflicts_with_parsed_address(self, parsed_address: Dict[str, Any], canonical: Dict[str, Any]) -> bool:
+        """Fail-safe guard: skip alias forcing when parsed street/postal strongly disagree."""
+        parsed_street_number = self._safe_lower(parsed_address.get("street_number"))
+        canonical_street_number = self._safe_lower(canonical.get("street_number"))
+        if parsed_street_number and canonical_street_number and parsed_street_number != canonical_street_number:
+            return True
+
+        parsed_postal_code = self._normalize_postal_code(parsed_address.get("postal_code"))
+        canonical_postal_code = self._normalize_postal_code(canonical.get("postal_code"))
+        if parsed_postal_code and canonical_postal_code and parsed_postal_code != canonical_postal_code:
+            return True
+
+        return False
+
+    def _get_alias_canonical_address_id(self, canonical: Dict[str, Any]) -> Optional[int]:
+        """Resolve canonical alias mapping to address_id, preferring configured address_id when present."""
+        if not isinstance(canonical, dict) or not canonical:
+            return None
+
+        configured_id = canonical.get("address_id")
+        try:
+            configured_id_int = int(configured_id) if configured_id is not None else None
+        except (TypeError, ValueError):
+            configured_id_int = None
+
+        if configured_id_int and configured_id_int > 0:
+            existing = self.execute_query(
+                "SELECT address_id FROM address WHERE address_id = :address_id",
+                {"address_id": configured_id_int},
+            )
+            if existing:
+                return configured_id_int
+
+        canonical_copy = dict(canonical)
+        canonical_copy.pop("address_id", None)
+        return self.resolve_or_insert_address(canonical_copy, skip_alias_normalization=True)
 
     @staticmethod
     def _url_matches_rule(normalized_url: str, match_rule: Dict[str, Any]) -> bool:
@@ -911,13 +1160,14 @@ class DatabaseHandler():
         return updated_location, address_id
     
 
-    def resolve_or_insert_address(self, parsed_address: dict) -> Optional[int]:
+    def resolve_or_insert_address(self, parsed_address: dict, skip_alias_normalization: bool = False) -> Optional[int]:
         """
         Resolves an address by checking multiple matching strategies in order of specificity.
         Uses improved fuzzy matching to prevent duplicate addresses.
 
         Args:
             parsed_address (dict): Dictionary of parsed address fields.
+            skip_alias_normalization (bool): Internal flag to bypass alias mapping recursion.
 
         Returns:
             int or None: The address_id of the matched or newly inserted address.
@@ -925,6 +1175,48 @@ class DatabaseHandler():
         if not parsed_address:
             logging.info("resolve_or_insert_address: No parsed address provided.")
             return None
+
+        if not skip_alias_normalization:
+            alias_candidates: List[str] = [
+                parsed_address.get("full_address", ""),
+                parsed_address.get("building_name", ""),
+            ]
+            street_number_candidate = (parsed_address.get("street_number") or "").strip()
+            street_name_candidate = (parsed_address.get("street_name") or "").strip()
+            if street_number_candidate or street_name_candidate:
+                alias_candidates.append(f"{street_number_candidate} {street_name_candidate}".strip())
+
+            alias_match = self._find_address_alias_match(alias_candidates)
+            if alias_match:
+                canonical = alias_match["canonical"]
+                if self._alias_conflicts_with_parsed_address(parsed_address, canonical):
+                    self._audit_address_alias_hit({
+                        "decision": "skipped_conflict",
+                        "rule_name": alias_match.get("rule_name"),
+                        "match_type": alias_match.get("match_type"),
+                        "matched_alias": alias_match.get("matched_alias"),
+                        "candidate": alias_match.get("candidate"),
+                        "canonical_address_id": canonical.get("address_id"),
+                        "canonical_full_address": canonical.get("full_address"),
+                    })
+                    logging.warning(
+                        "resolve_or_insert_address: Skipping alias '%s' due to postal/street conflict.",
+                        alias_match.get("rule_name", "unnamed_address_alias"),
+                    )
+                else:
+                    canonical_address_id = self._get_alias_canonical_address_id(canonical)
+                    if canonical_address_id:
+                        self._audit_address_alias_hit({
+                            "decision": "applied",
+                            "rule_name": alias_match.get("rule_name"),
+                            "match_type": alias_match.get("match_type"),
+                            "matched_alias": alias_match.get("matched_alias"),
+                            "candidate": alias_match.get("candidate"),
+                            "canonical_address_id": canonical_address_id,
+                            "canonical_full_address": canonical.get("full_address"),
+                        })
+                        return canonical_address_id
+                    parsed_address = {**parsed_address, **canonical}
 
         building_name = (parsed_address.get("building_name") or "").strip()
         street_number = (parsed_address.get("street_number") or "").strip()
@@ -1749,6 +2041,39 @@ class DatabaseHandler():
                 # Final fallback - set reasonable defaults instead of None
                 event["address_id"] = 0
                 event["location"] = f"Location unavailable - {source}"
+                return event
+
+        # Normalize known venue aliases before cache and fuzzy lookup to enforce canonical address.
+        alias_context = {
+            "source": source,
+            "url": event.get("url", ""),
+        }
+        location_alias_match = self._find_address_alias_match([location], context=alias_context)
+        if location_alias_match:
+            location_alias_canonical = location_alias_match["canonical"]
+            alias_address_id = self._get_alias_canonical_address_id(location_alias_canonical)
+            if alias_address_id:
+                event["address_id"] = alias_address_id
+                canonical_full_address = location_alias_canonical.get("full_address")
+                db_full_address = self.get_full_address_from_id(alias_address_id)
+                event["location"] = db_full_address or canonical_full_address or location
+                self.cache_raw_location(location, alias_address_id)
+                self._audit_address_alias_hit({
+                    "decision": "applied",
+                    "rule_name": location_alias_match.get("rule_name"),
+                    "match_type": location_alias_match.get("match_type"),
+                    "matched_alias": location_alias_match.get("matched_alias"),
+                    "candidate": location_alias_match.get("candidate"),
+                    "canonical_address_id": alias_address_id,
+                    "canonical_full_address": location_alias_canonical.get("full_address"),
+                    "url": event.get("url", ""),
+                    "source": source,
+                })
+                logging.info(
+                    "process_event_address: Alias match forced canonical venue for '%s' -> address_id=%s",
+                    location,
+                    alias_address_id,
+                )
                 return event
 
         # STEP 1: Check raw_locations cache (fastest - exact string match)

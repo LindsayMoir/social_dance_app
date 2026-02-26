@@ -11,7 +11,9 @@ and sends the email with the HTML attached.
 import os
 import json
 import logging
-from datetime import datetime
+import csv
+from collections import Counter
+from datetime import datetime, timedelta
 
 import pandas as pd
 import yaml
@@ -59,6 +61,8 @@ def build_html(results: dict, output_path: str) -> None:
     avg_score = summary.get('average_score', 0)
     exec_rate = summary.get('execution_success_rate', 0)
     score_dist = summary.get('score_distribution', {})
+
+    alias_data = summarize_address_alias_audit(results.get('config', {}))
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -119,6 +123,15 @@ def build_html(results: dict, output_path: str) -> None:
             if cat.get('recommendation'):
                 html += f"<p><strong>Recommendation:</strong> {cat['recommendation']}</p>"
 
+    # Address Alias Audit
+    html += "<h2>Address Alias Audit</h2>"
+    html += build_address_alias_audit_html(alias_data)
+
+    # LLM Provider Activity
+    llm_data = summarize_llm_provider_activity(results.get('timestamp'), results.get('config', {}))
+    html += "<h2>LLM Provider Activity</h2>"
+    html += build_llm_provider_activity_html(llm_data)
+
     html += """
     <hr style="margin: 40px 0;">
     <p style="text-align: center; color: #999; font-size: 0.9em;">
@@ -133,6 +146,364 @@ def build_html(results: dict, output_path: str) -> None:
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
     logging.info("HTML report saved: %s", output_path)
+
+
+def escape_html(value: str) -> str:
+    return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def summarize_address_alias_audit(config: dict) -> dict:
+    output_cfg = config.get('output', {}) if isinstance(config, dict) else {}
+    validation_cfg = config.get('testing', {}).get('validation', {}) if isinstance(config, dict) else {}
+    csv_path = output_cfg.get('address_alias_audit', 'output/address_alias_hits.csv')
+    days_window = int(validation_cfg.get('reporting', {}).get('address_alias_audit_days', 14) or 14)
+
+    summary = {
+        'available': False,
+        'path': csv_path,
+        'days_window': days_window,
+        'rows_analyzed': 0,
+        'decision_counts': {},
+        'rule_decision_counts': [],
+        'daily_counts': [],
+        'top_candidates': [],
+        'error': '',
+    }
+
+    if not os.path.exists(csv_path):
+        summary['error'] = f"Audit file not found: {csv_path}"
+        return summary
+
+    try:
+        with open(csv_path, 'r', encoding='utf-8', newline='') as file:
+            rows = [{k: (v or '').strip() for k, v in row.items()} for row in csv.DictReader(file)]
+    except Exception as e:
+        summary['error'] = f"Failed reading audit file: {e}"
+        return summary
+
+    if not rows:
+        summary['error'] = "Audit file is empty."
+        return summary
+
+    def extract_day(ts: str) -> str:
+        ts = (ts or '').strip()
+        if not ts:
+            return 'unknown'
+        try:
+            return datetime.fromisoformat(ts).date().isoformat()
+        except ValueError:
+            return ts[:10] if len(ts) >= 10 else 'unknown'
+
+    if days_window > 0:
+        valid_days = sorted({extract_day(r.get('timestamp', '')) for r in rows if extract_day(r.get('timestamp', '')) != 'unknown'})
+        keep_days = set(valid_days[-days_window:]) if valid_days else set()
+        rows = [r for r in rows if not keep_days or extract_day(r.get('timestamp', '')) in keep_days]
+
+    decision_counts: Counter = Counter()
+    rule_decision_counts: Counter = Counter()
+    daily_counts: Counter = Counter()
+    candidate_counts: Counter = Counter()
+
+    for row in rows:
+        day = extract_day(row.get('timestamp', ''))
+        decision = row.get('decision', '') or '(blank)'
+        rule_name = row.get('rule_name', '') or '(blank)'
+        candidate = row.get('candidate', '') or '(blank)'
+
+        decision_counts.update([decision])
+        rule_decision_counts.update([f"{rule_name} | {decision}"])
+        daily_counts.update([day])
+        candidate_counts.update([candidate])
+
+    summary['available'] = True
+    summary['rows_analyzed'] = len(rows)
+    summary['decision_counts'] = dict(decision_counts)
+    summary['rule_decision_counts'] = rule_decision_counts.most_common(10)
+    summary['daily_counts'] = daily_counts.most_common(14)
+    summary['top_candidates'] = candidate_counts.most_common(8)
+    return summary
+
+
+def build_address_alias_audit_html(alias_data: dict) -> str:
+    if not alias_data:
+        return "<p class='error-box'>❌ Address alias audit summary unavailable</p>"
+
+    if not alias_data.get('available'):
+        return (
+            "<p class='error-box'>"
+            f"⚠ Address alias audit not available.<br>{escape_html(alias_data.get('error', 'unavailable'))}<br>"
+            f"<strong>Path:</strong> {escape_html(alias_data.get('path', ''))}</p>"
+        )
+
+    decision_counts = alias_data.get('decision_counts', {})
+    html = (
+        "<div class=\"metric-container\">"
+        f"<div class=\"metric\"><div class=\"metric-value\">{int(alias_data.get('rows_analyzed', 0))}</div>"
+        "<div class=\"metric-label\">Rows Analyzed (Recent Window)</div></div>"
+        f"<div class=\"metric\"><div class=\"metric-value\">{int(decision_counts.get('applied', 0))}</div>"
+        "<div class=\"metric-label\">Alias Matches Applied</div></div>"
+        f"<div class=\"metric\"><div class=\"metric-value\">{int(decision_counts.get('skipped_conflict', 0))}</div>"
+        "<div class=\"metric-label\">Conflict Skips</div></div>"
+        "</div>"
+    )
+
+    if alias_data.get('daily_counts'):
+        html += "<h3>Daily Volume</h3><table><tr><th>Day</th><th>Count</th></tr>"
+        for day, count in alias_data['daily_counts']:
+            html += f"<tr><td>{escape_html(day)}</td><td>{count}</td></tr>"
+        html += "</table>"
+
+    if alias_data.get('rule_decision_counts'):
+        html += "<h3>Top Rule + Decision Pairs</h3><table><tr><th>Rule | Decision</th><th>Count</th></tr>"
+        for key, count in alias_data['rule_decision_counts']:
+            html += f"<tr><td>{escape_html(key)}</td><td>{count}</td></tr>"
+        html += "</table>"
+
+    if alias_data.get('top_candidates'):
+        html += "<h3>Top Candidate Text</h3><table><tr><th>Candidate</th><th>Count</th></tr>"
+        for candidate, count in alias_data['top_candidates']:
+            html += f"<tr><td>{escape_html(candidate)}</td><td>{count}</td></tr>"
+        html += "</table>"
+
+    html += (
+        f"<p><strong>Audit Source:</strong> {escape_html(alias_data.get('path', ''))}"
+        f" (window: last {alias_data.get('days_window', 14)} day(s) present)</p>"
+    )
+    return html
+
+
+def parse_log_timestamp(line: str) -> datetime | None:
+    try:
+        return datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def summarize_llm_provider_activity(report_timestamp: str | None, config: dict) -> dict:
+    validation_cfg = config.get('testing', {}).get('validation', {}) if isinstance(config, dict) else {}
+    hours_window = int(validation_cfg.get('reporting', {}).get('llm_activity_hours', 24) or 24)
+
+    end_ts = datetime.now()
+    if report_timestamp:
+        try:
+            end_ts = datetime.fromisoformat(report_timestamp)
+        except ValueError:
+            pass
+    start_ts = end_ts - timedelta(hours=hours_window)
+
+    log_files = [
+        "logs/emails_log.txt",
+        "logs/gs_log.txt",
+        "logs/rd_ext_log.txt",
+        "logs/ebs_log.txt",
+        "logs/scraper_log.txt",
+        "logs/fb_log.txt",
+        "logs/images_log.txt",
+        "logs/read_pdfs_log.txt",
+        "logs/db_log.txt",
+        "logs/clean_up_log.txt",
+        "logs/dedup_llm_log.txt",
+        "logs/irrelevant_rows_log.txt",
+        "logs/validation_tests_log.txt",
+    ]
+
+    providers = ("openai", "openrouter", "mistral", "gemini")
+    stats = {
+        p: {"attempts": 0, "successes": 0, "failures": 0, "timeouts": 0, "rate_limits": 0}
+        for p in providers
+    }
+    file_attempts: Counter = Counter()
+    total_provider_exhausted = 0
+    lines_scanned = 0
+
+    for path in log_files:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as file:
+                for line in file:
+                    ts = parse_log_timestamp(line)
+                    if ts is None or ts < start_ts or ts > end_ts:
+                        continue
+
+                    lines_scanned += 1
+                    low = line.lower()
+
+                    if "query_llm(): querying openai" in low:
+                        stats["openai"]["attempts"] += 1
+                        file_attempts[path] += 1
+                    if "query_llm(): querying openrouter" in low:
+                        stats["openrouter"]["attempts"] += 1
+                        file_attempts[path] += 1
+                    if "query_llm(): querying mistral" in low:
+                        stats["mistral"]["attempts"] += 1
+                        file_attempts[path] += 1
+                    if "query_llm(): querying gemini" in low:
+                        stats["gemini"]["attempts"] += 1
+                        file_attempts[path] += 1
+
+                    if "query_llm(): openai response received" in low:
+                        stats["openai"]["successes"] += 1
+                    if "query_llm(): openrouter response received" in low:
+                        stats["openrouter"]["successes"] += 1
+                    if "query_llm(): mistral response received" in low:
+                        stats["mistral"]["successes"] += 1
+                    if "query_llm(): gemini response received" in low:
+                        stats["gemini"]["successes"] += 1
+
+                    if "query_llm(): openai query failed" in low:
+                        stats["openai"]["failures"] += 1
+                    if "query_llm(): openrouter query failed" in low:
+                        stats["openrouter"]["failures"] += 1
+                    if "query_llm(): mistral query failed" in low:
+                        stats["mistral"]["failures"] += 1
+                    if "query_llm(): gemini query failed" in low:
+                        stats["gemini"]["failures"] += 1
+
+                    if "request timed out" in low or "read timed out" in low:
+                        if "openai query failed" in low:
+                            stats["openai"]["timeouts"] += 1
+                        if "gemini query failed" in low:
+                            stats["gemini"]["timeouts"] += 1
+
+                    if "status 429" in low or "too many requests" in low or "rate limit exceeded" in low:
+                        if "openrouter query failed" in low:
+                            stats["openrouter"]["rate_limits"] += 1
+                        if "mistral query failed" in low:
+                            stats["mistral"]["rate_limits"] += 1
+                        if "openai query failed" in low:
+                            stats["openai"]["rate_limits"] += 1
+                        if "gemini query failed" in low:
+                            stats["gemini"]["rate_limits"] += 1
+
+                    if "all configured llm providers failed to provide a response" in low:
+                        total_provider_exhausted += 1
+        except Exception as e:
+            logging.warning("summarize_llm_provider_activity: Failed to parse %s: %s", path, e)
+
+    total_attempts = sum(v["attempts"] for v in stats.values())
+    total_rate_limits = sum(v["rate_limits"] for v in stats.values())
+    total_timeouts = sum(v["timeouts"] for v in stats.values())
+    gemini_attempts = int(stats.get("gemini", {}).get("attempts", 0))
+
+    thresholds_cfg = validation_cfg.get('reporting', {}).get('llm_activity_thresholds', {})
+    high_cfg = thresholds_cfg.get("high", {}) if isinstance(thresholds_cfg, dict) else {}
+    medium_cfg = thresholds_cfg.get("medium", {}) if isinstance(thresholds_cfg, dict) else {}
+
+    high_attempts = int(high_cfg.get("attempts", 150) or 150)
+    high_exhausted = int(high_cfg.get("provider_exhausted", 10) or 10)
+    high_rate_limits = int(high_cfg.get("rate_limits", 25) or 25)
+    high_timeouts = int(high_cfg.get("timeouts", 15) or 15)
+    high_gemini = int(high_cfg.get("gemini_attempts", 20) or 20)
+
+    medium_attempts = int(medium_cfg.get("attempts", 60) or 60)
+    medium_exhausted = int(medium_cfg.get("provider_exhausted", 3) or 3)
+    medium_rate_limits = int(medium_cfg.get("rate_limits", 10) or 10)
+    medium_timeouts = int(medium_cfg.get("timeouts", 5) or 5)
+    medium_gemini = int(medium_cfg.get("gemini_attempts", 5) or 5)
+
+    pressure_reasons: list[str] = []
+    if total_attempts >= high_attempts:
+        pressure_reasons.append(f"high attempt volume ({total_attempts})")
+    if total_provider_exhausted >= high_exhausted:
+        pressure_reasons.append(f"many full fallback failures ({total_provider_exhausted})")
+    if total_rate_limits >= high_rate_limits:
+        pressure_reasons.append(f"heavy rate limiting ({total_rate_limits})")
+    if total_timeouts >= high_timeouts:
+        pressure_reasons.append(f"many timeouts ({total_timeouts})")
+    if gemini_attempts >= high_gemini:
+        pressure_reasons.append(f"frequent Gemini fallback ({gemini_attempts})")
+
+    pressure_level = "LOW"
+    if pressure_reasons:
+        pressure_level = "HIGH"
+    else:
+        medium_signals = [
+            total_attempts >= medium_attempts,
+            total_provider_exhausted >= medium_exhausted,
+            total_rate_limits >= medium_rate_limits,
+            total_timeouts >= medium_timeouts,
+            gemini_attempts >= medium_gemini,
+        ]
+        if any(medium_signals):
+            pressure_level = "MEDIUM"
+
+    return {
+        "window_hours": hours_window,
+        "start_ts": start_ts.isoformat(sep=" "),
+        "end_ts": end_ts.isoformat(sep=" "),
+        "providers": stats,
+        "total_attempts": total_attempts,
+        "provider_exhausted_count": total_provider_exhausted,
+        "lines_scanned": lines_scanned,
+        "top_files": file_attempts.most_common(8),
+        "total_rate_limits": total_rate_limits,
+        "total_timeouts": total_timeouts,
+        "pressure_level": pressure_level,
+        "pressure_reasons": pressure_reasons,
+    }
+
+
+def build_llm_provider_activity_html(llm_data: dict) -> str:
+    if not llm_data:
+        return "<p class='error-box'>❌ LLM activity summary unavailable</p>"
+
+    total_attempts = int(llm_data.get("total_attempts", 0))
+    exhausted = int(llm_data.get("provider_exhausted_count", 0))
+    lines_scanned = int(llm_data.get("lines_scanned", 0))
+    total_rate_limits = int(llm_data.get("total_rate_limits", 0))
+    total_timeouts = int(llm_data.get("total_timeouts", 0))
+    pressure_level = str(llm_data.get("pressure_level", "LOW")).upper()
+    pressure_class = {
+        "LOW": "status-pass",
+        "MEDIUM": "status-warning",
+        "HIGH": "status-fail",
+    }.get(pressure_level, "status-warning")
+
+    html = (
+        "<div class=\"metric-container\">"
+        f"<div class=\"metric\"><div class=\"metric-value\">{total_attempts}</div><div class=\"metric-label\">LLM Attempts (Window)</div></div>"
+        f"<div class=\"metric\"><div class=\"metric-value\">{exhausted}</div><div class=\"metric-label\">All-Provider Exhausted</div></div>"
+        f"<div class=\"metric\"><div class=\"metric-value\">{lines_scanned}</div><div class=\"metric-label\">Log Lines Scanned</div></div>"
+        f"<div class=\"metric\"><div class=\"metric-value\">{total_rate_limits}</div><div class=\"metric-label\">Rate Limits (All Providers)</div></div>"
+        f"<div class=\"metric\"><div class=\"metric-value\">{total_timeouts}</div><div class=\"metric-label\">Timeouts (All Providers)</div></div>"
+        "</div>"
+    )
+    html += (
+        "<p><strong>Cost Pressure:</strong> "
+        f"<span class=\"{pressure_class}\">{escape_html(pressure_level)}</span></p>"
+    )
+    reasons = llm_data.get("pressure_reasons", [])
+    if reasons:
+        html += "<ul>"
+        for reason in reasons:
+            html += f"<li>{escape_html(reason)}</li>"
+        html += "</ul>"
+    html += (
+        f"<p><strong>Window:</strong> {escape_html(llm_data.get('start_ts', ''))} to {escape_html(llm_data.get('end_ts', ''))} "
+        f"({int(llm_data.get('window_hours', 24))}h)</p>"
+    )
+
+    html += "<h3>Provider Breakdown</h3><table><tr><th>Provider</th><th>Attempts</th><th>Successes</th><th>Failures</th><th>Timeouts</th><th>Rate Limits</th></tr>"
+    providers = llm_data.get("providers", {})
+    for provider in ("openai", "openrouter", "mistral", "gemini"):
+        p = providers.get(provider, {})
+        html += (
+            "<tr>"
+            f"<td>{provider}</td><td>{int(p.get('attempts', 0))}</td><td>{int(p.get('successes', 0))}</td>"
+            f"<td>{int(p.get('failures', 0))}</td><td>{int(p.get('timeouts', 0))}</td><td>{int(p.get('rate_limits', 0))}</td>"
+            "</tr>"
+        )
+    html += "</table>"
+
+    top_files = llm_data.get("top_files", [])
+    if top_files:
+        html += "<h3>Top Log Files by LLM Attempts</h3><table><tr><th>Log File</th><th>Attempts</th></tr>"
+        for path, attempts in top_files:
+            html += f"<tr><td>{escape_html(os.path.basename(path))}</td><td>{int(attempts)}</td></tr>"
+        html += "</table>"
+
+    return html
 
 
 def main():
@@ -161,7 +532,8 @@ def main():
         'timestamp': datetime.now().isoformat(),
         'scraping_validation': None,
         'chatbot_testing': chatbot_report,
-        'overall_status': 'PASS'
+        'overall_status': 'PASS',
+        'config': config
     }
 
     html_path = os.path.join(output_dir, 'comprehensive_test_report.html')
