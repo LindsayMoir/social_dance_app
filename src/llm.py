@@ -782,6 +782,34 @@ class LLMHandler:
         ) % len(candidates)
         return model
 
+    def _openrouter_candidates_for_attempt(self) -> list[str]:
+        """
+        Return OpenRouter candidates in attempt order.
+        - When rotation is disabled: strict configured order (cost order).
+        - When rotation is enabled: start at current rotation index and cycle.
+        """
+        candidates = self._provider_model_candidates("openrouter")
+        if not candidates:
+            raise ValueError("No OpenRouter model candidates configured.")
+
+        available = self._list_provider_models("openrouter")
+        if available:
+            normalized_available = {self._normalize_model_id(model) for model in available}
+            filtered = [
+                candidate for candidate in candidates
+                if self._normalize_model_id(candidate) in normalized_available
+            ]
+            if filtered:
+                candidates = filtered
+
+        if not self.openrouter_model_rotation_enabled:
+            return candidates
+
+        start_index = self.openrouter_model_rotation_index % len(candidates)
+        ordered = candidates[start_index:] + candidates[:start_index]
+        self.openrouter_model_rotation_index = (start_index + 1) % len(candidates)
+        return ordered
+
     @staticmethod
     def _is_model_not_found_error(error: Exception) -> bool:
         """
@@ -837,23 +865,28 @@ class LLMHandler:
             if self._openrouter_in_cooldown():
                 logging.warning("query_llm(): Skipping OpenRouter query due to active cooldown.")
                 return None
-            model = self._next_openrouter_model()
-            logging.info("query_llm(): Querying OpenRouter")
-            try:
-                response = self.query_openrouter(prompt, model, schema_type=schema_type)
-            except Exception as e:
-                if self._is_model_not_found_error(e):
-                    model = self._next_openrouter_model()
+            last_error = None
+            for model in self._openrouter_candidates_for_attempt():
+                logging.info("query_llm(): Querying OpenRouter model %s", model)
+                try:
                     response = self.query_openrouter(prompt, model, schema_type=schema_type)
-                else:
+                    self._record_openrouter_result()
+                    if response:
+                        logging.info("query_llm(): OpenRouter response received.")
+                        return response
+                    logging.warning("query_llm(): OpenRouter returned no response for model %s.", model)
+                except Exception as e:
+                    last_error = e
                     self._record_openrouter_result(e)
-                    raise
-            self._record_openrouter_result()
-            if response:
-                logging.info("query_llm(): OpenRouter response received.")
-            else:
-                logging.warning("query_llm(): OpenRouter returned no response.")
-            return response
+                    if self._is_model_not_found_error(e):
+                        logging.warning("query_llm(): OpenRouter model %s unavailable; trying next candidate.", model)
+                        continue
+                    logging.warning("query_llm(): OpenRouter model %s failed: %s", model, e)
+                    continue
+
+            if last_error is not None:
+                raise last_error
+            return None
 
         if provider == "mistral":
             if self._mistral_in_cooldown():

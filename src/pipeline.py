@@ -70,11 +70,11 @@ COMMON_CONFIG_UPDATES = {
          "urls_run_limit": 500,  # default for all steps
     },
     "llm": {
-        "provider": "round_robin",
-        "provider_rotation_enabled": True,
-        "provider_rotation_order": ["openrouter", "openai", "mistral", "gemini"],
+        "provider": "mistral",
+        "provider_rotation_enabled": False,
+        "provider_rotation_order": ["mistral", "openrouter", "openai", "gemini"],
         "fallback_enabled": True,
-        "fallback_provider_order": ["openrouter", "openai", "gemini", "mistral"],
+        "fallback_provider_order": ["mistral", "openrouter", "openai", "gemini"],
         "spend_money": True,
     }
 }
@@ -1725,7 +1725,16 @@ def prompt_user():
     start = PIPELINE_STEPS[start_index][0]
     end = PIPELINE_STEPS[end_index][0]
     print(f"Pipeline will run from '{start}' to '{end}'.")
-    run_pipeline(start, end)
+    selected_steps = [name for name, _ in PIPELINE_STEPS[start_index:end_index + 1]]
+    can_run_parallel = all(step in selected_steps for step in ("ebs", "scraper", "fb"))
+    parallel_crawlers = False
+    if can_run_parallel:
+        parallel_answer = input(
+            "Run ebs/scraper/fb in parallel? (y/N): "
+        ).strip().lower()
+        parallel_crawlers = parallel_answer in {"y", "yes"}
+        print(f"Parallel crawlers: {'enabled' if parallel_crawlers else 'disabled'}")
+    run_pipeline(start, end, parallel_crawlers=parallel_crawlers)
 
 def move_temp_files_back():
     # After a successful run, move CSV files from temp back to the original URL directory.

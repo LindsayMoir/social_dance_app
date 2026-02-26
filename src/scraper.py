@@ -244,8 +244,42 @@ class EventSpider(scrapy.Spider):
             if str(u).strip()
         }
         self.attempted_whitelist_roots: set[str] = set()
+        crawling_cfg = self.config.get("crawling", {})
+        self.scraper_download_timeout_seconds = int(
+            crawling_cfg.get("scraper_download_timeout_seconds", 35) or 35
+        )
+        self.scraper_retry_times = int(crawling_cfg.get("scraper_retry_times", 1) or 1)
+        self.scraper_priority_download_timeout_seconds = int(
+            crawling_cfg.get(
+                "scraper_priority_download_timeout_seconds",
+                max(self.scraper_download_timeout_seconds * 3, 90),
+            ) or max(self.scraper_download_timeout_seconds * 3, 90)
+        )
+        self.scraper_priority_retry_times = int(
+            crawling_cfg.get("scraper_priority_retry_times", max(self.scraper_retry_times + 2, 3))
+            or max(self.scraper_retry_times + 2, 3)
+        )
 
         logging.info("\n\nscraper.py starting...")
+
+    def _build_playwright_request_meta(self, high_priority: bool = False) -> dict:
+        """
+        Build per-request Playwright metadata.
+        High-priority requests (whitelist/calendar/forced-follow) get more time and retries.
+        """
+        wait_ms = int(self.config.get("crawling", {}).get("scraper_post_load_wait_ms", 1000) or 1000)
+        meta = {
+            "playwright": True,
+            "playwright_page_methods": [
+                PageMethod("wait_for_selector", "body"),
+                PageMethod("wait_for_load_state", "networkidle"),
+                PageMethod("wait_for_timeout", wait_ms),
+            ],
+        }
+        if high_priority:
+            meta["download_timeout"] = self.scraper_priority_download_timeout_seconds
+            meta["max_retry_times"] = self.scraper_priority_retry_times
+        return meta
 
 
     async def start(self):
@@ -324,17 +358,9 @@ class EventSpider(scrapy.Spider):
                 callback=self.parse,
                 cb_kwargs={'keywords': keywords, 'source': source, 'url': url},
                 priority=1000 if is_whitelisted_seed else 0,
-                meta={
-                    "playwright": True,
-                    "playwright_page_methods": [
-                        PageMethod("wait_for_selector", "body"),
-                        PageMethod("wait_for_load_state", "networkidle"),
-                        PageMethod(
-                            "wait_for_timeout",
-                            int(self.config.get("crawling", {}).get("scraper_post_load_wait_ms", 1000) or 1000),
-                        ),
-                    ],
-                },
+                meta=self._build_playwright_request_meta(
+                    high_priority=(is_whitelisted_seed or is_calendar_url)
+                ),
             )
 
 
@@ -506,17 +532,8 @@ class EventSpider(scrapy.Spider):
                 url=link,
                 callback=self.parse,
                 cb_kwargs={'keywords': keywords, 'source': source, 'url': link},
-                meta={
-                    "playwright": True,
-                    "playwright_page_methods": [
-                        PageMethod("wait_for_selector", "body"),
-                        PageMethod("wait_for_load_state", "networkidle"),
-                        PageMethod(
-                            "wait_for_timeout",
-                            int(self.config.get("crawling", {}).get("scraper_post_load_wait_ms", 1000) or 1000),
-                        ),
-                    ],
-                },
+                priority=800 if force_follow else 0,
+                meta=self._build_playwright_request_meta(high_priority=force_follow),
             )
 
 
