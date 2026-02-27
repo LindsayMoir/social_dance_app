@@ -6,6 +6,7 @@ import fb as fb_module
 from fb import should_use_fb_checkpoint
 from fb import FacebookEventScraper
 from fb import canonicalize_facebook_url, is_facebook_login_redirect, is_non_content_facebook_url
+from fb import extract_facebook_event_links_from_html
 from fb import sanitize_facebook_seed_urls
 from fb import classify_facebook_access_state
 import pandas as pd
@@ -103,6 +104,31 @@ def test_classify_facebook_access_state_does_not_false_positive_on_generic_login
     assert state == "ok"
 
 
+def test_extract_facebook_event_links_from_html_supports_multiple_link_shapes():
+    html = """
+    <html><body>
+      <a href="/events/2125791788194248/?acontext=%7B%7D">relative</a>
+      <a href="https://m.facebook.com/events/928779403433397">mobile</a>
+      <a href="https://www.facebook.com/events/1965005267625915/?ref=110">www</a>
+      <a href="https://l.facebook.com/l.php?u=https%3A%2F%2Fwww.facebook.com%2Fevents%2F1369934224880916%2F%3Fref%3Dshare">redirect</a>
+    </body></html>
+    """
+
+    links = extract_facebook_event_links_from_html(html)
+    assert links == {
+        "https://www.facebook.com/events/2125791788194248/",
+        "https://www.facebook.com/events/928779403433397/",
+        "https://www.facebook.com/events/1965005267625915/",
+        "https://www.facebook.com/events/1369934224880916/",
+    }
+
+
+def test_extract_facebook_event_links_from_html_falls_back_to_embedded_paths():
+    html = '{"event_url":"https:\\/\\/www.facebook.com\\/events\\/844485881486861\\/?ref=share"}'
+    links = extract_facebook_event_links_from_html(html)
+    assert links == {"https://www.facebook.com/events/844485881486861/"}
+
+
 def test_driver_fb_urls_marks_base_relevant_when_child_events_yield(monkeypatch):
     class DummyDB:
         def __init__(self):
@@ -137,6 +163,8 @@ def test_driver_fb_urls_marks_base_relevant_when_child_events_yield(monkeypatch)
     scraper.config = {"crawling": {"urls_run_limit": 10}, "checkpoint": {"fb_urls_write_every": 10}}
     scraper.urls_visited = set()
     scraper.events_written_to_db = 0
+    scraper.fb_base_urls_limit = 0
+    scraper.fb_event_links_per_base_limit = 0
     scraper._ensure_authenticated_or_raise = lambda: None
     scraper.normalize_facebook_url = lambda u: u
     scraper.extract_event_links = lambda _u: ["https://www.facebook.com/events/1018836737121988/"]
@@ -189,6 +217,8 @@ def test_driver_fb_urls_does_not_mark_base_relevant_when_no_events_yield(monkeyp
     scraper.config = {"crawling": {"urls_run_limit": 10}, "checkpoint": {"fb_urls_write_every": 10}}
     scraper.urls_visited = set()
     scraper.events_written_to_db = 0
+    scraper.fb_base_urls_limit = 0
+    scraper.fb_event_links_per_base_limit = 0
     scraper._ensure_authenticated_or_raise = lambda: None
     scraper.normalize_facebook_url = lambda u: u
     scraper.extract_event_links = lambda _u: []

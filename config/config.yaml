@@ -84,6 +84,7 @@ llm:
   - gemini
   gemini_model: gemini-2.5-flash
   gemini_model_candidates:
+  - gemini-2.5-flash-lite
   - gemini-2.5-flash
   - gemini-flash-latest
   gemini_timeout_seconds: 60
@@ -95,6 +96,7 @@ llm:
   model_candidates:
     gemini:
       default_fast:
+      - gemini-2.5-flash-lite
       - gemini-2.5-flash
       - gemini-flash-latest
     mistral:
@@ -107,6 +109,7 @@ llm:
       - gpt-4.1-mini
     openrouter:
       default_fast:
+      - qwen/qwen3-coder
       - openai/gpt-oss-120b:free
       - qwen/qwen3-coder:free
       - mistralai/mistral-small-3.1-24b-instruct:free
@@ -123,6 +126,7 @@ llm:
   openrouter_cooldown_seconds: 300
   openrouter_model: openai/gpt-oss-120b:free
   openrouter_model_candidates:
+  - qwen/qwen3-coder
   - openai/gpt-oss-120b:free
   - qwen/qwen3-coder:free
   - mistralai/mistral-small-3.1-24b-instruct:free

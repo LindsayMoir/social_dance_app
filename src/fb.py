@@ -77,7 +77,7 @@ import re
 from sqlalchemy import text
 import subprocess
 import time
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, unquote, urljoin
 import yaml
 
 # Import other classes
@@ -139,6 +139,65 @@ def canonicalize_facebook_url(url: str) -> str:
             return current
         current = decoded
     return current
+
+
+_FACEBOOK_EVENT_ID_RE = re.compile(r"/events/(\d+)")
+
+
+def _canonicalize_event_link_candidate(raw_link: str) -> str | None:
+    """Return canonical Facebook event URL when candidate contains an event ID."""
+    if not raw_link:
+        return None
+
+    candidate = unquote(str(raw_link).strip().replace("&amp;", "&"))
+    if not candidate:
+        return None
+
+    if candidate.startswith("//"):
+        candidate = f"https:{candidate}"
+    elif candidate.startswith("/"):
+        candidate = urljoin("https://www.facebook.com", candidate)
+
+    parsed = urlparse(candidate)
+    host = (parsed.netloc or "").lower()
+
+    # Handle Facebook redirect wrappers that carry target URL in `u=`.
+    if host in {"l.facebook.com", "lm.facebook.com"}:
+        target = parse_qs(parsed.query).get("u", [None])[0]
+        if target:
+            return _canonicalize_event_link_candidate(target)
+        return None
+
+    if host and "facebook.com" not in host:
+        return None
+
+    match = _FACEBOOK_EVENT_ID_RE.search(parsed.path or "")
+    if not match:
+        return None
+
+    event_id = match.group(1)
+    return f"https://www.facebook.com/events/{event_id}/"
+
+
+def extract_facebook_event_links_from_html(html: str) -> set[str]:
+    """Extract canonical Facebook event URLs from raw HTML."""
+    if not html:
+        return set()
+
+    links: set[str] = set()
+    soup = BeautifulSoup(html, "html.parser")
+
+    for anchor in soup.find_all("a", href=True):
+        normalized = _canonicalize_event_link_candidate(anchor.get("href"))
+        if normalized:
+            links.add(normalized)
+
+    # Fallback for embedded JSON/script content where links may not be in anchors.
+    normalized_html = html.replace("\\/", "/")
+    for event_id in re.findall(r"/events/(\d+)", normalized_html):
+        links.add(f"https://www.facebook.com/events/{event_id}/")
+
+    return links
 
 
 def is_facebook_login_redirect(url: str) -> bool:
@@ -826,7 +885,7 @@ class FacebookEventScraper():
         return False
     
 
-    def extract_event_links(self, search_url: str) -> set:
+    def extract_event_links(self, search_url: str) -> set[str]:
         """
         Extracts Facebook event links from a given search URL.
         Handles login if necessary, normalizes the URL, and scrolls to load dynamic content.
@@ -871,7 +930,7 @@ class FacebookEventScraper():
             self.logged_in_page.wait_for_timeout(2000)
 
         html = self.logged_in_page.content()
-        links = set(re.findall(r'https://www\.facebook\.com/events/\d+/', html))
+        links = extract_facebook_event_links_from_html(html)
         if links:
             self.urls_with_extracted_text += 1
             self.unique_urls.update(links)
@@ -1402,7 +1461,7 @@ class FacebookEventScraper():
                     break
 
                 # 4) Now scrape *all* event links by auto-navigating to /events/
-                fb_event_links = self.extract_event_links(base_url)
+                fb_event_links = sorted(self.extract_event_links(base_url))
                 if self.fb_event_links_per_base_limit > 0 and len(fb_event_links) > self.fb_event_links_per_base_limit:
                     logging.info(
                         "def driver_fb_urls(): Limiting discovered event links for %s from %d to %d.",
@@ -1428,6 +1487,10 @@ class FacebookEventScraper():
                         continue
 
                     if event_url in self.urls_visited:
+                        logging.info(
+                            "def driver_fb_urls(): Skipping discovered event URL already visited in this run: %s",
+                            event_url,
+                        )
                         continue
                     
                     # Check urls to see if they should be scraped

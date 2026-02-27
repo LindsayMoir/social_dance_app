@@ -1405,135 +1405,6 @@ def copy_dev_db_to_prod_db_step():
     return True
 
 # ------------------------
-# DOWNLOAD RENDER CRON LOGS STEP
-# ------------------------
-@flow(name="Download Render Logs Step")
-def download_render_logs_step():
-    """
-    Download Render cron job logs using the Render API.
-
-    This step only runs when on Render (checks RENDER environment variable).
-    Requires RENDER_API_KEY to be set in environment variables.
-
-    Saves logs to: logs/render_logs/cron_job_log_<timestamp>.txt
-    """
-    # Only run this step when on Render
-    if not os.getenv('RENDER'):
-        logger.info("def download_render_logs_step(): Not running on Render, skipping log download.")
-        return True
-
-    # Check for RENDER_API_KEY
-    render_api_key = os.getenv('RENDER_API_KEY')
-    if not render_api_key:
-        logger.warning("def download_render_logs_step(): RENDER_API_KEY not found. Cannot download logs.")
-        logger.info("def download_render_logs_step(): Set RENDER_API_KEY environment variable to enable automatic log downloads.")
-        return True
-
-    # Get the service name from environment (or use default)
-    service_name = os.getenv('RENDER_SERVICE_NAME', 'social_dance_app_cron')
-
-    # Create logs directory
-    log_dir = 'logs/render_logs'
-    os.makedirs(log_dir, exist_ok=True)
-
-    # Create timestamped filename
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f'cron_job_log_{timestamp}.txt')
-
-    # Download logs using Render API
-    logger.info(f"def download_render_logs_step(): Downloading logs for service: {service_name}")
-
-    try:
-        import requests
-
-        # Set up API headers
-        headers = {
-            'Authorization': f'Bearer {render_api_key}',
-            'Accept': 'application/json'
-        }
-
-        # Step 1: Find service ID and owner ID by service name
-        services_url = 'https://api.render.com/v1/services'
-        response = requests.get(services_url, headers=headers, params={'limit': 100})
-
-        if response.status_code != 200:
-            logger.error(f"def download_render_logs_step(): Failed to list services: {response.status_code} - {response.text}")
-            return True  # Don't fail pipeline
-
-        services = response.json()
-        service_id = None
-        owner_id = None
-
-        for service in services:
-            if service['service']['name'] == service_name:
-                service_id = service['service']['id']
-                owner_id = service['service'].get('ownerId')
-                break
-
-        if not service_id:
-            logger.error(f"def download_render_logs_step(): Service '{service_name}' not found")
-            return True  # Don't fail pipeline
-
-        logger.info(f"def download_render_logs_step(): Found service ID: {service_id}")
-
-        # Step 2: Get logs from Render API using /v1/logs endpoint
-        from datetime import datetime, timedelta
-
-        # Get logs from the last 24 hours
-        end_time = datetime.utcnow()
-        start_time = end_time - timedelta(hours=24)
-
-        # Format as RFC3339 (ISO 8601 with Z for UTC)
-        start_time_str = start_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-        end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-
-        logs_url = 'https://api.render.com/v1/logs'
-        log_params = {
-            'resource': service_id,
-            'ownerId': owner_id,
-            'startTime': start_time_str,
-            'endTime': end_time_str,
-            'limit': 1000
-        }
-
-        logger.info(f"def download_render_logs_step(): Retrieving logs from last 24 hours...")
-        log_response = requests.get(logs_url, headers=headers, params=log_params)
-
-        if log_response.status_code != 200:
-            logger.error(f"def download_render_logs_step(): Failed to get logs: {log_response.status_code} - {log_response.text}")
-            return True  # Don't fail pipeline
-
-        # Extract log text from API response
-        log_data = log_response.json()
-
-        if isinstance(log_data, list):
-            logs_text = '\n'.join([entry.get('text', entry.get('message', str(entry))) for entry in log_data])
-        elif isinstance(log_data, dict):
-            logs_text = '\n'.join([entry.get('text', entry.get('message', str(entry)))
-                                  for entry in log_data.get('logs', log_data.get('entries', []))])
-        else:
-            logs_text = str(log_data)
-
-        if not logs_text:
-            logger.warning("def download_render_logs_step(): No logs returned from Render API")
-            return True  # Don't fail pipeline
-
-        # Save logs to file
-        with open(log_file, 'w') as f:
-            f.write(logs_text)
-
-        logger.info(f"def download_render_logs_step(): ✓ Logs downloaded successfully to {log_file}")
-        logger.info(f"def download_render_logs_step(): Downloaded {len(logs_text)} characters ({len(logs_text.splitlines())} lines)")
-
-        return True
-
-    except Exception as e:
-        logger.error(f"def download_render_logs_step(): Unexpected error downloading logs: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return True  # Don't fail the pipeline on unexpected errors
-
-# ------------------------
 # STUB FOR TEXT MESSAGING
 # ------------------------
 @task
@@ -1598,8 +1469,7 @@ PIPELINE_STEPS = [
     ("irrelevant_rows", irrelevant_rows_step),
     ("validation", validation_step),  # Pre-commit validation before prod deployment
     ("result_analyzer", result_analyzer_step),  # LLM analysis of validation results
-    ("copy_dev_to_prod", copy_dev_db_to_prod_db_step),
-    ("download_render_logs", download_render_logs_step)
+    ("copy_dev_to_prod", copy_dev_db_to_prod_db_step)
 ]
 
 def list_available_steps():
