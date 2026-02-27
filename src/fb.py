@@ -1665,6 +1665,7 @@ def main():
 
     # Setup centralized logging
     from logging_config import setup_logging
+    os.environ["DS_STEP_NAME"] = "fb"
     setup_logging('fb')
     logging.info("\n\nfb.py starting...")
     logging.info("__main__: fb.py revision %s", get_git_revision())

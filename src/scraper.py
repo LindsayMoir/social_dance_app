@@ -32,6 +32,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 from credentials import get_credentials
 from db import DatabaseHandler
 from llm import LLMHandler
+from logging_config import setup_logging
 
 # --------------------------------------------------
 # Global objects initialization.
@@ -914,6 +915,11 @@ class EventSpider(scrapy.Spider):
         process = CrawlerProcess(settings={
             "LOG_FILE": logging_file,
             "LOG_LEVEL": "INFO",
+            "LOG_FORMAT": (
+                "%(asctime)s [%(name)s] %(levelname)s: "
+                f"[run_id={os.getenv('DS_RUN_ID', 'na')}] "
+                f"[step={os.getenv('DS_STEP_NAME', 'scraper')}] %(message)s"
+            ),
             "DEPTH_LIMIT": self.config['crawling']['depth_limit'],
             "FEEDS": {
                 "output/output.json": {"format": "json"}
@@ -948,6 +954,9 @@ class EventSpider(scrapy.Spider):
 # Main Block
 # --------------------------------------------------
 if __name__ == "__main__":
+    os.environ["DS_STEP_NAME"] = "scraper"
+    setup_logging('scraper')
+    logging.info("\n\nscraper.py starting...")
     start_time = datetime.now()
 
     with open('config/config.yaml', 'r') as file:

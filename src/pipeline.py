@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import logging
 import os
+import uuid
 
 # Load .env from src directory (where this script is located)
 env_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -1593,6 +1594,14 @@ def list_available_steps():
         print(f" {i}. {name}")
 
 def run_pipeline(start_step: str, end_step: str = None, parallel_crawlers: bool = False):
+    run_id = os.getenv("DS_RUN_ID")
+    if not run_id:
+        run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
+        os.environ["DS_RUN_ID"] = run_id
+    os.environ["DS_STEP_NAME"] = "pipeline"
+    setup_logging('pipeline')
+    logger.info("run_pipeline(): initialized run context run_id=%s", run_id)
+
     step_names = [name for name, _ in PIPELINE_STEPS]
     if start_step not in step_names:
         print(f"Error: start step '{start_step}' not found.")

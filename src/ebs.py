@@ -552,6 +552,7 @@ async def main():
         config = yaml.safe_load(file)
 
     # Setup centralized logging
+    os.environ["DS_STEP_NAME"] = "ebs"
     setup_logging('ebs')
     logging.info("\n\nebs.py starting...")
 

@@ -46,8 +46,13 @@ def setup_logging(script_name: str, level=logging.INFO):
     # Check if running on Render
     is_render = os.getenv('RENDER') == 'true'
 
-    # Common format for all logs
-    log_format = "%(asctime)s - %(levelname)s - %(message)s"
+    # Common format for all logs with pipeline run correlation context.
+    run_id = os.getenv("DS_RUN_ID", "na")
+    step_name = os.getenv("DS_STEP_NAME", script_name)
+    log_format = (
+        f"%(asctime)s - %(levelname)s - [run_id={run_id}] "
+        f"[step={step_name}] - %(message)s"
+    )
     date_format = '%Y-%m-%d %H:%M:%S'
 
     if is_render:
