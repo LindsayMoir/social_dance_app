@@ -295,6 +295,9 @@ class ValidationTestRunner:
         reliability_issues = self._extract_reliability_issues(results, llm_activity_summary, alias_audit_summary)
         reliability_gates = results.get('reliability_gates') or self._evaluate_reliability_gates(reliability_scorecard)
         optimization_plan = self._build_optimization_plan(results, reliability_scorecard, llm_activity_summary)
+        trend_summary = self._update_and_summarize_reliability_history(output_dir, reliability_scorecard)
+        reliability_issues, registry_summary = self._update_reliability_issue_registry(output_dir, reliability_issues)
+        action_queue = self._build_action_queue(reliability_gates, optimization_plan, reliability_issues, registry_summary)
 
         # Build HTML
         html = f"""<!DOCTYPE html>
@@ -333,7 +336,7 @@ class ValidationTestRunner:
         </p>
 
         <h2>1. Reliability Scorecard</h2>
-        {self._build_reliability_scorecard_html(reliability_scorecard, reliability_issues, reliability_gates)}
+        {self._build_reliability_scorecard_html(reliability_scorecard, reliability_issues, reliability_gates, trend_summary, registry_summary)}
 
         <h2>2. Scraping Validation</h2>
         {self._build_scraping_html(results.get('scraping_validation'))}
@@ -349,6 +352,9 @@ class ValidationTestRunner:
 
         <h2>6. Optimization Recommendations</h2>
         {self._build_optimization_html(optimization_plan)}
+
+        <h2>7. Reliability Action Queue</h2>
+        {self._build_action_queue_html(action_queue)}
 
         <hr style="margin: 40px 0;">
         <p style="text-align: center; color: #999; font-size: 0.9em;">
@@ -375,12 +381,16 @@ class ValidationTestRunner:
         optimization_path = os.path.join(output_dir, 'reliability_optimization.json')
         with open(optimization_path, 'w', encoding='utf-8') as f:
             json.dump(optimization_plan, f, indent=2)
+        action_queue_path = os.path.join(output_dir, 'reliability_action_queue.json')
+        with open(action_queue_path, 'w', encoding='utf-8') as f:
+            json.dump(action_queue, f, indent=2)
 
         logging.info(f"HTML report saved: {output_path}")
         logging.info(f"Reliability scorecard saved: {scorecard_path}")
         logging.info(f"Reliability issues saved: {issues_path}")
         logging.info(f"Reliability gates saved: {gates_path}")
         logging.info(f"Reliability optimization saved: {optimization_path}")
+        logging.info(f"Reliability action queue saved: {action_queue_path}")
 
     @staticmethod
     def _escape_html(value: str) -> str:
@@ -992,7 +1002,14 @@ class ValidationTestRunner:
 
         return issues
 
-    def _build_reliability_scorecard_html(self, scorecard: dict, issues: list[dict], gates: dict | None = None) -> str:
+    def _build_reliability_scorecard_html(
+        self,
+        scorecard: dict,
+        issues: list[dict],
+        gates: dict | None = None,
+        trends: dict | None = None,
+        registry_summary: dict | None = None,
+    ) -> str:
         """Render baseline reliability scorecard + normalized issue summary."""
         if not scorecard:
             return "<p class='error-box'>❌ Reliability scorecard unavailable</p>"
@@ -1080,7 +1097,7 @@ class ValidationTestRunner:
 
         if issues:
             html += "<h3>Top Reliability Issues</h3>"
-            html += "<table><tr><th>ID</th><th>Category</th><th>Severity</th><th>Step</th><th>Provider</th><th>Actual</th></tr>"
+            html += "<table><tr><th>ID</th><th>Category</th><th>Severity</th><th>Step</th><th>Provider</th><th>Occurrences</th><th>Actual</th></tr>"
             for issue in issues[:20]:
                 html += (
                     "<tr>"
@@ -1089,12 +1106,37 @@ class ValidationTestRunner:
                     f"<td>{self._escape_html(issue.get('severity', ''))}</td>"
                     f"<td>{self._escape_html(issue.get('step', ''))}</td>"
                     f"<td>{self._escape_html(issue.get('provider', ''))}</td>"
+                    f"<td>{int(issue.get('occurrence_count', 1) or 1)}</td>"
                     f"<td>{self._escape_html(issue.get('actual', ''))}</td>"
                     "</tr>"
                 )
             html += "</table>"
         else:
             html += "<p>✅ No normalized reliability issues in current window.</p>"
+
+        trends_payload = trends or {}
+        if trends_payload:
+            html += "<h3>Trend Snapshot</h3>"
+            html += "<table><tr><th>Window</th><th>Runs</th><th>Average Score</th><th>Latest Score</th><th>Delta</th></tr>"
+            for window in ("7d", "30d"):
+                t = trends_payload.get(window, {}) or {}
+                html += (
+                    "<tr>"
+                    f"<td>{window}</td>"
+                    f"<td>{int(t.get('runs', 0) or 0)}</td>"
+                    f"<td>{float(t.get('average_score', 0) or 0):.1f}</td>"
+                    f"<td>{float(t.get('latest_score', 0) or 0):.1f}</td>"
+                    f"<td>{float(t.get('delta_latest_vs_avg', 0) or 0):+.1f}</td>"
+                    "</tr>"
+                )
+            html += "</table>"
+
+        reg = registry_summary or {}
+        if reg:
+            html += (
+                f"<p><strong>Issue Registry:</strong> total_tracked={int(reg.get('total_tracked', 0) or 0)}, "
+                f"recurring_in_current_run={int(reg.get('recurring_in_current_run', 0) or 0)}</p>"
+            )
 
         return html
 
@@ -1303,6 +1345,177 @@ class ValidationTestRunner:
             f"→ {self._escape_html(str(recommended_order))}</p>"
         )
         return html
+
+    def _build_action_queue_html(self, action_queue: dict) -> str:
+        """Render prioritized reliability action queue."""
+        if not action_queue:
+            return "<p class='error-box'>❌ Action queue unavailable</p>"
+        items = action_queue.get("items", []) or []
+        if not items:
+            return "<p>✅ No queued reliability actions.</p>"
+        html = "<table><tr><th>Priority</th><th>Action</th><th>Reason</th><th>Suggested Change</th></tr>"
+        for item in items:
+            html += (
+                "<tr>"
+                f"<td>{self._escape_html(item.get('priority', ''))}</td>"
+                f"<td>{self._escape_html(item.get('title', ''))}</td>"
+                f"<td>{self._escape_html(item.get('reason', ''))}</td>"
+                f"<td>{self._escape_html(item.get('suggested_change', ''))}</td>"
+                "</tr>"
+            )
+        html += "</table>"
+        return html
+
+    def _update_and_summarize_reliability_history(self, output_dir: str, scorecard: dict) -> dict:
+        """Append current scorecard and return 7d/30d trend summary."""
+        os.makedirs(output_dir, exist_ok=True)
+        history_path = os.path.join(output_dir, "reliability_history.jsonl")
+        record = {
+            "timestamp": scorecard.get("timestamp", datetime.now().isoformat()),
+            "score": float(scorecard.get("score", 0) or 0),
+            "status": scorecard.get("status", "WATCH"),
+        }
+        with open(history_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+
+        rows: list[dict] = []
+        try:
+            with open(history_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rows.append(json.loads(line))
+                    except Exception:
+                        continue
+        except Exception:
+            rows = [record]
+
+        now = datetime.now()
+        summary: dict[str, dict] = {}
+        for days, label in ((7, "7d"), (30, "30d")):
+            cutoff = now - timedelta(days=days)
+            scoped = []
+            for row in rows:
+                ts = str(row.get("timestamp", "") or "")
+                try:
+                    dt = datetime.fromisoformat(ts)
+                except Exception:
+                    continue
+                if dt >= cutoff:
+                    scoped.append(float(row.get("score", 0) or 0))
+            avg_score = (sum(scoped) / len(scoped)) if scoped else 0.0
+            latest_score = float(record.get("score", 0) or 0)
+            summary[label] = {
+                "runs": len(scoped),
+                "average_score": round(avg_score, 2),
+                "latest_score": round(latest_score, 2),
+                "delta_latest_vs_avg": round(latest_score - avg_score, 2) if scoped else 0.0,
+            }
+        summary["path"] = history_path
+        return summary
+
+    def _update_reliability_issue_registry(self, output_dir: str, issues: list[dict]) -> tuple[list[dict], dict]:
+        """Upsert issues into persistent registry and annotate current issues with occurrence counts."""
+        os.makedirs(output_dir, exist_ok=True)
+        registry_path = os.path.join(output_dir, "reliability_issue_registry.json")
+        payload = {"issues": {}, "updated_at": datetime.now().isoformat()}
+        if os.path.exists(registry_path):
+            try:
+                with open(registry_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict) and isinstance(loaded.get("issues"), dict):
+                        payload = loaded
+            except Exception:
+                pass
+
+        registry = payload.get("issues", {})
+        now_ts = datetime.now().isoformat()
+        for issue in issues:
+            key = f"{issue.get('issue_id', '')}|{issue.get('input_signature', '')}"
+            entry = registry.get(key, {})
+            first_seen = entry.get("first_seen", issue.get("first_seen", now_ts))
+            occurrence = int(entry.get("occurrence_count", 0) or 0) + 1
+            registry[key] = {
+                "issue_id": issue.get("issue_id", ""),
+                "category": issue.get("category", ""),
+                "severity": issue.get("severity", ""),
+                "step": issue.get("step", ""),
+                "provider": issue.get("provider", ""),
+                "input_signature": issue.get("input_signature", ""),
+                "first_seen": first_seen,
+                "last_seen": now_ts,
+                "occurrence_count": occurrence,
+                "latest_actual": issue.get("actual", ""),
+            }
+            issue["occurrence_count"] = occurrence
+
+        payload["issues"] = registry
+        payload["updated_at"] = now_ts
+        with open(registry_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
+        recurring_current = sum(1 for i in issues if int(i.get("occurrence_count", 1) or 1) > 1)
+        top_recurring = sorted(
+            registry.values(),
+            key=lambda x: int(x.get("occurrence_count", 0) or 0),
+            reverse=True
+        )[:10]
+        return issues, {
+            "path": registry_path,
+            "total_tracked": len(registry),
+            "recurring_in_current_run": recurring_current,
+            "top_recurring": top_recurring,
+        }
+
+    def _build_action_queue(
+        self,
+        gates: dict,
+        optimization_plan: dict,
+        issues: list[dict],
+        registry_summary: dict,
+    ) -> dict:
+        """Build prioritized action queue from gates, recurring issues, and optimization signals."""
+        items: list[dict] = []
+        for gate in (gates or {}).get("failed_gates", []) or []:
+            items.append({
+                "priority": "P0",
+                "title": f"Fix gate failure: {gate.get('name', '')}",
+                "reason": gate.get("detail", "Gate threshold breached."),
+                "suggested_change": "Adjust provider routing/threshold regressions and rerun validation.",
+            })
+
+        for recurring in (registry_summary or {}).get("top_recurring", [])[:3]:
+            occ = int(recurring.get("occurrence_count", 0) or 0)
+            if occ < 2:
+                continue
+            items.append({
+                "priority": "P1",
+                "title": f"Resolve recurring issue: {recurring.get('issue_id', '')}",
+                "reason": f"Recurring {occ} times since {recurring.get('first_seen', '')}.",
+                "suggested_change": "Add deterministic regression test and tighten parser/fallback for this signature.",
+            })
+
+        for rec in (optimization_plan or {}).get("recommendations", [])[:3]:
+            items.append({
+                "priority": "P2",
+                "title": "Apply optimization recommendation",
+                "reason": rec,
+                "suggested_change": "Review config_patch_preview and apply routing change if aligned with quality goals.",
+            })
+
+        # Deduplicate by title while preserving order
+        dedup: dict[str, dict] = {}
+        for item in items:
+            title = str(item.get("title", "") or "")
+            if title and title not in dedup:
+                dedup[title] = item
+        return {
+            "generated_at": datetime.now().isoformat(),
+            "issue_count": len(issues or []),
+            "items": list(dedup.values())[:12],
+        }
 
     def _build_scraping_html(self, scraping_data: dict) -> str:
         """Build HTML for scraping validation section."""
