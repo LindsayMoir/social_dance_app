@@ -17,6 +17,7 @@ Version: 1.0.0
 import sys
 import os
 import csv
+import json
 from collections import Counter
 
 # Add src to path for imports (calculate path relative to this script)
@@ -256,6 +257,12 @@ class ValidationTestRunner:
         output_path = os.path.join(output_dir, 'comprehensive_test_report.html')
         alias_audit_summary = self._summarize_address_alias_audit()
         llm_activity_summary = self._summarize_llm_provider_activity(results.get('timestamp'))
+        reliability_scorecard = self._summarize_reliability_scorecard(
+            results, llm_activity_summary, alias_audit_summary
+        )
+        reliability_issues = self._extract_reliability_issues(
+            results, llm_activity_summary, alias_audit_summary
+        )
 
         # Build HTML
         html = f"""<!DOCTYPE html>
@@ -293,16 +300,19 @@ class ValidationTestRunner:
             <span class="status-{results['overall_status'].lower()}">{results['overall_status']}</span>
         </p>
 
-        <h2>1. Scraping Validation</h2>
+        <h2>1. Reliability Scorecard</h2>
+        {self._build_reliability_scorecard_html(reliability_scorecard, reliability_issues)}
+
+        <h2>2. Scraping Validation</h2>
         {self._build_scraping_html(results.get('scraping_validation'))}
 
-        <h2>2. Chatbot Testing</h2>
+        <h2>3. Chatbot Testing</h2>
         {self._build_chatbot_html(results.get('chatbot_testing'))}
 
-        <h2>3. Address Alias Audit</h2>
+        <h2>4. Address Alias Audit</h2>
         {self._build_address_alias_audit_html(alias_audit_summary)}
 
-        <h2>4. LLM Provider Activity</h2>
+        <h2>5. LLM Provider Activity</h2>
         {self._build_llm_provider_activity_html(llm_activity_summary)}
 
         <hr style="margin: 40px 0;">
@@ -318,8 +328,16 @@ class ValidationTestRunner:
         os.makedirs(output_dir, exist_ok=True)
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(html)
+        scorecard_path = os.path.join(output_dir, 'reliability_scorecard.json')
+        issues_path = os.path.join(output_dir, 'reliability_issues.json')
+        with open(scorecard_path, 'w', encoding='utf-8') as f:
+            json.dump(reliability_scorecard, f, indent=2)
+        with open(issues_path, 'w', encoding='utf-8') as f:
+            json.dump({"issues": reliability_issues}, f, indent=2)
 
         logging.info(f"HTML report saved: {output_path}")
+        logging.info(f"Reliability scorecard saved: {scorecard_path}")
+        logging.info(f"Reliability issues saved: {issues_path}")
 
     @staticmethod
     def _escape_html(value: str) -> str:
@@ -522,6 +540,7 @@ class ValidationTestRunner:
             for p in providers
         }
         file_attempts: Counter = Counter()
+        model_attempts: Counter = Counter()
         total_provider_exhausted = 0
         lines_scanned = 0
 
@@ -554,6 +573,13 @@ class ValidationTestRunner:
                         if "query_llm(): querying gemini" in low:
                             stats["gemini"]["attempts"] += 1
                             file_attempts[path] += 1
+                        for provider in providers:
+                            marker = f"query_llm(): querying {provider} model "
+                            idx = low.find(marker)
+                            if idx >= 0:
+                                model = line[idx + len(marker):].strip().split()[0]
+                                if model:
+                                    model_attempts[f"{provider}:{model}"] += 1
 
                         _inc_if(low, "query_llm(): openai response received", "openai", "successes")
                         _inc_if(low, "query_llm(): openrouter response received", "openrouter", "successes")
@@ -644,6 +670,7 @@ class ValidationTestRunner:
             "provider_exhausted_count": total_provider_exhausted,
             "lines_scanned": lines_scanned,
             "top_files": file_attempts.most_common(8),
+            "top_models": model_attempts.most_common(12),
             "total_rate_limits": total_rate_limits,
             "total_timeouts": total_timeouts,
             "pressure_level": pressure_level,
@@ -737,6 +764,248 @@ class ValidationTestRunner:
                     "</tr>"
                 )
             html += "</table>"
+
+        top_models = llm_data.get("top_models", [])
+        if top_models:
+            html += "<h3>Top Provider/Model Attempts</h3><table><tr><th>Provider:Model</th><th>Attempts</th></tr>"
+            for model_key, attempts in top_models:
+                html += (
+                    "<tr>"
+                    f"<td>{self._escape_html(model_key)}</td>"
+                    f"<td>{int(attempts)}</td>"
+                    "</tr>"
+                )
+            html += "</table>"
+
+        return html
+
+    def _summarize_reliability_scorecard(self, results: dict, llm_data: dict, alias_data: dict) -> dict:
+        """Build baseline reliability metrics from report-driving data."""
+        scraping = results.get('scraping_validation') or {}
+        scraping_summary = scraping.get('summary', {}) if isinstance(scraping, dict) else {}
+        critical_failures = len(scraping.get('critical_failures', []) or []) if isinstance(scraping, dict) else 0
+
+        chatbot = results.get('chatbot_testing') or {}
+        chatbot_summary = chatbot.get('summary', {}) if isinstance(chatbot, dict) else {}
+        avg_score = float(chatbot_summary.get('average_score', 0) or 0)
+        exec_rate = float(chatbot_summary.get('execution_success_rate', 0) or 0)
+
+        total_attempts = int((llm_data or {}).get('total_attempts', 0) or 0)
+        providers = (llm_data or {}).get('providers', {}) or {}
+        total_successes = sum(int((providers.get(p, {}) or {}).get('successes', 0) or 0) for p in ("openai", "openrouter", "mistral", "gemini"))
+        total_rate_limits = int((llm_data or {}).get('total_rate_limits', 0) or 0)
+        total_timeouts = int((llm_data or {}).get('total_timeouts', 0) or 0)
+        exhausted = int((llm_data or {}).get('provider_exhausted_count', 0) or 0)
+        llm_success_rate = (total_successes / total_attempts) if total_attempts else 0.0
+        rate_limit_rate = (total_rate_limits / total_attempts) if total_attempts else 0.0
+
+        decision_counts = (alias_data or {}).get('decision_counts', {}) or {}
+        alias_conflicts = int(decision_counts.get('skipped_conflict', 0) or 0)
+
+        score = 100.0
+        score -= min(30.0, critical_failures * 3.0)
+        score -= max(0.0, min(20.0, 90.0 - avg_score))
+        score -= max(0.0, min(20.0, (1.0 - exec_rate) * 20.0))
+        score -= min(15.0, rate_limit_rate * 100.0)
+        score -= min(10.0, exhausted * 2.0)
+        score = max(0.0, min(100.0, score))
+
+        if score >= 85:
+            status = "HEALTHY"
+        elif score >= 70:
+            status = "WATCH"
+        else:
+            status = "AT_RISK"
+
+        return {
+            "timestamp": results.get("timestamp", datetime.now().isoformat()),
+            "status": status,
+            "score": round(score, 1),
+            "metrics": {
+                "scrape_critical_failures": critical_failures,
+                "scrape_total_failures": int(scraping_summary.get('total_failures', 0) or 0),
+                "chatbot_average_score": round(avg_score, 2),
+                "chatbot_execution_success_rate": round(exec_rate, 4),
+                "llm_attempts": total_attempts,
+                "llm_success_rate": round(llm_success_rate, 4),
+                "llm_rate_limits": total_rate_limits,
+                "llm_timeouts": total_timeouts,
+                "llm_provider_exhausted": exhausted,
+                "llm_cost_pressure": (llm_data or {}).get("pressure_level", "LOW"),
+                "address_alias_conflict_skips": alias_conflicts,
+            },
+        }
+
+    def _extract_reliability_issues(self, results: dict, llm_data: dict, alias_data: dict) -> list[dict]:
+        """Normalize major reliability signals into a JSON-friendly issue list."""
+        now_ts = str(results.get("timestamp") or datetime.now().isoformat())
+        issues: list[dict] = []
+
+        scraping = results.get('scraping_validation') or {}
+        for idx, failure in enumerate((scraping.get('critical_failures') or [])[:30], start=1):
+            url = str(failure.get('url', '') or '')
+            reason = str(failure.get('reason_code', failure.get('failure_type', 'unknown')) or 'unknown')
+            issues.append({
+                "issue_id": f"SCRAPE-{idx:03d}",
+                "timestamp": now_ts,
+                "category": "Scrape Coverage Miss",
+                "severity": "high",
+                "step": "scraping_validation",
+                "provider": "",
+                "url": url,
+                "input_signature": reason,
+                "expected": "Event source should produce expected events.",
+                "actual": f"Critical scrape failure detected ({reason}).",
+                "status": "open",
+                "owner": "unassigned",
+                "first_seen": now_ts,
+                "last_seen": now_ts,
+            })
+
+        chatbot = results.get('chatbot_testing') or {}
+        for idx, cat in enumerate((chatbot.get('problem_categories') or [])[:10], start=1):
+            ex = cat.get('example', {}) or {}
+            issues.append({
+                "issue_id": f"CHATBOT-{idx:03d}",
+                "timestamp": now_ts,
+                "category": "LLM Semantic Failure",
+                "severity": "medium",
+                "step": "chatbot_testing",
+                "provider": "",
+                "url": "",
+                "input_signature": str(cat.get('name', 'unknown')),
+                "expected": "Chatbot intent + SQL output should meet quality threshold.",
+                "actual": str(ex.get('reason', 'Category below target threshold.')),
+                "status": "open",
+                "owner": "unassigned",
+                "first_seen": now_ts,
+                "last_seen": now_ts,
+            })
+
+        providers = (llm_data or {}).get("providers", {}) or {}
+        for provider in ("openai", "openrouter", "mistral", "gemini"):
+            pdata = providers.get(provider, {}) or {}
+            failures = int(pdata.get("failures", 0) or 0)
+            timeouts = int(pdata.get("timeouts", 0) or 0)
+            rate_limits = int(pdata.get("rate_limits", 0) or 0)
+            if failures <= 0 and timeouts <= 0 and rate_limits <= 0:
+                continue
+            issues.append({
+                "issue_id": f"LLM-{provider.upper()}-001",
+                "timestamp": now_ts,
+                "category": "Provider Reliability Failure",
+                "severity": "high" if (timeouts > 0 or rate_limits > 0) else "medium",
+                "step": "llm_activity",
+                "provider": provider,
+                "url": "",
+                "input_signature": "provider_failure_signal",
+                "expected": "Provider should respond within timeout and quota limits.",
+                "actual": f"failures={failures}, timeouts={timeouts}, rate_limits={rate_limits}",
+                "status": "open",
+                "owner": "unassigned",
+                "first_seen": now_ts,
+                "last_seen": now_ts,
+            })
+
+        decision_counts = (alias_data or {}).get('decision_counts', {}) or {}
+        alias_conflicts = int(decision_counts.get('skipped_conflict', 0) or 0)
+        if alias_conflicts > 0:
+            issues.append({
+                "issue_id": "ADDRESS-ALIAS-001",
+                "timestamp": now_ts,
+                "category": "Data Integrity Failure",
+                "severity": "medium",
+                "step": "address_alias_audit",
+                "provider": "",
+                "url": "",
+                "input_signature": "skipped_conflict",
+                "expected": "Alias normalization should avoid unresolved conflicts.",
+                "actual": f"Conflict skips observed: {alias_conflicts}",
+                "status": "open",
+                "owner": "unassigned",
+                "first_seen": now_ts,
+                "last_seen": now_ts,
+            })
+
+        return issues
+
+    def _build_reliability_scorecard_html(self, scorecard: dict, issues: list[dict]) -> str:
+        """Render baseline reliability scorecard + normalized issue summary."""
+        if not scorecard:
+            return "<p class='error-box'>❌ Reliability scorecard unavailable</p>"
+
+        status = str(scorecard.get("status", "WATCH")).upper()
+        status_class = {
+            "HEALTHY": "status-pass",
+            "WATCH": "status-warning",
+            "AT_RISK": "status-fail",
+        }.get(status, "status-warning")
+        metrics = scorecard.get("metrics", {}) or {}
+        open_issues = len(issues or [])
+
+        html = f"""
+        <div class="metric-container">
+            <div class="metric">
+                <div class="metric-value">{float(scorecard.get('score', 0)):.1f}</div>
+                <div class="metric-label">Reliability Score</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{self._escape_html(status)}</div>
+                <div class="metric-label">Reliability Status</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{open_issues}</div>
+                <div class="metric-label">Normalized Open Issues</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{int(metrics.get('llm_attempts', 0))}</div>
+                <div class="metric-label">LLM Attempts (Window)</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{int(metrics.get('llm_rate_limits', 0))}</div>
+                <div class="metric-label">LLM Rate Limits</div>
+            </div>
+        </div>
+        <p><strong>Status:</strong> <span class="{status_class}">{self._escape_html(status)}</span></p>
+        """
+
+        html += "<h3>Core Reliability Metrics</h3>"
+        html += "<table><tr><th>Metric</th><th>Value</th></tr>"
+        for key in (
+            "scrape_critical_failures",
+            "scrape_total_failures",
+            "chatbot_average_score",
+            "chatbot_execution_success_rate",
+            "llm_success_rate",
+            "llm_provider_exhausted",
+            "llm_cost_pressure",
+            "address_alias_conflict_skips",
+        ):
+            html += (
+                "<tr>"
+                f"<td>{self._escape_html(key)}</td>"
+                f"<td>{self._escape_html(metrics.get(key, ''))}</td>"
+                "</tr>"
+            )
+        html += "</table>"
+
+        if issues:
+            html += "<h3>Top Reliability Issues</h3>"
+            html += "<table><tr><th>ID</th><th>Category</th><th>Severity</th><th>Step</th><th>Provider</th><th>Actual</th></tr>"
+            for issue in issues[:20]:
+                html += (
+                    "<tr>"
+                    f"<td>{self._escape_html(issue.get('issue_id', ''))}</td>"
+                    f"<td>{self._escape_html(issue.get('category', ''))}</td>"
+                    f"<td>{self._escape_html(issue.get('severity', ''))}</td>"
+                    f"<td>{self._escape_html(issue.get('step', ''))}</td>"
+                    f"<td>{self._escape_html(issue.get('provider', ''))}</td>"
+                    f"<td>{self._escape_html(issue.get('actual', ''))}</td>"
+                    "</tr>"
+                )
+            html += "</table>"
+        else:
+            html += "<p>✅ No normalized reliability issues in current window.</p>"
 
         return html
 

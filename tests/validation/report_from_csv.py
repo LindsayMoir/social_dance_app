@@ -63,6 +63,9 @@ def build_html(results: dict, output_path: str) -> None:
     score_dist = summary.get('score_distribution', {})
 
     alias_data = summarize_address_alias_audit(results.get('config', {}))
+    llm_data = summarize_llm_provider_activity(results.get('timestamp'), results.get('config', {}))
+    reliability_scorecard = summarize_reliability_scorecard(results, llm_data, alias_data)
+    reliability_issues = extract_reliability_issues(results, llm_data, alias_data)
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -92,6 +95,9 @@ def build_html(results: dict, output_path: str) -> None:
   <div class=\"container\">
     <h1>Pre-Commit Validation Report (Chatbot Only)</h1>
     <p class=\"timestamp\"><strong>Timestamp:</strong> {ts}</p>
+
+    <h2>Reliability Scorecard</h2>
+    {build_reliability_scorecard_html(reliability_scorecard, reliability_issues)}
 
     <h2>Chatbot Testing</h2>
     <div class=\"metric-container\">
@@ -128,7 +134,6 @@ def build_html(results: dict, output_path: str) -> None:
     html += build_address_alias_audit_html(alias_data)
 
     # LLM Provider Activity
-    llm_data = summarize_llm_provider_activity(results.get('timestamp'), results.get('config', {}))
     html += "<h2>LLM Provider Activity</h2>"
     html += build_llm_provider_activity_html(llm_data)
 
@@ -145,6 +150,11 @@ def build_html(results: dict, output_path: str) -> None:
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
+    output_dir = os.path.dirname(output_path)
+    with open(os.path.join(output_dir, 'reliability_scorecard.json'), 'w', encoding='utf-8') as f:
+        json.dump(reliability_scorecard, f, indent=2)
+    with open(os.path.join(output_dir, 'reliability_issues.json'), 'w', encoding='utf-8') as f:
+        json.dump({"issues": reliability_issues}, f, indent=2)
     logging.info("HTML report saved: %s", output_path)
 
 
@@ -313,6 +323,7 @@ def summarize_llm_provider_activity(report_timestamp: str | None, config: dict) 
         for p in providers
     }
     file_attempts: Counter = Counter()
+    model_attempts: Counter = Counter()
     total_provider_exhausted = 0
     lines_scanned = 0
 
@@ -341,6 +352,13 @@ def summarize_llm_provider_activity(report_timestamp: str | None, config: dict) 
                     if "query_llm(): querying gemini" in low:
                         stats["gemini"]["attempts"] += 1
                         file_attempts[path] += 1
+                    for provider in providers:
+                        marker = f"query_llm(): querying {provider} model "
+                        idx = low.find(marker)
+                        if idx >= 0:
+                            model = line[idx + len(marker):].strip().split()[0]
+                            if model:
+                                model_attempts[f"{provider}:{model}"] += 1
 
                     if "query_llm(): openai response received" in low:
                         stats["openai"]["successes"] += 1
@@ -437,6 +455,7 @@ def summarize_llm_provider_activity(report_timestamp: str | None, config: dict) 
         "provider_exhausted_count": total_provider_exhausted,
         "lines_scanned": lines_scanned,
         "top_files": file_attempts.most_common(8),
+        "top_models": model_attempts.most_common(12),
         "total_rate_limits": total_rate_limits,
         "total_timeouts": total_timeouts,
         "pressure_level": pressure_level,
@@ -503,6 +522,196 @@ def build_llm_provider_activity_html(llm_data: dict) -> str:
             html += f"<tr><td>{escape_html(os.path.basename(path))}</td><td>{int(attempts)}</td></tr>"
         html += "</table>"
 
+    top_models = llm_data.get("top_models", [])
+    if top_models:
+        html += "<h3>Top Provider/Model Attempts</h3><table><tr><th>Provider:Model</th><th>Attempts</th></tr>"
+        for model_key, attempts in top_models:
+            html += f"<tr><td>{escape_html(model_key)}</td><td>{int(attempts)}</td></tr>"
+        html += "</table>"
+
+    return html
+
+
+def summarize_reliability_scorecard(results: dict, llm_data: dict, alias_data: dict) -> dict:
+    """Build baseline reliability metrics from report-driving data."""
+    chatbot = results.get('chatbot_testing') or {}
+    chatbot_summary = chatbot.get('summary', {}) if isinstance(chatbot, dict) else {}
+    avg_score = float(chatbot_summary.get('average_score', 0) or 0)
+    exec_rate = float(chatbot_summary.get('execution_success_rate', 0) or 0)
+
+    total_attempts = int((llm_data or {}).get('total_attempts', 0) or 0)
+    providers = (llm_data or {}).get('providers', {}) or {}
+    total_successes = sum(int((providers.get(p, {}) or {}).get('successes', 0) or 0) for p in ("openai", "openrouter", "mistral", "gemini"))
+    total_rate_limits = int((llm_data or {}).get('total_rate_limits', 0) or 0)
+    total_timeouts = int((llm_data or {}).get('total_timeouts', 0) or 0)
+    exhausted = int((llm_data or {}).get('provider_exhausted_count', 0) or 0)
+    llm_success_rate = (total_successes / total_attempts) if total_attempts else 0.0
+    rate_limit_rate = (total_rate_limits / total_attempts) if total_attempts else 0.0
+
+    decision_counts = (alias_data or {}).get('decision_counts', {}) or {}
+    alias_conflicts = int(decision_counts.get('skipped_conflict', 0) or 0)
+
+    score = 100.0
+    score -= max(0.0, min(20.0, 90.0 - avg_score))
+    score -= max(0.0, min(20.0, (1.0 - exec_rate) * 20.0))
+    score -= min(15.0, rate_limit_rate * 100.0)
+    score -= min(10.0, exhausted * 2.0)
+    score = max(0.0, min(100.0, score))
+
+    if score >= 85:
+        status = "HEALTHY"
+    elif score >= 70:
+        status = "WATCH"
+    else:
+        status = "AT_RISK"
+
+    return {
+        "timestamp": results.get("timestamp", datetime.now().isoformat()),
+        "status": status,
+        "score": round(score, 1),
+        "metrics": {
+            "chatbot_average_score": round(avg_score, 2),
+            "chatbot_execution_success_rate": round(exec_rate, 4),
+            "llm_attempts": total_attempts,
+            "llm_success_rate": round(llm_success_rate, 4),
+            "llm_rate_limits": total_rate_limits,
+            "llm_timeouts": total_timeouts,
+            "llm_provider_exhausted": exhausted,
+            "llm_cost_pressure": (llm_data or {}).get("pressure_level", "LOW"),
+            "address_alias_conflict_skips": alias_conflicts,
+        },
+    }
+
+
+def extract_reliability_issues(results: dict, llm_data: dict, alias_data: dict) -> list[dict]:
+    """Normalize reliability signals into machine-readable issue records."""
+    now_ts = str(results.get("timestamp") or datetime.now().isoformat())
+    issues: list[dict] = []
+
+    chatbot = results.get('chatbot_testing') or {}
+    for idx, cat in enumerate((chatbot.get('problem_categories') or [])[:10], start=1):
+        ex = cat.get('example', {}) or {}
+        issues.append({
+            "issue_id": f"CHATBOT-{idx:03d}",
+            "timestamp": now_ts,
+            "category": "LLM Semantic Failure",
+            "severity": "medium",
+            "step": "chatbot_testing",
+            "provider": "",
+            "url": "",
+            "input_signature": str(cat.get('name', 'unknown')),
+            "expected": "Chatbot intent + SQL output should meet quality threshold.",
+            "actual": str(ex.get('reason', 'Category below target threshold.')),
+            "status": "open",
+            "owner": "unassigned",
+            "first_seen": now_ts,
+            "last_seen": now_ts,
+        })
+
+    providers = (llm_data or {}).get("providers", {}) or {}
+    for provider in ("openai", "openrouter", "mistral", "gemini"):
+        pdata = providers.get(provider, {}) or {}
+        failures = int(pdata.get("failures", 0) or 0)
+        timeouts = int(pdata.get("timeouts", 0) or 0)
+        rate_limits = int(pdata.get("rate_limits", 0) or 0)
+        if failures <= 0 and timeouts <= 0 and rate_limits <= 0:
+            continue
+        issues.append({
+            "issue_id": f"LLM-{provider.upper()}-001",
+            "timestamp": now_ts,
+            "category": "Provider Reliability Failure",
+            "severity": "high" if (timeouts > 0 or rate_limits > 0) else "medium",
+            "step": "llm_activity",
+            "provider": provider,
+            "url": "",
+            "input_signature": "provider_failure_signal",
+            "expected": "Provider should respond within timeout and quota limits.",
+            "actual": f"failures={failures}, timeouts={timeouts}, rate_limits={rate_limits}",
+            "status": "open",
+            "owner": "unassigned",
+            "first_seen": now_ts,
+            "last_seen": now_ts,
+        })
+
+    decision_counts = (alias_data or {}).get('decision_counts', {}) or {}
+    alias_conflicts = int(decision_counts.get('skipped_conflict', 0) or 0)
+    if alias_conflicts > 0:
+        issues.append({
+            "issue_id": "ADDRESS-ALIAS-001",
+            "timestamp": now_ts,
+            "category": "Data Integrity Failure",
+            "severity": "medium",
+            "step": "address_alias_audit",
+            "provider": "",
+            "url": "",
+            "input_signature": "skipped_conflict",
+            "expected": "Alias normalization should avoid unresolved conflicts.",
+            "actual": f"Conflict skips observed: {alias_conflicts}",
+            "status": "open",
+            "owner": "unassigned",
+            "first_seen": now_ts,
+            "last_seen": now_ts,
+        })
+
+    return issues
+
+
+def build_reliability_scorecard_html(scorecard: dict, issues: list[dict]) -> str:
+    if not scorecard:
+        return "<p class='error-box'>❌ Reliability scorecard unavailable</p>"
+
+    status = str(scorecard.get("status", "WATCH")).upper()
+    status_class = {
+        "HEALTHY": "status-pass",
+        "WATCH": "status-warning",
+        "AT_RISK": "status-fail",
+    }.get(status, "status-warning")
+    metrics = scorecard.get("metrics", {}) or {}
+    open_issues = len(issues or [])
+
+    html = (
+        "<div class=\"metric-container\">"
+        f"<div class=\"metric\"><div class=\"metric-value\">{float(scorecard.get('score', 0)):.1f}</div><div class=\"metric-label\">Reliability Score</div></div>"
+        f"<div class=\"metric\"><div class=\"metric-value\">{escape_html(status)}</div><div class=\"metric-label\">Reliability Status</div></div>"
+        f"<div class=\"metric\"><div class=\"metric-value\">{open_issues}</div><div class=\"metric-label\">Normalized Open Issues</div></div>"
+        f"<div class=\"metric\"><div class=\"metric-value\">{int(metrics.get('llm_attempts', 0))}</div><div class=\"metric-label\">LLM Attempts (Window)</div></div>"
+        f"<div class=\"metric\"><div class=\"metric-value\">{int(metrics.get('llm_rate_limits', 0))}</div><div class=\"metric-label\">LLM Rate Limits</div></div>"
+        "</div>"
+    )
+    html += (
+        "<p><strong>Status:</strong> "
+        f"<span class=\"{status_class}\">{escape_html(status)}</span></p>"
+    )
+    html += "<h3>Core Reliability Metrics</h3>"
+    html += "<table><tr><th>Metric</th><th>Value</th></tr>"
+    for key in (
+        "chatbot_average_score",
+        "chatbot_execution_success_rate",
+        "llm_success_rate",
+        "llm_provider_exhausted",
+        "llm_cost_pressure",
+        "address_alias_conflict_skips",
+    ):
+        html += f"<tr><td>{escape_html(key)}</td><td>{escape_html(metrics.get(key, ''))}</td></tr>"
+    html += "</table>"
+
+    if issues:
+        html += "<h3>Top Reliability Issues</h3>"
+        html += "<table><tr><th>ID</th><th>Category</th><th>Severity</th><th>Step</th><th>Provider</th><th>Actual</th></tr>"
+        for issue in issues[:20]:
+            html += (
+                "<tr>"
+                f"<td>{escape_html(issue.get('issue_id', ''))}</td>"
+                f"<td>{escape_html(issue.get('category', ''))}</td>"
+                f"<td>{escape_html(issue.get('severity', ''))}</td>"
+                f"<td>{escape_html(issue.get('step', ''))}</td>"
+                f"<td>{escape_html(issue.get('provider', ''))}</td>"
+                f"<td>{escape_html(issue.get('actual', ''))}</td>"
+                "</tr>"
+            )
+        html += "</table>"
+    else:
+        html += "<p>✅ No normalized reliability issues in current window.</p>"
     return html
 
 

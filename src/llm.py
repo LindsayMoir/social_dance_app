@@ -976,7 +976,7 @@ class LLMHandler:
                 logging.warning("query_llm(): Skipping OpenAI query due to active timeout cooldown.")
                 return None
             model = self._resolve_model_for_provider("openai")
-            logging.info("query_llm(): Querying OpenAI")
+            logging.info("query_llm(): Querying OpenAI model %s", model)
             try:
                 response = self.query_openai(prompt, model, schema_type=schema_type)
             except Exception as e:
@@ -1026,7 +1026,7 @@ class LLMHandler:
                 return None
             try:
                 model = self._resolve_model_for_provider("mistral")
-                logging.info("query_llm(): Querying Mistral")
+                logging.info("query_llm(): Querying Mistral model %s", model)
                 try:
                     response = self.query_mistral(prompt, model, schema_type=schema_type)
                 except Exception as e:
@@ -1050,7 +1050,7 @@ class LLMHandler:
                 logging.warning("query_llm(): Skipping Gemini query due to active timeout cooldown.")
                 return None
             model = self._resolve_model_for_provider("gemini")
-            logging.info("query_llm(): Querying Gemini")
+            logging.info("query_llm(): Querying Gemini model %s", model)
             try:
                 response = self.query_gemini(prompt, model, schema_type=schema_type)
             except Exception as e:
