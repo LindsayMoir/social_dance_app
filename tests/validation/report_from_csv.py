@@ -67,6 +67,7 @@ def build_html(results: dict, output_path: str) -> None:
     reliability_scorecard = summarize_reliability_scorecard(results, llm_data, alias_data)
     reliability_gates = evaluate_reliability_gates(reliability_scorecard, results.get('config', {}))
     reliability_issues = extract_reliability_issues(results, llm_data, alias_data, reliability_gates)
+    optimization_plan = build_optimization_plan(results, reliability_scorecard, llm_data)
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -138,6 +139,10 @@ def build_html(results: dict, output_path: str) -> None:
     html += "<h2>LLM Provider Activity</h2>"
     html += build_llm_provider_activity_html(llm_data)
 
+    # Optimization Recommendations
+    html += "<h2>Optimization Recommendations</h2>"
+    html += build_optimization_html(optimization_plan)
+
     html += """
     <hr style="margin: 40px 0;">
     <p style="text-align: center; color: #999; font-size: 0.9em;">
@@ -158,6 +163,8 @@ def build_html(results: dict, output_path: str) -> None:
         json.dump({"issues": reliability_issues}, f, indent=2)
     with open(os.path.join(output_dir, 'reliability_gates.json'), 'w', encoding='utf-8') as f:
         json.dump(reliability_gates, f, indent=2)
+    with open(os.path.join(output_dir, 'reliability_optimization.json'), 'w', encoding='utf-8') as f:
+        json.dump(optimization_plan, f, indent=2)
     logging.info("HTML report saved: %s", output_path)
 
 
@@ -821,6 +828,105 @@ def evaluate_reliability_gates(scorecard: dict, config: dict) -> dict:
         "failed_gates": failed_gates,
         "evaluated_at": datetime.now().isoformat(),
     }
+
+
+def build_optimization_plan(results: dict, scorecard: dict, llm_data: dict) -> dict:
+    config = results.get("config", {}) if isinstance(results, dict) else {}
+    providers = (llm_data or {}).get("providers", {}) or {}
+    default_order = list((config.get("llm", {}) if isinstance(config, dict) else {}).get("chatbot_provider_order", ["openai", "openrouter", "gemini"]))
+    provider_scores: dict[str, dict] = {}
+    ranked: list[tuple[str, float]] = []
+    recommendations: list[str] = []
+
+    for provider in ("openai", "openrouter", "mistral", "gemini"):
+        pdata = providers.get(provider, {}) or {}
+        attempts = int(pdata.get("attempts", 0) or 0)
+        successes = int(pdata.get("successes", 0) or 0)
+        failures = int(pdata.get("failures", 0) or 0)
+        rate_limits = int(pdata.get("rate_limits", 0) or 0)
+        timeouts = int(pdata.get("timeouts", 0) or 0)
+        success_rate = (successes / attempts) if attempts else 0.0
+        failure_rate = (failures / attempts) if attempts else 0.0
+        rate_limit_rate = (rate_limits / attempts) if attempts else 0.0
+        timeout_rate = (timeouts / attempts) if attempts else 0.0
+        score = (success_rate * 100.0) - (rate_limit_rate * 40.0) - (timeout_rate * 30.0) - (failure_rate * 20.0)
+        provider_scores[provider] = {
+            "attempts": attempts,
+            "success_rate": round(success_rate, 4),
+            "failure_rate": round(failure_rate, 4),
+            "rate_limit_rate": round(rate_limit_rate, 4),
+            "timeout_rate": round(timeout_rate, 4),
+            "health_score": round(score, 2),
+        }
+        ranked.append((provider, score))
+        if attempts > 0 and rate_limit_rate >= 0.20:
+            recommendations.append(f"{provider}: high rate-limit ratio ({rate_limits}/{attempts}); reduce priority or increase cooldown.")
+        if attempts > 0 and timeout_rate >= 0.15:
+            recommendations.append(f"{provider}: elevated timeout ratio ({timeouts}/{attempts}); keep as fallback until stable.")
+
+    ranked.sort(key=lambda x: x[1], reverse=True)
+    optimized_order = [p for p, _ in ranked]
+
+    current_metrics = (scorecard or {}).get("metrics", {}) or {}
+    if float(current_metrics.get("llm_success_rate", 0) or 0) < 0.8:
+        recommendations.append("Overall LLM success rate is below 80%; tighten routing and fallback depth for chatbot requests.")
+    if str(current_metrics.get("llm_cost_pressure", "LOW")).upper() in {"MEDIUM", "HIGH"}:
+        recommendations.append("Cost pressure is elevated; prioritize stable low-cost providers and avoid deep fallback chains.")
+    if not recommendations:
+        recommendations.append("Routing health is stable. Keep current order and continue monitoring 7-day trend deltas.")
+
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "current_chatbot_provider_order": default_order,
+        "recommended_chatbot_provider_order": optimized_order,
+        "provider_scores": provider_scores,
+        "quality_snapshot": {
+            "chatbot_average_score": current_metrics.get("chatbot_average_score", 0),
+            "chatbot_execution_success_rate": current_metrics.get("chatbot_execution_success_rate", 0),
+            "reliability_score": (scorecard or {}).get("score", 0),
+        },
+        "recommendations": recommendations,
+        "config_patch_preview": {"llm": {"chatbot_provider_order": optimized_order}},
+    }
+
+
+def build_optimization_html(optimization_plan: dict) -> str:
+    if not optimization_plan:
+        return "<p class='error-box'>❌ Optimization recommendations unavailable</p>"
+    current_order = optimization_plan.get("current_chatbot_provider_order", [])
+    recommended_order = optimization_plan.get("recommended_chatbot_provider_order", [])
+    html = (
+        f"<p><strong>Current chatbot provider order:</strong> {escape_html(' -> '.join(current_order))}</p>"
+        f"<p><strong>Recommended order:</strong> {escape_html(' -> '.join(recommended_order))}</p>"
+    )
+    html += "<h3>Provider Health Scores</h3>"
+    html += "<table><tr><th>Provider</th><th>Attempts</th><th>Success Rate</th><th>Rate Limit Rate</th><th>Timeout Rate</th><th>Health Score</th></tr>"
+    provider_scores = optimization_plan.get("provider_scores", {}) or {}
+    for provider in ("openai", "openrouter", "mistral", "gemini"):
+        stats = provider_scores.get(provider, {}) or {}
+        html += (
+            "<tr>"
+            f"<td>{escape_html(provider)}</td>"
+            f"<td>{int(stats.get('attempts', 0) or 0)}</td>"
+            f"<td>{float(stats.get('success_rate', 0) or 0):.2%}</td>"
+            f"<td>{float(stats.get('rate_limit_rate', 0) or 0):.2%}</td>"
+            f"<td>{float(stats.get('timeout_rate', 0) or 0):.2%}</td>"
+            f"<td>{float(stats.get('health_score', 0) or 0):.2f}</td>"
+            "</tr>"
+        )
+    html += "</table>"
+    recs = optimization_plan.get("recommendations", []) or []
+    if recs:
+        html += "<h3>Recommended Actions</h3><ul>"
+        for rec in recs:
+            html += f"<li>{escape_html(rec)}</li>"
+        html += "</ul>"
+    html += (
+        "<p><strong>Patch Preview:</strong> "
+        "<code>llm.chatbot_provider_order</code> "
+        f"→ {escape_html(str(recommended_order))}</p>"
+    )
+    return html
 
 
 def main():
