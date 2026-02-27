@@ -1201,6 +1201,61 @@ def result_analyzer_step():
     return True
 
 # ------------------------
+# REMEDIATION PLANNER STEP
+# Builds a read-only remediation plan from reliability artifacts
+# ------------------------
+@task
+def run_remediation_planner():
+    """Run remediation planner based on reliability artifacts."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "tests/validation/remediation_planner.py"],
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 min
+        )
+        if result.returncode == 0:
+            logger.info("def run_remediation_planner(): Remediation planning completed successfully")
+            if result.stdout:
+                logger.info(result.stdout.strip())
+            return "Remediation plan generated"
+        logger.warning(
+            "def run_remediation_planner(): Remediation planning completed with issues (exit code %s)",
+            result.returncode,
+        )
+        if result.stderr:
+            logger.warning(result.stderr.strip())
+        logger.warning("def run_remediation_planner(): Continuing pipeline despite planning issues")
+        return "Remediation planning completed with warnings"
+    except subprocess.TimeoutExpired:
+        logger.error("def run_remediation_planner(): Remediation planner timed out after 5 minutes")
+        logger.warning("def run_remediation_planner(): Continuing pipeline despite timeout")
+        return "Remediation planner timed out"
+    except Exception as e:
+        logger.error(f"def run_remediation_planner(): Unexpected error: {e}")
+        logger.warning("def run_remediation_planner(): Continuing pipeline despite error")
+        return "Remediation planner encountered error"
+
+
+@flow(name="Remediation Planner Step")
+def remediation_planner_step():
+    """
+    Generate a read-only remediation plan from validation/reliability outputs.
+
+    NOTE: This step does NOT modify source code or config.
+    It writes output/remediation_plan.json and output/remediation_plan.md.
+    """
+    logger.info("=" * 70)
+    logger.info("REMEDIATION PLANNER STEP")
+    logger.info("Build read-only remediation plan from reliability artifacts")
+    logger.info("=" * 70)
+
+    planner_result = run_remediation_planner()
+    logger.info(f"remediation_planner_step: run_remediation_planner returned: {planner_result}")
+    logger.info("remediation_planner_step: Step completed")
+    return True
+
+# ------------------------
 # COPY DEV DATABASE TO PRODUCTION DATABASE STEP
 # This step copies the working database (local or render_dev) to production
 # ------------------------
@@ -1469,6 +1524,7 @@ PIPELINE_STEPS = [
     ("irrelevant_rows", irrelevant_rows_step),
     ("validation", validation_step),  # Pre-commit validation before prod deployment
     ("result_analyzer", result_analyzer_step),  # LLM analysis of validation results
+    ("remediation_planner", remediation_planner_step),  # Read-only plan from reliability artifacts
     ("copy_dev_to_prod", copy_dev_db_to_prod_db_step)
 ]
 

@@ -1753,7 +1753,29 @@ class ValidationTestRunner:
 
         # Collect attachment paths — only include the comprehensive HTML report
         html_report = os.path.join(output_dir, 'comprehensive_test_report.html')
-        attachments = [html_report] if os.path.exists(html_report) else []
+        remediation_md = os.path.join(output_dir, 'remediation_plan.md')
+        remediation_json = os.path.join(output_dir, 'remediation_plan.json')
+
+        # Ensure remediation plan exists before sending email (read-only planner).
+        if not (os.path.exists(remediation_md) and os.path.exists(remediation_json)):
+            try:
+                subprocess.run(
+                    [sys.executable, "tests/validation/remediation_planner.py"],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    check=False,
+                )
+            except Exception as e:
+                logging.warning("Failed to generate remediation plan before email: %s", e)
+
+        attachments = []
+        if os.path.exists(html_report):
+            attachments.append(html_report)
+        if os.path.exists(remediation_md):
+            attachments.append(remediation_md)
+        if os.path.exists(remediation_json):
+            attachments.append(remediation_json)
 
         # Send email
         logging.info("Attempting to send email notification...")
