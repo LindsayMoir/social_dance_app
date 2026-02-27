@@ -162,10 +162,10 @@ class LLMHandler:
         self.provider_retry_base_delay_seconds = float(llm_config.get("provider_retry_base_delay_seconds", 0.5) or 0.5)
         self.provider_retry_jitter_seconds = float(llm_config.get("provider_retry_jitter_seconds", 0.3) or 0.3)
         self.provider_retry_max_delay_seconds = float(llm_config.get("provider_retry_max_delay_seconds", 4.0) or 4.0)
-        self.chatbot_openai_first_every_n_requests = int(
-            llm_config.get("chatbot_openai_first_every_n_requests", 0) or 0
+        self.regular_openai_first_every_n_requests = int(
+            llm_config.get("regular_openai_first_every_n_requests", 0) or 0
         )
-        self.chatbot_request_counter = 0
+        self.regular_request_counter = 0
         self.provider_rotation_enabled = bool(llm_config.get("provider_rotation_enabled", False))
         self.provider_rotation_index = 0
         self._resolved_provider_models: dict[str, str] = {}
@@ -703,17 +703,7 @@ class LLMHandler:
             order = ["openai", "openrouter", "gemini"]
         valid = {"openai", "mistral", "gemini", "openrouter"}
         filtered = [provider for provider in order if provider in valid]
-        resolved = filtered or ["openai", "openrouter", "gemini"]
-
-        # Optional cadence override: promote OpenAI to the first slot every N chatbot requests.
-        cadence = max(0, int(getattr(self, "chatbot_openai_first_every_n_requests", 0) or 0))
-        if cadence <= 0 or "openai" not in resolved:
-            return resolved
-
-        self.chatbot_request_counter = int(getattr(self, "chatbot_request_counter", 0) or 0) + 1
-        if self.chatbot_request_counter % cadence == 0:
-            return ["openai"] + [p for p in resolved if p != "openai"]
-        return resolved
+        return filtered or ["openai", "openrouter", "gemini"]
 
     def _candidate_providers_for_request(self, url: str, primary_provider: str) -> list[str]:
         """Build ordered provider candidates for a single request."""
@@ -726,6 +716,12 @@ class LLMHandler:
             for fallback_provider in self._fallback_provider_order():
                 if fallback_provider not in candidates:
                     candidates.append(fallback_provider)
+
+        cadence = max(0, int(getattr(self, "regular_openai_first_every_n_requests", 0) or 0))
+        if cadence > 0 and "openai" in candidates:
+            self.regular_request_counter = int(getattr(self, "regular_request_counter", 0) or 0) + 1
+            if self.regular_request_counter % cadence == 0:
+                candidates = ["openai"] + [p for p in candidates if p != "openai"]
 
         return candidates
 
