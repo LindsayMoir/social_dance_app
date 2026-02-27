@@ -1565,7 +1565,13 @@ class DatabaseHandler():
         url = '' if pd.isna(url) else str(url)
         parent_url = '' if pd.isna(parent_url) else str(parent_url)
 
-        if 'calendar' in url or 'calendar' in parent_url:
+        calendar_style_columns = {
+            'URL', 'Type_of_Event', 'Name_of_the_Event', 'Day_of_Week',
+            'Start_Date', 'End_Date', 'Start_Time', 'End_Time',
+            'Price', 'Location', 'Description',
+        }
+        is_calendar_payload = bool(calendar_style_columns.intersection(set(df.columns)))
+        if 'calendar' in url or 'calendar' in parent_url or is_calendar_payload:
             df = self._rename_google_calendar_columns(df)
             df['dance_style'] = ', '.join(keywords) if isinstance(keywords, list) else keywords
 
@@ -1666,6 +1672,22 @@ class DatabaseHandler():
         Returns:
             None: The DataFrame is modified in place.
         """
+        # Normalize common alternate datetime column names before conversion.
+        alias_map = {
+            'Start_Date': 'start_date',
+            'End_Date': 'end_date',
+            'Start_Time': 'start_time',
+            'End_Time': 'end_time',
+        }
+        for alias, canonical in alias_map.items():
+            if canonical not in df.columns and alias in df.columns:
+                df[canonical] = df[alias]
+
+        # Ensure canonical columns exist to avoid hard-fail KeyError on imperfect payloads.
+        for col in ['start_date', 'end_date', 'start_time', 'end_time']:
+            if col not in df.columns:
+                df[col] = pd.NA
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             for col in ['start_date', 'end_date']:

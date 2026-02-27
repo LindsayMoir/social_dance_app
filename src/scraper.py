@@ -11,6 +11,7 @@ Dependencies:
 """
 
 import base64
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 import logging
 import os
@@ -259,8 +260,134 @@ class EventSpider(scrapy.Spider):
             crawling_cfg.get("scraper_priority_retry_times", max(self.scraper_retry_times + 2, 3))
             or max(self.scraper_retry_times + 2, 3)
         )
+        self.scraper_domain_failure_threshold = int(
+            crawling_cfg.get("scraper_domain_failure_threshold", 3) or 3
+        )
+        self.scraper_domain_failure_window_seconds = int(
+            crawling_cfg.get("scraper_domain_failure_window_seconds", 600) or 600
+        )
+        self.scraper_domain_cooldown_seconds = int(
+            crawling_cfg.get("scraper_domain_cooldown_seconds", 600) or 600
+        )
+        self.domain_failure_events: dict[str, deque[datetime]] = defaultdict(deque)
+        self.domain_cooldown_until: dict[str, datetime] = {}
+        self.domain_cooldown_skip_count = 0
+        self.domain_cooldown_trigger_count = 0
 
         logging.info("\n\nscraper.py starting...")
+
+    @staticmethod
+    def _domain_for_url(url: str) -> str:
+        """Return lowercase netloc for a URL."""
+        try:
+            return urlparse(url).netloc.lower().strip()
+        except Exception:
+            return ""
+
+    def _prune_domain_failures(self, domain: str, now_ts: datetime) -> None:
+        """Keep only failures that are still inside the rolling failure window."""
+        events = self.domain_failure_events.get(domain)
+        if not events:
+            return
+        cutoff = now_ts - timedelta(seconds=self.scraper_domain_failure_window_seconds)
+        while events and events[0] < cutoff:
+            events.popleft()
+
+    def _domain_in_cooldown(self, url: str) -> bool:
+        """True when domain is currently blocked by transient-failure circuit breaker."""
+        domain = self._domain_for_url(url)
+        if not domain:
+            return False
+        until = self.domain_cooldown_until.get(domain)
+        if not until:
+            return False
+        now_ts = datetime.now()
+        if now_ts >= until:
+            self.domain_cooldown_until.pop(domain, None)
+            self.domain_failure_events.pop(domain, None)
+            return False
+        return True
+
+    def _record_domain_success(self, url: str) -> None:
+        """Clear failure history on successful response for a domain."""
+        domain = self._domain_for_url(url)
+        if not domain:
+            return
+        self.domain_failure_events.pop(domain, None)
+
+    def _record_domain_transient_failure(self, url: str, reason: str) -> None:
+        """Track transient download failures and trigger domain cooldown when threshold is crossed."""
+        domain = self._domain_for_url(url)
+        if not domain:
+            return
+        now_ts = datetime.now()
+        events = self.domain_failure_events[domain]
+        events.append(now_ts)
+        self._prune_domain_failures(domain, now_ts)
+        if len(events) < self.scraper_domain_failure_threshold:
+            return
+        cooldown_until = now_ts + timedelta(seconds=self.scraper_domain_cooldown_seconds)
+        current_until = self.domain_cooldown_until.get(domain)
+        if current_until and current_until >= cooldown_until:
+            return
+        self.domain_cooldown_until[domain] = cooldown_until
+        self.domain_cooldown_trigger_count += 1
+        logging.warning(
+            "Domain circuit breaker triggered for %s until %s after %d transient failures in %ds. Last reason: %s",
+            domain,
+            cooldown_until.isoformat(),
+            len(events),
+            self.scraper_domain_failure_window_seconds,
+            reason,
+        )
+
+    @staticmethod
+    def _is_transient_download_failure(failure) -> bool:
+        """Return True for transient network/download failures worth circuit-breaking."""
+        err_name = ""
+        err_text = ""
+        try:
+            err_name = failure.type.__name__.lower() if getattr(failure, "type", None) else ""
+            err_text = str(failure.value).lower() if getattr(failure, "value", None) else str(failure).lower()
+        except Exception:
+            err_text = str(failure).lower()
+        markers = (
+            "timeouterror",
+            "responseneverreceived",
+            "connectionlost",
+            "tcptimedout",
+            "dnslookuperror",
+            "connecterror",
+            "connection was refused",
+            "connection reset by peer",
+            "timed out",
+            "timeout",
+        )
+        return any(marker in err_name or marker in err_text for marker in markers)
+
+    def handle_request_error(self, failure) -> None:
+        """Scrapy errback to track transient domain failures and cooldown behavior."""
+        request = getattr(failure, "request", None)
+        req_url = request.url if request else ""
+        if self._is_transient_download_failure(failure):
+            self._record_domain_transient_failure(req_url, str(failure.value) if getattr(failure, "value", None) else str(failure))
+        else:
+            logging.warning("handle_request_error(): Non-transient request failure for %s: %s", req_url, failure)
+
+    def closed(self, reason: str) -> None:
+        """Emit circuit-breaker summary at spider shutdown for reporting."""
+        active_blocks = 0
+        now_ts = datetime.now()
+        for until in self.domain_cooldown_until.values():
+            if until > now_ts:
+                active_blocks += 1
+        logging.info(
+            "domain_circuit_breaker_summary: triggers=%d skips=%d active_blocks=%d reason=%s",
+            self.domain_cooldown_trigger_count,
+            self.domain_cooldown_skip_count,
+            active_blocks,
+            reason,
+        )
 
     def _build_playwright_request_meta(self, high_priority: bool = False) -> dict:
         """
@@ -353,9 +480,14 @@ class EventSpider(scrapy.Spider):
                 continue
 
             logging.info(f"start(): Starting crawl for URL: {url}")
+            if self._domain_in_cooldown(url):
+                self.domain_cooldown_skip_count += 1
+                logging.info("start(): Skipping URL in active domain cooldown: %s", url)
+                continue
             yield scrapy.Request(
                 url=url,
                 callback=self.parse,
+                errback=self.handle_request_error,
                 cb_kwargs={'keywords': keywords, 'source': source, 'url': url},
                 priority=1000 if is_whitelisted_seed else 0,
                 meta=self._build_playwright_request_meta(
@@ -376,6 +508,7 @@ class EventSpider(scrapy.Spider):
         # Skip non-text responses (e.g., images, PDFs, etc.)
         if not isinstance(response, TextResponse):
             return
+        self._record_domain_success(response.url)
         
         try:
             is_whitelisted_origin = db_handler.is_whitelisted_url(url)
@@ -528,9 +661,14 @@ class EventSpider(scrapy.Spider):
                 raise scrapy.exceptions.CloseSpider(reason="URL run limit reached")
 
             logging.info(f"def parse(): Crawling next URL: {link}")
+            if self._domain_in_cooldown(link):
+                self.domain_cooldown_skip_count += 1
+                logging.info("parse(): Skipping link in active domain cooldown: %s", link)
+                continue
             yield scrapy.Request(
                 url=link,
                 callback=self.parse,
+                errback=self.handle_request_error,
                 cb_kwargs={'keywords': keywords, 'source': source, 'url': link},
                 priority=800 if force_follow else 0,
                 meta=self._build_playwright_request_meta(high_priority=force_follow),

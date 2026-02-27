@@ -61,6 +61,31 @@ os.makedirs(log_dir, exist_ok=True)
 
 logger = logging.getLogger(__name__)
 
+_TRANSIENT_DB_ERROR_MARKERS = (
+    "database is locked",
+    "operationalerror",
+    "could not connect to server",
+    "connection refused",
+    "connection reset by peer",
+    "server closed the connection unexpectedly",
+    "terminating connection due to administrator command",
+    "remaining connection slots are reserved",
+    "too many clients already",
+    "temporary failure in name resolution",
+    "name or service not known",
+    "timeout expired",
+    "connection timed out",
+    "ssl syscall error: eof detected",
+    "could not translate host name",
+    "the database system is starting up",
+)
+
+
+def _is_transient_database_error(message: str) -> bool:
+    """Return True if text looks like a retriable database failure."""
+    lowered = (message or "").lower()
+    return any(marker in lowered for marker in _TRANSIENT_DB_ERROR_MARKERS)
+
 # Define common configuration updates for all pipeline steps
 COMMON_CONFIG_UPDATES = {
     "testing": {"drop_tables": False},
@@ -82,12 +107,12 @@ COMMON_CONFIG_UPDATES = {
 PARALLEL_CRAWL_CONFIG_UPDATES = copy.deepcopy(COMMON_CONFIG_UPDATES)
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["urls_run_limit"] = 500
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["max_website_urls"] = 10
-PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_download_timeout_seconds"] = 35
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_download_timeout_seconds"] = 50
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_playwright_timeout_ms"] = 35000
-PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_retry_times"] = 1
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_retry_times"] = 2
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_post_load_wait_ms"] = 1000
-PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_concurrent_requests"] = 16
-PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_concurrent_requests_per_domain"] = 8
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_concurrent_requests"] = 8
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_concurrent_requests_per_domain"] = 2
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_base_urls_limit"] = 180
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_event_links_per_base_limit"] = 20
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_post_nav_wait_ms"] = 1800
@@ -714,12 +739,12 @@ def post_process_scraper():
 def scraper_step():
     scraper_updates = copy.deepcopy(COMMON_CONFIG_UPDATES)
     scraper_updates["crawling"]["urls_run_limit"] = 900
-    scraper_updates["crawling"]["scraper_download_timeout_seconds"] = 35
+    scraper_updates["crawling"]["scraper_download_timeout_seconds"] = 50
     scraper_updates["crawling"]["scraper_playwright_timeout_ms"] = 35000
-    scraper_updates["crawling"]["scraper_retry_times"] = 1
+    scraper_updates["crawling"]["scraper_retry_times"] = 2
     scraper_updates["crawling"]["scraper_post_load_wait_ms"] = 1000
-    scraper_updates["crawling"]["scraper_concurrent_requests"] = 16
-    scraper_updates["crawling"]["scraper_concurrent_requests_per_domain"] = 8
+    scraper_updates["crawling"]["scraper_concurrent_requests"] = 8
+    scraper_updates["crawling"]["scraper_concurrent_requests_per_domain"] = 2
     original_config = backup_and_update_config("scraper", updates=scraper_updates)
     write_run_config.submit("scraper", original_config)
     if not pre_process_scraper():
@@ -777,15 +802,47 @@ def run_parallel_crawlers_script(script_path: str) -> str:
     Execute a crawler script in a subprocess.
     Returns a success marker string or raises on failure.
     """
-    logger.info(f"run_parallel_crawlers_script(): starting {script_path}")
-    try:
-        subprocess.run([sys.executable, script_path], check=True)
-        logger.info(f"run_parallel_crawlers_script(): completed {script_path}")
-        return f"{script_path}:ok"
-    except subprocess.CalledProcessError as e:
-        error_message = f"{script_path} failed with return code: {e.returncode}"
-        logger.error(f"run_parallel_crawlers_script(): {error_message}")
-        raise Exception(error_message)
+    logger.info("run_parallel_crawlers_script(): starting %s", script_path)
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = subprocess.run(
+                [sys.executable, script_path],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            if result.stdout:
+                logger.info(
+                    "run_parallel_crawlers_script(): %s stdout tail:\n%s",
+                    script_path,
+                    result.stdout[-1000:],
+                )
+            logger.info("run_parallel_crawlers_script(): completed %s", script_path)
+            return f"{script_path}:ok"
+        except subprocess.CalledProcessError as e:
+            stderr_text = (e.stderr or "").strip()
+            stdout_text = (e.stdout or "").strip()
+            combined_output = "\n".join(part for part in (stderr_text, stdout_text) if part)
+            if _is_transient_database_error(combined_output) and attempt < max_attempts:
+                delay_seconds = 5 * attempt
+                logger.warning(
+                    "run_parallel_crawlers_script(): transient DB failure for %s on attempt %d/%d, retrying in %ds.",
+                    script_path,
+                    attempt,
+                    max_attempts,
+                    delay_seconds,
+                )
+                time.sleep(delay_seconds)
+                continue
+
+            output_tail = combined_output[-1200:] if combined_output else "<no subprocess output captured>"
+            error_message = (
+                f"{script_path} failed with return code: {e.returncode} "
+                f"(attempt {attempt}/{max_attempts}). Output tail:\n{output_tail}"
+            )
+            logger.error("run_parallel_crawlers_script(): %s", error_message)
+            raise Exception(error_message)
 
 
 @flow(name="Parallel Crawlers Step")
@@ -1265,9 +1322,11 @@ def run_command_with_retry(command, logger, attempts=3, delay=5, env=None, timeo
             result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True, env=env, timeout=timeout)
             return result
         except subprocess.CalledProcessError as e:
-            stderr_lower = e.stderr.lower() if e.stderr else ""
-            if "database is locked" in stderr_lower:
-                logger.warning(f"def run_command_with_retry(): Attempt {attempt} failed due to database lock. Retrying in {delay} seconds...")
+            stderr_text = e.stderr or ""
+            if _is_transient_database_error(stderr_text):
+                logger.warning(
+                    f"def run_command_with_retry(): Attempt {attempt} failed due to transient DB error. Retrying in {delay} seconds..."
+                )
                 time.sleep(delay)
             else:
                 logger.error(f"def run_command_with_retry(): Command failed on attempt {attempt}: {e.stderr}")
@@ -1275,7 +1334,7 @@ def run_command_with_retry(command, logger, attempts=3, delay=5, env=None, timeo
         except subprocess.TimeoutExpired as te:
             logger.error(f"def run_command_with_retry(): Command timed out on attempt {attempt}: {te}")
             raise te
-    raise Exception(f"Command failed after {attempts} attempts due to persistent database lock errors.")
+    raise Exception(f"Command failed after {attempts} attempts due to persistent transient DB errors.")
 
 @flow(name="Copy Dev to Prod Step")
 def copy_dev_db_to_prod_db_step():
@@ -1567,9 +1626,9 @@ def run_pipeline(start_step: str, end_step: str = None, parallel_crawlers: bool 
                     skip_steps.update({"scraper", "fb"})
                     break
                 except Exception as e:
-                    if "database is locked" in str(e).lower():
+                    if _is_transient_database_error(str(e)):
                         logger.error(
-                            "parallel crawler group encountered database lock, retrying in 5 seconds. Attempt %d of 3.",
+                            "parallel crawler group encountered transient DB error, retrying in 5 seconds. Attempt %d of 3.",
                             retry_count + 1,
                         )
                         time.sleep(5)
@@ -1580,7 +1639,7 @@ def run_pipeline(start_step: str, end_step: str = None, parallel_crawlers: bool 
                         logger.error(traceback.format_exc())
                         sys.exit(1)
             else:
-                logger.error("Parallel crawler group failed after 3 retries due to database locked errors.")
+                logger.error("Parallel crawler group failed after 3 retries due to transient DB errors.")
                 sys.exit(1)
             continue
 
@@ -1591,8 +1650,8 @@ def run_pipeline(start_step: str, end_step: str = None, parallel_crawlers: bool 
                 step_flow()
                 break
             except Exception as e:
-                if "database is locked" in str(e).lower():
-                    logger.error(f"Step {name} encountered a database locked error, retrying in 5 seconds. Attempt {retry_count+1} of 3.")
+                if _is_transient_database_error(str(e)):
+                    logger.error(f"Step {name} encountered a transient DB error, retrying in 5 seconds. Attempt {retry_count+1} of 3.")
                     time.sleep(5)
                     retry_count += 1
                 else:
@@ -1602,7 +1661,7 @@ def run_pipeline(start_step: str, end_step: str = None, parallel_crawlers: bool 
                     logger.error(traceback.format_exc())
                     sys.exit(1)
         else:
-            logger.error(f"Step {name} failed after 3 retries due to database locked errors.")
+            logger.error(f"Step {name} failed after 3 retries due to transient DB errors.")
             sys.exit(1)
 
 def prompt_user():

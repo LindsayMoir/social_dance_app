@@ -19,6 +19,7 @@ import os
 import csv
 import json
 from collections import Counter
+import re
 
 # Add src to path for imports (calculate path relative to this script)
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -230,8 +231,9 @@ class ValidationTestRunner:
         try:
             alias_audit_summary = self._summarize_address_alias_audit()
             llm_activity_summary = self._summarize_llm_provider_activity(results.get('timestamp'))
+            scraper_network_summary = self._summarize_scraper_network_health(results.get('timestamp'))
             reliability_scorecard = self._summarize_reliability_scorecard(
-                results, llm_activity_summary, alias_audit_summary
+                results, llm_activity_summary, alias_audit_summary, scraper_network_summary
             )
             gate_eval = self._evaluate_reliability_gates(reliability_scorecard)
             results['reliability_gates'] = gate_eval
@@ -291,8 +293,13 @@ class ValidationTestRunner:
         output_path = os.path.join(output_dir, 'comprehensive_test_report.html')
         alias_audit_summary = self._summarize_address_alias_audit()
         llm_activity_summary = self._summarize_llm_provider_activity(results.get('timestamp'))
-        reliability_scorecard = self._summarize_reliability_scorecard(results, llm_activity_summary, alias_audit_summary)
-        reliability_issues = self._extract_reliability_issues(results, llm_activity_summary, alias_audit_summary)
+        scraper_network_summary = self._summarize_scraper_network_health(results.get('timestamp'))
+        reliability_scorecard = self._summarize_reliability_scorecard(
+            results, llm_activity_summary, alias_audit_summary, scraper_network_summary
+        )
+        reliability_issues = self._extract_reliability_issues(
+            results, llm_activity_summary, alias_audit_summary, scraper_network_summary
+        )
         reliability_gates = results.get('reliability_gates') or self._evaluate_reliability_gates(reliability_scorecard)
         optimization_plan = self._build_optimization_plan(results, reliability_scorecard, llm_activity_summary)
         trend_summary = self._update_and_summarize_reliability_history(output_dir, reliability_scorecard)
@@ -344,16 +351,19 @@ class ValidationTestRunner:
         <h2>3. Chatbot Testing</h2>
         {self._build_chatbot_html(results.get('chatbot_testing'))}
 
-        <h2>4. Address Alias Audit</h2>
+        <h2>4. Scraper Network Reliability</h2>
+        {self._build_scraper_network_html(scraper_network_summary)}
+
+        <h2>5. Address Alias Audit</h2>
         {self._build_address_alias_audit_html(alias_audit_summary)}
 
-        <h2>5. LLM Provider Activity</h2>
+        <h2>6. LLM Provider Activity</h2>
         {self._build_llm_provider_activity_html(llm_activity_summary)}
 
-        <h2>6. Optimization Recommendations</h2>
+        <h2>7. Optimization Recommendations</h2>
         {self._build_optimization_html(optimization_plan)}
 
-        <h2>7. Reliability Action Queue</h2>
+        <h2>8. Reliability Action Queue</h2>
         {self._build_action_queue_html(action_queue)}
 
         <hr style="margin: 40px 0;">
@@ -730,6 +740,117 @@ class ValidationTestRunner:
             "pressure_reasons": pressure_reasons,
         }
 
+    def _summarize_scraper_network_health(self, report_timestamp: str | None) -> dict:
+        """Summarize recent scraper network/transient failure reliability from scraper logs."""
+        path = "logs/scraper_log.txt"
+        if not os.path.exists(path):
+            return {"error": "scraper log not found", "path": path}
+
+        hours_window = int(
+            self.validation_config.get('reporting', {}).get('scraper_activity_hours', 24) or 24
+        )
+        end_ts = datetime.now()
+        if report_timestamp:
+            try:
+                end_ts = datetime.fromisoformat(report_timestamp)
+            except ValueError:
+                pass
+        start_ts = end_ts - timedelta(hours=hours_window)
+
+        with open(path, "r", encoding="utf-8", errors="ignore") as file:
+            lines = file.readlines()
+
+        window_lines: list[str] = []
+        for line in lines:
+            ts = self._parse_log_timestamp(line)
+            if ts is None:
+                continue
+            if start_ts <= ts <= end_ts:
+                window_lines.append(line)
+        if not window_lines:
+            window_lines = lines[-4000:]
+
+        latest_values: dict[str, int] = {}
+        stat_patterns = {
+            "request_count": re.compile(r"'downloader/request_count':\s*(\d+)"),
+            "response_count": re.compile(r"'downloader/response_count':\s*(\d+)"),
+            "exception_count": re.compile(r"'downloader/exception_count':\s*(\d+)"),
+            "retry_count": re.compile(r"'retry/count':\s*(\d+)"),
+            "retry_max_reached": re.compile(r"'retry/max_reached':\s*(\d+)"),
+            "timeout_count": re.compile(r"'retry/reason_count/twisted\.internet\.error\.TimeoutError':\s*(\d+)"),
+            "connection_lost_count": re.compile(r"'retry/reason_count/twisted\.web\._newclient\.ResponseNeverReceived':\s*(\d+)"),
+        }
+        for line in window_lines:
+            for key, pattern in stat_patterns.items():
+                match = pattern.search(line)
+                if match:
+                    latest_values[key] = int(match.group(1))
+
+        finish_reason = ""
+        finish_re = re.compile(r"'finish_reason':\s*'([^']+)'")
+        for line in window_lines:
+            match = finish_re.search(line)
+            if match:
+                finish_reason = match.group(1)
+
+        top_fail_domains: Counter = Counter()
+        for line in window_lines:
+            if "Error downloading <GET " not in line:
+                continue
+            start = line.find("<GET ")
+            end = line.find(">", start)
+            if start < 0 or end < 0:
+                continue
+            raw_url = line[start + 5:end].strip()
+            try:
+                domain = re.sub(r":\d+$", "", raw_url.split("/")[2].lower())
+            except Exception:
+                domain = ""
+            if domain:
+                top_fail_domains[domain] += 1
+
+        request_count = int(latest_values.get("request_count", 0))
+        exception_count = int(latest_values.get("exception_count", 0))
+        retry_max_reached = int(latest_values.get("retry_max_reached", 0))
+        timeout_count = int(latest_values.get("timeout_count", 0))
+        connection_lost_count = int(latest_values.get("connection_lost_count", 0))
+        exception_rate = (exception_count / request_count) if request_count else 0.0
+
+        thresholds_cfg = (
+            self.validation_config.get("reporting", {}).get("scraper_network_thresholds", {})
+        )
+        max_exception_rate = float(thresholds_cfg.get("max_exception_rate", 0.20) or 0.20)
+        max_retry_max_reached = int(thresholds_cfg.get("max_retry_max_reached", 30) or 30)
+        max_timeout_count = int(thresholds_cfg.get("max_timeout_count", 50) or 50)
+        degraded = (
+            exception_rate > max_exception_rate
+            or retry_max_reached > max_retry_max_reached
+            or timeout_count > max_timeout_count
+        )
+
+        return {
+            "path": path,
+            "window_hours": hours_window,
+            "start_ts": start_ts.isoformat(sep=" "),
+            "end_ts": end_ts.isoformat(sep=" "),
+            "finish_reason": finish_reason,
+            "request_count": request_count,
+            "response_count": int(latest_values.get("response_count", 0)),
+            "exception_count": exception_count,
+            "exception_rate": round(exception_rate, 4),
+            "retry_count": int(latest_values.get("retry_count", 0)),
+            "retry_max_reached": retry_max_reached,
+            "timeout_count": timeout_count,
+            "connection_lost_count": connection_lost_count,
+            "top_failure_domains": top_fail_domains.most_common(10),
+            "degraded": degraded,
+            "thresholds": {
+                "max_exception_rate": max_exception_rate,
+                "max_retry_max_reached": max_retry_max_reached,
+                "max_timeout_count": max_timeout_count,
+            },
+        }
+
     def _build_llm_provider_activity_html(self, llm_data: dict) -> str:
         """Build HTML for LLM provider usage/cost pressure section."""
         if not llm_data:
@@ -832,7 +953,13 @@ class ValidationTestRunner:
 
         return html
 
-    def _summarize_reliability_scorecard(self, results: dict, llm_data: dict, alias_data: dict) -> dict:
+    def _summarize_reliability_scorecard(
+        self,
+        results: dict,
+        llm_data: dict,
+        alias_data: dict,
+        scraper_network_data: dict | None = None,
+    ) -> dict:
         """Build baseline reliability metrics from report-driving data."""
         scraping = results.get('scraping_validation') or {}
         scraping_summary = scraping.get('summary', {}) if isinstance(scraping, dict) else {}
@@ -854,6 +981,11 @@ class ValidationTestRunner:
 
         decision_counts = (alias_data or {}).get('decision_counts', {}) or {}
         alias_conflicts = int(decision_counts.get('skipped_conflict', 0) or 0)
+        scraper_network = scraper_network_data or {}
+        scraper_exception_rate = float(scraper_network.get("exception_rate", 0) or 0)
+        scraper_retry_max_reached = int(scraper_network.get("retry_max_reached", 0) or 0)
+        scraper_timeout_count = int(scraper_network.get("timeout_count", 0) or 0)
+        scraper_degraded = bool(scraper_network.get("degraded", False))
 
         score = 100.0
         score -= min(30.0, critical_failures * 3.0)
@@ -861,6 +993,10 @@ class ValidationTestRunner:
         score -= max(0.0, min(20.0, (1.0 - exec_rate) * 20.0))
         score -= min(15.0, rate_limit_rate * 100.0)
         score -= min(10.0, exhausted * 2.0)
+        score -= min(15.0, scraper_exception_rate * 100.0)
+        score -= min(10.0, max(0, scraper_retry_max_reached - 10) * 0.5)
+        if scraper_degraded:
+            score -= 5.0
         score = max(0.0, min(100.0, score))
 
         if score >= 85:
@@ -886,10 +1022,20 @@ class ValidationTestRunner:
                 "llm_provider_exhausted": exhausted,
                 "llm_cost_pressure": (llm_data or {}).get("pressure_level", "LOW"),
                 "address_alias_conflict_skips": alias_conflicts,
+                "scraper_exception_rate": round(scraper_exception_rate, 4),
+                "scraper_retry_max_reached": scraper_retry_max_reached,
+                "scraper_timeout_count": scraper_timeout_count,
+                "scraper_network_degraded": scraper_degraded,
             },
         }
 
-    def _extract_reliability_issues(self, results: dict, llm_data: dict, alias_data: dict) -> list[dict]:
+    def _extract_reliability_issues(
+        self,
+        results: dict,
+        llm_data: dict,
+        alias_data: dict,
+        scraper_network_data: dict | None = None,
+    ) -> list[dict]:
         """Normalize major reliability signals into a JSON-friendly issue list."""
         now_ts = str(results.get("timestamp") or datetime.now().isoformat())
         issues: list[dict] = []
@@ -980,6 +1126,29 @@ class ValidationTestRunner:
                 "last_seen": now_ts,
             })
 
+        scraper_network = scraper_network_data or {}
+        if scraper_network.get("degraded"):
+            issues.append({
+                "issue_id": "SCRAPER-NET-001",
+                "timestamp": now_ts,
+                "category": "Crawler Network Reliability Failure",
+                "severity": "high",
+                "step": "scraper_network_health",
+                "provider": "",
+                "url": "",
+                "input_signature": "scraper_transient_network_instability",
+                "expected": "Scraper should stay below configured timeout/exception thresholds.",
+                "actual": (
+                    f"exception_rate={scraper_network.get('exception_rate', 0)}, "
+                    f"retry_max_reached={scraper_network.get('retry_max_reached', 0)}, "
+                    f"timeouts={scraper_network.get('timeout_count', 0)}"
+                ),
+                "status": "open",
+                "owner": "unassigned",
+                "first_seen": now_ts,
+                "last_seen": now_ts,
+            })
+
         gates = results.get('reliability_gates') or {}
         for gate in (gates.get('failed_gates') or []):
             gate_name = str(gate.get('name', 'unknown_gate'))
@@ -1054,6 +1223,10 @@ class ValidationTestRunner:
         for key in (
             "scrape_critical_failures",
             "scrape_total_failures",
+            "scraper_exception_rate",
+            "scraper_retry_max_reached",
+            "scraper_timeout_count",
+            "scraper_network_degraded",
             "chatbot_average_score",
             "chatbot_execution_success_rate",
             "llm_success_rate",
@@ -1156,6 +1329,9 @@ class ValidationTestRunner:
             "max_llm_timeouts": 15,
             "max_llm_provider_exhausted": 10,
             "max_scrape_critical_failures": 0,
+            "max_scraper_exception_rate": 0.20,
+            "max_scraper_retry_max_reached": 30,
+            "max_scraper_timeout_count": 50,
         }
         merged_thresholds = {**defaults, **(thresholds or {})}
 
@@ -1221,6 +1397,21 @@ class ValidationTestRunner:
             "max_scrape_critical_failures",
             float(metrics.get("scrape_critical_failures", 0) or 0),
             float(merged_thresholds["max_scrape_critical_failures"]),
+        )
+        check_max(
+            "max_scraper_exception_rate",
+            float(metrics.get("scraper_exception_rate", 0) or 0),
+            float(merged_thresholds["max_scraper_exception_rate"]),
+        )
+        check_max(
+            "max_scraper_retry_max_reached",
+            float(metrics.get("scraper_retry_max_reached", 0) or 0),
+            float(merged_thresholds["max_scraper_retry_max_reached"]),
+        )
+        check_max(
+            "max_scraper_timeout_count",
+            float(metrics.get("scraper_timeout_count", 0) or 0),
+            float(merged_thresholds["max_scraper_timeout_count"]),
         )
 
         failed_gates = [g for g in gate_results if g.get("status") == "FAIL"]
@@ -1516,6 +1707,61 @@ class ValidationTestRunner:
             "issue_count": len(issues or []),
             "items": list(dedup.values())[:12],
         }
+
+    def _build_scraper_network_html(self, scraper_network: dict) -> str:
+        """Build HTML for scraper network reliability health section."""
+        if not scraper_network:
+            return "<p class='error-box'>❌ Scraper network summary unavailable</p>"
+        if scraper_network.get("error"):
+            return (
+                "<p class='error-box'>❌ Scraper network summary unavailable: "
+                f"{self._escape_html(scraper_network.get('error', 'unknown'))}</p>"
+            )
+
+        degraded = bool(scraper_network.get("degraded", False))
+        status = "DEGRADED" if degraded else "HEALTHY"
+        status_class = "status-fail" if degraded else "status-pass"
+
+        html = f"""
+        <div class="metric-container">
+            <div class="metric">
+                <div class="metric-value">{float(scraper_network.get('exception_rate', 0) or 0):.2%}</div>
+                <div class="metric-label">Exception Rate</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{int(scraper_network.get('timeout_count', 0) or 0)}</div>
+                <div class="metric-label">Timeout Retries</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{int(scraper_network.get('retry_max_reached', 0) or 0)}</div>
+                <div class="metric-label">Retry Max Reached</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{int(scraper_network.get('request_count', 0) or 0)}</div>
+                <div class="metric-label">Requests</div>
+            </div>
+        </div>
+        <p><strong>Status:</strong> <span class="{status_class}">{status}</span></p>
+        <p><strong>Window:</strong> {self._escape_html(scraper_network.get('start_ts', ''))} to {self._escape_html(scraper_network.get('end_ts', ''))}</p>
+        <p><strong>Finish Reason:</strong> {self._escape_html(scraper_network.get('finish_reason', ''))}</p>
+        """
+
+        top_domains = scraper_network.get("top_failure_domains") or []
+        if top_domains:
+            html += "<h3>Top Failing Domains</h3><table><tr><th>Domain</th><th>Transient Failures</th></tr>"
+            for domain, count in top_domains:
+                html += f"<tr><td>{self._escape_html(domain)}</td><td>{int(count)}</td></tr>"
+            html += "</table>"
+
+        thresholds = scraper_network.get("thresholds") or {}
+        if thresholds:
+            html += "<h3>Thresholds</h3><table><tr><th>Metric</th><th>Threshold</th></tr>"
+            html += f"<tr><td>max_exception_rate</td><td>{float(thresholds.get('max_exception_rate', 0) or 0):.2%}</td></tr>"
+            html += f"<tr><td>max_retry_max_reached</td><td>{int(thresholds.get('max_retry_max_reached', 0) or 0)}</td></tr>"
+            html += f"<tr><td>max_timeout_count</td><td>{int(thresholds.get('max_timeout_count', 0) or 0)}</td></tr>"
+            html += "</table>"
+
+        return html
 
     def _build_scraping_html(self, scraping_data: dict) -> str:
         """Build HTML for scraping validation section."""

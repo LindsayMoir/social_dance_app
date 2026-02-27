@@ -344,6 +344,30 @@ class LLMHandler:
                     attempt_index,
                     len(llm_response),
                 )
+                llm_response_lower = llm_response.lower()
+                min_response_length = (
+                    30
+                    if (("address_id" in llm_response and "label" in llm_response_lower)
+                        or "canonical_address_id" in llm_response_lower)
+                    else 100
+                )
+                if "no events found" in llm_response_lower:
+                    logging.warning(
+                        "def process_llm_response: URL %s attempt=%d returned 'no events found'; treating as non-fatal miss.",
+                        url,
+                        attempt_index,
+                    )
+                    return False
+                if len(llm_response) <= min_response_length:
+                    logging.warning(
+                        "def process_llm_response: URL %s attempt=%d returned too-short response (%d <= %d); treating as non-fatal miss.",
+                        url,
+                        attempt_index,
+                        len(llm_response),
+                        min_response_length,
+                    )
+                    return False
+
                 # Check if this is a schema type that expects JSON parsing
                 if schema_type is None:
                     # For prompts with no schema (like relevance checks), don't try to parse JSON
