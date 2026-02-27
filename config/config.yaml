@@ -350,6 +350,16 @@ testing:
           provider_exhausted: 3
           rate_limits: 10
           timeouts: 5
+      reliability_gates:
+        enabled: true
+        thresholds:
+          max_llm_provider_exhausted: 10
+          max_llm_rate_limits: 25
+          max_llm_timeouts: 15
+          max_scrape_critical_failures: 0
+          min_chatbot_average_score: 70
+          min_chatbot_execution_success_rate: 0.9
+          min_reliability_score: 75
       generate_csv: true
       generate_html: true
       output_dir: output

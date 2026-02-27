@@ -65,7 +65,8 @@ def build_html(results: dict, output_path: str) -> None:
     alias_data = summarize_address_alias_audit(results.get('config', {}))
     llm_data = summarize_llm_provider_activity(results.get('timestamp'), results.get('config', {}))
     reliability_scorecard = summarize_reliability_scorecard(results, llm_data, alias_data)
-    reliability_issues = extract_reliability_issues(results, llm_data, alias_data)
+    reliability_gates = evaluate_reliability_gates(reliability_scorecard, results.get('config', {}))
+    reliability_issues = extract_reliability_issues(results, llm_data, alias_data, reliability_gates)
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -97,7 +98,7 @@ def build_html(results: dict, output_path: str) -> None:
     <p class=\"timestamp\"><strong>Timestamp:</strong> {ts}</p>
 
     <h2>Reliability Scorecard</h2>
-    {build_reliability_scorecard_html(reliability_scorecard, reliability_issues)}
+    {build_reliability_scorecard_html(reliability_scorecard, reliability_issues, reliability_gates)}
 
     <h2>Chatbot Testing</h2>
     <div class=\"metric-container\">
@@ -155,6 +156,8 @@ def build_html(results: dict, output_path: str) -> None:
         json.dump(reliability_scorecard, f, indent=2)
     with open(os.path.join(output_dir, 'reliability_issues.json'), 'w', encoding='utf-8') as f:
         json.dump({"issues": reliability_issues}, f, indent=2)
+    with open(os.path.join(output_dir, 'reliability_gates.json'), 'w', encoding='utf-8') as f:
+        json.dump(reliability_gates, f, indent=2)
     logging.info("HTML report saved: %s", output_path)
 
 
@@ -583,7 +586,7 @@ def summarize_reliability_scorecard(results: dict, llm_data: dict, alias_data: d
     }
 
 
-def extract_reliability_issues(results: dict, llm_data: dict, alias_data: dict) -> list[dict]:
+def extract_reliability_issues(results: dict, llm_data: dict, alias_data: dict, gates: dict | None = None) -> list[dict]:
     """Normalize reliability signals into machine-readable issue records."""
     now_ts = str(results.get("timestamp") or datetime.now().isoformat())
     issues: list[dict] = []
@@ -653,10 +656,30 @@ def extract_reliability_issues(results: dict, llm_data: dict, alias_data: dict) 
             "last_seen": now_ts,
         })
 
+    gate_payload = gates or {}
+    for gate in (gate_payload.get('failed_gates') or []):
+        gate_name = str(gate.get('name', 'unknown_gate'))
+        issues.append({
+            "issue_id": f"GATE-{gate_name.upper().replace('-', '_')}",
+            "timestamp": now_ts,
+            "category": "Reliability Gate Failure",
+            "severity": "high",
+            "step": "reliability_gates",
+            "provider": "",
+            "url": "",
+            "input_signature": gate_name,
+            "expected": f"Gate '{gate_name}' threshold should pass.",
+            "actual": str(gate.get('detail', 'Gate threshold breached.')),
+            "status": "open",
+            "owner": "unassigned",
+            "first_seen": now_ts,
+            "last_seen": now_ts,
+        })
+
     return issues
 
 
-def build_reliability_scorecard_html(scorecard: dict, issues: list[dict]) -> str:
+def build_reliability_scorecard_html(scorecard: dict, issues: list[dict], gates: dict | None = None) -> str:
     if not scorecard:
         return "<p class='error-box'>❌ Reliability scorecard unavailable</p>"
 
@@ -695,6 +718,32 @@ def build_reliability_scorecard_html(scorecard: dict, issues: list[dict]) -> str
         html += f"<tr><td>{escape_html(key)}</td><td>{escape_html(metrics.get(key, ''))}</td></tr>"
     html += "</table>"
 
+    gate_payload = gates or {}
+    gate_status = str(gate_payload.get("status", "PASS")).upper()
+    gate_status_class = {
+        "PASS": "status-pass",
+        "WARNING": "status-warning",
+        "FAIL": "status-fail",
+        "ERROR": "status-fail",
+    }.get(gate_status, "status-warning")
+    html += "<h3>Reliability Gates</h3>"
+    html += (
+        "<p><strong>Gate Status:</strong> "
+        f"<span class=\"{gate_status_class}\">{escape_html(gate_status)}</span></p>"
+    )
+    gate_results = gate_payload.get("gate_results", []) or []
+    if gate_results:
+        html += "<table><tr><th>Gate</th><th>Status</th><th>Detail</th></tr>"
+        for gate in gate_results:
+            html += (
+                "<tr>"
+                f"<td>{escape_html(gate.get('name', ''))}</td>"
+                f"<td>{escape_html(gate.get('status', ''))}</td>"
+                f"<td>{escape_html(gate.get('detail', ''))}</td>"
+                "</tr>"
+            )
+        html += "</table>"
+
     if issues:
         html += "<h3>Top Reliability Issues</h3>"
         html += "<table><tr><th>ID</th><th>Category</th><th>Severity</th><th>Step</th><th>Provider</th><th>Actual</th></tr>"
@@ -713,6 +762,65 @@ def build_reliability_scorecard_html(scorecard: dict, issues: list[dict]) -> str
     else:
         html += "<p>✅ No normalized reliability issues in current window.</p>"
     return html
+
+
+def evaluate_reliability_gates(scorecard: dict, config: dict) -> dict:
+    reporting_cfg = (
+        (config or {}).get('testing', {}).get('validation', {}).get('reporting', {})
+        if isinstance(config, dict) else {}
+    )
+    gates_cfg = reporting_cfg.get('reliability_gates', {}) if isinstance(reporting_cfg, dict) else {}
+    enabled = bool(gates_cfg.get('enabled', True))
+    thresholds = gates_cfg.get('thresholds', {}) if isinstance(gates_cfg, dict) else {}
+    metrics = (scorecard or {}).get('metrics', {}) or {}
+
+    defaults = {
+        "min_reliability_score": 75,
+        "min_chatbot_execution_success_rate": 0.90,
+        "min_chatbot_average_score": 70,
+        "max_llm_rate_limits": 25,
+        "max_llm_timeouts": 15,
+        "max_llm_provider_exhausted": 10,
+    }
+    merged_thresholds = {**defaults, **(thresholds or {})}
+
+    if not enabled:
+        return {
+            "enabled": False,
+            "status": "PASS",
+            "thresholds": merged_thresholds,
+            "gate_results": [],
+            "failed_gates": [],
+            "evaluated_at": datetime.now().isoformat(),
+        }
+
+    gate_results: list[dict] = []
+
+    def check_min(name: str, actual: float, minimum: float) -> None:
+        ok = actual >= minimum
+        gate_results.append({"name": name, "status": "PASS" if ok else "FAIL", "detail": f"actual={actual} min_required={minimum}"})
+
+    def check_max(name: str, actual: float, maximum: float) -> None:
+        ok = actual <= maximum
+        gate_results.append({"name": name, "status": "PASS" if ok else "FAIL", "detail": f"actual={actual} max_allowed={maximum}"})
+
+    check_min("min_reliability_score", float((scorecard or {}).get("score", 0) or 0), float(merged_thresholds["min_reliability_score"]))
+    check_min("min_chatbot_execution_success_rate", float(metrics.get("chatbot_execution_success_rate", 0) or 0), float(merged_thresholds["min_chatbot_execution_success_rate"]))
+    check_min("min_chatbot_average_score", float(metrics.get("chatbot_average_score", 0) or 0), float(merged_thresholds["min_chatbot_average_score"]))
+    check_max("max_llm_rate_limits", float(metrics.get("llm_rate_limits", 0) or 0), float(merged_thresholds["max_llm_rate_limits"]))
+    check_max("max_llm_timeouts", float(metrics.get("llm_timeouts", 0) or 0), float(merged_thresholds["max_llm_timeouts"]))
+    check_max("max_llm_provider_exhausted", float(metrics.get("llm_provider_exhausted", 0) or 0), float(merged_thresholds["max_llm_provider_exhausted"]))
+
+    failed_gates = [g for g in gate_results if g.get("status") == "FAIL"]
+    status = "FAIL" if failed_gates else "PASS"
+    return {
+        "enabled": True,
+        "status": status,
+        "thresholds": merged_thresholds,
+        "gate_results": gate_results,
+        "failed_gates": failed_gates,
+        "evaluated_at": datetime.now().isoformat(),
+    }
 
 
 def main():

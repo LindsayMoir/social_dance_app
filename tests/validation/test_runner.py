@@ -99,7 +99,8 @@ class ValidationTestRunner:
             'timestamp': datetime.now().isoformat(),
             'scraping_validation': None,
             'chatbot_testing': None,
-            'overall_status': 'PASS'
+            'overall_status': 'PASS',
+            'reliability_gates': None,
         }
 
         # 1. SCRAPING VALIDATION
@@ -225,14 +226,47 @@ class ValidationTestRunner:
             results['chatbot_testing'] = {'error': str(e)}
             results['overall_status'] = 'FAIL'
 
-        # 3. GENERATE COMPREHENSIVE HTML REPORT
+        # 3. RELIABILITY GATE EVALUATION (PHASE 2)
+        try:
+            alias_audit_summary = self._summarize_address_alias_audit()
+            llm_activity_summary = self._summarize_llm_provider_activity(results.get('timestamp'))
+            reliability_scorecard = self._summarize_reliability_scorecard(
+                results, llm_activity_summary, alias_audit_summary
+            )
+            gate_eval = self._evaluate_reliability_gates(reliability_scorecard)
+            results['reliability_gates'] = gate_eval
+
+            if gate_eval.get('status') == 'FAIL':
+                results['overall_status'] = 'FAIL'
+                failed = gate_eval.get('failed_gates', [])
+                logging.error(
+                    "❌ Reliability gates failed (%d): %s",
+                    len(failed),
+                    ", ".join(g.get('name', 'unknown') for g in failed),
+                )
+            elif gate_eval.get('status') == 'WARNING' and results['overall_status'] == 'PASS':
+                results['overall_status'] = 'WARNING'
+        except Exception as e:
+            logging.error(f"Reliability gate evaluation failed: {e}", exc_info=True)
+            if results['overall_status'] == 'PASS':
+                results['overall_status'] = 'WARNING'
+            results['reliability_gates'] = {
+                'enabled': True,
+                'status': 'ERROR',
+                'error': str(e),
+                'failed_gates': [],
+                'gate_results': [],
+                'thresholds': {},
+            }
+
+        # 4. GENERATE COMPREHENSIVE HTML REPORT
         try:
             if self.validation_config.get('reporting', {}).get('generate_html', True):
                 self._generate_html_report(results)
         except Exception as e:
             logging.error(f"HTML report generation failed: {e}", exc_info=True)
 
-        # 4. SEND EMAIL NOTIFICATION (if configured)
+        # 5. SEND EMAIL NOTIFICATION (if configured)
         try:
             self._send_email_notification(results)
         except Exception as e:
@@ -257,12 +291,9 @@ class ValidationTestRunner:
         output_path = os.path.join(output_dir, 'comprehensive_test_report.html')
         alias_audit_summary = self._summarize_address_alias_audit()
         llm_activity_summary = self._summarize_llm_provider_activity(results.get('timestamp'))
-        reliability_scorecard = self._summarize_reliability_scorecard(
-            results, llm_activity_summary, alias_audit_summary
-        )
-        reliability_issues = self._extract_reliability_issues(
-            results, llm_activity_summary, alias_audit_summary
-        )
+        reliability_scorecard = self._summarize_reliability_scorecard(results, llm_activity_summary, alias_audit_summary)
+        reliability_issues = self._extract_reliability_issues(results, llm_activity_summary, alias_audit_summary)
+        reliability_gates = results.get('reliability_gates') or self._evaluate_reliability_gates(reliability_scorecard)
 
         # Build HTML
         html = f"""<!DOCTYPE html>
@@ -301,7 +332,7 @@ class ValidationTestRunner:
         </p>
 
         <h2>1. Reliability Scorecard</h2>
-        {self._build_reliability_scorecard_html(reliability_scorecard, reliability_issues)}
+        {self._build_reliability_scorecard_html(reliability_scorecard, reliability_issues, reliability_gates)}
 
         <h2>2. Scraping Validation</h2>
         {self._build_scraping_html(results.get('scraping_validation'))}
@@ -334,10 +365,14 @@ class ValidationTestRunner:
             json.dump(reliability_scorecard, f, indent=2)
         with open(issues_path, 'w', encoding='utf-8') as f:
             json.dump({"issues": reliability_issues}, f, indent=2)
+        gates_path = os.path.join(output_dir, 'reliability_gates.json')
+        with open(gates_path, 'w', encoding='utf-8') as f:
+            json.dump(reliability_gates, f, indent=2)
 
         logging.info(f"HTML report saved: {output_path}")
         logging.info(f"Reliability scorecard saved: {scorecard_path}")
         logging.info(f"Reliability issues saved: {issues_path}")
+        logging.info(f"Reliability gates saved: {gates_path}")
 
     @staticmethod
     def _escape_html(value: str) -> str:
@@ -927,9 +962,29 @@ class ValidationTestRunner:
                 "last_seen": now_ts,
             })
 
+        gates = results.get('reliability_gates') or {}
+        for gate in (gates.get('failed_gates') or []):
+            gate_name = str(gate.get('name', 'unknown_gate'))
+            issues.append({
+                "issue_id": f"GATE-{gate_name.upper().replace('-', '_')}",
+                "timestamp": now_ts,
+                "category": "Reliability Gate Failure",
+                "severity": "high",
+                "step": "reliability_gates",
+                "provider": "",
+                "url": "",
+                "input_signature": gate_name,
+                "expected": f"Gate '{gate_name}' threshold should pass.",
+                "actual": str(gate.get('detail', 'Gate threshold breached.')),
+                "status": "open",
+                "owner": "unassigned",
+                "first_seen": now_ts,
+                "last_seen": now_ts,
+            })
+
         return issues
 
-    def _build_reliability_scorecard_html(self, scorecard: dict, issues: list[dict]) -> str:
+    def _build_reliability_scorecard_html(self, scorecard: dict, issues: list[dict], gates: dict | None = None) -> str:
         """Render baseline reliability scorecard + normalized issue summary."""
         if not scorecard:
             return "<p class='error-box'>❌ Reliability scorecard unavailable</p>"
@@ -989,6 +1044,32 @@ class ValidationTestRunner:
             )
         html += "</table>"
 
+        gate_payload = gates or {}
+        gate_status = str(gate_payload.get("status", "PASS")).upper()
+        gate_status_class = {
+            "PASS": "status-pass",
+            "WARNING": "status-warning",
+            "FAIL": "status-fail",
+            "ERROR": "status-fail",
+        }.get(gate_status, "status-warning")
+        html += "<h3>Reliability Gates</h3>"
+        html += (
+            "<p><strong>Gate Status:</strong> "
+            f"<span class=\"{gate_status_class}\">{self._escape_html(gate_status)}</span></p>"
+        )
+        gate_results = gate_payload.get("gate_results", []) or []
+        if gate_results:
+            html += "<table><tr><th>Gate</th><th>Status</th><th>Detail</th></tr>"
+            for gate in gate_results:
+                html += (
+                    "<tr>"
+                    f"<td>{self._escape_html(gate.get('name', ''))}</td>"
+                    f"<td>{self._escape_html(gate.get('status', ''))}</td>"
+                    f"<td>{self._escape_html(gate.get('detail', ''))}</td>"
+                    "</tr>"
+                )
+            html += "</table>"
+
         if issues:
             html += "<h3>Top Reliability Issues</h3>"
             html += "<table><tr><th>ID</th><th>Category</th><th>Severity</th><th>Step</th><th>Provider</th><th>Actual</th></tr>"
@@ -1008,6 +1089,100 @@ class ValidationTestRunner:
             html += "<p>✅ No normalized reliability issues in current window.</p>"
 
         return html
+
+    def _evaluate_reliability_gates(self, scorecard: dict) -> dict:
+        """Evaluate configurable reliability gates and return pass/fail details."""
+        reporting_cfg = self.validation_config.get('reporting', {})
+        gates_cfg = reporting_cfg.get('reliability_gates', {}) if isinstance(reporting_cfg, dict) else {}
+        enabled = bool(gates_cfg.get('enabled', True))
+        thresholds = gates_cfg.get('thresholds', {}) if isinstance(gates_cfg, dict) else {}
+        metrics = (scorecard or {}).get('metrics', {}) or {}
+
+        defaults = {
+            "min_reliability_score": 75,
+            "min_chatbot_execution_success_rate": 0.90,
+            "min_chatbot_average_score": 70,
+            "max_llm_rate_limits": 25,
+            "max_llm_timeouts": 15,
+            "max_llm_provider_exhausted": 10,
+            "max_scrape_critical_failures": 0,
+        }
+        merged_thresholds = {**defaults, **(thresholds or {})}
+
+        if not enabled:
+            return {
+                "enabled": False,
+                "status": "PASS",
+                "thresholds": merged_thresholds,
+                "gate_results": [],
+                "failed_gates": [],
+                "evaluated_at": datetime.now().isoformat(),
+            }
+
+        gate_results: list[dict] = []
+
+        def check_min(name: str, actual: float, minimum: float) -> None:
+            ok = actual >= minimum
+            gate_results.append({
+                "name": name,
+                "status": "PASS" if ok else "FAIL",
+                "detail": f"actual={actual} min_required={minimum}",
+            })
+
+        def check_max(name: str, actual: float, maximum: float) -> None:
+            ok = actual <= maximum
+            gate_results.append({
+                "name": name,
+                "status": "PASS" if ok else "FAIL",
+                "detail": f"actual={actual} max_allowed={maximum}",
+            })
+
+        check_min(
+            "min_reliability_score",
+            float((scorecard or {}).get("score", 0) or 0),
+            float(merged_thresholds["min_reliability_score"]),
+        )
+        check_min(
+            "min_chatbot_execution_success_rate",
+            float(metrics.get("chatbot_execution_success_rate", 0) or 0),
+            float(merged_thresholds["min_chatbot_execution_success_rate"]),
+        )
+        check_min(
+            "min_chatbot_average_score",
+            float(metrics.get("chatbot_average_score", 0) or 0),
+            float(merged_thresholds["min_chatbot_average_score"]),
+        )
+        check_max(
+            "max_llm_rate_limits",
+            float(metrics.get("llm_rate_limits", 0) or 0),
+            float(merged_thresholds["max_llm_rate_limits"]),
+        )
+        check_max(
+            "max_llm_timeouts",
+            float(metrics.get("llm_timeouts", 0) or 0),
+            float(merged_thresholds["max_llm_timeouts"]),
+        )
+        check_max(
+            "max_llm_provider_exhausted",
+            float(metrics.get("llm_provider_exhausted", 0) or 0),
+            float(merged_thresholds["max_llm_provider_exhausted"]),
+        )
+        check_max(
+            "max_scrape_critical_failures",
+            float(metrics.get("scrape_critical_failures", 0) or 0),
+            float(merged_thresholds["max_scrape_critical_failures"]),
+        )
+
+        failed_gates = [g for g in gate_results if g.get("status") == "FAIL"]
+        status = "FAIL" if failed_gates else "PASS"
+        return {
+            "enabled": True,
+            "status": status,
+            "thresholds": merged_thresholds,
+            "gate_results": gate_results,
+            "failed_gates": failed_gates,
+            "evaluated_at": datetime.now().isoformat(),
+        }
 
     def _build_scraping_html(self, scraping_data: dict) -> str:
         """Build HTML for scraping validation section."""
