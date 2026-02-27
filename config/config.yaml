@@ -39,7 +39,7 @@ crawling:
   scraper_priority_retry_times: 3
   scraper_retry_times: 1
   scroll_depth: 2
-  urls_run_limit: 30
+  urls_run_limit: 500
 date_range:
   days_ahead: 365
   months: 3
@@ -70,13 +70,14 @@ input:
   urls: data/urls
 llm:
   anthropic_model: claude-opus-4-20250514
-  fallback_enabled: true
+  chatbot_openrouter_model_candidates:
+  - deepseek/deepseek-v3.2
+  chatbot_openai_first_every_n_requests: 3
   chatbot_provider_order:
   - openai
   - openrouter
   - gemini
-  chatbot_openrouter_model_candidates:
-  - deepseek/deepseek-v3.2
+  fallback_enabled: true
   fallback_provider_order:
   - mistral
   - openrouter
@@ -119,13 +120,9 @@ llm:
   openai_model_candidates:
   - gpt-5-mini
   - gpt-4.1-mini
-  openai_timeout_seconds: 90
-  openai_timeout_max_strikes: 3
   openai_timeout_cooldown_seconds: 180
-  provider_retry_base_delay_seconds: 0.5
-  provider_retry_jitter_seconds: 0.3
-  provider_retry_max_attempts: 2
-  provider_retry_max_delay_seconds: 4.0
+  openai_timeout_max_strikes: 3
+  openai_timeout_seconds: 90
   openrouter_base_url: https://openrouter.ai/api/v1
   openrouter_cooldown_seconds: 300
   openrouter_model: openai/gpt-oss-120b:free
@@ -139,6 +136,10 @@ llm:
   openrouter_rate_limit_max_strikes: 2
   openrouter_timeout_seconds: 60
   provider: mistral
+  provider_retry_base_delay_seconds: 0.5
+  provider_retry_jitter_seconds: 0.3
+  provider_retry_max_attempts: 2
+  provider_retry_max_delay_seconds: 4.0
   provider_rotation_enabled: false
   provider_rotation_order:
   - mistral
@@ -170,7 +171,8 @@ normalization:
       building_name: The Wicket Hall (Strathcona Hotel)
       city: Victoria
       country_id: CA
-      full_address: The Wicket Hall (Strathcona Hotel), 919 Douglas St, Victoria, BC V8W 2C2, CA
+      full_address: The Wicket Hall (Strathcona Hotel), 919 Douglas St, Victoria,
+        BC V8W 2C2, CA
       postal_code: V8W 2C2
       province_or_state: BC
       street_name: Douglas St
@@ -341,6 +343,8 @@ testing:
       question_templates: tests/data/chatbot_test_questions.yaml
       score_threshold: 70
     reporting:
+      generate_csv: true
+      generate_html: true
       llm_activity_hours: 24
       llm_activity_thresholds:
         high:
@@ -355,6 +359,7 @@ testing:
           provider_exhausted: 3
           rate_limits: 10
           timeouts: 5
+      output_dir: output
       reliability_gates:
         enabled: true
         thresholds:
@@ -365,9 +370,6 @@ testing:
           min_chatbot_average_score: 70
           min_chatbot_execution_success_rate: 0.9
           min_reliability_score: 75
-      generate_csv: true
-      generate_html: true
-      output_dir: output
     scraping:
       consecutive_failures_threshold: 2
       days_back: 7
