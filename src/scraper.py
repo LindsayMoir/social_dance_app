@@ -273,6 +273,8 @@ class EventSpider(scrapy.Spider):
         self.domain_cooldown_until: dict[str, datetime] = {}
         self.domain_cooldown_skip_count = 0
         self.domain_cooldown_trigger_count = 0
+        self.invalid_calendar_ids: set[str] = set()
+        self.processed_calendar_ids: set[str] = set()
 
         logging.info("\n\nscraper.py starting...")
 
@@ -584,11 +586,15 @@ class EventSpider(scrapy.Spider):
         )
         calendar_anchor_links = [link for link in page_links if is_calendar_candidate(link, self.calendar_urls_set)]
         calendar_sources = iframe_links + calendar_anchor_links
-        calendar_ids: set[str] = set(calendar_emails)
-        calendar_ids.update(self.extract_calendar_ids(extracted_text))
+        calendar_ids: set[str] = {
+            c for c in calendar_emails if self.is_valid_calendar_id(c, allow_gmail=False)
+        }
+        # Only trust high-confidence group calendar IDs from raw page text.
+        calendar_ids.update(self.extract_calendar_ids(extracted_text, allow_gmail=False))
 
         for cal_url in calendar_sources:
-            extracted_ids = self.extract_calendar_ids(cal_url)
+            # URLs discovered from iframe/embed/calendar links may legitimately reference gmail calendars.
+            extracted_ids = self.extract_calendar_ids(cal_url, allow_gmail=True)
             if extracted_ids:
                 calendar_ids.update(extracted_ids)
                 continue
@@ -680,9 +686,15 @@ class EventSpider(scrapy.Spider):
         Fetch and process events from a Google Calendar.
         """
         logging.info(f"def fetch_google_calendar_events(): Inputs - calendar_url: {calendar_url}, URL: {url}, source: {source}, keywords: {keywords}")
-        calendar_ids = self.extract_calendar_ids(calendar_url)
+        if not self._is_google_calendar_like_url(calendar_url):
+            logging.info(
+                "def fetch_google_calendar_events(): Skipping non-calendar-like URL: %s",
+                calendar_url,
+            )
+            return
+        calendar_ids = self.extract_calendar_ids(calendar_url, allow_gmail=True)
         if not calendar_ids:
-            if self.is_valid_calendar_id(calendar_url):
+            if self.is_valid_calendar_id(calendar_url, allow_gmail=True):
                 calendar_ids = [calendar_url]
             else:
                 decoded_calendar_id = self.decode_calendar_id(calendar_url)
@@ -695,7 +707,26 @@ class EventSpider(scrapy.Spider):
             self.process_calendar_id(calendar_id, calendar_url, url, source, keywords)
 
 
-    def extract_calendar_ids(self, calendar_url):
+    @staticmethod
+    def _is_google_calendar_like_url(candidate_url: str) -> bool:
+        """Return True only for URLs that plausibly contain Google Calendar data/IDs."""
+        low = (candidate_url or "").lower()
+        return any(
+            token in low
+            for token in (
+                "calendar.google.com",
+                "google.com/calendar",
+                "/calendar/ical/",
+                "@group.calendar.google.com",
+                "%40group.calendar.google.com",
+                "@gmail.com",
+                "%40gmail.com",
+                "src=",
+            )
+        )
+
+
+    def extract_calendar_ids(self, calendar_url, allow_gmail: bool = False):
         if not calendar_url:
             return []
 
@@ -706,34 +737,42 @@ class EventSpider(scrapy.Spider):
         patterns = [
             # Standard Google Calendar embed src parameter
             r'src=([^&]+%40group\.calendar\.google\.com)',
-            r'src=([^&]+%40gmail\.com)',
             # Calendar IDs directly present in text
             r'([A-Za-z0-9_.+-]+(?:%40|@)group\.calendar\.google\.com)',
-            r'([A-Za-z0-9_.+-]+(?:%40|@)gmail\.com)',
             # Public ICS feed URLs
             r'/calendar/ical/([^/]+(?:%40|@)group\.calendar\.google\.com)/public',
-            r'/calendar/ical/([^/]+(?:%40|@)gmail\.com)/public',
         ]
+        if allow_gmail:
+            patterns.extend([
+                r'src=([^&]+%40gmail\.com)',
+                r'([A-Za-z0-9_.+-]+(?:%40|@)gmail\.com)',
+                r'/calendar/ical/([^/]+(?:%40|@)gmail\.com)/public',
+            ])
 
         ids: set[str] = set()
         for pattern in patterns:
             for match in re.findall(pattern, text, flags=re.IGNORECASE):
                 candidate = str(match).replace('%40', '@')
-                if self.is_valid_calendar_id(candidate):
+                if self.is_valid_calendar_id(candidate, allow_gmail=allow_gmail):
                     ids.add(candidate)
         return list(ids)
     
 
     def decode_calendar_id(self, calendar_url):
         try:
-            start_idx = calendar_url.find("src=") + 4
+            start_marker_idx = calendar_url.find("src=")
+            if start_marker_idx == -1:
+                return None
+            start_idx = start_marker_idx + 4
             end_idx = calendar_url.find("&", start_idx)
             calendar_id = calendar_url[start_idx:end_idx] if end_idx != -1 else calendar_url[start_idx:]
-            if self.is_valid_calendar_id(calendar_id):
+            if self.is_valid_calendar_id(calendar_id, allow_gmail=True):
                 return calendar_id
-            padded_id = calendar_id + '=' * (4 - len(calendar_id) % 4)
+            if not calendar_id:
+                return None
+            padded_id = calendar_id + '=' * ((4 - len(calendar_id) % 4) % 4)
             decoded = base64.b64decode(padded_id).decode('utf-8', errors='ignore')
-            if self.is_valid_calendar_id(decoded):
+            if self.is_valid_calendar_id(decoded, allow_gmail=True):
                 return decoded
             logging.warning(f"def decode_calendar_id(): Decoded ID is not valid: {decoded}")
             return None
@@ -742,14 +781,28 @@ class EventSpider(scrapy.Spider):
             return None
         
 
-    def is_valid_calendar_id(self, calendar_id):
-        pattern = re.compile(r'^[a-zA-Z0-9_.+-]+@(group\.calendar\.google\.com|gmail\.com)$')
+    def is_valid_calendar_id(self, calendar_id, allow_gmail: bool = False):
+        suffix_pattern = r'(group\.calendar\.google\.com|gmail\.com)' if allow_gmail else r'(group\.calendar\.google\.com)'
+        pattern = re.compile(rf'^[a-zA-Z0-9_.+-]+@{suffix_pattern}$')
         return bool(pattern.fullmatch(calendar_id))
     
 
     def process_calendar_id(self, calendar_id, calendar_url, url, source, keywords):
+        if calendar_id in self.processed_calendar_ids:
+            logging.info(
+                "def process_calendar_id(): Skipping already processed calendar_id in this run: %s",
+                calendar_id,
+            )
+            return
+        if calendar_id in self.invalid_calendar_ids:
+            logging.info(
+                "def process_calendar_id(): Skipping previously invalid calendar_id: %s",
+                calendar_id,
+            )
+            return
         logging.info(f"def process_calendar_id(): Processing calendar_id: {calendar_id} from {calendar_url}")
         events_df = self.get_calendar_events(calendar_id)
+        self.processed_calendar_ids.add(calendar_id)
         if not events_df.empty:
             logging.info(f"def process_calendar_id(): Found {len(events_df)} events for calendar_id: {calendar_id}")
             logging.info(f"def process_calendar_id(): Event columns: {list(events_df.columns)}")
@@ -781,7 +834,14 @@ class EventSpider(scrapy.Spider):
                     break
                 params["pageToken"] = data.get("nextPageToken")
             else:
-                logging.error(f"def get_calendar_events(): Error {response.status_code} for calendar_id: {calendar_id}")
+                if response.status_code == 404:
+                    self.invalid_calendar_ids.add(calendar_id)
+                    logging.warning(
+                        "def get_calendar_events(): Calendar not found (404) for calendar_id: %s",
+                        calendar_id,
+                    )
+                else:
+                    logging.error(f"def get_calendar_events(): Error {response.status_code} for calendar_id: {calendar_id}")
                 break
         df = pd.json_normalize(all_events)
         if df.empty:

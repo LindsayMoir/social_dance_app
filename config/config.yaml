@@ -30,19 +30,16 @@ crawling:
   max_website_urls: 10
   prompt_max_length: 100000
   random_test_limit: 10
-  scraper_concurrent_requests: 8
-  scraper_concurrent_requests_per_domain: 2
-  scraper_domain_cooldown_seconds: 600
-  scraper_domain_failure_threshold: 3
-  scraper_domain_failure_window_seconds: 600
-  scraper_download_timeout_seconds: 50
+  scraper_concurrent_requests: 16
+  scraper_concurrent_requests_per_domain: 8
+  scraper_download_timeout_seconds: 35
   scraper_playwright_timeout_ms: 35000
   scraper_post_load_wait_ms: 1000
   scraper_priority_download_timeout_seconds: 90
   scraper_priority_retry_times: 3
-  scraper_retry_times: 2
+  scraper_retry_times: 1
   scroll_depth: 2
-  urls_run_limit: 500
+  urls_run_limit: 30
 date_range:
   days_ahead: 365
   months: 3
@@ -138,7 +135,6 @@ llm:
   openrouter_rate_limit_max_strikes: 2
   openrouter_timeout_seconds: 60
   provider: mistral
-  regular_openai_first_every_n_requests: 3
   provider_retry_base_delay_seconds: 0.5
   provider_retry_jitter_seconds: 0.3
   provider_retry_max_attempts: 2

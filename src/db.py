@@ -1580,7 +1580,32 @@ class DatabaseHandler():
         df['url'] = df.get('url', pd.Series([''] * len(df))).replace('', url).fillna(url)
         df = self._apply_event_overrides(df, url=url, parent_url=parent_url)
 
-        self._convert_datetime_fields(df)
+        try:
+            self._convert_datetime_fields(df)
+        except KeyError as exc:
+            sample_row = df.head(1).to_dict('records') if not df.empty else []
+            logging.error(
+                "write_events_to_db: datetime conversion KeyError=%s url=%s parent_url=%s columns=%s sample=%s",
+                exc,
+                url,
+                parent_url,
+                list(df.columns),
+                sample_row,
+            )
+            for col in ['start_date', 'end_date', 'start_time', 'end_time']:
+                if col not in df.columns:
+                    df[col] = pd.NA
+            try:
+                self._convert_datetime_fields(df)
+            except Exception as retry_exc:
+                logging.error(
+                    "write_events_to_db: datetime conversion retry failed url=%s parent_url=%s error=%s",
+                    url,
+                    parent_url,
+                    retry_exc,
+                )
+                self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
+                return
 
         if 'price' not in df.columns:
             logging.warning("write_events_to_db: 'price' column is missing. Filling with empty string.")

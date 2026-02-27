@@ -293,6 +293,7 @@ class ValidationTestRunner:
         output_path = os.path.join(output_dir, 'comprehensive_test_report.html')
         alias_audit_summary = self._summarize_address_alias_audit()
         llm_activity_summary = self._summarize_llm_provider_activity(results.get('timestamp'))
+        llm_extraction_quality = self._summarize_llm_extraction_quality(results.get('timestamp'))
         scraper_network_summary = self._summarize_scraper_network_health(results.get('timestamp'))
         reliability_scorecard = self._summarize_reliability_scorecard(
             results, llm_activity_summary, alias_audit_summary, scraper_network_summary
@@ -360,10 +361,13 @@ class ValidationTestRunner:
         <h2>6. LLM Provider Activity</h2>
         {self._build_llm_provider_activity_html(llm_activity_summary)}
 
-        <h2>7. Optimization Recommendations</h2>
+        <h2>7. LLM Extraction Quality Scorecard</h2>
+        {self._build_llm_extraction_quality_html(llm_extraction_quality)}
+
+        <h2>8. Optimization Recommendations</h2>
         {self._build_optimization_html(optimization_plan)}
 
-        <h2>8. Reliability Action Queue</h2>
+        <h2>9. Reliability Action Queue</h2>
         {self._build_action_queue_html(action_queue)}
 
         <hr style="margin: 40px 0;">
@@ -394,6 +398,9 @@ class ValidationTestRunner:
         action_queue_path = os.path.join(output_dir, 'reliability_action_queue.json')
         with open(action_queue_path, 'w', encoding='utf-8') as f:
             json.dump(action_queue, f, indent=2)
+        llm_extraction_quality_path = os.path.join(output_dir, 'llm_extraction_quality.json')
+        with open(llm_extraction_quality_path, 'w', encoding='utf-8') as f:
+            json.dump(llm_extraction_quality, f, indent=2)
 
         logging.info(f"HTML report saved: {output_path}")
         logging.info(f"Reliability scorecard saved: {scorecard_path}")
@@ -401,6 +408,7 @@ class ValidationTestRunner:
         logging.info(f"Reliability gates saved: {gates_path}")
         logging.info(f"Reliability optimization saved: {optimization_path}")
         logging.info(f"Reliability action queue saved: {action_queue_path}")
+        logging.info(f"LLM extraction quality saved: {llm_extraction_quality_path}")
 
     @staticmethod
     def _escape_html(value: str) -> str:
@@ -560,6 +568,25 @@ class ValidationTestRunner:
         except Exception:
             return None
 
+    @staticmethod
+    def _get_llm_activity_log_files() -> list[str]:
+        """Return log files used for LLM activity/reliability summarization."""
+        return [
+            "logs/emails_log.txt",
+            "logs/gs_log.txt",
+            "logs/rd_ext_log.txt",
+            "logs/ebs_log.txt",
+            "logs/scraper_log.txt",
+            "logs/fb_log.txt",
+            "logs/images_log.txt",
+            "logs/read_pdfs_log.txt",
+            "logs/db_log.txt",
+            "logs/clean_up_log.txt",
+            "logs/dedup_llm_log.txt",
+            "logs/irrelevant_rows_log.txt",
+            "logs/validation_tests_log.txt",
+        ]
+
     def _summarize_llm_provider_activity(self, report_timestamp: str | None) -> dict:
         """
         Summarize provider-level LLM activity from recent logs.
@@ -575,21 +602,7 @@ class ValidationTestRunner:
                 pass
         start_ts = end_ts - timedelta(hours=hours_window)
 
-        log_files = [
-            "logs/emails_log.txt",
-            "logs/gs_log.txt",
-            "logs/rd_ext_log.txt",
-            "logs/ebs_log.txt",
-            "logs/scraper_log.txt",
-            "logs/fb_log.txt",
-            "logs/images_log.txt",
-            "logs/read_pdfs_log.txt",
-            "logs/db_log.txt",
-            "logs/clean_up_log.txt",
-            "logs/dedup_llm_log.txt",
-            "logs/irrelevant_rows_log.txt",
-            "logs/validation_tests_log.txt",
-        ]
+        log_files = self._get_llm_activity_log_files()
 
         providers = ("openai", "openrouter", "mistral", "gemini")
         stats = {
@@ -738,6 +751,217 @@ class ValidationTestRunner:
             "total_timeouts": total_timeouts,
             "pressure_level": pressure_level,
             "pressure_reasons": pressure_reasons,
+        }
+
+    def _summarize_llm_extraction_quality(self, report_timestamp: str | None) -> dict:
+        """
+        Summarize event-extraction quality from LLM logs in the recent reporting window.
+        """
+        hours_window = int(
+            self.validation_config.get('reporting', {}).get('llm_activity_hours', 24) or 24
+        )
+        end_ts = datetime.now()
+        if report_timestamp:
+            try:
+                end_ts = datetime.fromisoformat(report_timestamp)
+            except ValueError:
+                pass
+        start_ts = end_ts - timedelta(hours=hours_window)
+
+        log_files = self._get_llm_activity_log_files()
+        pending_models: list[str] = []
+        attempt_to_model: dict[tuple[str, int], str] = {}
+        url_state: dict[str, dict] = {}
+        model_stats: dict[str, dict[str, int]] = {}
+        top_failing_urls: Counter = Counter()
+
+        query_model_re = re.compile(r"query_llm\(\): querying (\w+) model (\S+)", re.IGNORECASE)
+        attempt_re = re.compile(r"def process_llm_response: URL (.+?) attempt=(\d+) llm_response_len=", re.IGNORECASE)
+        no_events_re = re.compile(
+            r"def process_llm_response: URL (.+?) attempt=(\d+) returned 'no events found'",
+            re.IGNORECASE,
+        )
+        short_re = re.compile(
+            r"def process_llm_response: URL (.+?) attempt=(\d+) returned too-short response",
+            re.IGNORECASE,
+        )
+        retry_re = re.compile(
+            r"def process_llm_response: URL (.+?) attempt=(\d+) returned non-parseable response; retrying once",
+            re.IGNORECASE,
+        )
+        success_re = re.compile(
+            r"def process_llm_response: URL (.+?) marked as relevant with events written to the database",
+            re.IGNORECASE,
+        )
+        fail_re = re.compile(
+            r"def process_llm_response: Failed to process LLM response for URL: (.+)",
+            re.IGNORECASE,
+        )
+        schema_re = re.compile(
+            r"write_events_to_db: datetime conversion KeyError=.* url=(\S+)\s+parent_url=",
+            re.IGNORECASE,
+        )
+
+        def _ensure_url(url: str) -> dict:
+            if url not in url_state:
+                url_state[url] = {
+                    "attempts": 0,
+                    "status": "unknown",
+                    "retries": 0,
+                    "too_short": 0,
+                    "no_events": 0,
+                    "hard_failures": 0,
+                    "schema_errors": 0,
+                    "last_model": "unknown",
+                }
+            return url_state[url]
+
+        def _ensure_model(model_key: str) -> dict[str, int]:
+            if model_key not in model_stats:
+                model_stats[model_key] = {
+                    "attempts": 0,
+                    "successes": 0,
+                    "hard_failures": 0,
+                    "no_events": 0,
+                    "too_short": 0,
+                    "retries": 0,
+                    "schema_errors": 0,
+                }
+            return model_stats[model_key]
+
+        def _resolve_model(url: str, attempt_num: int | None = None) -> str:
+            if attempt_num is not None:
+                model = attempt_to_model.get((url, attempt_num))
+                if model:
+                    return model
+            return _ensure_url(url).get("last_model", "unknown")
+
+        for path in log_files:
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as file:
+                    for line in file:
+                        ts = self._parse_log_timestamp(line)
+                        if ts is None or ts < start_ts or ts > end_ts:
+                            continue
+                        low = line.lower()
+
+                        match_model = query_model_re.search(line)
+                        if match_model:
+                            provider = match_model.group(1).lower()
+                            model = match_model.group(2).strip()
+                            pending_models.append(f"{provider}:{model}")
+                            continue
+
+                        match_attempt = attempt_re.search(line)
+                        if match_attempt:
+                            url = match_attempt.group(1).strip()
+                            attempt_num = int(match_attempt.group(2))
+                            state = _ensure_url(url)
+                            state["attempts"] += 1
+                            model_key = pending_models.pop(0) if pending_models else "unknown"
+                            state["last_model"] = model_key
+                            attempt_to_model[(url, attempt_num)] = model_key
+                            _ensure_model(model_key)["attempts"] += 1
+                            continue
+
+                        match_no_events = no_events_re.search(line)
+                        if match_no_events:
+                            url = match_no_events.group(1).strip()
+                            attempt_num = int(match_no_events.group(2))
+                            state = _ensure_url(url)
+                            state["status"] = "no_events"
+                            state["no_events"] += 1
+                            _ensure_model(_resolve_model(url, attempt_num))["no_events"] += 1
+                            continue
+
+                        match_short = short_re.search(line)
+                        if match_short:
+                            url = match_short.group(1).strip()
+                            attempt_num = int(match_short.group(2))
+                            state = _ensure_url(url)
+                            state["status"] = "too_short"
+                            state["too_short"] += 1
+                            _ensure_model(_resolve_model(url, attempt_num))["too_short"] += 1
+                            continue
+
+                        match_retry = retry_re.search(line)
+                        if match_retry:
+                            url = match_retry.group(1).strip()
+                            attempt_num = int(match_retry.group(2))
+                            state = _ensure_url(url)
+                            state["retries"] += 1
+                            _ensure_model(_resolve_model(url, attempt_num))["retries"] += 1
+                            continue
+
+                        match_success = success_re.search(line)
+                        if match_success:
+                            url = match_success.group(1).strip()
+                            state = _ensure_url(url)
+                            state["status"] = "success"
+                            _ensure_model(state["last_model"])["successes"] += 1
+                            continue
+
+                        match_fail = fail_re.search(line)
+                        if match_fail:
+                            url = match_fail.group(1).strip()
+                            state = _ensure_url(url)
+                            if state["status"] != "success":
+                                state["status"] = "hard_failure"
+                            state["hard_failures"] += 1
+                            top_failing_urls[url] += 1
+                            _ensure_model(state["last_model"])["hard_failures"] += 1
+                            continue
+
+                        match_schema = schema_re.search(line)
+                        if match_schema:
+                            url = match_schema.group(1).strip()
+                            state = _ensure_url(url)
+                            if state["status"] != "success":
+                                state["status"] = "schema_error"
+                            state["schema_errors"] += 1
+                            top_failing_urls[url] += 1
+                            _ensure_model(state["last_model"])["schema_errors"] += 1
+                            continue
+            except Exception as e:
+                logging.warning("_summarize_llm_extraction_quality: Failed to parse %s: %s", path, e)
+
+        total_urls = len(url_state)
+        successful_urls = sum(1 for s in url_state.values() if s.get("status") == "success")
+        hard_failed_urls = sum(
+            1 for s in url_state.values() if s.get("status") in {"hard_failure", "schema_error"}
+        )
+        no_events_urls = sum(1 for s in url_state.values() if s.get("status") == "no_events")
+        too_short_urls = sum(1 for s in url_state.values() if s.get("status") == "too_short")
+        total_attempts = sum(int(s.get("attempts", 0)) for s in url_state.values())
+        total_retries = sum(int(s.get("retries", 0)) for s in url_state.values())
+        total_schema_errors = sum(int(s.get("schema_errors", 0)) for s in url_state.values())
+
+        parse_success_rate = (successful_urls / total_urls) if total_urls else 0.0
+        hard_failure_rate = (hard_failed_urls / total_urls) if total_urls else 0.0
+
+        top_models: list[tuple[str, dict]] = sorted(
+            model_stats.items(),
+            key=lambda item: (-int(item[1].get("attempts", 0)), item[0]),
+        )[:15]
+
+        return {
+            "window_hours": hours_window,
+            "start_ts": start_ts.isoformat(sep=" "),
+            "end_ts": end_ts.isoformat(sep=" "),
+            "total_urls": total_urls,
+            "total_attempts": total_attempts,
+            "successful_urls": successful_urls,
+            "hard_failed_urls": hard_failed_urls,
+            "no_events_urls": no_events_urls,
+            "too_short_urls": too_short_urls,
+            "total_retries": total_retries,
+            "schema_errors": total_schema_errors,
+            "parse_success_rate": round(parse_success_rate, 4),
+            "hard_failure_rate": round(hard_failure_rate, 4),
+            "top_failing_urls": top_failing_urls.most_common(15),
+            "models": top_models,
         }
 
     def _summarize_scraper_network_health(self, report_timestamp: str | None) -> dict:
@@ -951,6 +1175,113 @@ class ValidationTestRunner:
                 )
             html += "</table>"
 
+        return html
+
+    def _build_llm_extraction_quality_html(self, quality_data: dict) -> str:
+        """Build HTML for LLM event-extraction quality scorecard section."""
+        if not quality_data:
+            return "<p class='error-box'>❌ LLM extraction quality summary unavailable</p>"
+
+        total_urls = int(quality_data.get("total_urls", 0) or 0)
+        total_attempts = int(quality_data.get("total_attempts", 0) or 0)
+        successful_urls = int(quality_data.get("successful_urls", 0) or 0)
+        hard_failed_urls = int(quality_data.get("hard_failed_urls", 0) or 0)
+        no_events_urls = int(quality_data.get("no_events_urls", 0) or 0)
+        too_short_urls = int(quality_data.get("too_short_urls", 0) or 0)
+        total_retries = int(quality_data.get("total_retries", 0) or 0)
+        schema_errors = int(quality_data.get("schema_errors", 0) or 0)
+        parse_success_rate = float(quality_data.get("parse_success_rate", 0) or 0)
+        hard_failure_rate = float(quality_data.get("hard_failure_rate", 0) or 0)
+
+        status = "GOOD"
+        if hard_failure_rate >= 0.20 or parse_success_rate < 0.40:
+            status = "POOR"
+        elif hard_failure_rate >= 0.10 or parse_success_rate < 0.60:
+            status = "FAIR"
+
+        status_class = {
+            "GOOD": "status-pass",
+            "FAIR": "status-warning",
+            "POOR": "status-fail",
+        }[status]
+
+        html = f"""
+        <div class="metric-container">
+            <div class="metric">
+                <div class="metric-value">{total_urls}</div>
+                <div class="metric-label">URLs Evaluated</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{total_attempts}</div>
+                <div class="metric-label">Extraction Attempts</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{successful_urls}</div>
+                <div class="metric-label">Successful Writes</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{hard_failed_urls}</div>
+                <div class="metric-label">Hard Failures</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{no_events_urls + too_short_urls}</div>
+                <div class="metric-label">Non-Fatal Misses</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{schema_errors}</div>
+                <div class="metric-label">Schema/Column Errors</div>
+            </div>
+        </div>
+        """
+        html += (
+            "<p><strong>Quality Status:</strong> "
+            f"<span class='{status_class}'>{self._escape_html(status)}</span></p>"
+        )
+        html += (
+            "<p><strong>Window:</strong> "
+            f"{self._escape_html(quality_data.get('start_ts', ''))} to {self._escape_html(quality_data.get('end_ts', ''))} "
+            f"({int(quality_data.get('window_hours', 24))}h)</p>"
+        )
+        html += (
+            "<p><strong>Parse Success Rate:</strong> "
+            f"{parse_success_rate:.1%} | "
+            f"<strong>Hard Failure Rate:</strong> {hard_failure_rate:.1%} | "
+            f"<strong>Retries:</strong> {total_retries}</p>"
+        )
+
+        html += (
+            "<h3>Model Breakdown (Estimated Mapping)</h3>"
+            "<table><tr><th>Provider:Model</th><th>Attempts</th><th>Successes</th><th>Hard Failures</th>"
+            "<th>No Events</th><th>Too Short</th><th>Retries</th><th>Schema Errors</th></tr>"
+        )
+        for model_key, stats in quality_data.get("models", []):
+            html += (
+                "<tr>"
+                f"<td>{self._escape_html(model_key)}</td>"
+                f"<td>{int(stats.get('attempts', 0))}</td>"
+                f"<td>{int(stats.get('successes', 0))}</td>"
+                f"<td>{int(stats.get('hard_failures', 0))}</td>"
+                f"<td>{int(stats.get('no_events', 0))}</td>"
+                f"<td>{int(stats.get('too_short', 0))}</td>"
+                f"<td>{int(stats.get('retries', 0))}</td>"
+                f"<td>{int(stats.get('schema_errors', 0))}</td>"
+                "</tr>"
+            )
+        html += "</table>"
+
+        top_failing = quality_data.get("top_failing_urls", [])
+        if top_failing:
+            html += "<h3>Top Failing URLs</h3><table><tr><th>URL</th><th>Failure Count</th></tr>"
+            for url, count in top_failing[:10]:
+                html += (
+                    "<tr>"
+                    f"<td>{self._escape_html(url)}</td>"
+                    f"<td>{int(count)}</td>"
+                    "</tr>"
+                )
+            html += "</table>"
+
+        html += "<p><em>Model mapping is estimated from log sequence and intended for trend monitoring.</em></p>"
         return html
 
     def _summarize_reliability_scorecard(
