@@ -122,6 +122,10 @@ llm:
   openai_timeout_seconds: 90
   openai_timeout_max_strikes: 3
   openai_timeout_cooldown_seconds: 180
+  provider_retry_base_delay_seconds: 0.5
+  provider_retry_jitter_seconds: 0.3
+  provider_retry_max_attempts: 2
+  provider_retry_max_delay_seconds: 4.0
   openrouter_base_url: https://openrouter.ai/api/v1
   openrouter_cooldown_seconds: 300
   openrouter_model: openai/gpt-oss-120b:free
@@ -141,6 +145,7 @@ llm:
   - openrouter
   - openai
   - gemini
+  self_healing_enabled: true
   spend_money: true
 location:
   epicentre: Victoria, British Columbia, Canada

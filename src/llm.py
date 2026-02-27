@@ -81,6 +81,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import json
 import logging
+import random
 from mistralai import Mistral
 import numpy as np
 from openai import OpenAI
@@ -90,6 +91,7 @@ import pandas as pd
 import re
 import requests
 from sqlalchemy.exc import SQLAlchemyError
+import time
 import yaml
 
 from db import DatabaseHandler
@@ -155,6 +157,11 @@ class LLMHandler:
         self.openrouter_rate_limit_max_strikes = int(llm_config.get("openrouter_rate_limit_max_strikes", 2) or 2)
         self.openrouter_cooldown_seconds = int(llm_config.get("openrouter_cooldown_seconds", 300) or 300)
         self.openrouter_cooldown_until = None
+        self.self_healing_enabled = bool(llm_config.get("self_healing_enabled", True))
+        self.provider_retry_max_attempts = int(llm_config.get("provider_retry_max_attempts", 2) or 2)
+        self.provider_retry_base_delay_seconds = float(llm_config.get("provider_retry_base_delay_seconds", 0.5) or 0.5)
+        self.provider_retry_jitter_seconds = float(llm_config.get("provider_retry_jitter_seconds", 0.3) or 0.3)
+        self.provider_retry_max_delay_seconds = float(llm_config.get("provider_retry_max_delay_seconds", 4.0) or 4.0)
         self.provider_rotation_enabled = bool(llm_config.get("provider_rotation_enabled", False))
         self.provider_rotation_index = 0
         self._resolved_provider_models: dict[str, str] = {}
@@ -952,6 +959,45 @@ class LLMHandler:
         )
         return any(token in msg for token in patterns)
 
+    def _is_transient_provider_error(self, provider: str, error: Exception) -> bool:
+        """
+        Return True when a provider error is likely transient and safe to retry.
+        """
+        message = str(error).lower()
+        if self._is_timeout_error(error):
+            return True
+        if any(token in message for token in (
+            "connection error",
+            "connection reset",
+            "temporarily unavailable",
+            "temporary failure",
+            "name resolution",
+            "service unavailable",
+            "bad gateway",
+            "gateway timeout",
+            "502",
+            "503",
+            "504",
+        )):
+            return True
+        if provider == "mistral" and self._is_mistral_rate_limited(error):
+            return True
+        if provider == "openrouter" and self._is_openrouter_rate_limited(error):
+            return True
+        if "429" in message or "rate limit" in message or "too many requests" in message:
+            return True
+        return False
+
+    def _retry_delay_seconds(self, attempt_number: int) -> float:
+        """
+        Compute exponential backoff delay with bounded jitter.
+        attempt_number is 1-based for failed attempts.
+        """
+        base = max(0.0, self.provider_retry_base_delay_seconds)
+        expo = base * (2 ** max(0, attempt_number - 1))
+        jitter = random.uniform(0.0, max(0.0, self.provider_retry_jitter_seconds))
+        return min(max(0.0, self.provider_retry_max_delay_seconds), expo + jitter)
+
     def resolve_models_for_startup(self) -> dict[str, str]:
         """
         Resolve model names for known providers for startup diagnostics.
@@ -977,44 +1023,84 @@ class LLMHandler:
                 return None
             model = self._resolve_model_for_provider("openai")
             logging.info("query_llm(): Querying OpenAI model %s", model)
-            try:
-                response = self.query_openai(prompt, model, schema_type=schema_type)
-            except Exception as e:
-                if self._is_model_not_found_error(e):
-                    model = self._resolve_model_for_provider("openai", force_refresh=True)
+            max_attempts = max(1, self.provider_retry_max_attempts) if self.self_healing_enabled else 1
+            last_error: Exception | None = None
+            for attempt in range(1, max_attempts + 1):
+                try:
                     response = self.query_openai(prompt, model, schema_type=schema_type)
-                else:
+                    self._record_openai_result()
+                    if response:
+                        logging.info("query_llm(): OpenAI response received.")
+                    else:
+                        logging.warning("query_llm(): OpenAI returned no response.")
+                    return response
+                except Exception as e:
+                    last_error = e
+                    if self._is_model_not_found_error(e):
+                        model = self._resolve_model_for_provider("openai", force_refresh=True)
                     self._record_openai_result(e)
-                    raise
-            self._record_openai_result()
-            if response:
-                logging.info("query_llm(): OpenAI response received.")
-            else:
-                logging.warning("query_llm(): OpenAI returned no response.")
-            return response
+                    should_retry = (
+                        self.self_healing_enabled
+                        and attempt < max_attempts
+                        and self._is_transient_provider_error("openai", e)
+                    )
+                    if not should_retry:
+                        raise
+                    delay_s = self._retry_delay_seconds(attempt)
+                    logging.warning(
+                        "query_llm(): OpenAI transient error on attempt %s/%s; retrying in %.2fs: %s",
+                        attempt,
+                        max_attempts,
+                        delay_s,
+                        e,
+                    )
+                    time.sleep(delay_s)
+            if last_error is not None:
+                raise last_error
+            return None
 
         if provider == "openrouter":
             if self._openrouter_in_cooldown():
                 logging.warning("query_llm(): Skipping OpenRouter query due to active cooldown.")
                 return None
             last_error = None
+            max_attempts = max(1, self.provider_retry_max_attempts) if self.self_healing_enabled else 1
             for model in self._openrouter_candidates_for_attempt(request_url=request_url):
                 logging.info("query_llm(): Querying OpenRouter model %s", model)
-                try:
-                    response = self.query_openrouter(prompt, model, schema_type=schema_type)
-                    self._record_openrouter_result()
-                    if response:
-                        logging.info("query_llm(): OpenRouter response received.")
-                        return response
-                    logging.warning("query_llm(): OpenRouter returned no response for model %s.", model)
-                except Exception as e:
-                    last_error = e
-                    self._record_openrouter_result(e)
-                    if self._is_model_not_found_error(e):
-                        logging.warning("query_llm(): OpenRouter model %s unavailable; trying next candidate.", model)
-                        continue
-                    logging.warning("query_llm(): OpenRouter model %s failed: %s", model, e)
-                    continue
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        response = self.query_openrouter(prompt, model, schema_type=schema_type)
+                        self._record_openrouter_result()
+                        if response:
+                            logging.info("query_llm(): OpenRouter response received.")
+                            return response
+                        logging.warning("query_llm(): OpenRouter returned no response for model %s.", model)
+                        break
+                    except Exception as e:
+                        last_error = e
+                        self._record_openrouter_result(e)
+                        if self._is_model_not_found_error(e):
+                            logging.warning("query_llm(): OpenRouter model %s unavailable; trying next candidate.", model)
+                            break
+                        should_retry = (
+                            self.self_healing_enabled
+                            and attempt < max_attempts
+                            and self._is_transient_provider_error("openrouter", e)
+                        )
+                        if should_retry:
+                            delay_s = self._retry_delay_seconds(attempt)
+                            logging.warning(
+                                "query_llm(): OpenRouter model %s transient error on attempt %s/%s; retrying in %.2fs: %s",
+                                model,
+                                attempt,
+                                max_attempts,
+                                delay_s,
+                                e,
+                            )
+                            time.sleep(delay_s)
+                            continue
+                        logging.warning("query_llm(): OpenRouter model %s failed: %s", model, e)
+                        break
 
             if last_error is not None:
                 raise last_error
@@ -1027,22 +1113,42 @@ class LLMHandler:
             try:
                 model = self._resolve_model_for_provider("mistral")
                 logging.info("query_llm(): Querying Mistral model %s", model)
-                try:
-                    response = self.query_mistral(prompt, model, schema_type=schema_type)
-                except Exception as e:
-                    if self._is_model_not_found_error(e):
-                        model = self._resolve_model_for_provider("mistral", force_refresh=True)
+                max_attempts = max(1, self.provider_retry_max_attempts) if self.self_healing_enabled else 1
+                last_error: Exception | None = None
+                for attempt in range(1, max_attempts + 1):
+                    try:
                         response = self.query_mistral(prompt, model, schema_type=schema_type)
-                    else:
-                        raise
-                self._record_mistral_result()
-                if response:
-                    logging.info("query_llm(): Mistral response received.")
-                else:
-                    logging.warning("query_llm(): Mistral returned no response.")
-                return response
+                        self._record_mistral_result()
+                        if response:
+                            logging.info("query_llm(): Mistral response received.")
+                        else:
+                            logging.warning("query_llm(): Mistral returned no response.")
+                        return response
+                    except Exception as e:
+                        last_error = e
+                        if self._is_model_not_found_error(e):
+                            model = self._resolve_model_for_provider("mistral", force_refresh=True)
+                        self._record_mistral_result(e)
+                        should_retry = (
+                            self.self_healing_enabled
+                            and attempt < max_attempts
+                            and self._is_transient_provider_error("mistral", e)
+                        )
+                        if not should_retry:
+                            raise
+                        delay_s = self._retry_delay_seconds(attempt)
+                        logging.warning(
+                            "query_llm(): Mistral transient error on attempt %s/%s; retrying in %.2fs: %s",
+                            attempt,
+                            max_attempts,
+                            delay_s,
+                            e,
+                        )
+                        time.sleep(delay_s)
+                if last_error is not None:
+                    raise last_error
+                return None
             except Exception as e:
-                self._record_mistral_result(e)
                 raise
 
         if provider == "gemini":
@@ -1051,21 +1157,41 @@ class LLMHandler:
                 return None
             model = self._resolve_model_for_provider("gemini")
             logging.info("query_llm(): Querying Gemini model %s", model)
-            try:
-                response = self.query_gemini(prompt, model, schema_type=schema_type)
-            except Exception as e:
-                if self._is_model_not_found_error(e):
-                    model = self._resolve_model_for_provider("gemini", force_refresh=True)
+            max_attempts = max(1, self.provider_retry_max_attempts) if self.self_healing_enabled else 1
+            last_error: Exception | None = None
+            for attempt in range(1, max_attempts + 1):
+                try:
                     response = self.query_gemini(prompt, model, schema_type=schema_type)
-                else:
+                    self._record_gemini_result()
+                    if response:
+                        logging.info("query_llm(): Gemini response received.")
+                    else:
+                        logging.warning("query_llm(): Gemini returned no response.")
+                    return response
+                except Exception as e:
+                    last_error = e
+                    if self._is_model_not_found_error(e):
+                        model = self._resolve_model_for_provider("gemini", force_refresh=True)
                     self._record_gemini_result(e)
-                    raise
-            self._record_gemini_result()
-            if response:
-                logging.info("query_llm(): Gemini response received.")
-            else:
-                logging.warning("query_llm(): Gemini returned no response.")
-            return response
+                    should_retry = (
+                        self.self_healing_enabled
+                        and attempt < max_attempts
+                        and self._is_transient_provider_error("gemini", e)
+                    )
+                    if not should_retry:
+                        raise
+                    delay_s = self._retry_delay_seconds(attempt)
+                    logging.warning(
+                        "query_llm(): Gemini transient error on attempt %s/%s; retrying in %.2fs: %s",
+                        attempt,
+                        max_attempts,
+                        delay_s,
+                        e,
+                    )
+                    time.sleep(delay_s)
+            if last_error is not None:
+                raise last_error
+            return None
 
         raise ValueError(f"Invalid LLM provider: {provider}")
 
