@@ -234,25 +234,40 @@ def is_non_content_facebook_url(url: str) -> bool:
     return False
 
 
-def classify_facebook_access_state(current_url: str, page_content: str) -> str:
+def diagnose_facebook_access(current_url: str, page_content: str) -> tuple[str, str]:
     """
-    Classify Facebook page access state as one of:
+    Diagnose Facebook access outcome as (state, reason).
+
+    States:
     - 'ok': content appears accessible
     - 'login': authentication wall detected
-    - 'blocked': temporary block/rate-limit/interstitial detected
+    - 'blocked': blocked/challenged/unavailable/rate-limited
     """
     url_lower = (current_url or "").lower()
     content_lower = (page_content or "").lower()
 
-    # Treat explicit auth URLs as login walls.
-    if any(m in url_lower for m in ("/login", "/checkpoint/")):
-        return "login"
+    if "/checkpoint/" in url_lower:
+        return "blocked", "checkpoint_url"
+    if "/challenge/" in url_lower:
+        return "blocked", "challenge_url"
+    if "/login" in url_lower:
+        return "login", "login_url"
+    if "/sorry/" in url_lower:
+        return "blocked", "sorry_url"
 
-    # Use stricter content checks to avoid false positives on pages that contain generic "log in" text.
+    # Use stricter checks to avoid false positives on generic "log in" mentions.
     has_login_form = ('name="email"' in content_lower and 'name="pass"' in content_lower)
-    has_login_gate = ("must log in" in content_lower or "two-factor" in content_lower)
-    if has_login_form or has_login_gate:
-        return "login"
+    if has_login_form:
+        return "login", "login_form_detected"
+
+    login_markers = (
+        "must log in",
+        "you must log in",
+        "two-factor",
+        "enter the code",
+    )
+    if any(m in content_lower for m in login_markers):
+        return "login", "login_gate_text"
 
     blocked_markers = (
         "temporarily blocked",
@@ -260,11 +275,27 @@ def classify_facebook_access_state(current_url: str, page_content: str) -> str:
         "too many requests",
         "try again later",
         "rate limited",
+        "you are temporarily blocked",
     )
-    if "/sorry/" in url_lower or any(m in content_lower for m in blocked_markers):
-        return "blocked"
+    if any(m in content_lower for m in blocked_markers):
+        return "blocked", "rate_limit_or_temp_block_text"
 
-    return "ok"
+    unavailable_markers = (
+        "this content isn't available",
+        "this page isn't available",
+        "this content is unavailable",
+        "may have been removed",
+    )
+    if any(m in content_lower for m in unavailable_markers):
+        return "blocked", "private_or_unavailable_content"
+
+    return "ok", "accessible"
+
+
+def classify_facebook_access_state(current_url: str, page_content: str) -> str:
+    """Backward-compatible state-only classifier."""
+    state, _ = diagnose_facebook_access(current_url, page_content)
+    return state
 
 
 def sanitize_facebook_seed_urls(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
@@ -403,6 +434,7 @@ class FacebookEventScraper():
         self.fb_block_state_ttl_days = int(crawling_cfg.get("fb_block_state_ttl_days", 45) or 45)
         self._load_adaptive_block_state()
         self._autotune_block_parameters_from_history()
+        self._last_access_diagnostics: dict[str, dict[str, str | float]] = {}
 
 
     def _facebook_scope_key(self, url: str) -> str:
@@ -812,6 +844,25 @@ class FacebookEventScraper():
         if real != url:
             logging.info(f"normalize_facebook_url: unwrapped login redirect to {real}")
         return real
+
+    def _set_last_access_diagnostic(self, url: str, state: str, reason: str) -> None:
+        """
+        Cache latest access diagnostic for a normalized Facebook URL.
+        """
+        key = self.normalize_facebook_url(url)
+        self._last_access_diagnostics[key] = {
+            "state": state,
+            "reason": reason,
+            "ts": time.time(),
+        }
+
+    def _get_last_access_reason(self, url: str) -> str:
+        """
+        Return the latest diagnostic reason for URL, if known.
+        """
+        key = self.normalize_facebook_url(url)
+        diag = self._last_access_diagnostics.get(key, {})
+        return str(diag.get("reason", "unknown"))
     
 
     def navigate_and_maybe_login(self, incoming_url: str, max_attempts: int = 2) -> bool:
@@ -825,6 +876,7 @@ class FacebookEventScraper():
         real_url = self.normalize_facebook_url(incoming_url)
         scope_key = self._facebook_scope_key(real_url)
         if self._scope_in_cooldown(scope_key):
+            self._set_last_access_diagnostic(real_url, "blocked", "scope_cooldown")
             logging.info(
                 "navigate_and_maybe_login: skipping URL in cooldown scope=%s url=%s",
                 scope_key,
@@ -835,53 +887,80 @@ class FacebookEventScraper():
 
         attempts = max(1, int(max_attempts))
         for attempt in range(attempts):
+            timed_out = False
             try:
                 t = random.randint(20000//2, int(20000 * 1.5))
                 page.goto(real_url, wait_until="domcontentloaded", timeout=t)
             except PlaywrightTimeoutError:
+                timed_out = True
                 logging.warning(f"navigate_and_maybe_login: timeout on {real_url}")
 
             try:
-                state = classify_facebook_access_state(page.url, page.content())
+                state, reason = diagnose_facebook_access(page.url, page.content())
             except Exception:
-                state = classify_facebook_access_state(page.url, "")
+                state, reason = diagnose_facebook_access(page.url, "")
+            if timed_out and state == "ok":
+                state, reason = "blocked", "navigation_timeout"
 
             if state == "ok":
                 self._record_scope_success(scope_key)
+                self._set_last_access_diagnostic(real_url, state, reason)
                 return True
 
             if state == "login":
-                logging.info(f"navigate_and_maybe_login: login required for {incoming_url}")
+                logging.info(
+                    "navigate_and_maybe_login: login required for %s (reason=%s)",
+                    incoming_url,
+                    reason,
+                )
                 if not self.login_to_facebook():
+                    self._set_last_access_diagnostic(real_url, "login", "login_failed")
                     return False
                 # Immediately re-check target URL after login, even in single-attempt mode.
+                post_login_timed_out = False
                 try:
                     t = random.randint(20000 // 2, int(20000 * 1.5))
                     page.goto(real_url, wait_until="domcontentloaded", timeout=t)
                 except PlaywrightTimeoutError:
+                    post_login_timed_out = True
                     logging.warning(f"navigate_and_maybe_login: timeout after login for {real_url}")
                 try:
-                    post_login_state = classify_facebook_access_state(page.url, page.content())
+                    post_login_state, post_login_reason = diagnose_facebook_access(page.url, page.content())
                 except Exception:
-                    post_login_state = classify_facebook_access_state(page.url, "")
+                    post_login_state, post_login_reason = diagnose_facebook_access(page.url, "")
+                if post_login_timed_out and post_login_state == "ok":
+                    post_login_state, post_login_reason = "blocked", "navigation_timeout_after_login"
                 if post_login_state == "ok":
                     self._record_scope_success(scope_key)
+                    self._set_last_access_diagnostic(real_url, post_login_state, post_login_reason)
                     return True
                 if post_login_state == "blocked":
-                    logging.warning(f"navigate_and_maybe_login: blocked or rate-limited on {real_url}")
+                    logging.warning(
+                        "navigate_and_maybe_login: blocked or rate-limited on %s (reason=%s)",
+                        real_url,
+                        post_login_reason,
+                    )
                     self._record_scope_blocked(scope_key)
+                    self._set_last_access_diagnostic(real_url, post_login_state, post_login_reason)
                     return False
                 # Still appears to require login.
+                self._set_last_access_diagnostic(real_url, post_login_state, post_login_reason)
                 continue
 
-            logging.warning(f"navigate_and_maybe_login: blocked or rate-limited on {real_url}")
+            logging.warning(
+                "navigate_and_maybe_login: blocked or rate-limited on %s (reason=%s)",
+                real_url,
+                reason,
+            )
             self._record_scope_blocked(scope_key)
+            self._set_last_access_diagnostic(real_url, state, reason)
             if attempt < attempts - 1:
                 cooldown_ms = random.randint(3000, 7000)
                 page.wait_for_timeout(cooldown_ms)
                 continue
             return False
 
+        self._set_last_access_diagnostic(real_url, "blocked", "max_attempts_exhausted")
         return False
     
 
@@ -900,7 +979,8 @@ class FacebookEventScraper():
         """
         # 1) Ensure access
         if not self.navigate_and_maybe_login(search_url):
-            logging.error(f"extract_event_links: cannot access {search_url}")
+            reason = self._get_last_access_reason(search_url)
+            logging.error("extract_event_links: cannot access %s (reason=%s)", search_url, reason)
             return set()
 
         # 2) Normalize for tab logic
@@ -953,7 +1033,8 @@ class FacebookEventScraper():
 
         if not assume_navigated:
             if not self.navigate_and_maybe_login(link):
-                logging.warning(f"extract_event_text: cannot access {link}")
+                reason = self._get_last_access_reason(link)
+                logging.warning("extract_event_text: cannot access %s (reason=%s)", link, reason)
                 return None
         
         self.total_url_attempts += 1
@@ -1163,7 +1244,8 @@ class FacebookEventScraper():
 
         # Ensure we can access the page
         if not self.navigate_and_maybe_login(url):
-            logging.info(f"process_fb_url: cannot access {url}")
+            reason = self._get_last_access_reason(url)
+            logging.info("process_fb_url: cannot access %s (reason=%s)", url, reason)
             db_handler.write_url_to_db(url_row)
             return
 

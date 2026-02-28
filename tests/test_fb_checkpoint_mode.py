@@ -9,6 +9,7 @@ from fb import canonicalize_facebook_url, is_facebook_login_redirect, is_non_con
 from fb import extract_facebook_event_links_from_html
 from fb import sanitize_facebook_seed_urls
 from fb import classify_facebook_access_state
+from fb import diagnose_facebook_access
 import pandas as pd
 
 
@@ -102,6 +103,24 @@ def test_classify_facebook_access_state_does_not_false_positive_on_generic_login
         "Some footer text saying log in to facebook to comment",
     )
     assert state == "ok"
+
+
+def test_diagnose_facebook_access_returns_reason_for_checkpoint():
+    state, reason = diagnose_facebook_access(
+        "https://www.facebook.com/checkpoint/",
+        "Checkpoint required",
+    )
+    assert state == "blocked"
+    assert reason == "checkpoint_url"
+
+
+def test_diagnose_facebook_access_returns_reason_for_private_page():
+    state, reason = diagnose_facebook_access(
+        "https://www.facebook.com/events/123/",
+        "This content isn't available right now",
+    )
+    assert state == "blocked"
+    assert reason == "private_or_unavailable_content"
 
 
 def test_extract_facebook_event_links_from_html_supports_multiple_link_shapes():
