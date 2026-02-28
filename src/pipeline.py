@@ -119,6 +119,8 @@ PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_event_links_per_base_limit"] = 20
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_post_nav_wait_ms"] = 1800
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_post_expand_wait_ms"] = 900
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_final_wait_ms"] = 700
+
+PARALLEL_CRAWLER_STEPS = {"rd_ext", "ebs", "scraper", "fb"}
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_failures_before_cooldown"] = 2
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_cooldown_base_seconds"] = 300
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_cooldown_max_seconds"] = 1800
@@ -849,16 +851,16 @@ def run_parallel_crawlers_script(script_path: str) -> str:
 @flow(name="Parallel Crawlers Step")
 def parallel_crawlers_step():
     """
-    Run ebs.py, scraper.py, and fb.py concurrently using one shared config snapshot.
+    Run rd_ext.py, ebs.py, scraper.py, and fb.py concurrently using one shared config snapshot.
     This avoids config race conditions from each individual step wrapper.
     """
-    scripts = ["src/ebs.py", "src/scraper.py", "src/fb.py"]
+    scripts = ["src/rd_ext.py", "src/ebs.py", "src/scraper.py", "src/fb.py"]
     original_config = backup_and_update_config("parallel_crawlers", updates=PARALLEL_CRAWL_CONFIG_UPDATES)
     write_run_config.submit("parallel_crawlers", original_config)
 
     failures: list[str] = []
     try:
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             future_to_script = {
                 executor.submit(run_parallel_crawlers_script.fn, script): script
                 for script in scripts
@@ -1624,15 +1626,15 @@ def run_pipeline(start_step: str, end_step: str = None, parallel_crawlers: bool 
 
         if (
             parallel_crawlers
-            and name == "ebs"
-            and {"ebs", "scraper", "fb"}.issubset(set(selected_names))
+            and name == "rd_ext"
+            and PARALLEL_CRAWLER_STEPS.issubset(set(selected_names))
         ):
-            print("Running parallel crawler group: ebs + scraper + fb")
+            print("Running parallel crawler group: rd_ext + ebs + scraper + fb")
             retry_count = 0
             while retry_count < 3:
                 try:
                     parallel_crawlers_step()
-                    skip_steps.update({"scraper", "fb"})
+                    skip_steps.update(PARALLEL_CRAWLER_STEPS - {"rd_ext"})
                     break
                 except Exception as e:
                     if _is_transient_database_error(str(e)):
