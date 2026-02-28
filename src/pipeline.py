@@ -1726,7 +1726,7 @@ def prompt_user():
     parallel_crawlers = False
     if can_run_parallel:
         parallel_answer = input(
-            "Run ebs/scraper/fb in parallel? (y/N): "
+            "Run rd_ext/ebs/scraper/fb in parallel? (y/N): "
         ).strip().lower()
         parallel_crawlers = parallel_answer in {"y", "yes"}
         print(f"Parallel crawlers: {'enabled' if parallel_crawlers else 'disabled'}")
