@@ -795,10 +795,18 @@ class LLMHandler:
     def _provider_model_candidates(self, provider: str) -> list[str]:
         """
         Return candidate model names for a provider in priority order.
-        Supports alias-based mapping and direct provider lists.
+        Priority:
+        1) Explicit provider lists (<provider>_model_candidates)
+        2) Alias-based mapping (model_candidates.<provider>.<model_alias>)
+        3) Single model fallback (<provider>_model)
         """
         llm_cfg = self.config.get("llm", {})
         provider = (provider or "").lower().strip()
+
+        provider_list_key = f"{provider}_model_candidates"
+        provider_candidates = llm_cfg.get(provider_list_key, [])
+        if isinstance(provider_candidates, list) and provider_candidates:
+            return [str(m).strip() for m in provider_candidates if str(m).strip()]
 
         alias = str(llm_cfg.get("model_alias", "default_fast")).strip()
         alias_map = llm_cfg.get("model_candidates", {})
@@ -808,11 +816,6 @@ class LLMHandler:
                 alias_candidates = by_provider.get(alias, [])
                 if isinstance(alias_candidates, list) and alias_candidates:
                     return [str(m).strip() for m in alias_candidates if str(m).strip()]
-
-        provider_list_key = f"{provider}_model_candidates"
-        provider_candidates = llm_cfg.get(provider_list_key, [])
-        if isinstance(provider_candidates, list) and provider_candidates:
-            return [str(m).strip() for m in provider_candidates if str(m).strip()]
 
         single_model_map = {
             "openai": llm_cfg.get("openai_model"),
