@@ -122,15 +122,16 @@ llm:
   openai_timeout_cooldown_seconds: 180
   openai_timeout_max_strikes: 3
   openai_timeout_seconds: 90
+  regular_openai_first_every_n_requests: 3
   openrouter_base_url: https://openrouter.ai/api/v1
   openrouter_cooldown_seconds: 300
   openrouter_model: openai/gpt-oss-120b:free
   openrouter_model_candidates:
+  - deepseek/deepseek-v3.2
   - qwen/qwen3-coder
   - openai/gpt-oss-120b:free
   - qwen/qwen3-coder:free
   - mistralai/mistral-small-3.1-24b-instruct:free
-  - deepseek/deepseek-v3.2
   openrouter_model_rotation_enabled: false
   openrouter_rate_limit_max_strikes: 2
   openrouter_timeout_seconds: 60
