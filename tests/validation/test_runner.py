@@ -232,8 +232,9 @@ class ValidationTestRunner:
             alias_audit_summary = self._summarize_address_alias_audit()
             llm_activity_summary = self._summarize_llm_provider_activity(results.get('timestamp'))
             scraper_network_summary = self._summarize_scraper_network_health(results.get('timestamp'))
+            fb_block_summary = self._summarize_fb_block_health(results.get('timestamp'))
             reliability_scorecard = self._summarize_reliability_scorecard(
-                results, llm_activity_summary, alias_audit_summary, scraper_network_summary
+                results, llm_activity_summary, alias_audit_summary, scraper_network_summary, fb_block_summary
             )
             gate_eval = self._evaluate_reliability_gates(reliability_scorecard)
             results['reliability_gates'] = gate_eval
@@ -295,11 +296,12 @@ class ValidationTestRunner:
         llm_activity_summary = self._summarize_llm_provider_activity(results.get('timestamp'))
         llm_extraction_quality = self._summarize_llm_extraction_quality(results.get('timestamp'))
         scraper_network_summary = self._summarize_scraper_network_health(results.get('timestamp'))
+        fb_block_summary = self._summarize_fb_block_health(results.get('timestamp'))
         reliability_scorecard = self._summarize_reliability_scorecard(
-            results, llm_activity_summary, alias_audit_summary, scraper_network_summary
+            results, llm_activity_summary, alias_audit_summary, scraper_network_summary, fb_block_summary
         )
         reliability_issues = self._extract_reliability_issues(
-            results, llm_activity_summary, alias_audit_summary, scraper_network_summary
+            results, llm_activity_summary, alias_audit_summary, scraper_network_summary, fb_block_summary
         )
         reliability_gates = results.get('reliability_gates') or self._evaluate_reliability_gates(reliability_scorecard)
         optimization_plan = self._build_optimization_plan(results, reliability_scorecard, llm_activity_summary)
@@ -355,19 +357,22 @@ class ValidationTestRunner:
         <h2>4. Scraper Network Reliability</h2>
         {self._build_scraper_network_html(scraper_network_summary)}
 
-        <h2>5. Address Alias Audit</h2>
+        <h2>5. Facebook Block Health</h2>
+        {self._build_fb_block_health_html(fb_block_summary)}
+
+        <h2>6. Address Alias Audit</h2>
         {self._build_address_alias_audit_html(alias_audit_summary)}
 
-        <h2>6. LLM Provider Activity</h2>
+        <h2>7. LLM Provider Activity</h2>
         {self._build_llm_provider_activity_html(llm_activity_summary)}
 
-        <h2>7. LLM Extraction Quality Scorecard</h2>
+        <h2>8. LLM Extraction Quality Scorecard</h2>
         {self._build_llm_extraction_quality_html(llm_extraction_quality)}
 
-        <h2>8. Optimization Recommendations</h2>
+        <h2>9. Optimization Recommendations</h2>
         {self._build_optimization_html(optimization_plan)}
 
-        <h2>9. Reliability Action Queue</h2>
+        <h2>10. Reliability Action Queue</h2>
         {self._build_action_queue_html(action_queue)}
 
         <hr style="margin: 40px 0;">
@@ -1075,6 +1080,242 @@ class ValidationTestRunner:
             },
         }
 
+    def _summarize_fb_block_health(self, report_timestamp: str | None) -> dict:
+        """Summarize Facebook temporary-block behavior from fb logs."""
+        path = "logs/fb_log.txt"
+        if not os.path.exists(path):
+            return {"error": "fb log not found", "path": path}
+
+        hours_window = int(
+            self.validation_config.get('reporting', {}).get('fb_activity_hours', 24) or 24
+        )
+        end_ts = datetime.now()
+        if report_timestamp:
+            try:
+                end_ts = datetime.fromisoformat(report_timestamp)
+            except ValueError:
+                pass
+        start_ts = end_ts - timedelta(hours=hours_window)
+
+        with open(path, "r", encoding="utf-8", errors="ignore") as file:
+            lines = file.readlines()
+
+        window_lines: list[str] = []
+        for line in lines:
+            ts = self._parse_log_timestamp(line)
+            if ts is None:
+                continue
+            if start_ts <= ts <= end_ts:
+                window_lines.append(line)
+        if not window_lines:
+            window_lines = lines[-4000:]
+
+        run_id_re = re.compile(r"\[run_id=([^\]]+)\]")
+        retrieved_re = re.compile(r"Retrieved\s+(\d+)\s+Facebook URLs from the database\.", re.IGNORECASE)
+        processing_base_re = re.compile(r"Processing base URL:\s*(https?://\S+)", re.IGNORECASE)
+        processing_fb_url_re = re.compile(r"Processing Facebook URL:\s*(https?://\S+)", re.IGNORECASE)
+        access_ok_re = re.compile(r"fb access check:.*requested_url=(https?://\S+).*state=ok\b", re.IGNORECASE)
+
+        latest_run_id = ""
+        for line in window_lines:
+            m = run_id_re.search(line)
+            if m:
+                latest_run_id = m.group(1).strip()
+
+        scoped_fb_lines = window_lines
+        if latest_run_id:
+            scoped_fb_lines = [ln for ln in window_lines if f"[run_id={latest_run_id}]" in ln]
+            if not scoped_fb_lines:
+                scoped_fb_lines = window_lines
+
+        strike1_count = 0
+        abort_count = 0
+        explicit_block_count = 0
+        wait_seconds_total = 0
+        wait_seconds_samples: list[int] = []
+        fb_target_urls = 0
+        fb_successes_before_throttle = 0
+        first_throttle_seen = False
+        unique_ok_urls: set[str] = set()
+        unique_processed_urls_before_throttle: set[str] = set()
+
+        wait_re = re.compile(r"fb temp block policy: strike=1 .* wait_seconds=(\d+)")
+        for line in scoped_fb_lines:
+            low = line.lower()
+            if "reason=explicit_temp_block_regex" in low:
+                explicit_block_count += 1
+            if "fb temp block policy: strike=1 " in low:
+                strike1_count += 1
+                m = wait_re.search(line)
+                if m:
+                    wait_val = int(m.group(1))
+                    wait_seconds_total += wait_val
+                    wait_seconds_samples.append(wait_val)
+            if "action=abort_fb_run" in low:
+                abort_count += 1
+            m_retrieved = retrieved_re.search(line)
+            if m_retrieved:
+                fb_target_urls = max(fb_target_urls, int(m_retrieved.group(1)))
+
+            throttle_now = (
+                "reason=explicit_temp_block_regex" in low
+                or "reason=rate_limit_or_temp_block_text" in low
+                or "you are temporarily blocked" in low
+            )
+            if not first_throttle_seen and throttle_now:
+                first_throttle_seen = True
+
+            if first_throttle_seen:
+                continue
+
+            m_ok = access_ok_re.search(line)
+            if m_ok:
+                unique_ok_urls.add(m_ok.group(1).rstrip(".,"))
+            m_base = processing_base_re.search(line)
+            if m_base:
+                unique_processed_urls_before_throttle.add(m_base.group(1).rstrip(".,"))
+            m_fb_url = processing_fb_url_re.search(line)
+            if m_fb_url:
+                unique_processed_urls_before_throttle.add(m_fb_url.group(1).rstrip(".,"))
+
+        fb_successes_before_throttle = len(unique_ok_urls) or len(unique_processed_urls_before_throttle)
+
+        instagram_urls_seen = 0
+        scraper_path = "logs/scraper_log.txt"
+        if os.path.exists(scraper_path):
+            with open(scraper_path, "r", encoding="utf-8", errors="ignore") as file:
+                scraper_lines = file.readlines()
+
+            scoped_scraper_lines: list[str] = []
+            for line in scraper_lines:
+                ts = self._parse_log_timestamp(line)
+                if ts is None:
+                    continue
+                if start_ts <= ts <= end_ts:
+                    scoped_scraper_lines.append(line)
+            if not scoped_scraper_lines:
+                scoped_scraper_lines = scraper_lines[-6000:]
+
+            if latest_run_id:
+                run_scoped = [ln for ln in scoped_scraper_lines if f"[run_id={latest_run_id}]" in ln]
+                if run_scoped:
+                    scoped_scraper_lines = run_scoped
+
+            ig_urls: set[str] = set()
+            ig_re = re.compile(r"Skipping social media URL \(fb/ig\):\s*(https?://\S+)", re.IGNORECASE)
+            for line in scoped_scraper_lines:
+                m_ig = ig_re.search(line)
+                if not m_ig:
+                    continue
+                url = m_ig.group(1).rstrip(".,")
+                if "instagram" in url.lower():
+                    ig_urls.add(url)
+            instagram_urls_seen = len(ig_urls)
+
+        denominator_fb_ig = max(1, fb_target_urls + instagram_urls_seen)
+        numerator_fb_ig = fb_successes_before_throttle + instagram_urls_seen
+        jail_progress_ratio = numerator_fb_ig / denominator_fb_ig
+        fb_only_denominator = max(1, fb_target_urls)
+        fb_only_ratio = fb_successes_before_throttle / fb_only_denominator
+
+        avg_wait_seconds = (wait_seconds_total / len(wait_seconds_samples)) if wait_seconds_samples else 0.0
+
+        return {
+            "path": path,
+            "window_hours": hours_window,
+            "start_ts": start_ts.isoformat(sep=" "),
+            "end_ts": end_ts.isoformat(sep=" "),
+            "explicit_block_count": explicit_block_count,
+            "strike1_count": strike1_count,
+            "abort_count": abort_count,
+            "avg_wait_seconds": round(avg_wait_seconds, 1),
+            "max_wait_seconds": max(wait_seconds_samples) if wait_seconds_samples else 0,
+            "min_wait_seconds": min(wait_seconds_samples) if wait_seconds_samples else 0,
+            "policy_triggered": strike1_count > 0 or abort_count > 0,
+            "run_id": latest_run_id,
+            "fb_target_urls": fb_target_urls,
+            "instagram_target_urls": instagram_urls_seen,
+            "fb_successes_before_throttle": fb_successes_before_throttle,
+            "numerator_fb_ig": numerator_fb_ig,
+            "denominator_fb_ig": denominator_fb_ig,
+            "jail_progress_ratio": round(jail_progress_ratio, 4),
+            "fb_only_ratio": round(fb_only_ratio, 4),
+        }
+
+    def _build_fb_block_health_html(self, fb_data: dict) -> str:
+        """Render HTML for Facebook temporary-block policy health."""
+        if not fb_data:
+            return "<p class='error-box'>❌ Facebook block health summary unavailable</p>"
+        if 'error' in fb_data:
+            return f"<p class='error-box'>❌ Facebook block health failed: {self._escape_html(fb_data['error'])}</p>"
+
+        explicit_blocks = int(fb_data.get("explicit_block_count", 0) or 0)
+        strike1 = int(fb_data.get("strike1_count", 0) or 0)
+        aborts = int(fb_data.get("abort_count", 0) or 0)
+        avg_wait = float(fb_data.get("avg_wait_seconds", 0) or 0)
+        fb_target_urls = int(fb_data.get("fb_target_urls", 0) or 0)
+        instagram_target_urls = int(fb_data.get("instagram_target_urls", 0) or 0)
+        fb_successes_before_throttle = int(fb_data.get("fb_successes_before_throttle", 0) or 0)
+        numerator_fb_ig = int(fb_data.get("numerator_fb_ig", 0) or 0)
+        denominator_fb_ig = int(fb_data.get("denominator_fb_ig", 0) or 0)
+        jail_progress_ratio = float(fb_data.get("jail_progress_ratio", 0) or 0)
+        fb_only_ratio = float(fb_data.get("fb_only_ratio", 0) or 0)
+        status_class = "status-pass"
+        status_text = "Healthy"
+        if aborts > 0:
+            status_class = "status-fail"
+            status_text = "Aborted"
+        elif strike1 > 0 or explicit_blocks > 0:
+            status_class = "status-warning"
+            status_text = "Cooling"
+
+        html = f"""
+        <div class="metric-container">
+            <div class="metric">
+                <div class="metric-value">{explicit_blocks}</div>
+                <div class="metric-label">Explicit Temp Blocks</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{strike1}</div>
+                <div class="metric-label">Strike-1 Cooldowns</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{aborts}</div>
+                <div class="metric-label">fb.py Early Aborts</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{avg_wait:.1f}s</div>
+                <div class="metric-label">Average Strike-1 Wait</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{numerator_fb_ig}/{denominator_fb_ig}</div>
+                <div class="metric-label">FB+IG Jail Progress (Num/Den)</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{jail_progress_ratio:.1%}</div>
+                <div class="metric-label">FB+IG Jail Progress Ratio</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value">{fb_only_ratio:.1%}</div>
+                <div class="metric-label">FB-only Pre-throttle Success Ratio</div>
+            </div>
+        </div>
+        <p><strong>Status:</strong> <span class="{status_class}">{status_text}</span></p>
+        """
+        html += (
+            f"<p><strong>Formula:</strong> "
+            f"({fb_successes_before_throttle} FB successes before first throttle + {instagram_target_urls} IG URLs seen) "
+            f"/ ({fb_target_urls} FB target URLs + {instagram_target_urls} IG URLs seen)</p>"
+        )
+        if fb_data.get("run_id"):
+            html += f"<p><strong>Run ID:</strong> {self._escape_html(str(fb_data.get('run_id')))}</p>"
+        html += (
+            f"<p><strong>Window:</strong> {self._escape_html(str(fb_data.get('start_ts', '')))}"
+            f" to {self._escape_html(str(fb_data.get('end_ts', '')))} "
+            f"(last {int(fb_data.get('window_hours', 24) or 24)} hour(s))</p>"
+        )
+        return html
+
     def _build_llm_provider_activity_html(self, llm_data: dict) -> str:
         """Build HTML for LLM provider usage/cost pressure section."""
         if not llm_data:
@@ -1290,6 +1531,7 @@ class ValidationTestRunner:
         llm_data: dict,
         alias_data: dict,
         scraper_network_data: dict | None = None,
+        fb_block_data: dict | None = None,
     ) -> dict:
         """Build baseline reliability metrics from report-driving data."""
         scraping = results.get('scraping_validation') or {}
@@ -1317,6 +1559,9 @@ class ValidationTestRunner:
         scraper_retry_max_reached = int(scraper_network.get("retry_max_reached", 0) or 0)
         scraper_timeout_count = int(scraper_network.get("timeout_count", 0) or 0)
         scraper_degraded = bool(scraper_network.get("degraded", False))
+        fb_blocks = fb_block_data or {}
+        fb_explicit_blocks = int(fb_blocks.get("explicit_block_count", 0) or 0)
+        fb_abort_count = int(fb_blocks.get("abort_count", 0) or 0)
 
         score = 100.0
         score -= min(30.0, critical_failures * 3.0)
@@ -1328,6 +1573,8 @@ class ValidationTestRunner:
         score -= min(10.0, max(0, scraper_retry_max_reached - 10) * 0.5)
         if scraper_degraded:
             score -= 5.0
+        score -= min(8.0, fb_explicit_blocks * 1.0)
+        score -= min(12.0, fb_abort_count * 6.0)
         score = max(0.0, min(100.0, score))
 
         if score >= 85:
@@ -1357,6 +1604,8 @@ class ValidationTestRunner:
                 "scraper_retry_max_reached": scraper_retry_max_reached,
                 "scraper_timeout_count": scraper_timeout_count,
                 "scraper_network_degraded": scraper_degraded,
+                "fb_explicit_temp_blocks": fb_explicit_blocks,
+                "fb_temp_block_aborts": fb_abort_count,
             },
         }
 
@@ -1366,6 +1615,7 @@ class ValidationTestRunner:
         llm_data: dict,
         alias_data: dict,
         scraper_network_data: dict | None = None,
+        fb_block_data: dict | None = None,
     ) -> list[dict]:
         """Normalize major reliability signals into a JSON-friendly issue list."""
         now_ts = str(results.get("timestamp") or datetime.now().isoformat())
@@ -1473,6 +1723,30 @@ class ValidationTestRunner:
                     f"exception_rate={scraper_network.get('exception_rate', 0)}, "
                     f"retry_max_reached={scraper_network.get('retry_max_reached', 0)}, "
                     f"timeouts={scraper_network.get('timeout_count', 0)}"
+                ),
+                "status": "open",
+                "owner": "unassigned",
+                "first_seen": now_ts,
+                "last_seen": now_ts,
+            })
+
+        fb_blocks = fb_block_data or {}
+        fb_explicit_blocks = int(fb_blocks.get("explicit_block_count", 0) or 0)
+        fb_abort_count = int(fb_blocks.get("abort_count", 0) or 0)
+        if fb_explicit_blocks > 0:
+            issues.append({
+                "issue_id": "FB-BLOCK-001",
+                "timestamp": now_ts,
+                "category": "Facebook Throttle",
+                "severity": "high" if fb_abort_count > 0 else "medium",
+                "step": "fb.py",
+                "provider": "facebook",
+                "url": "",
+                "input_signature": "explicit_temp_block_regex",
+                "expected": "Facebook crawl should progress without temp-block triggers.",
+                "actual": (
+                    f"explicit_blocks={fb_explicit_blocks}, "
+                    f"fb_run_aborts={fb_abort_count}"
                 ),
                 "status": "open",
                 "owner": "unassigned",

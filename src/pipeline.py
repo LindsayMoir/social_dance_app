@@ -126,6 +126,9 @@ PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_cooldown_base_seconds"] = 30
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_cooldown_max_seconds"] = 1800
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_state_max_scopes"] = 800
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_state_ttl_days"] = 45
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_temp_block_policy_enabled"] = True
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_temp_block_wait_min_seconds"] = 300
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_temp_block_wait_max_seconds"] = 600
 
 # ------------------------
 # HELPER TASKS: Backup and Restore Config
@@ -791,6 +794,9 @@ def fb_step():
     fb_updates["crawling"]["fb_block_cooldown_max_seconds"] = 1800
     fb_updates["crawling"]["fb_block_state_max_scopes"] = 800
     fb_updates["crawling"]["fb_block_state_ttl_days"] = 45
+    fb_updates["crawling"]["fb_temp_block_policy_enabled"] = True
+    fb_updates["crawling"]["fb_temp_block_wait_min_seconds"] = 300
+    fb_updates["crawling"]["fb_temp_block_wait_max_seconds"] = 600
     original_config = backup_and_update_config("fb", updates=fb_updates)
     write_run_config.submit("fb", original_config)
     run_fb_script()

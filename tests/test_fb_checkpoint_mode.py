@@ -123,6 +123,15 @@ def test_diagnose_facebook_access_returns_reason_for_private_page():
     assert reason == "private_or_unavailable_content"
 
 
+def test_diagnose_facebook_access_detects_temp_block_phrase_variations():
+    state, reason = diagnose_facebook_access(
+        "https://www.facebook.com/events/123/",
+        "You're temporarily blocked. It looks like you were misusing this feature by going too fast.",
+    )
+    assert state == "blocked"
+    assert reason == "explicit_temp_block_regex"
+
+
 def test_extract_facebook_event_links_from_html_supports_multiple_link_shapes():
     html = """
     <html><body>
@@ -257,3 +266,42 @@ def test_driver_fb_urls_does_not_mark_base_relevant_when_no_events_yield(monkeyp
         row[0] == "https://www.facebook.com/groups/1634269246863069/" and row[4] is True
         for row in dummy_db.rows
     )
+
+
+def test_temp_block_policy_first_strike_waits_and_continues(monkeypatch):
+    scraper = FacebookEventScraper.__new__(FacebookEventScraper)
+    scraper.fb_temp_block_policy_enabled = True
+    scraper.fb_step_name = "fb"
+    scraper.fb_temp_block_wait_min_seconds = 300
+    scraper.fb_temp_block_wait_max_seconds = 600
+    scraper.fb_run_temp_block_strikes = 0
+    scraper.fb_run_abort_requested = False
+    scraper.fb_run_abort_reason = ""
+
+    waited = {"seconds": 0}
+    monkeypatch.setattr(fb_module.random, "randint", lambda _a, _b: 420)
+    scraper._sleep_seconds = lambda seconds, _context: waited.__setitem__("seconds", seconds)
+
+    can_continue = scraper._handle_explicit_temp_block("https://www.facebook.com/events/1/")
+    assert can_continue is True
+    assert scraper.fb_run_temp_block_strikes == 1
+    assert waited["seconds"] == 420
+    assert scraper.fb_run_abort_requested is False
+
+
+def test_temp_block_policy_second_strike_aborts(monkeypatch):
+    scraper = FacebookEventScraper.__new__(FacebookEventScraper)
+    scraper.fb_temp_block_policy_enabled = True
+    scraper.fb_step_name = "fb"
+    scraper.fb_temp_block_wait_min_seconds = 300
+    scraper.fb_temp_block_wait_max_seconds = 600
+    scraper.fb_run_temp_block_strikes = 1
+    scraper.fb_run_abort_requested = False
+    scraper.fb_run_abort_reason = ""
+
+    scraper._sleep_seconds = lambda _seconds, _context: None
+    can_continue = scraper._handle_explicit_temp_block("https://www.facebook.com/events/2/")
+    assert can_continue is False
+    assert scraper.fb_run_temp_block_strikes == 2
+    assert scraper.fb_run_abort_requested is True
+    assert scraper.fb_run_abort_reason == "repeated_explicit_temp_block"

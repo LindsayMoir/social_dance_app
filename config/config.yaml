@@ -28,6 +28,9 @@ crawling:
   fb_post_nav_wait_ms: 3500
   fb_randomize_base_url_order: true
   fb_randomize_event_link_order: true
+  fb_temp_block_policy_enabled: true
+  fb_temp_block_wait_max_seconds: 600
+  fb_temp_block_wait_min_seconds: 300
   headless: false
   max_attempts: 3
   max_crawl_trys: 3

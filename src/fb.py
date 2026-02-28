@@ -95,6 +95,16 @@ with open('config/config.yaml', 'r') as file:
 llm_handler = None
 db_handler = None
 
+FB_TEMP_BLOCK_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\byou[’']?re\s+temporarily\s+blocked\b", re.IGNORECASE),
+    re.compile(r"\byou[’']?ve\s+been\s+temporarily\s+blocked\b", re.IGNORECASE),
+    re.compile(r"\bmisusing\s+this\s+feature\b.*\bgoing\s+too\s+fast\b", re.IGNORECASE | re.DOTALL),
+    re.compile(r"\btemporar(?:ily|y)\s+blocked\b.*\b(using\s+this\s+feature|from\s+using\s+it)\b", re.IGNORECASE | re.DOTALL),
+    re.compile(r"\btoo\s+many\s+requests\b", re.IGNORECASE),
+    re.compile(r"\btry\s+again\s+later\b", re.IGNORECASE),
+    re.compile(r"\brate\s*[- ]?limit(?:ed|ing)?\b", re.IGNORECASE),
+)
+
 
 def should_use_fb_checkpoint(config_data: dict, is_render: bool) -> bool:
     """
@@ -277,6 +287,8 @@ def diagnose_facebook_access(current_url: str, page_content: str) -> tuple[str, 
         "rate limited",
         "you are temporarily blocked",
     )
+    if any(pattern.search(page_content or "") for pattern in FB_TEMP_BLOCK_PATTERNS):
+        return "blocked", "explicit_temp_block_regex"
     if any(m in content_lower for m in blocked_markers):
         return "blocked", "rate_limit_or_temp_block_text"
 
@@ -440,6 +452,19 @@ class FacebookEventScraper():
         )
         self.fb_block_state_max_scopes = int(crawling_cfg.get("fb_block_state_max_scopes", 800) or 800)
         self.fb_block_state_ttl_days = int(crawling_cfg.get("fb_block_state_ttl_days", 45) or 45)
+        self.fb_temp_block_wait_min_seconds = int(
+            crawling_cfg.get("fb_temp_block_wait_min_seconds", 300) or 300
+        )
+        self.fb_temp_block_wait_max_seconds = int(
+            crawling_cfg.get("fb_temp_block_wait_max_seconds", 600) or 600
+        )
+        self.fb_temp_block_policy_enabled = bool(
+            crawling_cfg.get("fb_temp_block_policy_enabled", True)
+        )
+        self.fb_step_name = str(os.getenv("DS_STEP_NAME", "")).strip().lower()
+        self.fb_run_temp_block_strikes = 0
+        self.fb_run_abort_requested = False
+        self.fb_run_abort_reason = ""
         self._load_adaptive_block_state()
         self._autotune_block_parameters_from_history()
         self._last_access_diagnostics: dict[str, dict[str, str | float]] = {}
@@ -684,6 +709,64 @@ class FacebookEventScraper():
             pass
         time.sleep(delay_ms / 1000.0)
 
+    def _is_fb_temp_block_policy_active(self) -> bool:
+        """Return True when run-level temporary-block policy should be enforced."""
+        return bool(
+            getattr(self, "fb_temp_block_policy_enabled", False)
+            and str(getattr(self, "fb_step_name", "")).lower() == "fb"
+        )
+
+    def _sleep_seconds(self, seconds: int, context: str) -> None:
+        """Sleep helper that prefers Playwright timer when possible."""
+        wait_seconds = max(0, int(seconds or 0))
+        if wait_seconds <= 0:
+            return
+        wait_ms = wait_seconds * 1000
+        logging.warning(
+            "fb temp block policy: waiting %ss before %s",
+            wait_seconds,
+            context,
+        )
+        try:
+            if self.logged_in_page:
+                self.logged_in_page.wait_for_timeout(wait_ms)
+                return
+        except Exception:
+            pass
+        time.sleep(wait_seconds)
+
+    def _handle_explicit_temp_block(self, real_url: str) -> bool:
+        """
+        Enforce run-level two-strike temporary block policy.
+        Returns True to continue run, False to abort remaining fb.py work.
+        """
+        if not self._is_fb_temp_block_policy_active():
+            return True
+
+        self.fb_run_temp_block_strikes = int(getattr(self, "fb_run_temp_block_strikes", 0) or 0) + 1
+        strike = self.fb_run_temp_block_strikes
+        if strike == 1:
+            wait_min = max(1, int(getattr(self, "fb_temp_block_wait_min_seconds", 300) or 300))
+            wait_max = max(wait_min, int(getattr(self, "fb_temp_block_wait_max_seconds", 600) or 600))
+            wait_seconds = random.randint(wait_min, wait_max)
+            logging.warning(
+                "fb temp block policy: strike=1 url=%s action=cooldown wait_seconds=%s",
+                real_url,
+                wait_seconds,
+            )
+            self._sleep_seconds(wait_seconds, "retry_after_temp_block")
+            return True
+
+        self.fb_run_abort_requested = True
+        self.fb_run_abort_reason = "repeated_explicit_temp_block"
+        logging.error(
+            "fb temp block policy: strike=%s url=%s action=abort_fb_run reason=%s",
+            strike,
+            real_url,
+            self.fb_run_abort_reason,
+        )
+        return False
+
 
     def _safe_shutdown_browser(self) -> None:
         """Close Playwright resources safely."""
@@ -889,6 +972,30 @@ class FacebookEventScraper():
         key = self.normalize_facebook_url(url)
         diag = self._last_access_diagnostics.get(key, {})
         return str(diag.get("reason", "unknown"))
+
+    def _log_access_check(
+        self,
+        *,
+        phase: str,
+        requested_url: str,
+        current_url: str,
+        state: str,
+        reason: str,
+        attempt: int | None = None,
+    ) -> None:
+        """
+        Emit a structured per-page access diagnostic for every Facebook navigation check.
+        """
+        attempt_suffix = f" attempt={attempt}" if attempt is not None else ""
+        logging.info(
+            "fb access check:%s phase=%s requested_url=%s current_url=%s state=%s reason=%s",
+            attempt_suffix,
+            phase,
+            requested_url,
+            current_url,
+            state,
+            reason,
+        )
     
 
     def navigate_and_maybe_login(self, incoming_url: str, max_attempts: int = 2) -> bool:
@@ -900,6 +1007,13 @@ class FacebookEventScraper():
             bool: True if navigation was successful, False otherwise.
         """
         real_url = self.normalize_facebook_url(incoming_url)
+        if getattr(self, "fb_run_abort_requested", False):
+            self._set_last_access_diagnostic(
+                real_url,
+                "blocked",
+                str(getattr(self, "fb_run_abort_reason", "") or "run_abort_requested"),
+            )
+            return False
         scope_key = self._facebook_scope_key(real_url)
         if self._scope_in_cooldown(scope_key):
             self._set_last_access_diagnostic(real_url, "blocked", "scope_cooldown")
@@ -927,6 +1041,14 @@ class FacebookEventScraper():
                 state, reason = diagnose_facebook_access(page.url, "")
             if timed_out and state == "ok":
                 state, reason = "blocked", "navigation_timeout"
+            self._log_access_check(
+                phase="navigate",
+                requested_url=real_url,
+                current_url=page.url,
+                state=state,
+                reason=reason,
+                attempt=attempt + 1,
+            )
 
             if state == "ok":
                 self._record_scope_success(scope_key)
@@ -956,6 +1078,14 @@ class FacebookEventScraper():
                     post_login_state, post_login_reason = diagnose_facebook_access(page.url, "")
                 if post_login_timed_out and post_login_state == "ok":
                     post_login_state, post_login_reason = "blocked", "navigation_timeout_after_login"
+                self._log_access_check(
+                    phase="navigate_post_login",
+                    requested_url=real_url,
+                    current_url=page.url,
+                    state=post_login_state,
+                    reason=post_login_reason,
+                    attempt=attempt + 1,
+                )
                 if post_login_state == "ok":
                     self._record_scope_success(scope_key)
                     self._set_last_access_diagnostic(real_url, post_login_state, post_login_reason)
@@ -968,6 +1098,11 @@ class FacebookEventScraper():
                     )
                     self._record_scope_blocked(scope_key)
                     self._set_last_access_diagnostic(real_url, post_login_state, post_login_reason)
+                    if post_login_reason == "explicit_temp_block_regex":
+                        if not self._handle_explicit_temp_block(real_url):
+                            return False
+                        if attempt < attempts - 1:
+                            continue
                     return False
                 # Still appears to require login.
                 self._set_last_access_diagnostic(real_url, post_login_state, post_login_reason)
@@ -980,6 +1115,11 @@ class FacebookEventScraper():
             )
             self._record_scope_blocked(scope_key)
             self._set_last_access_diagnostic(real_url, state, reason)
+            if reason == "explicit_temp_block_regex":
+                if not self._handle_explicit_temp_block(real_url):
+                    return False
+                if attempt < attempts - 1:
+                    continue
             if attempt < attempts - 1:
                 cooldown_ms = random.randint(3000, 7000)
                 page.wait_for_timeout(cooldown_ms)
@@ -1024,6 +1164,26 @@ class FacebookEventScraper():
             self.logged_in_page.goto(norm_url, wait_until="domcontentloaded", timeout=t)
         except Exception as e:
             logging.error(f"extract_event_links(): error loading {norm_url}: {e}")
+            return set()
+        try:
+            state, reason = diagnose_facebook_access(self.logged_in_page.url, self.logged_in_page.content())
+        except Exception:
+            state, reason = diagnose_facebook_access(self.logged_in_page.url, "")
+        self._set_last_access_diagnostic(norm_url, state, reason)
+        self._log_access_check(
+            phase="extract_event_links",
+            requested_url=norm_url,
+            current_url=self.logged_in_page.url,
+            state=state,
+            reason=reason,
+        )
+        if state != "ok":
+            logging.warning(
+                "extract_event_links(): access not ok for %s (state=%s reason=%s)",
+                norm_url,
+                state,
+                reason,
+            )
             return set()
 
         # scrolling logic unchanged...
@@ -1205,6 +1365,12 @@ class FacebookEventScraper():
             logging.info("scrape_events: randomized keyword search order for %d keywords.", len(keyword_list))
 
         for keyword in keyword_list:
+            if getattr(self, "fb_run_abort_requested", False):
+                logging.warning(
+                    "scrape_events: stopping early due to temp block policy (reason=%s).",
+                    str(getattr(self, "fb_run_abort_reason", "") or "unknown"),
+                )
+                break
             search_url = f"{base_url}{keyword}{location_id}"
             self._wait_between_requests("search_keyword")
             event_links = self.extract_event_links(search_url)
@@ -1217,6 +1383,12 @@ class FacebookEventScraper():
                 logging.info("scrape_events: randomized event link order for %s.", search_url)
 
             for link in event_links_iter:
+                if getattr(self, "fb_run_abort_requested", False):
+                    logging.warning(
+                        "scrape_events: stopping event loop due to temp block policy (reason=%s).",
+                        str(getattr(self, "fb_run_abort_reason", "") or "unknown"),
+                    )
+                    break
                 if link in self.urls_visited:
                     continue  # Skip already visited URLs
                 else:
@@ -1275,6 +1447,13 @@ class FacebookEventScraper():
         """
         # Canonicalize URL first to avoid persisting login redirect wrappers.
         url = self.normalize_facebook_url(url)
+        if getattr(self, "fb_run_abort_requested", False):
+            logging.warning(
+                "process_fb_url: skipping %s due to temp block policy (reason=%s).",
+                url,
+                str(getattr(self, "fb_run_abort_reason", "") or "unknown"),
+            )
+            return
 
         # Set up url_row for database writing
         url_row = [url, parent_url, source, keywords, False, 1, datetime.now()]
@@ -1365,12 +1544,24 @@ class FacebookEventScraper():
         keywords_df['processed'] = keywords_df['processed'] = False
 
         for idx, row in keywords_df.iterrows():
+            if getattr(self, "fb_run_abort_requested", False):
+                logging.warning(
+                    "def driver_fb_search(): stopping early due to temp block policy (reason=%s).",
+                    str(getattr(self, "fb_run_abort_reason", "") or "unknown"),
+                )
+                break
             keywords_list = row['keywords'].split(',')
             source = row.get('source', '')
 
             # Define callback to process events immediately (streaming)
             def process_event(url: str, extracted_text: str, parent_url: str):
                 """Callback to process each event immediately as it's extracted."""
+                if getattr(self, "fb_run_abort_requested", False):
+                    logging.warning(
+                        "def driver_fb_search(): skipping callback event due to temp block policy (reason=%s).",
+                        str(getattr(self, "fb_run_abort_reason", "") or "unknown"),
+                    )
+                    return
                 logging.info(f"def driver_fb_search(): Processing Facebook URL: {url}")
 
                 if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
@@ -1526,6 +1717,12 @@ class FacebookEventScraper():
                     len(fb_urls_df),
                 )
             for idx, row in fb_urls_df.iterrows():
+                if getattr(self, "fb_run_abort_requested", False):
+                    logging.warning(
+                        "def driver_fb_urls(): stopping base URL loop due to temp block policy (reason=%s).",
+                        str(getattr(self, "fb_run_abort_reason", "") or "unknown"),
+                    )
+                    break
                 raw_base_url = row['link']
                 base_url = self.normalize_facebook_url(raw_base_url)
                 parent_url = row['parent_url']
@@ -1607,6 +1804,12 @@ class FacebookEventScraper():
 
                 # 5) Process each event link
                 for event_idx, event_url in enumerate(fb_event_links):
+                    if getattr(self, "fb_run_abort_requested", False):
+                        logging.warning(
+                            "def driver_fb_urls(): stopping event URL loop due to temp block policy (reason=%s).",
+                            str(getattr(self, "fb_run_abort_reason", "") or "unknown"),
+                        )
+                        break
                     event_url = self.normalize_facebook_url(event_url)
 
                     if event_idx > 0:
@@ -1698,7 +1901,11 @@ class FacebookEventScraper():
 
         run_data = pd.DataFrame([{
             "run_name": self.run_name,
-            "run_description": self.run_description,
+            "run_description": (
+                f"{self.run_description}"
+                f" | fb_temp_block_strikes={int(getattr(self, 'fb_run_temp_block_strikes', 0) or 0)}"
+                f" | fb_run_abort_reason={str(getattr(self, 'fb_run_abort_reason', '') or 'none')}"
+            ),
             "start_time": self.start_time,
             "end_time": end_time,
             "elapsed_time": elapsed_time,
