@@ -184,6 +184,10 @@ def test_driver_fb_urls_marks_base_relevant_when_child_events_yield(monkeypatch)
     scraper.events_written_to_db = 0
     scraper.fb_base_urls_limit = 0
     scraper.fb_event_links_per_base_limit = 0
+    scraper.fb_randomize_base_url_order = False
+    scraper.fb_randomize_event_link_order = False
+    scraper.fb_inter_request_wait_min_ms = 0
+    scraper.fb_inter_request_wait_max_ms = 0
     scraper._ensure_authenticated_or_raise = lambda: None
     scraper.normalize_facebook_url = lambda u: u
     scraper.extract_event_links = lambda _u: ["https://www.facebook.com/events/1018836737121988/"]
@@ -238,6 +242,10 @@ def test_driver_fb_urls_does_not_mark_base_relevant_when_no_events_yield(monkeyp
     scraper.events_written_to_db = 0
     scraper.fb_base_urls_limit = 0
     scraper.fb_event_links_per_base_limit = 0
+    scraper.fb_randomize_base_url_order = False
+    scraper.fb_randomize_event_link_order = False
+    scraper.fb_inter_request_wait_min_ms = 0
+    scraper.fb_inter_request_wait_max_ms = 0
     scraper._ensure_authenticated_or_raise = lambda: None
     scraper.normalize_facebook_url = lambda u: u
     scraper.extract_event_links = lambda _u: []

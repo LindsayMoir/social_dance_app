@@ -1,6 +1,7 @@
 import pandas as pd
 import sys
 import asyncio
+from collections import defaultdict, deque
 
 sys.path.insert(0, 'src')
 
@@ -10,6 +11,7 @@ from scrapy.http import HtmlResponse, Request
 from scraper import (
     EventSpider,
     is_calendar_candidate,
+    is_facebook_url,
     is_whitelist_candidate,
     merge_seed_urls,
     normalize_http_links,
@@ -43,6 +45,13 @@ def test_is_calendar_candidate_matches_google_and_seed_roots():
     assert is_calendar_candidate("https://calendar.google.com/calendar/embed?src=abc", calendar_roots)
     assert is_calendar_candidate("https://vlda.ca/resources/calendar-feed", calendar_roots)
     assert not is_calendar_candidate("https://example.com/events", calendar_roots)
+
+
+def test_is_facebook_url_matches_facebook_hosts_only():
+    assert is_facebook_url("https://www.facebook.com/groups/1634269246863069/") is True
+    assert is_facebook_url("https://m.facebook.com/events/123456/") is True
+    assert is_facebook_url("https://facebook.com/events/123456/") is True
+    assert is_facebook_url("https://notfacebook.com/events/123456/") is False
 
 
 def test_is_whitelist_candidate_matches_root_and_subpath():
@@ -166,6 +175,11 @@ def test_parse_extracts_calendar_id_from_rendered_page_text(monkeypatch):
     spider.whitelist_roots = set()
     spider.attempted_whitelist_roots = set()
     spider.visited_link = set()
+    spider.domain_failure_events = defaultdict(deque)
+    spider.domain_cooldown_until = {}
+    spider.domain_cooldown_skip_count = 0
+    spider.scraper_priority_download_timeout_seconds = 90
+    spider.scraper_priority_retry_times = 3
 
     processed_ids = []
 
@@ -239,6 +253,13 @@ def test_start_whitelist_seed_bypasses_history_gate(monkeypatch, tmp_path):
     spider.whitelist_roots = {normalize_url_for_compare("https://latindancecanada.com/")}
     spider.attempted_whitelist_roots = set()
     spider.calendar_urls_set = set()
+    spider.domain_failure_events = defaultdict(deque)
+    spider.domain_cooldown_until = {}
+    spider.domain_cooldown_skip_count = 0
+    spider.scraper_priority_download_timeout_seconds = 90
+    spider.scraper_priority_retry_times = 3
+    spider.scraper_priority_download_timeout_seconds = 90
+    spider.scraper_priority_retry_times = 3
 
     async def _collect():
         reqs = []
@@ -291,6 +312,11 @@ def test_start_sets_high_priority_for_whitelist_seed(monkeypatch, tmp_path):
     spider.whitelist_roots = {normalize_url_for_compare("https://latindancecanada.com/")}
     spider.attempted_whitelist_roots = set()
     spider.calendar_urls_set = set()
+    spider.domain_failure_events = defaultdict(deque)
+    spider.domain_cooldown_until = {}
+    spider.domain_cooldown_skip_count = 0
+    spider.scraper_priority_download_timeout_seconds = 90
+    spider.scraper_priority_retry_times = 3
 
     async def _collect():
         reqs = []

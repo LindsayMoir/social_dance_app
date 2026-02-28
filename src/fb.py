@@ -416,6 +416,14 @@ class FacebookEventScraper():
         self.fb_post_nav_wait_ms = int(crawling_cfg.get("fb_post_nav_wait_ms", 1800) or 1800)
         self.fb_post_expand_wait_ms = int(crawling_cfg.get("fb_post_expand_wait_ms", 900) or 900)
         self.fb_final_wait_ms = int(crawling_cfg.get("fb_final_wait_ms", 700) or 700)
+        self.fb_inter_request_wait_min_ms = int(
+            crawling_cfg.get("fb_inter_request_wait_min_ms", 5000) or 5000
+        )
+        self.fb_inter_request_wait_max_ms = int(
+            crawling_cfg.get("fb_inter_request_wait_max_ms", 15000) or 15000
+        )
+        self.fb_randomize_base_url_order = bool(crawling_cfg.get("fb_randomize_base_url_order", True))
+        self.fb_randomize_event_link_order = bool(crawling_cfg.get("fb_randomize_event_link_order", True))
         self.fb_block_failures_before_cooldown = int(
             crawling_cfg.get("fb_block_failures_before_cooldown", 2) or 2
         )
@@ -657,6 +665,24 @@ class FacebookEventScraper():
             )
         except Exception as e:
             logging.warning("fb adaptive backoff: failed persisting state: %s", e)
+
+    def _wait_between_requests(self, context: str) -> None:
+        """
+        Add human-like jitter between successful URL visits to reduce bursty request patterns.
+        """
+        delay_min = max(0, int(self.fb_inter_request_wait_min_ms or 0))
+        delay_max = max(delay_min, int(self.fb_inter_request_wait_max_ms or 0))
+        if delay_max <= 0:
+            return
+        delay_ms = random.randint(delay_min, delay_max)
+        logging.info("fb pacing: waiting %dms before %s", delay_ms, context)
+        try:
+            if self.logged_in_page:
+                self.logged_in_page.wait_for_timeout(delay_ms)
+                return
+        except Exception:
+            pass
+        time.sleep(delay_ms / 1000.0)
 
 
     def _safe_shutdown_browser(self) -> None:
@@ -1172,15 +1198,25 @@ class FacebookEventScraper():
         base_url = self.config['constants']['fb_base_url']
         location_id = self.config['constants']['fb_location_id']
         events_processed = 0
+        search_url = ""
+        keyword_list = [kw.strip() for kw in keywords if isinstance(kw, str) and kw.strip()]
+        if self.fb_randomize_base_url_order and len(keyword_list) > 1:
+            random.shuffle(keyword_list)
+            logging.info("scrape_events: randomized keyword search order for %d keywords.", len(keyword_list))
 
-        for keyword in keywords:
+        for keyword in keyword_list:
             search_url = f"{base_url}{keyword}{location_id}"
+            self._wait_between_requests("search_keyword")
             event_links = self.extract_event_links(search_url)
             logging.info(f"def scrape_events: Used {search_url} to get {len(event_links)} event_links\n")
 
             self.total_url_attempts += len(event_links)  # Update total URL attempts
+            event_links_iter = list(event_links)
+            if self.fb_randomize_event_link_order and len(event_links_iter) > 1:
+                random.shuffle(event_links_iter)
+                logging.info("scrape_events: randomized event link order for %s.", search_url)
 
-            for link in event_links:
+            for link in event_links_iter:
                 if link in self.urls_visited:
                     continue  # Skip already visited URLs
                 else:
@@ -1194,6 +1230,7 @@ class FacebookEventScraper():
                         logging.info("def scrape_events(): Reached the URL visit limit. Stopping the scraping process.")
                         return search_url, events_processed
 
+                    self._wait_between_requests("search_event_link")
                     extracted_text = self.extract_event_text(link)
                     if extracted_text:
                         relevant_text = self.extract_relevant_text(extracted_text, link)
@@ -1482,6 +1519,12 @@ class FacebookEventScraper():
         # 3) Iterate each base Facebook URL
         if fb_urls_df.shape[0] > 0:
             processed_base_urls = set()
+            if self.fb_randomize_base_url_order:
+                fb_urls_df = fb_urls_df.sample(frac=1).reset_index(drop=True)
+                logging.info(
+                    "def driver_fb_urls(): Randomized base URL processing order for %d rows.",
+                    len(fb_urls_df),
+                )
             for idx, row in fb_urls_df.iterrows():
                 raw_base_url = row['link']
                 base_url = self.normalize_facebook_url(raw_base_url)
@@ -1489,6 +1532,9 @@ class FacebookEventScraper():
                 source = row['source']
                 keywords = row['keywords']
                 logging.info(f"def driver_fb_urls(): Processing base URL: {base_url}")
+
+                if idx > 0:
+                    self._wait_between_requests("base_url")
 
                 if is_facebook_login_redirect(raw_base_url):
                     logging.info(
@@ -1543,7 +1589,11 @@ class FacebookEventScraper():
                     break
 
                 # 4) Now scrape *all* event links by auto-navigating to /events/
-                fb_event_links = sorted(self.extract_event_links(base_url))
+                fb_event_links = list(self.extract_event_links(base_url))
+                if self.fb_randomize_event_link_order:
+                    random.shuffle(fb_event_links)
+                else:
+                    fb_event_links = sorted(fb_event_links)
                 if self.fb_event_links_per_base_limit > 0 and len(fb_event_links) > self.fb_event_links_per_base_limit:
                     logging.info(
                         "def driver_fb_urls(): Limiting discovered event links for %s from %d to %d.",
@@ -1556,8 +1606,11 @@ class FacebookEventScraper():
                     logging.info(f"driver_fb_urls(): No events tab or no events found on {base_url}")
 
                 # 5) Process each event link
-                for event_url in fb_event_links:
+                for event_idx, event_url in enumerate(fb_event_links):
                     event_url = self.normalize_facebook_url(event_url)
+
+                    if event_idx > 0:
+                        self._wait_between_requests("event_link")
 
                     if is_non_content_facebook_url(event_url):
                         logging.info(

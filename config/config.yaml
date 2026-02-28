@@ -14,17 +14,21 @@ constants:
   fb_location_id: '&filters=eyJycF9ldmVudHNfbG9jYXRpb246MCI6IntcIm5hbWVcIjpcImZpbHRlcl9ldmVudHNfbG9jYXRpb25cIixcImFyZ3NcIjpcIjEwMzEzNTg3OTcyNzM4MlwifSJ9'
 crawling:
   depth_limit: 2
-  fb_base_urls_limit: 180
-  fb_block_cooldown_base_seconds: 300
-  fb_block_cooldown_max_seconds: 1800
-  fb_block_failures_before_cooldown: 2
+  fb_base_urls_limit: 5
+  fb_block_cooldown_base_seconds: 1200
+  fb_block_cooldown_max_seconds: 7200
+  fb_block_failures_before_cooldown: 1
   fb_block_state_max_scopes: 800
   fb_block_state_ttl_days: 45
-  fb_event_links_per_base_limit: 20
-  fb_final_wait_ms: 700
-  fb_post_expand_wait_ms: 900
-  fb_post_nav_wait_ms: 1800
-  headless: true
+  fb_event_links_per_base_limit: 5
+  fb_final_wait_ms: 1500
+  fb_inter_request_wait_max_ms: 15000
+  fb_inter_request_wait_min_ms: 5000
+  fb_post_expand_wait_ms: 1800
+  fb_post_nav_wait_ms: 3500
+  fb_randomize_base_url_order: true
+  fb_randomize_event_link_order: true
+  headless: false
   max_attempts: 3
   max_crawl_trys: 3
   max_website_urls: 10

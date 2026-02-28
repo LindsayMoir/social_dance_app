@@ -87,6 +87,19 @@ def normalize_http_links(base_url: str, raw_links: list[str], limit: int | None 
     return normalized
 
 
+def is_facebook_url(url: str) -> bool:
+    """
+    Return True when URL host belongs to Facebook.
+
+    scraper.py must not crawl Facebook directly; fb.py owns Facebook crawling.
+    """
+    try:
+        host = (urlparse(url).netloc or "").lower()
+    except Exception:
+        return False
+    return host == "facebook.com" or host.endswith(".facebook.com")
+
+
 def is_calendar_candidate(url: str, calendar_roots: set[str]) -> bool:
     """
     Returns True when URL is a known calendar seed/root or a Google Calendar link.
@@ -451,9 +464,16 @@ class EventSpider(scrapy.Spider):
             except Exception:
                 is_whitelisted = is_whitelisted_seed
 
-            # ✳️ Skip Facebook or Instagram URLs unless whitelisted
-            if ('facebook.com' in url.lower() or 'instagram.com' in url.lower()) and not is_whitelisted:
-                logging.info(f"start(): Skipping social media URL (fb/ig): {url}")
+            # Facebook URLs are owned by fb.py and must never be crawled by scraper.py.
+            if is_facebook_url(url):
+                logging.info("start(): Skipping Facebook URL (owned by fb.py): %s", url)
+                child_row = [url, '', source, [], False, 1, datetime.now()]
+                db_handler.write_url_to_db(child_row)
+                continue
+
+            # Skip Instagram URLs unless whitelisted.
+            if 'instagram.com' in url.lower() and not is_whitelisted:
+                logging.info(f"start(): Skipping social media URL (ig): {url}")
                 child_row = [url, '', source, [], False, 1, datetime.now()]
                 db_handler.write_url_to_db(child_row)
                 continue
@@ -525,7 +545,13 @@ class EventSpider(scrapy.Spider):
                     self.attempted_whitelist_roots.add(root)
                     break
 
-        if any(dom in url for dom in ('facebook', 'instagram')) and not is_whitelisted_origin:
+        if is_facebook_url(url):
+            child_row = [url, '', source, [], False, 1, datetime.now()]
+            db_handler.write_url_to_db(child_row)
+            logging.info("def parse(): Skipping Facebook URL (owned by fb.py): %s", url)
+            return
+
+        if 'instagram' in url.lower() and not is_whitelisted_origin:
             # record it as unwanted and stop processing immediately
             child_row = [url, '', source, [], False, 1, datetime.now()]
             db_handler.write_url_to_db(child_row)
@@ -619,7 +645,13 @@ class EventSpider(scrapy.Spider):
                 wl = db_handler.is_whitelisted_url(link)
             except Exception:
                 wl = False
-            if 'facebook' in low or 'instagram' in low:
+            if is_facebook_url(link):
+                child_row = [link, url, source, found_keywords, False, 1, datetime.now()]
+                db_handler.write_url_to_db(child_row)
+                logging.info("def parse(): Recorded Facebook URL for fb.py ownership: %s", link)
+                continue
+
+            if 'instagram' in low:
                 if wl:
                     logging.info(f"def parse(): Whitelisted social URL kept for crawl: {link}")
                     filtered_links.add(link)
