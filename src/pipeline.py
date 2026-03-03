@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 import yaml
+from email_notifier import send_report_email
 
 # Setup centralized logging (logging_config.py is in the same directory)
 from logging_config import setup_logging
@@ -1305,6 +1306,56 @@ def run_remediation_planner():
         return "Remediation planner encountered error"
 
 
+@task
+def send_remediation_email() -> bool:
+    """
+    Send remediation-phase report email with:
+    - comprehensive_test_report.html
+    - remediation_plan.md
+    """
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            latest_cfg = yaml.safe_load(f) or {}
+        output_dir = (
+            latest_cfg.get("testing", {})
+            .get("validation", {})
+            .get("reporting", {})
+            .get("output_dir", "output")
+        )
+
+        html_report = os.path.join(output_dir, "comprehensive_test_report.html")
+        remediation_md = os.path.join(output_dir, "remediation_plan.md")
+        attachment_paths = [p for p in (html_report, remediation_md) if os.path.exists(p)]
+
+        if not attachment_paths:
+            logger.warning(
+                "send_remediation_email(): No report attachments found in %s; skipping email.",
+                output_dir,
+            )
+            return False
+
+        summary = {
+            "overall_status": "REMEDIATION_PLAN_READY",
+            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+        success = send_report_email(
+            report_summary=summary,
+            attachment_paths=attachment_paths,
+            test_type="Remediation Plan",
+        )
+        if success:
+            logger.info(
+                "send_remediation_email(): Email sent with attachments: %s",
+                ", ".join(os.path.basename(p) for p in attachment_paths),
+            )
+        else:
+            logger.warning("send_remediation_email(): Email send skipped or failed.")
+        return success
+    except Exception as e:
+        logger.error("send_remediation_email(): Unexpected error: %s", e, exc_info=True)
+        return False
+
+
 @flow(name="Remediation Planner Step")
 def remediation_planner_step():
     """
@@ -1320,6 +1371,7 @@ def remediation_planner_step():
 
     planner_result = run_remediation_planner()
     logger.info(f"remediation_planner_step: run_remediation_planner returned: {planner_result}")
+    send_remediation_email()
     logger.info("remediation_planner_step: Step completed")
     return True
 

@@ -269,12 +269,10 @@ class ValidationTestRunner:
         except Exception as e:
             logging.error(f"HTML report generation failed: {e}", exc_info=True)
 
-        # 5. SEND EMAIL NOTIFICATION (if configured)
-        try:
-            self._send_email_notification(results)
-        except Exception as e:
-            logging.error(f"Email notification failed: {e}", exc_info=True)
-            # Don't fail the entire validation if email fails
+        # 5. EMAIL NOTIFICATION
+        # Email delivery is handled by pipeline remediation_planner_step so
+        # attachments can include both remediation_plan.md and the HTML report.
+        logging.info("Validation email notification skipped (handled in remediation_planner_step).")
 
         # Final status
         logging.info("\n" + "=" * 80)
