@@ -47,3 +47,42 @@ def test_chatbot_order_unaffected_by_regular_cadence_setting():
 
     assert order_1 == ["openrouter", "gemini", "openai"]
     assert order_2 == ["openrouter", "gemini", "openai"]
+
+
+def test_fb_step_excludes_mistral_from_regular_rotation(monkeypatch):
+    monkeypatch.setenv("DS_STEP_NAME", "fb")
+    handler = LLMHandler.__new__(LLMHandler)
+    handler.config = {
+        "llm": {
+            "fallback_enabled": True,
+            "fallback_provider_order": ["mistral", "openrouter", "openai", "gemini"],
+            "provider_exclusions_by_step": {"fb": ["mistral"]},
+        }
+    }
+    handler.regular_openai_first_every_n_requests = 0
+    handler.regular_request_counter = 0
+
+    order = handler._candidate_providers_for_request("https://example.com/events", "mistral")
+    assert "mistral" not in order
+    assert order == ["openrouter", "openai", "gemini"]
+
+
+def test_global_provider_exclusion_removes_mistral_everywhere(monkeypatch):
+    monkeypatch.delenv("DS_STEP_NAME", raising=False)
+    handler = LLMHandler.__new__(LLMHandler)
+    handler.config = {
+        "llm": {
+            "fallback_enabled": True,
+            "fallback_provider_order": ["mistral", "openrouter", "openai", "gemini"],
+            "provider_rotation_order": ["mistral", "openrouter", "openai", "gemini"],
+            "provider_exclusions": ["mistral"],
+        }
+    }
+    handler.regular_openai_first_every_n_requests = 0
+    handler.regular_request_counter = 0
+
+    candidates = handler._candidate_providers_for_request("https://example.com/events", "mistral")
+    rotation = handler._provider_rotation_order()
+
+    assert "mistral" not in candidates
+    assert "mistral" not in rotation

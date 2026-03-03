@@ -691,7 +691,8 @@ class LLMHandler:
         else:
             order = ["openai", "gemini", "mistral"]
         valid = {"openai", "mistral", "gemini", "openrouter"}
-        return [provider for provider in order if provider in valid]
+        exclusions = self._step_provider_exclusions()
+        return [provider for provider in order if provider in valid and provider not in exclusions]
 
     def _provider_rotation_order(self, for_tools: bool = False) -> list[str]:
         """
@@ -705,8 +706,45 @@ class LLMHandler:
             order = ["openrouter", "openai", "mistral", "gemini"]
 
         valid = {"openai", "mistral", "gemini", "openrouter"}
-        filtered = [provider for provider in order if provider in valid]
-        return filtered or ["openrouter", "openai", "mistral", "gemini"]
+        exclusions = self._step_provider_exclusions()
+        filtered = [provider for provider in order if provider in valid and provider not in exclusions]
+        default_order = ["openrouter", "openai", "mistral", "gemini"]
+        fallback_filtered = [provider for provider in default_order if provider not in exclusions]
+        return filtered or fallback_filtered or ["openai"]
+
+    def _step_provider_exclusions(self) -> set[str]:
+        """
+        Return providers excluded for the current pipeline step.
+        Uses llm.provider_exclusions globally plus llm.provider_exclusions_by_step.
+        """
+        llm_cfg = self.config.get("llm", {})
+        step_name = str(os.getenv("DS_STEP_NAME", "")).strip().lower()
+        exclusions: set[str] = set()
+
+        global_exclusions = llm_cfg.get("provider_exclusions", [])
+        if isinstance(global_exclusions, list):
+            exclusions.update(
+                str(item).strip().lower()
+                for item in global_exclusions
+                if str(item).strip()
+            )
+
+        configured = llm_cfg.get("provider_exclusions_by_step", {})
+        if isinstance(configured, dict) and step_name:
+            raw_step = configured.get(step_name, [])
+            if isinstance(raw_step, list):
+                exclusions.update(
+                    str(item).strip().lower()
+                    for item in raw_step
+                    if str(item).strip()
+                )
+
+        # Default safety policy: keep mistral out of fb step unless explicitly overridden.
+        if step_name == "fb" and "mistral" not in exclusions:
+            exclusions.add("mistral")
+
+        valid = {"openai", "mistral", "gemini", "openrouter"}
+        return {provider for provider in exclusions if provider in valid}
 
     @staticmethod
     def _is_chatbot_request(url: str) -> bool:
@@ -726,7 +764,8 @@ class LLMHandler:
         else:
             order = ["openai", "openrouter", "gemini"]
         valid = {"openai", "mistral", "gemini", "openrouter"}
-        filtered = [provider for provider in order if provider in valid]
+        exclusions = self._step_provider_exclusions()
+        filtered = [provider for provider in order if provider in valid and provider not in exclusions]
         return filtered or ["openai", "openrouter", "gemini"]
 
     def _candidate_providers_for_request(self, url: str, primary_provider: str) -> list[str]:
@@ -740,6 +779,9 @@ class LLMHandler:
             for fallback_provider in self._fallback_provider_order():
                 if fallback_provider not in candidates:
                     candidates.append(fallback_provider)
+        exclusions = self._step_provider_exclusions()
+        if exclusions:
+            candidates = [provider for provider in candidates if provider not in exclusions]
 
         cadence = max(0, int(getattr(self, "regular_openai_first_every_n_requests", 0) or 0))
         if cadence > 0 and "openai" in candidates:
@@ -747,7 +789,7 @@ class LLMHandler:
             if self.regular_request_counter % cadence == 0:
                 candidates = ["openai"] + [p for p in candidates if p != "openai"]
 
-        return candidates
+        return candidates or ["openai"]
 
     def _next_round_robin_provider(self, for_tools: bool = False) -> str:
         """
@@ -790,6 +832,11 @@ class LLMHandler:
         use_rotation = self.provider_rotation_enabled or configured == "round_robin"
         if use_rotation:
             return self._next_round_robin_provider(for_tools=for_tools)
+        if configured in self._step_provider_exclusions():
+            fallback = self._provider_rotation_order(for_tools=for_tools)
+            if fallback:
+                return fallback[0]
+            return "openai"
         return configured
 
     def _provider_model_candidates(self, provider: str) -> list[str]:

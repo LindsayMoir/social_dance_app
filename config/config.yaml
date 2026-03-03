@@ -85,7 +85,6 @@ llm:
   - gemini
   fallback_enabled: true
   fallback_provider_order:
-  - mistral
   - openrouter
   - openai
   - gemini
@@ -141,18 +140,22 @@ llm:
   openrouter_model_rotation_enabled: false
   openrouter_rate_limit_max_strikes: 2
   openrouter_timeout_seconds: 60
-  provider: mistral
+  provider: openrouter
+  provider_exclusions:
+  - mistral
+  provider_exclusions_by_step:
+    fb:
+    - mistral
   provider_retry_base_delay_seconds: 0.5
   provider_retry_jitter_seconds: 0.3
   provider_retry_max_attempts: 2
   provider_retry_max_delay_seconds: 4.0
   provider_rotation_enabled: false
   provider_rotation_order:
-  - mistral
   - openrouter
   - openai
   - gemini
-  regular_openai_first_every_n_requests: 3
+  regular_openai_first_every_n_requests: 2
   self_healing_enabled: true
   spend_money: true
 location:

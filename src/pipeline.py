@@ -96,11 +96,13 @@ COMMON_CONFIG_UPDATES = {
          "urls_run_limit": 500,  # default for all steps
     },
     "llm": {
-        "provider": "mistral",
+        "provider": "openrouter",
         "provider_rotation_enabled": False,
-        "provider_rotation_order": ["mistral", "openrouter", "openai", "gemini"],
+        "provider_rotation_order": ["openrouter", "openai", "gemini"],
         "fallback_enabled": True,
-        "fallback_provider_order": ["mistral", "openrouter", "openai", "gemini"],
+        "fallback_provider_order": ["openrouter", "openai", "gemini"],
+        "provider_exclusions": ["mistral"],
+        "regular_openai_first_every_n_requests": 2,
         "spend_money": True,
     }
 }

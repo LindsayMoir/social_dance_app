@@ -1172,23 +1172,6 @@ def main():
         'timestamp': results['timestamp']
     }
     attachments = [html_path] if os.path.exists(html_path) else []
-    remediation_md = os.path.join(output_dir, 'remediation_plan.md')
-    remediation_json = os.path.join(output_dir, 'remediation_plan.json')
-    if not (os.path.exists(remediation_md) and os.path.exists(remediation_json)):
-        try:
-            subprocess.run(
-                [sys.executable, "tests/validation/remediation_planner.py"],
-                capture_output=True,
-                text=True,
-                timeout=300,
-                check=False,
-            )
-        except Exception as e:
-            logging.warning("Could not generate remediation plan before email: %s", e)
-    if os.path.exists(remediation_md):
-        attachments.append(remediation_md)
-    if os.path.exists(remediation_json):
-        attachments.append(remediation_json)
     ok = send_report_email(report_summary=summary, attachment_paths=attachments, test_type='Chatbot Report')
     if ok:
         logging.info("Email sent successfully with attachment: %s", html_path)

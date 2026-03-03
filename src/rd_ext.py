@@ -40,6 +40,24 @@ from secret_paths import get_auth_file
 # Module-level handler that will be initialized when needed
 db_handler = None
 
+
+def is_social_media_url(url: str) -> bool:
+    """
+    Return True for Facebook/Instagram URLs that rd_ext must never crawl.
+    """
+    if not url:
+        return False
+    try:
+        host = (urlparse(str(url)).netloc or "").lower()
+    except Exception:
+        host = str(url).lower()
+    return (
+        "facebook.com" in host
+        or host.endswith(".fb.com")
+        or host == "fb.com"
+        or "instagram.com" in host
+    )
+
 def get_db_handler():
     """Get or create the global db_handler instance."""
     global db_handler
@@ -335,6 +353,9 @@ class ReadExtract:
         Determines if the URL belongs to Facebook, Google, allevents, or Eventbrite.
         If so, calls the corresponding login method. Otherwise, returns True (no login needed).
         """
+        if is_social_media_url(url):
+            logging.info("login_if_required(): Skipping social media URL (fb/ig): %s", url)
+            return False
         url_lower = url.lower()
 
         # If it's Facebook
@@ -379,6 +400,9 @@ class ReadExtract:
         """
         Extracts text from an event page with retries and crash recovery.
         """
+        if is_social_media_url(link):
+            logging.info("extract_event_text: Skipping social media URL (fb/ig): %s", link)
+            return None
         # Ensure we're logged in
         if not await self.login_if_required(link):
             logging.error(f"extract_event_text: Login failed for {link}, skipping.")
@@ -474,6 +498,15 @@ class ReadExtract:
         """
         logging.info(f"extract_from_url(): Processing {url} (multiple={multiple})")
 
+        if is_social_media_url(url):
+            logging.info("extract_from_url(): Skipping social media URL (fb/ig): %s", url)
+            try:
+                child_row = [url, '', 'rd_ext_social_skip', [], False, 1, datetime.now()]
+                get_db_handler().write_url_to_db(child_row)
+            except Exception as e:
+                logging.warning("extract_from_url(): Failed recording social URL skip for %s: %s", url, e)
+            return None
+
         # Check urls to see if they should be scraped
         if not get_db_handler().should_process_url(url):
             logging.info(f"extract_from_url(): Skipping URL {url} based on historical relevancy.")
@@ -514,6 +547,18 @@ class ReadExtract:
 
         for link in links:
             if link == url:
+                continue
+            if is_social_media_url(link):
+                logging.info("extract_from_url(): Skipping discovered social media URL (fb/ig): %s", link)
+                try:
+                    child_row = [link, url, 'rd_ext_social_skip', [], False, 1, datetime.now()]
+                    get_db_handler().write_url_to_db(child_row)
+                except Exception as e:
+                    logging.warning(
+                        "extract_from_url(): Failed recording discovered social URL skip for %s: %s",
+                        link,
+                        e,
+                    )
                 continue
 
             # Check urls to see if they should be scraped
@@ -565,6 +610,9 @@ class ReadExtract:
             parsed = urlparse(abs_url)
             # Only HTTP/S
             if parsed.scheme not in ('http', 'https'):
+                continue
+            if is_social_media_url(abs_url):
+                logging.info("extract_links(): Skipping social media URL (fb/ig): %s", abs_url)
                 continue
             # Same domain only
             if parsed.netloc != urlparse(base).netloc:
@@ -631,6 +679,13 @@ class ReadExtract:
                         href = urljoin(calendar_url, href)
 
                     # Check if this looks like an individual event link
+                    if is_social_media_url(href):
+                        logging.info(
+                            "extract_calendar_events(%s): Skipping social media event URL (fb/ig): %s",
+                            venue_name,
+                            href,
+                        )
+                        continue
                     if ('/show/' in href or '/event' in href.lower() or '/events/' in href) and href != calendar_url:
                         unique_urls.add(href)
 
@@ -803,6 +858,10 @@ if __name__ == "__main__":
         for source, keywords, url, multiple in df.itertuples(index=False, name=None):
             multiple_flag = str(multiple).strip().lower() == 'yes'
             logging.info(f"__main__: url={url}, source={source}, keywords={keywords}, multiple={multiple_flag}")
+            if is_social_media_url(url):
+                logging.info("__main__: Skipping social media URL (fb/ig) in edge_cases: %s", url)
+                db_handler.write_url_to_db([url, '', source, [], False, 1, datetime.now()])
+                continue
             extracted = await read_extract.extract_from_url(url, multiple_flag)
 
             # If multiple events were found (i.e. extracted is a dict), process each event separately
