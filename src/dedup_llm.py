@@ -1591,6 +1591,91 @@ Respond with ONLY valid JSON in this exact format:
             logging.error(f"analyze_conflict_with_llm(): Failed to analyze conflict: {e}")
             return None
 
+    @staticmethod
+    def _coerce_event_id(value: Any) -> Optional[int]:
+        """
+        Coerce an event id-like value to int, returning None when invalid.
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            if pd.isna(value):
+                return None
+            if float(value).is_integer():
+                return int(value)
+            return None
+        value_str = str(value).strip()
+        if not value_str:
+            return None
+        if re.fullmatch(r"-?\d+", value_str):
+            return int(value_str)
+        return None
+
+    def _normalize_conflict_decision(
+        self,
+        decision: Dict[str, Any],
+        conflict_row: pd.Series,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate and normalize LLM decision payload for venue/time conflict resolution.
+        """
+        if not isinstance(decision, dict):
+            return None
+
+        event_id_1 = self._coerce_event_id(conflict_row.get("event_id_1"))
+        event_id_2 = self._coerce_event_id(conflict_row.get("event_id_2"))
+        if event_id_1 is None or event_id_2 is None:
+            logging.warning(
+                "_normalize_conflict_decision(): Invalid conflict row event IDs: %s / %s",
+                conflict_row.get("event_id_1"),
+                conflict_row.get("event_id_2"),
+            )
+            return None
+
+        valid_ids = {event_id_1, event_id_2}
+        correct_id = self._coerce_event_id(decision.get("correct_event_id"))
+        incorrect_id = self._coerce_event_id(decision.get("incorrect_event_id"))
+
+        if correct_id is None and incorrect_id is not None:
+            if incorrect_id == event_id_1:
+                correct_id = event_id_2
+            elif incorrect_id == event_id_2:
+                correct_id = event_id_1
+
+        if incorrect_id is None and correct_id is not None:
+            if correct_id == event_id_1:
+                incorrect_id = event_id_2
+            elif correct_id == event_id_2:
+                incorrect_id = event_id_1
+
+        if correct_id not in valid_ids or incorrect_id not in valid_ids:
+            logging.warning(
+                "_normalize_conflict_decision(): Decision event IDs not in conflict pair. "
+                "correct=%s incorrect=%s valid=%s",
+                correct_id,
+                incorrect_id,
+                sorted(valid_ids),
+            )
+            return None
+
+        if correct_id == incorrect_id:
+            logging.warning(
+                "_normalize_conflict_decision(): Decision selected same event for keep/delete: %s",
+                correct_id,
+            )
+            return None
+
+        return {
+            "correct_event_id": correct_id,
+            "incorrect_event_id": incorrect_id,
+            "confidence": str(decision.get("confidence", "")).strip().lower() or "unknown",
+            "reasoning": str(decision.get("reasoning", "")).strip(),
+        }
+
 
     def resolve_venue_time_conflicts(self, dry_run: bool = True) -> int:
         """
@@ -1629,6 +1714,10 @@ Respond with ONLY valid JSON in this exact format:
 
             if decision is None:
                 logging.warning(f"  Skipping conflict - LLM analysis failed")
+                continue
+            decision = self._normalize_conflict_decision(decision, row)
+            if decision is None:
+                logging.warning("  Skipping conflict - LLM decision payload invalid")
                 continue
 
             # Record decision for audit trail (saved to CSV regardless of dry_run)

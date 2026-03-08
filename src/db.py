@@ -1785,6 +1785,13 @@ class DatabaseHandler():
             self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
             return
 
+        # Final type guard before insert to keep address_id nullable-int and text fields scalar.
+        df = self._sanitize_events_dataframe_for_insert(df)
+        if df.empty:
+            logging.info("write_events_to_db: No events remain after type sanitization, skipping write.")
+            self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
+            return
+
         # Write debug CSV (only locally, not on Render)
         if os.getenv('RENDER') != 'true':
             os.makedirs('output', exist_ok=True)
@@ -2223,8 +2230,8 @@ class DatabaseHandler():
                 return event
             else:
                 logging.error("process_event_address: Failed to create minimal address entry, setting default values")
-                # Final fallback - set reasonable defaults instead of None
-                event["address_id"] = 0
+                # Keep nullable semantics for unresolved addresses (avoid pseudo-id 0).
+                event["address_id"] = None
                 event["location"] = f"Location unavailable - {source}"
                 return event
 
@@ -2343,6 +2350,73 @@ class DatabaseHandler():
             event["location"] = full_address
 
         return event
+
+    @staticmethod
+    def _coerce_optional_int(value: Any) -> Optional[int]:
+        """Coerce value to int when valid, else return None."""
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value > 0 else None
+        if isinstance(value, float):
+            if pd.isna(value):
+                return None
+            if float(value).is_integer():
+                int_value = int(value)
+                return int_value if int_value > 0 else None
+            return None
+        value_str = str(value).strip()
+        if not value_str:
+            return None
+        if re.fullmatch(r"\d+", value_str):
+            int_value = int(value_str)
+            return int_value if int_value > 0 else None
+        return None
+
+    def _sanitize_events_dataframe_for_insert(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normalize event payload types before INSERT.
+
+        - Keep only known event table columns.
+        - Coerce address_id to nullable positive integer.
+        - Force text columns to plain strings where values are non-null.
+        """
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        expected_columns = [
+            "event_name", "dance_style", "description", "day_of_week",
+            "start_date", "end_date", "start_time", "end_time", "source",
+            "location", "price", "url", "event_type", "address_id", "time_stamp",
+        ]
+        working_df = df.copy()
+
+        for col in expected_columns:
+            if col not in working_df.columns:
+                working_df[col] = pd.NA
+        working_df = working_df[expected_columns]
+
+        working_df["address_id"] = working_df["address_id"].apply(self._coerce_optional_int)
+
+        text_columns = [
+            "event_name", "dance_style", "description", "day_of_week",
+            "source", "location", "price", "url", "event_type",
+        ]
+        for col in text_columns:
+            working_df[col] = working_df[col].apply(
+                lambda value: None if pd.isna(value) else str(value)
+            )
+
+        invalid_addr_count = int(working_df["address_id"].isna().sum())
+        if invalid_addr_count:
+            logging.info(
+                "_sanitize_events_dataframe_for_insert: Normalized %d events to NULL address_id.",
+                invalid_addr_count,
+            )
+
+        return working_df
 
 
     def find_address_by_building_name(self, building_name: str, threshold: int = 75) -> Optional[int]:
