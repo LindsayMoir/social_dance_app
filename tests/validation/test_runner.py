@@ -1280,15 +1280,7 @@ class ValidationTestRunner:
         }
 
     def _summarize_chatbot_performance(self, report_timestamp: str | None) -> dict:
-        """Summarize chatbot request performance from timing logs emitted by main.py."""
-        log_paths = ["logs/main_log.txt", "logs/app_log.txt"]
-        existing_paths = [p for p in log_paths if os.path.exists(p)]
-        if not existing_paths:
-            return {
-                "error": "chatbot performance logs not found",
-                "paths": log_paths,
-            }
-
+        """Summarize chatbot request performance from DB metrics (preferred) or timing logs."""
         reporting_cfg = self.validation_config.get("reporting", {}) if isinstance(self.validation_config, dict) else {}
         perf_cfg = reporting_cfg.get("chatbot_performance_thresholds", {}) if isinstance(reporting_cfg, dict) else {}
 
@@ -1335,6 +1327,179 @@ class ValidationTestRunner:
             idx = int(round((percentile / 100.0) * (len(scoped) - 1)))
             idx = max(0, min(len(scoped) - 1, idx))
             return float(scoped[idx])
+
+        def _compute_status(query_latencies: list[float], unresolved_count: int) -> tuple[str, list[str], float, float, float, int, int]:
+            query_p95_local = _percentile(query_latencies, 95) if query_latencies else 0.0
+            slow_query_ms_local = float(perf_cfg.get("slow_query_ms", 15000) or 15000)
+            warn_query_p95_ms_local = float(perf_cfg.get("warn_query_p95_ms", 10000) or 10000)
+            critical_query_p95_ms_local = float(perf_cfg.get("critical_query_p95_ms", 20000) or 20000)
+            warn_unresolved_count_local = int(perf_cfg.get("warn_unresolved_count", 1) or 1)
+            critical_unresolved_count_local = int(perf_cfg.get("critical_unresolved_count", 3) or 3)
+            status_local = "HEALTHY"
+            reasons_local: list[str] = []
+            if query_p95_local >= critical_query_p95_ms_local or unresolved_count >= critical_unresolved_count_local:
+                status_local = "DEGRADED"
+            elif query_p95_local >= warn_query_p95_ms_local or unresolved_count >= warn_unresolved_count_local:
+                status_local = "WATCH"
+            if query_p95_local >= warn_query_p95_ms_local:
+                reasons_local.append(f"query p95 latency high ({query_p95_local:.1f}ms)")
+            if unresolved_count > 0:
+                reasons_local.append(f"unfinished requests ({unresolved_count})")
+            return (
+                status_local,
+                reasons_local,
+                slow_query_ms_local,
+                warn_query_p95_ms_local,
+                critical_query_p95_ms_local,
+                warn_unresolved_count_local,
+                critical_unresolved_count_local,
+            )
+
+        # Prefer DB-backed metrics for durable, longitudinal reporting.
+        try:
+            requests_rows = self.db_handler.execute_query(
+                """
+                SELECT request_id, endpoint, duration_ms, result_type, user_input, sql_snippet, started_at, finished_at
+                FROM chatbot_request_metrics
+                WHERE started_at >= :start_ts AND started_at <= :end_ts
+                ORDER BY started_at DESC
+                """,
+                {"start_ts": start_ts, "end_ts": end_ts},
+            ) or []
+            stages_rows = self.db_handler.execute_query(
+                """
+                SELECT request_id, endpoint, stage, duration_ms, started_at, finished_at
+                FROM chatbot_stage_metrics
+                WHERE started_at >= :start_ts AND started_at <= :end_ts
+                ORDER BY started_at DESC
+                """,
+                {"start_ts": start_ts, "end_ts": end_ts},
+            ) or []
+            if requests_rows or stages_rows:
+                query_entries: list[dict] = []
+                confirm_entries: list[dict] = []
+                unresolved_ids: list[str] = []
+                stage_durations: dict[str, list[float]] = {}
+                for row in requests_rows:
+                    req_id, endpoint, duration_ms, result_type, question, sql_snippet, started_at_row, finished_at_row = row
+                    if duration_ms is None or finished_at_row is None:
+                        unresolved_ids.append(str(req_id))
+                        continue
+                    entry = {
+                        "request_id": str(req_id),
+                        "endpoint": str(endpoint or ""),
+                        "duration_ms": round(float(duration_ms or 0.0), 1),
+                        "result_type": str(result_type or ""),
+                        "question": str(question or ""),
+                        "sql": str(sql_snippet or ""),
+                    }
+                    if str(endpoint) == "/query":
+                        query_entries.append(entry)
+                    elif str(endpoint) == "/confirm":
+                        confirm_entries.append(entry)
+
+                for row in stages_rows:
+                    _, _, stage, duration_ms, _, _ = row
+                    if stage is None or duration_ms is None:
+                        continue
+                    stage_durations.setdefault(str(stage), []).append(float(duration_ms))
+
+                query_latencies = [float(e.get("duration_ms", 0.0) or 0.0) for e in query_entries]
+                confirm_latencies = [float(e.get("duration_ms", 0.0) or 0.0) for e in confirm_entries]
+                query_avg = (sum(query_latencies) / len(query_latencies)) if query_latencies else 0.0
+                confirm_avg = (sum(confirm_latencies) / len(confirm_latencies)) if confirm_latencies else 0.0
+
+                (
+                    status,
+                    reasons,
+                    slow_query_ms,
+                    warn_query_p95_ms,
+                    critical_query_p95_ms,
+                    warn_unresolved_count,
+                    critical_unresolved_count,
+                ) = _compute_status(query_latencies, len(unresolved_ids))
+                query_p95 = _percentile(query_latencies, 95) if query_latencies else 0.0
+
+                slow_entries = sorted(
+                    [
+                        e for e in (query_entries + confirm_entries)
+                        if float(e.get("duration_ms", 0.0) or 0.0) >= slow_query_ms
+                    ],
+                    key=lambda x: float(x.get("duration_ms", 0.0) or 0.0),
+                    reverse=True,
+                )[:20]
+
+                stage_summary: list[dict] = []
+                for stage, values in stage_durations.items():
+                    if not values:
+                        continue
+                    avg_val = sum(values) / len(values)
+                    stage_summary.append({
+                        "stage": stage,
+                        "count": len(values),
+                        "avg_ms": round(avg_val, 1),
+                        "p95_ms": round(_percentile(values, 95), 1),
+                        "max_ms": round(max(values), 1),
+                    })
+                stage_summary = sorted(
+                    stage_summary,
+                    key=lambda x: float(x.get("p95_ms", 0.0) or 0.0),
+                    reverse=True,
+                )[:15]
+
+                traced_question_count = sum(1 for e in slow_entries if e.get("question"))
+                traced_sql_count = sum(1 for e in slow_entries if e.get("sql"))
+                return {
+                    "source": "db",
+                    "paths": ["chatbot_request_metrics", "chatbot_stage_metrics"],
+                    "window_hours": hours_window,
+                    "start_ts": start_ts.isoformat(sep=" "),
+                    "end_ts": end_ts.isoformat(sep=" "),
+                    "scanned_lines": 0,
+                    "query_request_count": len(query_entries),
+                    "confirm_request_count": len(confirm_entries),
+                    "query_latency_ms": {
+                        "avg": round(query_avg, 1),
+                        "p50": round(_percentile(query_latencies, 50), 1) if query_latencies else 0.0,
+                        "p95": round(query_p95, 1),
+                        "max": round(max(query_latencies), 1) if query_latencies else 0.0,
+                    },
+                    "confirm_latency_ms": {
+                        "avg": round(confirm_avg, 1),
+                        "p50": round(_percentile(confirm_latencies, 50), 1) if confirm_latencies else 0.0,
+                        "p95": round(_percentile(confirm_latencies, 95), 1) if confirm_latencies else 0.0,
+                        "max": round(max(confirm_latencies), 1) if confirm_latencies else 0.0,
+                    },
+                    "unfinished_request_count": len(unresolved_ids),
+                    "unfinished_request_ids": sorted(unresolved_ids)[:25],
+                    "slow_request_threshold_ms": slow_query_ms,
+                    "slow_requests": slow_entries,
+                    "slow_request_trace_coverage": {
+                        "question_count": traced_question_count,
+                        "sql_count": traced_sql_count,
+                        "slow_request_count": len(slow_entries),
+                    },
+                    "stage_latency_summary": stage_summary,
+                    "status": status,
+                    "status_reasons": reasons,
+                    "thresholds": {
+                        "warn_query_p95_ms": warn_query_p95_ms,
+                        "critical_query_p95_ms": critical_query_p95_ms,
+                        "warn_unresolved_count": warn_unresolved_count,
+                        "critical_unresolved_count": critical_unresolved_count,
+                        "slow_query_ms": slow_query_ms,
+                    },
+                }
+        except Exception as e:
+            logging.warning("_summarize_chatbot_performance: DB query path unavailable, falling back to logs: %s", e)
+
+        log_paths = ["logs/main_log.txt", "logs/app_log.txt"]
+        existing_paths = [p for p in log_paths if os.path.exists(p)]
+        if not existing_paths:
+            return {
+                "error": "chatbot performance metrics unavailable in DB and logs",
+                "paths": log_paths,
+            }
 
         request_total_starts: set[str] = set()
         request_total_ends: set[str] = set()
@@ -1464,6 +1629,7 @@ class ValidationTestRunner:
         traced_sql_count = sum(1 for e in slow_entries if e.get("sql"))
 
         return {
+            "source": "logs",
             "paths": existing_paths,
             "window_hours": hours_window,
             "start_ts": start_ts.isoformat(sep=" "),
@@ -3775,6 +3941,10 @@ class ValidationTestRunner:
             f"{self._escape_html(str(perf_data.get('start_ts', '')))} to "
             f"{self._escape_html(str(perf_data.get('end_ts', '')))} "
             f"(last {int(perf_data.get('window_hours', 24) or 24)} hour(s))</p>"
+        )
+        html += (
+            "<p><strong>Data Source:</strong> "
+            f"{self._escape_html(str(perf_data.get('source', 'logs')))}</p>"
         )
         html += (
             "<p><strong>Latency Formula:</strong> "

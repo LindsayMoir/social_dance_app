@@ -14,7 +14,8 @@ import sys
 import logging
 import yaml
 import uuid
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 from time import perf_counter
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
@@ -85,6 +86,185 @@ logging.info("main.py: SQLAlchemy engine created.")
 SLOW_CHATBOT_RESPONSE_SECONDS = 20.0
 
 
+def _ensure_chatbot_metrics_tables() -> None:
+    """Create chatbot performance metric tables if they do not exist."""
+    create_requests = """
+    CREATE TABLE IF NOT EXISTS chatbot_request_metrics (
+        id SERIAL PRIMARY KEY,
+        request_id TEXT UNIQUE NOT NULL,
+        endpoint TEXT NOT NULL,
+        session_suffix TEXT,
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP,
+        duration_ms DOUBLE PRECISION,
+        result_type TEXT,
+        user_input TEXT,
+        sql_snippet TEXT,
+        has_response BOOLEAN,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+    create_stages = """
+    CREATE TABLE IF NOT EXISTS chatbot_stage_metrics (
+        id SERIAL PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        endpoint TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP,
+        duration_ms DOUBLE PRECISION,
+        metadata_json TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+    create_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_started_at ON chatbot_request_metrics(started_at);",
+        "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_endpoint ON chatbot_request_metrics(endpoint);",
+        "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_started_at ON chatbot_stage_metrics(started_at);",
+        "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_stage ON chatbot_stage_metrics(stage);",
+        "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_request_id ON chatbot_stage_metrics(request_id);",
+    ]
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(create_requests))
+            conn.execute(text(create_stages))
+            for idx_sql in create_indexes:
+                conn.execute(text(idx_sql))
+        logging.info("chatbot_metrics_db: ensured chatbot performance metric tables exist")
+    except Exception as e:
+        logging.warning("chatbot_metrics_db: failed to ensure metric tables: %s", e)
+
+
+def _persist_request_start(request_id: str, endpoint: str, session_suffix: str | None) -> None:
+    """Persist request start marker for duration tracking across process restarts."""
+    sql = """
+    INSERT INTO chatbot_request_metrics (request_id, endpoint, session_suffix, started_at, updated_at)
+    VALUES (:request_id, :endpoint, :session_suffix, :started_at, :updated_at)
+    ON CONFLICT (request_id)
+    DO UPDATE SET
+      endpoint = EXCLUDED.endpoint,
+      session_suffix = COALESCE(EXCLUDED.session_suffix, chatbot_request_metrics.session_suffix),
+      started_at = COALESCE(chatbot_request_metrics.started_at, EXCLUDED.started_at),
+      updated_at = EXCLUDED.updated_at;
+    """
+    now_ts = datetime.now()
+    params = {
+        "request_id": request_id,
+        "endpoint": endpoint,
+        "session_suffix": session_suffix,
+        "started_at": now_ts,
+        "updated_at": now_ts,
+    }
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(sql), params)
+    except Exception as e:
+        logging.warning("chatbot_metrics_db: failed to persist request start (%s): %s", request_id, e)
+
+
+def _persist_request_end(request_id: str, endpoint: str, duration_ms: float, result_type: str | None) -> None:
+    """Persist request completion metrics."""
+    sql = """
+    INSERT INTO chatbot_request_metrics (request_id, endpoint, finished_at, duration_ms, result_type, updated_at)
+    VALUES (:request_id, :endpoint, :finished_at, :duration_ms, :result_type, :updated_at)
+    ON CONFLICT (request_id)
+    DO UPDATE SET
+      endpoint = EXCLUDED.endpoint,
+      finished_at = EXCLUDED.finished_at,
+      duration_ms = EXCLUDED.duration_ms,
+      result_type = EXCLUDED.result_type,
+      updated_at = EXCLUDED.updated_at;
+    """
+    now_ts = datetime.now()
+    params = {
+        "request_id": request_id,
+        "endpoint": endpoint,
+        "finished_at": now_ts,
+        "duration_ms": float(duration_ms),
+        "result_type": result_type,
+        "updated_at": now_ts,
+    }
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(sql), params)
+    except Exception as e:
+        logging.warning("chatbot_metrics_db: failed to persist request end (%s): %s", request_id, e)
+
+
+def _persist_stage_metric(
+    request_id: str,
+    endpoint: str,
+    stage: str,
+    duration_ms: float,
+    fields: dict,
+) -> None:
+    """Persist stage-level timing events for hotspot analysis."""
+    finished_at = datetime.now()
+    started_at = finished_at - timedelta(milliseconds=float(duration_ms))
+    sql = """
+    INSERT INTO chatbot_stage_metrics (request_id, endpoint, stage, started_at, finished_at, duration_ms, metadata_json)
+    VALUES (:request_id, :endpoint, :stage, :started_at, :finished_at, :duration_ms, :metadata_json);
+    """
+    params = {
+        "request_id": request_id,
+        "endpoint": endpoint,
+        "stage": stage,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "duration_ms": float(duration_ms),
+        "metadata_json": json.dumps(fields or {}),
+    }
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(sql), params)
+    except Exception as e:
+        logging.warning("chatbot_metrics_db: failed to persist stage metric (%s/%s): %s", request_id, stage, e)
+
+
+def _persist_request_trace(request_id: str, user_input: str | None = None, sql_snippet: str | None = None) -> None:
+    """Persist question/sql trace to correlate slow requests with generated SQL."""
+    updates: list[str] = []
+    params: dict = {"request_id": request_id, "updated_at": datetime.now()}
+    if user_input is not None:
+        updates.append("user_input = :user_input")
+        params["user_input"] = user_input
+    if sql_snippet is not None:
+        updates.append("sql_snippet = :sql_snippet")
+        params["sql_snippet"] = sql_snippet
+    if not updates:
+        return
+    sql = (
+        "UPDATE chatbot_request_metrics SET "
+        + ", ".join(updates)
+        + ", updated_at = :updated_at WHERE request_id = :request_id"
+    )
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(text(sql), params)
+            if int(getattr(result, "rowcount", 0) or 0) <= 0:
+                insert_sql = """
+                INSERT INTO chatbot_request_metrics (
+                    request_id, endpoint, user_input, sql_snippet, started_at, updated_at
+                ) VALUES (
+                    :request_id, :endpoint, :user_input, :sql_snippet, :started_at, :updated_at
+                ) ON CONFLICT (request_id) DO NOTHING;
+                """
+                conn.execute(
+                    text(insert_sql),
+                    {
+                        "request_id": request_id,
+                        "endpoint": "/query",
+                        "user_input": params.get("user_input"),
+                        "sql_snippet": params.get("sql_snippet"),
+                        "started_at": datetime.now(),
+                        "updated_at": datetime.now(),
+                    },
+                )
+    except Exception as e:
+        logging.warning("chatbot_metrics_db: failed to persist trace (%s): %s", request_id, e)
+
+
 def _new_request_id(prefix: str) -> str:
     """Generate a short request id for correlating timing logs."""
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
@@ -116,6 +296,8 @@ def _log_timing_start(request_id: str, endpoint: str, stage: str, **fields) -> f
             endpoint,
             stage,
         )
+    if stage == "request_total":
+        _persist_request_start(request_id, endpoint, fields.get("session_suffix"))
     return started
 
 
@@ -143,6 +325,9 @@ def _log_timing_end(request_id: str, endpoint: str, stage: str, started: float, 
             stage,
             elapsed_ms,
         )
+    _persist_stage_metric(request_id, endpoint, stage, elapsed_ms, fields)
+    if stage == "request_total":
+        _persist_request_end(request_id, endpoint, elapsed_ms, str(fields.get("result_type", "") or ""))
 
 
 def _query_llm_timed(
@@ -197,6 +382,9 @@ def _safe_log_snippet(value: str, max_len: int = 220) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 3] + "..."
+
+
+_ensure_chatbot_metrics_tables()
 
 # SQL preflight validation for date arithmetic and common pitfalls
 def _sql_has_illegal_date_arithmetic(sql: str) -> bool:
@@ -959,6 +1147,7 @@ def process_confirmation(request: ConfirmationRequest):
                 request_id,
                 _safe_log_snippet(sanitized_query, max_len=320),
             )
+            _persist_request_trace(request_id=request_id, sql_snippet=_safe_log_snippet(sanitized_query, max_len=1000))
 
             rows = _execute_query_timed(
                 request_id=request_id,
@@ -1071,6 +1260,7 @@ def process_query(request: QueryRequest):
         request_id,
         _safe_log_snippet(user_input),
     )
+    _persist_request_trace(request_id=request_id, user_input=_safe_log_snippet(user_input, max_len=500))
     
     # Handle session-based conversation context
     session_token = request.session_token
@@ -1266,6 +1456,7 @@ def process_query(request: QueryRequest):
             request_id,
             _safe_log_snippet(sanitized_query, max_len=320),
         )
+        _persist_request_trace(request_id=request_id, sql_snippet=_safe_log_snippet(sanitized_query, max_len=1000))
 
         # Preflight: reject illegal date arithmetic and re-query with strict reminder
         if _sql_has_illegal_date_arithmetic(sanitized_query):
@@ -1298,6 +1489,7 @@ def process_query(request: QueryRequest):
                         request_id,
                         _safe_log_snippet(sanitized_query, max_len=320),
                     )
+                    _persist_request_trace(request_id=request_id, sql_snippet=_safe_log_snippet(sanitized_query, max_len=1000))
                 else:
                     logging.warning("Preflight: Regenerated SQL still contains illegal date arithmetic; proceeding with interpretation but execution may fail.")
 
@@ -1331,6 +1523,7 @@ def process_query(request: QueryRequest):
                         request_id,
                         _safe_log_snippet(sanitized_query, max_len=320),
                     )
+                    _persist_request_trace(request_id=request_id, sql_snippet=_safe_log_snippet(sanitized_query, max_len=1000))
 
     # Generate natural language interpretation and always confirm intent
     try:

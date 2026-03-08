@@ -92,6 +92,7 @@ import re
 import requests
 from sqlalchemy.exc import SQLAlchemyError
 import time
+from urllib.parse import urlparse
 import yaml
 
 from db import DatabaseHandler
@@ -449,6 +450,57 @@ class LLMHandler:
             + "\n...[TRUNCATED]...\n"
             + (extracted_text[-tail_chars:] if tail_chars > 0 else "")
         )
+
+    @staticmethod
+    def _resolve_prompt_config(
+        prompts_config: dict,
+        prompt_type: str,
+        fallback_key: str = "default",
+    ) -> tuple[dict | str, str]:
+        """
+        Resolve prompt config by exact key, domain key, or URL-prefix key.
+
+        URL-prefix resolution supports configured site roots (for example
+        'https://thedukesaloon.com/') matching deeper paths like
+        'https://thedukesaloon.com/events/'.
+        """
+        if prompt_type in prompts_config:
+            return prompts_config[prompt_type], prompt_type
+
+        try:
+            parsed_prompt_type = urlparse(prompt_type)
+        except Exception:
+            parsed_prompt_type = None
+
+        if parsed_prompt_type and parsed_prompt_type.netloc:
+            domain = parsed_prompt_type.netloc
+            if domain in prompts_config:
+                return prompts_config[domain], domain
+
+            normalized_target = prompt_type.rstrip("/")
+            best_match_key = ""
+            for key in prompts_config:
+                try:
+                    parsed_key = urlparse(key)
+                except Exception:
+                    continue
+                if not parsed_key.netloc:
+                    continue
+                if parsed_key.netloc != domain:
+                    continue
+                normalized_key = key.rstrip("/")
+                if (
+                    normalized_target == normalized_key
+                    or normalized_target.startswith(normalized_key + "/")
+                ):
+                    if len(normalized_key) > len(best_match_key):
+                        best_match_key = normalized_key
+            if best_match_key:
+                resolved_key = best_match_key if best_match_key in prompts_config else f"{best_match_key}/"
+                if resolved_key in prompts_config:
+                    return prompts_config[resolved_key], resolved_key
+
+        return prompts_config[fallback_key], fallback_key
         
 
     def generate_prompt(self, url, extracted_text, prompt_type):
@@ -481,22 +533,22 @@ class LLMHandler:
         logging.info(f"def generate_prompt(): Generating prompt for URL: {url}")
 
         # Get prompt configuration, fallback to default if needed
-        try:
-            prompt_config = self.config['prompts'][prompt_type]
-        except KeyError:
-            # Try domain-based lookup if full URL lookup fails
-            try:
-                from urllib.parse import urlparse
-                parsed_url = urlparse(prompt_type)
-                domain = parsed_url.netloc
-                if domain:
-                    prompt_config = self.config['prompts'][domain]
-                    logging.info(f"def generate_prompt(): Using domain-based config for '{domain}'")
-                else:
-                    raise KeyError("No domain found")
-            except KeyError:
-                prompt_config = self.config['prompts']['default']
-                logging.warning(f"def generate_prompt(): Prompt type '{prompt_type}' not found, using default")
+        prompt_config, resolved_prompt_key = self._resolve_prompt_config(
+            self.config["prompts"],
+            prompt_type,
+            fallback_key="default",
+        )
+        if resolved_prompt_key == "default" and prompt_type != "default":
+            logging.warning(
+                "def generate_prompt(): Prompt type '%s' not found, using default",
+                prompt_type,
+            )
+        elif resolved_prompt_key != prompt_type:
+            logging.info(
+                "def generate_prompt(): Resolved prompt type '%s' via '%s'",
+                prompt_type,
+                resolved_prompt_key,
+            )
         
         # Handle both old string format and new dict format for backward compatibility
         if isinstance(prompt_config, str):

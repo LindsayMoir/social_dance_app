@@ -713,6 +713,9 @@ class DatabaseHandler():
         self.execute_query(runs_table_query)
         logging.info("create_tables: 'address' table created or already exists.")
 
+        # Create chatbot performance metric tables
+        self.create_chatbot_metrics_tables()
+
         # See if this worked.
         query = """
                 SELECT table_schema,
@@ -728,6 +731,52 @@ class DatabaseHandler():
                 logging.info("Schema: %s, Table: %s", schema, table)
         else:
             logging.info("No tables found or query failed.")
+
+
+    def create_chatbot_metrics_tables(self) -> None:
+        """Create chatbot performance metric tables used for long-term latency reporting."""
+        request_metrics_query = """
+            CREATE TABLE IF NOT EXISTS chatbot_request_metrics (
+                id SERIAL PRIMARY KEY,
+                request_id TEXT UNIQUE NOT NULL,
+                endpoint TEXT NOT NULL,
+                session_suffix TEXT,
+                started_at TIMESTAMP,
+                finished_at TIMESTAMP,
+                duration_ms DOUBLE PRECISION,
+                result_type TEXT,
+                user_input TEXT,
+                sql_snippet TEXT,
+                has_response BOOLEAN,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        stage_metrics_query = """
+            CREATE TABLE IF NOT EXISTS chatbot_stage_metrics (
+                id SERIAL PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                started_at TIMESTAMP,
+                finished_at TIMESTAMP,
+                duration_ms DOUBLE PRECISION,
+                metadata_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_started_at ON chatbot_request_metrics(started_at)",
+            "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_endpoint ON chatbot_request_metrics(endpoint)",
+            "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_started_at ON chatbot_stage_metrics(started_at)",
+            "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_stage ON chatbot_stage_metrics(stage)",
+            "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_request_id ON chatbot_stage_metrics(request_id)",
+        ]
+        self.execute_query(request_metrics_query)
+        self.execute_query(stage_metrics_query)
+        for query in indexes:
+            self.execute_query(query)
+        logging.info("create_chatbot_metrics_tables: chatbot metric tables created or already exist.")
 
 
     def create_urls_df(self):
