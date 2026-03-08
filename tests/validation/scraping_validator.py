@@ -272,6 +272,135 @@ class ScrapingValidator:
                 continue
         return snippets
 
+    @staticmethod
+    def _extract_logged_url(line: str, prefix: str, suffix: str) -> str:
+        """Extract URL between prefix/suffix markers from a log line."""
+        start = line.find(prefix)
+        if start < 0:
+            return ""
+        start += len(prefix)
+        end = line.find(suffix, start)
+        if end < 0:
+            return ""
+        return line[start:end].strip()
+
+    @staticmethod
+    def _matches_logged_url(candidate_url: str, logged_url: str) -> bool:
+        """Return true when a candidate URL matches a logged URL snippet."""
+        candidate = (candidate_url or "").strip().lower()
+        logged = (logged_url or "").strip().lower()
+        if not candidate or not logged:
+            return False
+        if logged.endswith("..."):
+            return candidate.startswith(logged[:-3])
+        return candidate == logged
+
+    def _summarize_not_attempted_reasons(self, failures_df: pd.DataFrame) -> Dict[str, object]:
+        """
+        Classify why not-attempted URLs were not processed in this run.
+
+        Categories:
+        - explicit_url_run_limit_skip
+        - explicit_should_process_url_skip
+        - unattributed_with_global_run_limit
+        - other_or_unknown
+        """
+        empty_summary = {
+            "total_not_attempted": 0,
+            "global_url_run_limit_reached": False,
+            "per_url_stage": {},
+            "categories": {
+                "explicit_url_run_limit_skip": 0,
+                "explicit_should_process_url_skip": 0,
+                "unattributed_with_global_run_limit": 0,
+                "other_or_unknown": 0,
+            },
+        }
+        if failures_df.empty or "failure_type" not in failures_df.columns:
+            return empty_summary
+
+        not_attempted = failures_df[failures_df["failure_type"] == "not_attempted"]
+        if not_attempted.empty:
+            return empty_summary
+
+        urls = [str(url).strip() for url in not_attempted.get("url", pd.Series(dtype=str)).tolist() if str(url).strip()]
+        if not urls:
+            return empty_summary
+
+        url_variants: Dict[str, List[str]] = {}
+        for url in urls:
+            variants = [v.lower() for v in self._normalize_link_variants(url)]
+            url_variants[url] = list(dict.fromkeys(variants + [url.lower()]))
+
+        run_limit_urls: set[str] = set()
+        should_skip_urls: set[str] = set()
+        global_run_limit_reached = False
+
+        for log_path in self._log_files:
+            if not os.path.exists(log_path):
+                continue
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="ignore") as handle:
+                    for line in handle:
+                        lower_line = line.lower()
+                        if "url run limit reached" in lower_line:
+                            global_run_limit_reached = True
+
+                        if "skipping non-whitelist link:" in lower_line and "url run limit reached" in lower_line:
+                            logged_url = self._extract_logged_url(
+                                line=line,
+                                prefix="skipping non-whitelist link:",
+                                suffix="\n",
+                            )
+                            if logged_url:
+                                for original_url, variants in url_variants.items():
+                                    if any(self._matches_logged_url(variant, logged_url) for variant in variants):
+                                        run_limit_urls.add(original_url)
+
+                        if (
+                            "should_process_url:" in lower_line
+                            and "does not meet criteria for processing, skipping it." in lower_line
+                        ):
+                            logged_url = self._extract_logged_url(
+                                line=line,
+                                prefix="should_process_url: URL ",
+                                suffix=" does not meet criteria for processing, skipping it.",
+                            )
+                            if logged_url:
+                                for original_url, variants in url_variants.items():
+                                    if any(self._matches_logged_url(variant, logged_url) for variant in variants):
+                                        should_skip_urls.add(original_url)
+            except Exception:
+                continue
+
+        categories = {
+            "explicit_url_run_limit_skip": 0,
+            "explicit_should_process_url_skip": 0,
+            "unattributed_with_global_run_limit": 0,
+            "other_or_unknown": 0,
+        }
+        per_url_stage: Dict[str, str] = {}
+        for url in urls:
+            if url in run_limit_urls:
+                categories["explicit_url_run_limit_skip"] += 1
+                per_url_stage[url] = "not_attempted_run_limit_skipped"
+            elif url in should_skip_urls:
+                categories["explicit_should_process_url_skip"] += 1
+                per_url_stage[url] = "not_attempted_should_process_url_skipped"
+            elif global_run_limit_reached:
+                categories["unattributed_with_global_run_limit"] += 1
+                per_url_stage[url] = "not_attempted_run_limit_skipped"
+            else:
+                categories["other_or_unknown"] += 1
+                per_url_stage[url] = "not_attempted_other_or_unknown"
+
+        return {
+            "total_not_attempted": len(urls),
+            "global_url_run_limit_reached": global_run_limit_reached,
+            "per_url_stage": per_url_stage,
+            "categories": categories,
+        }
+
     def classify_important_urls(self) -> pd.DataFrame:
         """
         Identify important URLs from three sources.
@@ -398,7 +527,8 @@ class ScrapingValidator:
             important_urls_df (pd.DataFrame): DataFrame from classify_important_urls()
 
         Returns:
-            pd.DataFrame: Failures with columns [url, source, failure_type, importance, recommendation]
+            pd.DataFrame: Failures with columns
+            [url, source, failure_type, failure_stage, importance, recommendation]
         """
         if important_urls_df.empty:
             logging.warning("No important URLs to check")
@@ -435,6 +565,7 @@ class ScrapingValidator:
                         'url': url,
                         'source': url_row['source'],
                         'failure_type': 'not_attempted',
+                        'failure_stage': 'not_attempted_unattributed',
                         'importance': url_row['importance_type'],
                         'crawl_attempts': 0,
                         'keywords_found': None,
@@ -476,6 +607,7 @@ class ScrapingValidator:
                         'url': url,
                         'source': url_row['source'],
                         'failure_type': 'marked_irrelevant',
+                        'failure_stage': 'attempted_no_keywords',
                         'importance': url_row['importance_type'],
                         'crawl_attempts': crawl_try_vals[0] if crawl_try_vals else None,
                         'keywords_found': keywords_recent,
@@ -496,6 +628,7 @@ class ScrapingValidator:
                         'url': url,
                         'source': url_row['source'],
                         'failure_type': 'multiple_retries',
+                        'failure_stage': 'attempted_extraction_or_llm_failure',
                         'importance': url_row['importance_type'],
                         'crawl_attempts': latest_crawl_try,
                         'keywords_found': keywords_recent,
@@ -522,6 +655,7 @@ class ScrapingValidator:
                     'url': url,
                     'source': url_row.get('source', 'Unknown'),
                     'failure_type': 'error',
+                    'failure_stage': 'attempted_extraction_or_llm_failure',
                     'importance': url_row['importance_type'],
                     'crawl_attempts': None,
                     'keywords_found': None,
@@ -688,12 +822,17 @@ class ScrapingValidator:
                 'warnings': []
             }
 
-    def generate_report(self, failures_df: pd.DataFrame) -> dict:
+    def generate_report(
+        self,
+        failures_df: pd.DataFrame,
+        important_urls_df: pd.DataFrame | None = None,
+    ) -> dict:
         """
         Generate JSON report with scraping validation results.
 
         Args:
             failures_df (pd.DataFrame): DataFrame from check_scraping_failures()
+            important_urls_df (pd.DataFrame | None): DataFrame from classify_important_urls()
 
         Returns:
             dict: Report dictionary with summary, critical_failures, and performance_degradation
@@ -703,20 +842,46 @@ class ScrapingValidator:
             'timestamp': datetime.now().isoformat(),
             'summary': {
                 'total_failures': 0,
+                'total_failures_raw': 0,
+                'total_important_urls': 0,
+                'attempted_url_denominator': 0,
+                'attempted_failure_rate': None,
+                'post_scrape_failures': 0,
+                'keyword_failures_after_scrape': 0,
+                'pre_scrape_skipped_failures_excluded': 0,
                 'whitelist_failures': 0,
                 'edge_case_failures': 0,
                 'high_performer_failures': 0,
-                'failure_types': {}
+                'failure_types': {},
+                'failure_stage_counts': {
+                    'run_limit_skipped': 0,
+                    'should_process_url_skipped': 0,
+                    'attempted_no_keywords': 0,
+                    'attempted_extraction_or_llm_failure': 0,
+                    'other_or_unknown': 0,
+                },
+                'not_attempted_reason_breakdown': {
+                    'total_not_attempted': 0,
+                    'global_url_run_limit_reached': False,
+                    'categories': {}
+                }
             },
             'critical_failures': [],
             'performance_degradation': []
         }
 
+        total_important_urls = int(len(important_urls_df)) if important_urls_df is not None else 0
+        report['summary']['total_important_urls'] = total_important_urls
+
         if failures_df.empty:
             logging.info("No failures to report - all important URLs scraped successfully")
+            if total_important_urls > 0:
+                report['summary']['attempted_url_denominator'] = total_important_urls
+                report['summary']['attempted_failure_rate'] = 0.0
         else:
+            failures_df = failures_df.copy()
             # Calculate summary statistics
-            report['summary']['total_failures'] = len(failures_df)
+            report['summary']['total_failures_raw'] = len(failures_df)
             report['summary']['whitelist_failures'] = len(failures_df[failures_df['importance'] == 'whitelist'])
             report['summary']['edge_case_failures'] = len(failures_df[failures_df['importance'] == 'edge_case'])
             report['summary']['high_performer_failures'] = len(failures_df[failures_df['importance'] == 'high_performer'])
@@ -724,6 +889,63 @@ class ScrapingValidator:
             # Failure type counts
             if 'failure_type' in failures_df.columns:
                 report['summary']['failure_types'] = failures_df['failure_type'].value_counts().to_dict()
+                report['summary']['not_attempted_reason_breakdown'] = self._summarize_not_attempted_reasons(
+                    failures_df
+                )
+                categories = (
+                    report['summary']
+                    .get('not_attempted_reason_breakdown', {})
+                    .get('categories', {})
+                )
+                per_url_stage = (
+                    report['summary']
+                    .get('not_attempted_reason_breakdown', {})
+                    .get('per_url_stage', {})
+                )
+                if per_url_stage and 'url' in failures_df.columns and 'failure_type' in failures_df.columns:
+                    def _normalize_stage_for_row(row):
+                        if str(row.get('failure_type', '')) != 'not_attempted':
+                            return row.get('failure_stage')
+                        return per_url_stage.get(
+                            str(row.get('url', '') or ''),
+                            row.get('failure_stage', 'not_attempted_unattributed')
+                        )
+                    failures_df['failure_stage'] = failures_df.apply(_normalize_stage_for_row, axis=1)
+
+                pre_scrape_skips = int(categories.get('explicit_should_process_url_skip', 0) or 0)
+                report['summary']['pre_scrape_skipped_failures_excluded'] = pre_scrape_skips
+                not_attempted_count = int(report['summary']['failure_types'].get('not_attempted', 0) or 0)
+                keyword_failures = int(report['summary']['failure_types'].get('marked_irrelevant', 0) or 0)
+                post_scrape_failures = max(
+                    0,
+                    int(report['summary']['total_failures_raw']) - not_attempted_count,
+                )
+                report['summary']['post_scrape_failures'] = post_scrape_failures
+                report['summary']['keyword_failures_after_scrape'] = keyword_failures
+                report['summary']['total_failures'] = post_scrape_failures
+
+                attempted_denominator = max(0, total_important_urls - not_attempted_count)
+                report['summary']['attempted_url_denominator'] = attempted_denominator
+                if attempted_denominator > 0:
+                    report['summary']['attempted_failure_rate'] = round(
+                        post_scrape_failures / attempted_denominator, 4
+                    )
+                else:
+                    report['summary']['attempted_failure_rate'] = None
+
+                stage_counts = failures_df['failure_stage'].value_counts().to_dict() if 'failure_stage' in failures_df.columns else {}
+                run_limit_skipped = int(categories.get('explicit_url_run_limit_skip', 0) or 0) + int(
+                    categories.get('unattributed_with_global_run_limit', 0) or 0
+                )
+                report['summary']['failure_stage_counts'] = {
+                    'run_limit_skipped': run_limit_skipped,
+                    'should_process_url_skipped': int(categories.get('explicit_should_process_url_skip', 0) or 0),
+                    'attempted_no_keywords': int(stage_counts.get('attempted_no_keywords', 0) or 0),
+                    'attempted_extraction_or_llm_failure': int(stage_counts.get('attempted_extraction_or_llm_failure', 0) or 0),
+                    'other_or_unknown': int(stage_counts.get('not_attempted_other_or_unknown', 0) or 0),
+                }
+            else:
+                report['summary']['total_failures'] = int(report['summary']['total_failures_raw'])
 
             # Critical failures (whitelist + edge_case)
             critical_df = failures_df[failures_df['importance'].isin(['whitelist', 'edge_case'])]

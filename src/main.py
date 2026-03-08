@@ -13,7 +13,9 @@ import os
 import sys
 import logging
 import yaml
+import uuid
 from datetime import datetime
+from time import perf_counter
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -79,6 +81,122 @@ else:
 # Create the SQLAlchemy engine
 engine = create_engine(DATABASE_URL)
 logging.info("main.py: SQLAlchemy engine created.")
+
+SLOW_CHATBOT_RESPONSE_SECONDS = 20.0
+
+
+def _new_request_id(prefix: str) -> str:
+    """Generate a short request id for correlating timing logs."""
+    return f"{prefix}-{uuid.uuid4().hex[:8]}"
+
+
+def _session_suffix(session_token: str | None) -> str:
+    """Return non-sensitive session token suffix for log correlation."""
+    if not session_token:
+        return "none"
+    return str(session_token)[-8:]
+
+
+def _log_timing_start(request_id: str, endpoint: str, stage: str, **fields) -> float:
+    """Log timing start and return a monotonic timer start marker."""
+    started = perf_counter()
+    if fields:
+        detail = " ".join(f"{k}={v}" for k, v in fields.items())
+        logging.info(
+            "chatbot_timing_start: request_id=%s endpoint=%s stage=%s %s",
+            request_id,
+            endpoint,
+            stage,
+            detail,
+        )
+    else:
+        logging.info(
+            "chatbot_timing_start: request_id=%s endpoint=%s stage=%s",
+            request_id,
+            endpoint,
+            stage,
+        )
+    return started
+
+
+def _log_timing_end(request_id: str, endpoint: str, stage: str, started: float, **fields) -> None:
+    """Log timing end with elapsed milliseconds and optional detail fields."""
+    elapsed_ms = (perf_counter() - started) * 1000.0
+    level = logging.WARNING if (elapsed_ms / 1000.0) >= SLOW_CHATBOT_RESPONSE_SECONDS else logging.INFO
+    if fields:
+        detail = " ".join(f"{k}={v}" for k, v in fields.items())
+        logging.log(
+            level,
+            "chatbot_timing_end: request_id=%s endpoint=%s stage=%s duration_ms=%.1f %s",
+            request_id,
+            endpoint,
+            stage,
+            elapsed_ms,
+            detail,
+        )
+    else:
+        logging.log(
+            level,
+            "chatbot_timing_end: request_id=%s endpoint=%s stage=%s duration_ms=%.1f",
+            request_id,
+            endpoint,
+            stage,
+            elapsed_ms,
+        )
+
+
+def _query_llm_timed(
+    request_id: str,
+    endpoint: str,
+    stage: str,
+    request_url: str,
+    prompt: str,
+    tools=None,
+):
+    """Run llm_handler.query_llm with start/end timing logs."""
+    started = _log_timing_start(
+        request_id,
+        endpoint,
+        stage,
+        request_url=request_url,
+        prompt_len=len(prompt or ""),
+    )
+    try:
+        response = llm_handler.query_llm(request_url, prompt, tools=tools)
+        _log_timing_end(
+            request_id,
+            endpoint,
+            stage,
+            started,
+            has_response=bool(response),
+            response_len=len(response) if isinstance(response, str) else 0,
+        )
+        return response
+    except Exception:
+        _log_timing_end(request_id, endpoint, stage, started, error="exception")
+        raise
+
+
+def _execute_query_timed(request_id: str, endpoint: str, stage: str, sql_query: str):
+    """Run db_handler.execute_query with timing logs."""
+    started = _log_timing_start(
+        request_id,
+        endpoint,
+        stage,
+        sql_len=len(sql_query or ""),
+    )
+    rows = db_handler.execute_query(sql_query)
+    row_count = 0 if not rows else len(rows)
+    _log_timing_end(request_id, endpoint, stage, started, rows=row_count)
+    return rows
+
+
+def _safe_log_snippet(value: str, max_len: int = 220) -> str:
+    """Return a single-line safe snippet for structured logs."""
+    text = (value or "").replace("\n", " ").replace("\r", " ").strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
 
 # SQL preflight validation for date arithmetic and common pitfalls
 def _sql_has_illegal_date_arithmetic(sql: str) -> bool:
@@ -414,7 +532,7 @@ def _force_style_in_interpretation(text: str, user_text: str) -> str:
     # Fallback: append style note
     return text.rstrip('.') + f" (style: {', '.join(styles)})."
 
-def generate_interpretation(user_query: str, config: dict) -> str:
+def generate_interpretation(user_query: str, config: dict, request_id: str | None = None) -> str:
     """
     Generate a natural language interpretation of the user's search intent.
     
@@ -553,7 +671,15 @@ def generate_interpretation(user_query: str, config: dict) -> str:
 
     # Query LLM for interpretation WITH date calculator tool
     from date_calculator import CALCULATE_DATE_RANGE_TOOL
-    interpretation = llm_handler.query_llm('chatbot', formatted_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+    llm_request_id = request_id or _new_request_id("interp")
+    interpretation = _query_llm_timed(
+        request_id=llm_request_id,
+        endpoint="/query",
+        stage="interpretation_llm",
+        request_url='chatbot',
+        prompt=formatted_prompt,
+        tools=[CALCULATE_DATE_RANGE_TOOL],
+    )
 
     if interpretation:
         text = interpretation.strip()
@@ -603,11 +729,29 @@ def process_confirmation(request: ConfirmationRequest):
     """
     Handle user confirmations for pending queries.
     """
+    request_id = _new_request_id("confirm")
+    request_started = _log_timing_start(
+        request_id,
+        "/confirm",
+        "request_total",
+        session_suffix=_session_suffix(request.session_token),
+    )
+    result_type = "unknown"
+    def _finish_confirmation_timing() -> None:
+        _log_timing_end(
+            request_id,
+            "/confirm",
+            "request_total",
+            request_started,
+            result_type=result_type,
+        )
     confirmation = request.confirmation.lower().strip()
     session_token = request.session_token
     clarification = request.clarification
     
     if not session_token:
+        result_type = "invalid_missing_session"
+        _finish_confirmation_timing()
         raise HTTPException(status_code=400, detail="Session token is required for confirmations.")
     
     # Get conversation and pending query
@@ -615,6 +759,8 @@ def process_confirmation(request: ConfirmationRequest):
     pending_query = conversation_manager.get_pending_query(conversation_id)
     
     if not pending_query:
+        result_type = "invalid_missing_pending_query"
+        _finish_confirmation_timing()
         raise HTTPException(status_code=400, detail="No pending query found for confirmation.")
     
     if confirmation == "yes":
@@ -656,7 +802,14 @@ def process_confirmation(request: ConfirmationRequest):
                     prompt += f"\n\nCurrent User Question: \"{combined_q}\""
 
                 from date_calculator import CALCULATE_DATE_RANGE_TOOL
-                sql_raw = llm_handler.query_llm('chatbot', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+                sql_raw = _query_llm_timed(
+                    request_id=request_id,
+                    endpoint="/confirm",
+                    stage="confirm_sql_generation_primary",
+                    request_url='chatbot',
+                    prompt=prompt,
+                    tools=[CALCULATE_DATE_RANGE_TOOL],
+                )
                 if sql_raw:
                     s = sql_raw.replace("```sql", "").replace("```", "").strip()
                     si = s.upper().find("SELECT")
@@ -673,7 +826,14 @@ def process_confirmation(request: ConfirmationRequest):
                             "Call calculate_date_range internally and embed the dates directly in WHERE clauses."
                         )
                         strict_prompt = f"{prompt}\n{sql_only_suffix}"
-                        sql_raw2 = llm_handler.query_llm('chatbot', strict_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+                        sql_raw2 = _query_llm_timed(
+                            request_id=request_id,
+                            endpoint="/confirm",
+                            stage="confirm_sql_generation_retry",
+                            request_url='chatbot',
+                            prompt=strict_prompt,
+                            tools=[CALCULATE_DATE_RANGE_TOOL],
+                        )
                         if sql_raw2:
                             s2 = sql_raw2.replace("```sql", "").replace("```", "").strip()
                             si2 = s2.upper().find("SELECT")
@@ -684,7 +844,15 @@ def process_confirmation(request: ConfirmationRequest):
                                 sanitized_query = _enforce_default_event_type(s2, combined_q)
             # Pre-execution repair + validation to prevent malformed SQL from reaching users.
             sanitized_query = _repair_common_sql_issues(sanitized_query)
+            validate_1_started = _log_timing_start(request_id, "/confirm", "sql_validate_pre_fallback")
             is_valid_sql, validation_error = _validate_sql_select(sanitized_query)
+            _log_timing_end(
+                request_id,
+                "/confirm",
+                "sql_validate_pre_fallback",
+                validate_1_started,
+                is_valid=is_valid_sql,
+            )
 
             if not is_valid_sql:
                 logging.warning("CONFIRMATION: SQL validation failed, using deterministic fallback. Error: %s", validation_error)
@@ -772,14 +940,32 @@ def process_confirmation(request: ConfirmationRequest):
             sanitized_query = enforce_dance_style(sanitized_query, cq_final)
             sanitized_query = _repair_common_sql_issues(sanitized_query)
 
+            validate_2_started = _log_timing_start(request_id, "/confirm", "sql_validate_final")
             is_valid_sql, validation_error = _validate_sql_select(sanitized_query)
+            _log_timing_end(
+                request_id,
+                "/confirm",
+                "sql_validate_final",
+                validate_2_started,
+                is_valid=is_valid_sql,
+            )
             if not is_valid_sql:
                 raise ValueError(f"Unable to build a valid query for this request. Validation: {validation_error}")
 
             display_sql = _format_sql_for_display(sanitized_query)
             logging.info(f"CONFIRMATION: Executing confirmed query: {sanitized_query}")
+            logging.info(
+                "chatbot_trace_sql: request_id=%s endpoint=/confirm stage=confirmed_sql sql=%s",
+                request_id,
+                _safe_log_snippet(sanitized_query, max_len=320),
+            )
 
-            rows = db_handler.execute_query(sanitized_query)
+            rows = _execute_query_timed(
+                request_id=request_id,
+                endpoint="/confirm",
+                stage="execute_confirmed_sql",
+                sql_query=sanitized_query,
+            )
             if rows is None:
                 raise ValueError("Query execution failed before result retrieval.")
             if not rows:
@@ -803,6 +989,8 @@ def process_confirmation(request: ConfirmationRequest):
             
             conversation_manager.clear_pending_query(conversation_id)
             
+            result_type = "confirmed_results"
+            _finish_confirmation_timing()
             return {
                 "sql_query": display_sql,
                 "data": data,
@@ -814,6 +1002,8 @@ def process_confirmation(request: ConfirmationRequest):
         except Exception as db_err:
             logging.error("CONFIRMATION: Query execution pipeline failed: %s", db_err)
             conversation_manager.clear_pending_query(conversation_id)
+            result_type = "confirm_error"
+            _finish_confirmation_timing()
             raise HTTPException(
                 status_code=500,
                 detail="I couldn't run that search right now. Please try again with a slightly reworded request."
@@ -831,12 +1021,16 @@ def process_confirmation(request: ConfirmationRequest):
         conversation_manager.clear_pending_query(conversation_id)
 
         clarification_request = QueryRequest(user_input=merged, session_token=session_token)
+        result_type = "clarify_reroute"
+        _finish_confirmation_timing()
         return process_query(clarification_request)
     
     elif confirmation == "no":
         # User rejected the interpretation - clear pending query
         conversation_manager.clear_pending_query(conversation_id)
         
+        result_type = "cancelled"
+        _finish_confirmation_timing()
         return {
             "message": "Query cancelled. Please provide a new search request.",
             "conversation_id": conversation_id,
@@ -844,13 +1038,39 @@ def process_confirmation(request: ConfirmationRequest):
         }
     
     else:
+        result_type = "invalid_confirmation_option"
+        _finish_confirmation_timing()
         raise HTTPException(status_code=400, detail="Invalid confirmation option. Use 'yes', 'clarify', or 'no'.")
 
 @app.post("/query")
 def process_query(request: QueryRequest):
+    request_id = _new_request_id("query")
+    request_started = _log_timing_start(
+        request_id,
+        "/query",
+        "request_total",
+        session_suffix=_session_suffix(request.session_token),
+        input_len=len((request.user_input or "").strip()),
+    )
+    result_type = "unknown"
+    def _finish_query_timing() -> None:
+        _log_timing_end(
+            request_id,
+            "/query",
+            "request_total",
+            request_started,
+            result_type=result_type,
+        )
     user_input = request.user_input.strip()
     if not user_input:
+        result_type = "invalid_input"
+        _finish_query_timing()
         raise HTTPException(status_code=400, detail="User input is empty.")
+    logging.info(
+        "chatbot_trace_request: request_id=%s endpoint=/query user_input=%s",
+        request_id,
+        _safe_log_snippet(user_input),
+    )
     
     # Handle session-based conversation context
     session_token = request.session_token
@@ -862,6 +1082,12 @@ def process_query(request: QueryRequest):
     entities = {}
     
     if use_contextual_prompt:
+        context_started = _log_timing_start(
+            request_id,
+            "/query",
+            "context_preparation",
+            has_session=True,
+        )
         try:
             # Get or create conversation
             conversation_id = conversation_manager.create_or_get_conversation(session_token)
@@ -955,8 +1181,22 @@ def process_query(request: QueryRequest):
             logging.error(f"Error with contextual conversation: {e}")
             # Fall back to non-contextual mode
             use_contextual_prompt = False
+        finally:
+            _log_timing_end(
+                request_id,
+                "/query",
+                "context_preparation",
+                context_started,
+                contextual_used=use_contextual_prompt,
+            )
     
     if not use_contextual_prompt:
+        fallback_prompt_started = _log_timing_start(
+            request_id,
+            "/query",
+            "fallback_prompt_preparation",
+            has_session=False,
+        )
         # Use contextual SQL prompt even in fallback (no history/context)
         prompts_cfg = config.get('prompts', {})
         contextual_cfg = prompts_cfg.get('contextual_sql', {})
@@ -971,6 +1211,8 @@ def process_query(request: QueryRequest):
                 base_prompt = file.read()
         except Exception as e:
             logging.error(f"Error reading contextual SQL prompt file: {e}")
+            result_type = "prompt_file_error"
+            _finish_query_timing()
             raise HTTPException(status_code=500, detail="Error reading contextual SQL prompt file.")
 
         # Minimal context for non-session queries
@@ -994,12 +1236,20 @@ def process_query(request: QueryRequest):
         logging.info("=== FULL PROMPT BEING SENT TO LLM ===")
         logging.info(prompt)
         logging.info("=== END PROMPT ===")
+        _log_timing_end(request_id, "/query", "fallback_prompt_preparation", fallback_prompt_started)
     
     logging.info(f"Constructed Prompt: {prompt}")
 
     # Query the language model for a raw SQL query with date calculator tool support
     from date_calculator import CALCULATE_DATE_RANGE_TOOL
-    sql_query = llm_handler.query_llm('chatbot', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+    sql_query = _query_llm_timed(
+        request_id=request_id,
+        endpoint="/query",
+        stage="sql_generation_primary",
+        request_url='chatbot',
+        prompt=prompt,
+        tools=[CALCULATE_DATE_RANGE_TOOL],
+    )
     logging.info(f"Raw SQL Query: {sql_query}")
 
     # Always generate interpretation and confirmation, even if SQL didn't come back yet
@@ -1011,6 +1261,11 @@ def process_query(request: QueryRequest):
             sanitized_query = sanitized_query[select_index:]
         sanitized_query = sanitized_query.split(";")[0]
         logging.info(f"Sanitized SQL Query: {sanitized_query}")
+        logging.info(
+            "chatbot_trace_sql: request_id=%s endpoint=/query stage=sql_sanitized sql=%s",
+            request_id,
+            _safe_log_snippet(sanitized_query, max_len=320),
+        )
 
         # Preflight: reject illegal date arithmetic and re-query with strict reminder
         if _sql_has_illegal_date_arithmetic(sanitized_query):
@@ -1021,7 +1276,14 @@ def process_query(request: QueryRequest):
                 "but prefer explicit dates from the tool. Return ONLY SQL."
             )
             strict_prompt = f"{prompt}\n{strict_suffix}"
-            sql_query2 = llm_handler.query_llm('chatbot', strict_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+            sql_query2 = _query_llm_timed(
+                request_id=request_id,
+                endpoint="/query",
+                stage="sql_generation_strict_retry",
+                request_url='chatbot',
+                prompt=strict_prompt,
+                tools=[CALCULATE_DATE_RANGE_TOOL],
+            )
             if sql_query2:
                 sanitized_query2 = sql_query2.replace("```sql", "").replace("```", "").strip()
                 select_index2 = sanitized_query2.find("SELECT")
@@ -1031,6 +1293,11 @@ def process_query(request: QueryRequest):
                 if not _sql_has_illegal_date_arithmetic(sanitized_query2):
                     sanitized_query = sanitized_query2
                     logging.info("Preflight: Successfully regenerated SQL without illegal date arithmetic.")
+                    logging.info(
+                        "chatbot_trace_sql: request_id=%s endpoint=/query stage=sql_strict_retry sql=%s",
+                        request_id,
+                        _safe_log_snippet(sanitized_query, max_len=320),
+                    )
                 else:
                     logging.warning("Preflight: Regenerated SQL still contains illegal date arithmetic; proceeding with interpretation but execution may fail.")
 
@@ -1042,7 +1309,14 @@ def process_query(request: QueryRequest):
                 "Call calculate_date_range internally and embed the dates directly in WHERE clauses."
             )
             sql_only_prompt = f"{prompt}\n{sql_only_suffix}"
-            sql_query3 = llm_handler.query_llm('chatbot', sql_only_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+            sql_query3 = _query_llm_timed(
+                request_id=request_id,
+                endpoint="/query",
+                stage="sql_generation_select_retry",
+                request_url='chatbot',
+                prompt=sql_only_prompt,
+                tools=[CALCULATE_DATE_RANGE_TOOL],
+            )
             if sql_query3:
                 s3 = sql_query3.replace("```sql", "").replace("```", "").strip()
                 si3 = s3.upper().find("SELECT")
@@ -1052,6 +1326,11 @@ def process_query(request: QueryRequest):
                 if s3.upper().startswith("SELECT") and not _sql_has_illegal_date_arithmetic(s3):
                     sanitized_query = s3
                     logging.info("Preflight: Successfully regenerated a valid SELECT SQL.")
+                    logging.info(
+                        "chatbot_trace_sql: request_id=%s endpoint=/query stage=sql_select_retry sql=%s",
+                        request_id,
+                        _safe_log_snippet(sanitized_query, max_len=320),
+                    )
 
     # Generate natural language interpretation and always confirm intent
     try:
@@ -1060,7 +1339,11 @@ def process_query(request: QueryRequest):
         else:
             query_for_interpretation = user_input
 
-        interpretation = generate_interpretation(query_for_interpretation, config)
+        interpretation = generate_interpretation(
+            query_for_interpretation,
+            config,
+            request_id=request_id,
+        )
         interpretation = _force_style_in_interpretation(interpretation, query_for_interpretation)
         logging.info(f"Generated interpretation: {interpretation}")
 
@@ -1090,6 +1373,7 @@ def process_query(request: QueryRequest):
         except Exception:
             pass
 
+        result_type = "confirmation_required"
         return {
             "interpretation": interpretation,
             "confirmation_required": True,
@@ -1102,8 +1386,11 @@ def process_query(request: QueryRequest):
 
     except Exception as e:
         logging.error(f"Error generating interpretation: {e}")
+        result_type = "confirmation_fallback"
         return {
             "message": f"I understand you want to search for: {user_input}. Please confirm if this is correct.",
             "confirmation_required": True,
             "simple_confirmation": True
         }
+    finally:
+        _finish_query_timing()

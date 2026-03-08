@@ -400,7 +400,10 @@ class DatabaseHandler():
                 for alias in aliases:
                     if not self._is_specific_alias_for_substring(alias):
                         continue
-                    if alias in candidate or candidate in alias:
+                    # Guard against generic candidates (for example "victoria bc")
+                    # matching long canonical aliases by substring.
+                    # Exact matching is already handled in pass 1 above.
+                    if alias in candidate:
                         return {
                             "canonical": canonical,
                             "rule_name": rule.get("name", "unnamed_address_alias"),
@@ -842,6 +845,92 @@ class DatabaseHandler():
                     e, query
                 )
                 return None
+
+    def _deleted_events_audit_path(self) -> str:
+        """Return JSONL path for deleted event audit records."""
+        return (
+            self.config.get("output", {}).get("deleted_events_audit")
+            or os.path.join("logs", "deleted_events_audit.jsonl")
+        )
+
+    def _write_deleted_event_audit_record(
+        self,
+        event_row: Dict[str, Any],
+        deletion_source: str,
+        reason: str,
+        extra_context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Persist a restore-ready audit record for one deleted event row.
+
+        Each line is valid JSON and includes:
+        - metadata (timestamp/source/reason/context)
+        - full deleted event row payload
+        """
+        audit_record: Dict[str, Any] = {
+            "deleted_at_utc": datetime.utcnow().isoformat(timespec="seconds"),
+            "deletion_source": deletion_source,
+            "deletion_reason": reason,
+            "extra_context": extra_context or {},
+            "event": event_row,
+        }
+        path = self._deleted_events_audit_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(audit_record, default=str) + "\n")
+
+    def _delete_events_with_audit(
+        self,
+        delete_sql_without_returning: str,
+        params: Optional[Dict[str, Any]],
+        deletion_source: str,
+        reason: str,
+        extra_context: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Execute a DELETE on events, return deleted rows, and write row-level audit.
+
+        Args:
+            delete_sql_without_returning: DELETE statement targeting events table,
+                without trailing RETURNING clause.
+        """
+        base_sql = delete_sql_without_returning.strip().rstrip(";")
+        wrapped_sql = f"""
+        WITH deleted_rows AS (
+            {base_sql}
+            RETURNING *
+        )
+        SELECT row_to_json(deleted_rows) AS deleted_event
+        FROM deleted_rows;
+        """
+        rows = self.execute_query(wrapped_sql, params or {}) or []
+        deleted_events: List[Dict[str, Any]] = []
+        for row in rows:
+            # row shape is typically tuple(dict,) from SQLAlchemy fetchall()
+            payload = row[0] if isinstance(row, tuple) else row
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except Exception:
+                    payload = {"raw": payload}
+            if isinstance(payload, dict):
+                deleted_events.append(payload)
+                self._write_deleted_event_audit_record(
+                    event_row=payload,
+                    deletion_source=deletion_source,
+                    reason=reason,
+                    extra_context=extra_context,
+                )
+            else:
+                deleted_events.append({"raw": str(payload)})
+        if deleted_events:
+            logging.info(
+                "_delete_events_with_audit: audited %d deleted event(s) for %s (%s)",
+                len(deleted_events),
+                deletion_source,
+                reason,
+            )
+        return deleted_events
 
     
     def close_connection(self):
@@ -2541,7 +2630,13 @@ class DatabaseHandler():
                     AND ABS(EXTRACT(EPOCH FROM (e1.start_time - e2.start_time))) <= 900
                     AND ABS(EXTRACT(EPOCH FROM (e1.end_time - e2.end_time))) <= 900;
             """
-            deleted_count = self.execute_query(dedup_events_query)
+            deleted_rows = self._delete_events_with_audit(
+                delete_sql_without_returning=dedup_events_query,
+                params=None,
+                deletion_source="db.dedup",
+                reason="exact_time_window_duplicate",
+            )
+            deleted_count = len(deleted_rows)
             logging.info("def dedup(): Deduplicated events table successfully. Rows deleted: %d", deleted_count)
 
             # Clean up any orphaned references that might have been created
@@ -2687,7 +2782,17 @@ class DatabaseHandler():
 
                         # Delete duplicate row from database
                         delete_query = "DELETE FROM events WHERE event_id = :event_id"
-                        self.execute_query(delete_query, {'event_id': int(other['event_id'])})
+                        self._delete_events_with_audit(
+                            delete_sql_without_returning=delete_query,
+                            params={'event_id': int(other['event_id'])},
+                            deletion_source="db.fuzzy_duplicates",
+                            reason="fuzzy_duplicate_merged",
+                            extra_context={
+                                "kept_event_id": int(preferred['event_id']),
+                                "deleted_event_id": int(other['event_id']),
+                                "fuzzy_score": int(score),
+                            },
+                        )
                         logging.info("fuzzy_duplicates: Deleted duplicate row with event_id %s", other['event_id'])
 
         logging.info("fuzzy_duplicates: Fuzzy duplicate removal completed successfully.")
@@ -2710,8 +2815,14 @@ class DatabaseHandler():
                 DELETE FROM events
                 WHERE End_Date < CURRENT_DATE - INTERVAL '%s days';
             """ % days
-            self.execute_query(delete_query)
-            deleted_count = self.execute_query(delete_query)
+            deleted_rows = self._delete_events_with_audit(
+                delete_sql_without_returning=delete_query,
+                params=None,
+                deletion_source="db.delete_old_events",
+                reason=f"end_date_older_than_{days}_days",
+                extra_context={"days": days},
+            )
+            deleted_count = len(deleted_rows)
             logging.info(f"delete_old_events: Deleted {deleted_count} events older than {days} days.")
         except Exception as e:
             logging.error("delete_old_events: Failed to delete old events: %s", e)
@@ -2734,8 +2845,7 @@ class DatabaseHandler():
         WHERE source = :source
         AND dance_style = :dance_style
         AND url = :url
-        AND address_id IS NULL
-        RETURNING event_id;
+        AND address_id IS NULL;
         """
         params = {
             'source': '',
@@ -2744,7 +2854,12 @@ class DatabaseHandler():
             'event_type': 'other'
             }
 
-        deleted_events = self.execute_query(delete_query_1, params)
+        deleted_events = self._delete_events_with_audit(
+            delete_sql_without_returning=delete_query_1,
+            params=params,
+            deletion_source="db.delete_likely_dud_events",
+            reason="empty_source_dance_style_url_no_address",
+        )
         deleted_count = len(deleted_events) if deleted_events else 0
         logging.info("delete_likely_dud_events: Deleted %d events with empty source, dance_style, and url, and no address_id.", deleted_count)
 
@@ -2756,14 +2871,19 @@ class DatabaseHandler():
         FROM address
         WHERE province_or_state IS NOT NULL
             AND province_or_state != :province_or_state
-        )
-        RETURNING event_id;
+        );
         """
         params = {
             'province_or_state': 'BC'
             }
         
-        deleted_events = self.execute_query(delete_query_2, params)
+        deleted_events = self._delete_events_with_audit(
+            delete_sql_without_returning=delete_query_2,
+            params=params,
+            deletion_source="db.delete_likely_dud_events",
+            reason="outside_bc_filter",
+            extra_context={"province_or_state_expected": "BC"},
+        )
         deleted_count = len(deleted_events) if deleted_events else 0
         logging.info("delete_likely_dud_events: Deleted %d events outside of British Columbia (BC).", deleted_count)
 
@@ -2775,14 +2895,19 @@ class DatabaseHandler():
         FROM address
         WHERE country_id IS NOT NULL
             AND country_id != :country_id
-        )
-        RETURNING event_id;
+        );
         """
         params = {
             'country_id': 'CA'
             }
         
-        deleted_events = self.execute_query(delete_query_3, params)
+        deleted_events = self._delete_events_with_audit(
+            delete_sql_without_returning=delete_query_3,
+            params=params,
+            deletion_source="db.delete_likely_dud_events",
+            reason="outside_canada_filter",
+            extra_context={"country_expected": "CA"},
+        )
         deleted_count = len(deleted_events) if deleted_events else 0
         logging.info("delete_likely_dud_events: Deleted %d events that are not in Canada (CA).", deleted_count)
 
@@ -2793,8 +2918,7 @@ class DatabaseHandler():
             AND url = :url
             AND event_type = :event_type
             AND location IS NULL
-            AND description IS NULL
-        RETURNING event_id;
+            AND description IS NULL;
         """
         params = {
             'dance_style': '',
@@ -2802,7 +2926,12 @@ class DatabaseHandler():
             'event_type': 'other'
             }
         
-        deleted_events = self.execute_query(delete_query_4, params)
+        deleted_events = self._delete_events_with_audit(
+            delete_sql_without_returning=delete_query_4,
+            params=params,
+            deletion_source="db.delete_likely_dud_events",
+            reason="empty_dance_style_url_other_no_location_description",
+        )
         deleted_count = len(deleted_events) if deleted_events else 0
         logging.info(
             "def delete_likely_dud_events(): Deleted %d events with empty "
@@ -2831,10 +2960,16 @@ class DatabaseHandler():
             delete_event_query = """
                 DELETE FROM events
                 WHERE Name_of_the_Event = :event_name
-                  AND Start_Date = :start_date;
+                  AND Start_Date = :start_date
             """
             params = {'event_name': event_name, 'start_date': start_date}
-            self.execute_query(delete_event_query, params)
+            self._delete_events_with_audit(
+                delete_sql_without_returning=delete_event_query,
+                params=params,
+                deletion_source="db.delete_event",
+                reason="manual_delete_by_name_and_start_date",
+                extra_context={"url_arg": url},
+            )
             logging.info("delete_event: Deleted event from 'events' table.")
 
         except Exception as e:
@@ -2856,16 +2991,27 @@ class DatabaseHandler():
             delete_query = """
             DELETE FROM events
             WHERE (start_date IS NULL AND start_time IS NULL) OR 
-            (start_time IS NULL AND end_time IS NULL);
+            (start_time IS NULL AND end_time IS NULL)
             """
-            self.execute_query(delete_query)
-            deleted_count = self.execute_query(delete_query) or 0
+            deleted_rows = self._delete_events_with_audit(
+                delete_sql_without_returning=delete_query,
+                params=None,
+                deletion_source="db.delete_events_with_nulls",
+                reason="null_start_date_start_time_or_null_start_end_time",
+            )
+            deleted_count = len(deleted_rows)
             logging.info("def delete_events_with_nulls(): Deleted %d events where (start_date and start_time are null).", deleted_count)
         except Exception as e:
             logging.error("def delete_events_with_nulls(): Failed to delete events with nulls: %s", e)
 
 
-    def delete_event_with_event_id(self, event_id):
+    def delete_event_with_event_id(
+        self,
+        event_id,
+        deletion_source: str = "db.delete_event_with_event_id",
+        deletion_reason: str = "delete_by_event_id",
+        extra_context: Optional[Dict[str, Any]] = None,
+    ):
         """
         Deletes an event from the 'events' table based on the provided event_id.
 
@@ -2881,16 +3027,32 @@ class DatabaseHandler():
         try:
             delete_query = """
             DELETE FROM events
-            WHERE event_id = :event_id;
+            WHERE event_id = :event_id
             """
             params = {'event_id': event_id}
-            self.execute_query(delete_query, params)
+            merged_context: Dict[str, Any] = {"event_id": int(event_id)}
+            if extra_context:
+                merged_context.update(extra_context)
+
+            self._delete_events_with_audit(
+                delete_sql_without_returning=delete_query,
+                params=params,
+                deletion_source=deletion_source,
+                reason=deletion_reason,
+                extra_context=merged_context,
+            )
             logging.info("delete_event_with_event_id: Deleted event with event_id %d successfully.", event_id)
         except Exception as e:
             logging.error("delete_event_with_event_id: Failed to delete event with event_id %d: %s", event_id, e)
 
     
-    def delete_multiple_events(self, event_ids):
+    def delete_multiple_events(
+        self,
+        event_ids,
+        deletion_source: str = "db.delete_multiple_events",
+        deletion_reason: str = "bulk_delete_by_event_ids",
+        extra_context: Optional[Dict[str, Any]] = None,
+    ):
         """
         Deletes multiple events from the 'events' table based on a list of event IDs.
             event_ids (list): A list of event IDs (int) to be deleted from the database.
@@ -2909,7 +3071,14 @@ class DatabaseHandler():
         success_count = 0
         for event_id in event_ids:
             try:
-                self.delete_event_with_event_id(event_id)
+                per_event_context = dict(extra_context or {})
+                per_event_context["batch_size"] = len(event_ids)
+                self.delete_event_with_event_id(
+                    event_id,
+                    deletion_source=deletion_source,
+                    deletion_reason=deletion_reason,
+                    extra_context=per_event_context,
+                )
                 success_count += 1
             except Exception as e:
                 logging.error("delete_multiple_events: Error deleting event_id %d: %s", event_id, e)

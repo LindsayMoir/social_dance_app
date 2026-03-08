@@ -2,7 +2,7 @@ import sys
 
 sys.path.insert(0, "tests/validation")
 
-from chatbot_evaluator import ChatbotScorer
+from chatbot_evaluator import ChatbotScorer, generate_chatbot_report
 
 
 class _DummyLLM:
@@ -146,3 +146,63 @@ def test_next_week_sunday_to_saturday_window_not_penalized():
     assert "timeframe" in out["criteria_matched"]
     assert "timeframe" not in [c.lower() for c in out["criteria_missed"]]
     assert all("next week" not in issue.lower() for issue in out["sql_issues"])
+
+
+def test_weekend_evening_filter_not_penalized_when_friday_to_sunday_window_is_correct():
+    scorer = ChatbotScorer(_DummyLLM())
+
+    test_result = {
+        "question": "Show me tango events this weekend",
+        "sql_query": (
+            "SELECT * FROM events WHERE dance_style ILIKE '%tango%' "
+            "AND start_date >= '2026-03-06' AND start_date <= '2026-03-08' "
+            "AND start_time >= '18:00:00' "
+            "AND event_type ILIKE '%social dance%'"
+        ),
+    }
+    eval_result = {
+        "score": 84,
+        "reasoning": (
+            "Weekend date range is correct but incorrectly adds a start_time filter "
+            "that restricts to evening events."
+        ),
+        "criteria_matched": ["dance_style", "timeframe"],
+        "criteria_missed": ["timeframe"],
+        "sql_issues": ["Incorrect evening time filter in weekend query"],
+    }
+
+    out = scorer._apply_policy_overrides(test_result, eval_result)
+
+    assert out["score"] == 100
+    assert "weekend_evening_filter_policy" in out["criteria_matched"]
+    assert all("time" not in c.lower() for c in out["criteria_missed"])
+    assert all("evening" not in issue.lower() for issue in out["sql_issues"])
+
+
+def test_problem_category_does_not_label_weekend_without_weekend_definition_error(tmp_path):
+    scored_results = [
+        {
+            "question": "Show me tango events this weekend",
+            "category": "static",
+            "execution_success": True,
+            "sql_query": (
+                "SELECT * FROM events WHERE dance_style ILIKE '%tango%' "
+                "AND start_date >= '2026-03-06' AND start_date <= '2026-03-08' "
+                "AND start_time >= '18:00:00'"
+            ),
+            "results_count": 5,
+            "evaluation": {
+                "score": 80,
+                "reasoning": "Weekend range is correct; query adds an evening start_time filter.",
+                "criteria_matched": ["dance_style", "timeframe"],
+                "criteria_missed": ["timeframe"],
+                "sql_issues": ["Evening start_time filter"],
+                "interpretation_evaluation": {"score": 100},
+            },
+        }
+    ]
+
+    report = generate_chatbot_report(scored_results, output_dir=str(tmp_path))
+    categories = report.get("problem_categories", [])
+    assert categories
+    assert categories[0]["name"] != "Weekend Calculation"

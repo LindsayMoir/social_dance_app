@@ -91,3 +91,130 @@ def test_check_scraping_failures_suppresses_base_failure_when_children_succeed()
 
     failures = validator.check_scraping_failures(important_urls)
     assert failures.empty
+
+
+def test_generate_report_categorizes_not_attempted_reasons(tmp_path):
+    config = {
+        "testing": {
+            "validation": {
+                "reporting": {
+                    "output_dir": str(tmp_path),
+                },
+                "scraping": {
+                    "days_back": 7,
+                    "whitelist_days_back": 60,
+                    "consecutive_failures_threshold": 2,
+                    "whitelist_consecutive_failures_threshold": 3,
+                },
+            }
+        }
+    }
+    validator = ScrapingValidator(_DummyDB(), config)
+
+    log_path = tmp_path / "scraper_log.txt"
+    log_path.write_text(
+        "\n".join(
+            [
+                "2026-03-03 10:00:00 - INFO - should_process_url: URL https://skip-me.com/ does not meet criteria for processing, skipping it.",
+                "2026-03-03 10:01:00 - INFO - parse(): URL run limit reached but 9 whitelist roots are still unattempted; skipping non-whitelist link: https://run-limit.com/path",
+                "2026-03-03 10:02:00 - INFO - {'finish_reason': 'URL run limit reached'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    validator._log_files = [str(log_path)]
+
+    failures_df = pd.DataFrame(
+        [
+            {
+                "url": "https://skip-me.com/",
+                "source": "Skip Site",
+                "failure_type": "not_attempted",
+                "importance": "high_performer",
+            },
+            {
+                "url": "https://run-limit.com/path",
+                "source": "Run Limit Site",
+                "failure_type": "not_attempted",
+                "importance": "high_performer",
+            },
+            {
+                "url": "https://unknown-reason.com/",
+                "source": "Unknown Site",
+                "failure_type": "not_attempted",
+                "importance": "high_performer",
+            },
+        ]
+    )
+
+    report = validator.generate_report(failures_df)
+    breakdown = report["summary"]["not_attempted_reason_breakdown"]
+    categories = breakdown["categories"]
+
+    assert breakdown["total_not_attempted"] == 3
+    assert breakdown["global_url_run_limit_reached"] is True
+    assert categories["explicit_should_process_url_skip"] == 1
+    assert categories["explicit_url_run_limit_skip"] == 1
+    assert categories["unattributed_with_global_run_limit"] == 1
+    assert categories["other_or_unknown"] == 0
+
+
+def test_generate_report_excludes_prescrape_should_process_skips_from_total(tmp_path):
+    config = {
+        "testing": {
+            "validation": {
+                "reporting": {
+                    "output_dir": str(tmp_path),
+                },
+                "scraping": {
+                    "days_back": 7,
+                    "whitelist_days_back": 60,
+                    "consecutive_failures_threshold": 2,
+                    "whitelist_consecutive_failures_threshold": 3,
+                },
+            }
+        }
+    }
+    validator = ScrapingValidator(_DummyDB(), config)
+
+    log_path = tmp_path / "scraper_log.txt"
+    log_path.write_text(
+        "2026-03-03 10:00:00 - INFO - should_process_url: URL https://skip-me.com/ does not meet criteria for processing, skipping it.\n",
+        encoding="utf-8",
+    )
+    validator._log_files = [str(log_path)]
+
+    failures_df = pd.DataFrame(
+        [
+            {
+                "url": "https://skip-me.com/",
+                "source": "Skip Site",
+                "failure_type": "not_attempted",
+                "importance": "high_performer",
+            },
+            {
+                "url": "https://counted-failure.com/",
+                "source": "Counted Site",
+                "failure_type": "marked_irrelevant",
+                "importance": "high_performer",
+            },
+        ]
+    )
+
+    important_urls_df = pd.DataFrame(
+        [
+            {"url": "https://skip-me.com/"},
+            {"url": "https://counted-failure.com/"},
+            {"url": "https://successful-site.com/"},
+        ]
+    )
+    report = validator.generate_report(failures_df, important_urls_df)
+    summary = report["summary"]
+
+    assert summary["total_failures_raw"] == 2
+    assert summary["pre_scrape_skipped_failures_excluded"] == 1
+    assert summary["total_failures"] == 1
+    assert summary["post_scrape_failures"] == 1
+    assert summary["keyword_failures_after_scrape"] == 1
+    assert summary["attempted_url_denominator"] == 2
+    assert summary["attempted_failure_rate"] == 0.5

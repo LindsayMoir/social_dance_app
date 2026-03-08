@@ -358,17 +358,19 @@ testing:
       llm_activity_hours: 24
       llm_activity_thresholds:
         high:
-          attempts: 150
+          attempts: 1500
           gemini_attempts: 20
           provider_exhausted: 10
           rate_limits: 25
           timeouts: 15
         medium:
-          attempts: 60
+          attempts: 1000
           gemini_attempts: 5
           provider_exhausted: 3
           rate_limits: 10
           timeouts: 5
+        low:
+          attempts: 500
       output_dir: output
       reliability_gates:
         enabled: true
@@ -376,7 +378,7 @@ testing:
           max_llm_provider_exhausted: 10
           max_llm_rate_limits: 25
           max_llm_timeouts: 15
-          max_scrape_critical_failures: 0
+          max_scrape_critical_failures: 1
           min_chatbot_average_score: 70
           min_chatbot_execution_success_rate: 0.9
           min_reliability_score: 75

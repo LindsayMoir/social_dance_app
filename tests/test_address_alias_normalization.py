@@ -59,6 +59,13 @@ def test_address_alias_matches_raw_address_variant() -> None:
     assert alias_match["canonical"]["full_address"].startswith("The Wicket Hall (Strathcona Hotel)")
 
 
+def test_generic_city_text_does_not_match_strath_alias() -> None:
+    """Generic city/province text must not trigger venue alias mapping."""
+    handler = _build_handler_for_alias_tests()
+    alias_match = handler._find_address_alias_match(["Victoria, BC"])
+    assert alias_match is None
+
+
 def test_scoped_alias_requires_matching_context() -> None:
     """Scoped alias should only apply with matching source and URL context."""
     handler = _build_handler_for_alias_tests()

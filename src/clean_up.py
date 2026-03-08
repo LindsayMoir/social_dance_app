@@ -661,30 +661,33 @@ class CleanUp:
             WHERE location IS NOT NULL OR location = ''
             """
         events_df = pd.read_sql(sql, self.conn)
-        
-        event_ids_to_be_deleted = []
+
+        event_ids_to_be_deleted: set[int] = set()
+        usa_postal_code_pattern = re.compile(r"\b\d{5}(?:[-\s]\d{4})?\b")
+        uk_postal_code_pattern = re.compile(r"\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b")
         for event in events_df.itertuples():
+            location = str(event.location or "")
+            location_lower = location.lower()
 
-            # Mark USA for deletion
-            if event.location and "USA" in event.location:
-                event_ids_to_be_deleted.append(event.event_id)
-            # Prepare a regex pattern to match USA postal codes
-            usa_postal_code_pattern = re.compile(r"\b\d{5}(?:[-\s]\d{4})?\b")
-            if usa_postal_code_pattern.search(event.location):
-                event_ids_to_be_deleted.append(event.event_id)
-            if "Washington" in event.location:
-                event_ids_to_be_deleted.append(event.event_id)
-            if "Oregon" in event.location:
-                event_ids_to_be_deleted.append(event.event_id)
+            # Mark known non-local geographies for deletion.
+            if "usa" in location_lower:
+                event_ids_to_be_deleted.add(event.event_id)
+            if "washington" in location_lower:
+                event_ids_to_be_deleted.add(event.event_id)
+            if "oregon" in location_lower:
+                event_ids_to_be_deleted.add(event.event_id)
+            if "bellingham" in location_lower:
+                event_ids_to_be_deleted.add(event.event_id)
 
-            # Prepare a regex to match UK postal codes
-            uk_postal_code_pattern = re.compile(r"\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b")
-            if uk_postal_code_pattern.search(event.location):
-                event_ids_to_be_deleted.append(event.event_id)
+            # Postal code heuristics for non-BC locales.
+            if usa_postal_code_pattern.search(location):
+                event_ids_to_be_deleted.add(event.event_id)
+            if uk_postal_code_pattern.search(location):
+                event_ids_to_be_deleted.add(event.event_id)
 
         # Have the database delete the list of event_id(s)
         if event_ids_to_be_deleted:
-            self.db_handler.delete_multiple_events(event_ids_to_be_deleted)
+            self.db_handler.delete_multiple_events(list(event_ids_to_be_deleted))
             logging.info(f"delete_events_outside_bc(): Deleted {len(event_ids_to_be_deleted)} events outside of BC.")
         else:
             logging.info("delete_events_outside_bc(): No events found outside of BC.")

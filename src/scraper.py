@@ -11,7 +11,7 @@ Dependencies:
 """
 
 import base64
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta, timezone
 import logging
 import os
@@ -287,6 +287,9 @@ class EventSpider(scrapy.Spider):
         self.domain_cooldown_until: dict[str, datetime] = {}
         self.domain_cooldown_skip_count = 0
         self.domain_cooldown_trigger_count = 0
+        self.domain_transient_failure_counts: Counter = Counter()
+        self.domain_timeout_failure_counts: Counter = Counter()
+        self.domain_exception_failure_counts: Counter = Counter()
         self.invalid_calendar_ids: set[str] = set()
         self.processed_calendar_ids: set[str] = set()
 
@@ -381,11 +384,36 @@ class EventSpider(scrapy.Spider):
         )
         return any(marker in err_name or marker in err_text for marker in markers)
 
+    @staticmethod
+    def _is_timeout_download_failure(failure) -> bool:
+        """Return True when a transient failure is timeout-related."""
+        err_name = ""
+        err_text = ""
+        try:
+            err_name = failure.type.__name__.lower() if getattr(failure, "type", None) else ""
+            err_text = str(failure.value).lower() if getattr(failure, "value", None) else str(failure).lower()
+        except Exception:
+            err_text = str(failure).lower()
+        timeout_markers = (
+            "timeouterror",
+            "timed out",
+            "timeout",
+            "tcptimedout",
+        )
+        return any(marker in err_name or marker in err_text for marker in timeout_markers)
+
     def handle_request_error(self, failure) -> None:
         """Scrapy errback to track transient domain failures and cooldown behavior."""
         request = getattr(failure, "request", None)
         req_url = request.url if request else ""
         if self._is_transient_download_failure(failure):
+            domain = self._domain_for_url(req_url)
+            if domain:
+                self.domain_transient_failure_counts[domain] += 1
+                if self._is_timeout_download_failure(failure):
+                    self.domain_timeout_failure_counts[domain] += 1
+                else:
+                    self.domain_exception_failure_counts[domain] += 1
             self._record_domain_transient_failure(req_url, str(failure.value) if getattr(failure, "value", None) else str(failure))
         else:
             logging.warning("handle_request_error(): Non-transient request failure for %s: %s", req_url, failure)
@@ -404,6 +432,12 @@ class EventSpider(scrapy.Spider):
             active_blocks,
             reason,
         )
+        top_transient = self.domain_transient_failure_counts.most_common(10)
+        top_timeout = self.domain_timeout_failure_counts.most_common(10)
+        top_exception = self.domain_exception_failure_counts.most_common(10)
+        logging.info("domain_transient_failures_top: %s", top_transient)
+        logging.info("domain_timeout_failures_top: %s", top_timeout)
+        logging.info("domain_exception_failures_top: %s", top_exception)
 
     def _build_playwright_request_meta(self, high_priority: bool = False) -> dict:
         """

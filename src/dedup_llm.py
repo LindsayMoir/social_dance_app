@@ -445,7 +445,12 @@ class DeduplicationHandler:
         to_be_deleted_event_list = df.loc[df["Label"] == 1, "event_id"].tolist()
         logging.info(f"def delete_duplicates(): Number of event_id(s) to be deleted is: {len(to_be_deleted_event_list)}")  
         if to_be_deleted_event_list:
-            if self.db_handler.delete_multiple_events(to_be_deleted_event_list):
+            if self.db_handler.delete_multiple_events(
+                to_be_deleted_event_list,
+                deletion_source="dedup_llm.delete_duplicates",
+                deletion_reason="llm_labeled_duplicate",
+                extra_context={"llm_label": 1},
+            ):
                 logging.info("def delete_duplicates(): All selected events successfully deleted.")
             else:
                 logging.error("def delete_duplicates(): Some selected events could not be deleted.")
@@ -983,8 +988,11 @@ class DeduplicationHandler:
         if dry_run:
             fix_events.append({**row.to_dict(), "delete": True})
         else:
-            delete_sql = "DELETE FROM events WHERE event_id = :event_id"
-            self.db_handler.execute_query(delete_sql, {"event_id": event_id})
+            self.db_handler.delete_event_with_event_id(
+                event_id,
+                deletion_source="dedup_llm.delete_event_if_completely_empty",
+                deletion_reason="completely_empty_event_row",
+            )
             logging.info("delete_event_if_completely_empty: Deleted event_id %s", event_id)
 
 
@@ -1138,7 +1146,12 @@ class DeduplicationHandler:
             duplicate_event_ids = cluster_review[cluster_review['status'] == 'PROPOSED_DUPLICATE']['event_id'].tolist()
             if duplicate_event_ids:
                 logging.info(f"Deleting {len(duplicate_event_ids)} duplicate events from database...")
-                if self.db_handler.delete_multiple_events(duplicate_event_ids):
+                if self.db_handler.delete_multiple_events(
+                    duplicate_event_ids,
+                    deletion_source="dedup_llm.deduplicate_with_embeddings",
+                    deletion_reason="embedding_cluster_proposed_duplicate",
+                    extra_context={"method": "DBSCAN", "eps": float(eps), "min_samples": int(min_samples)},
+                ):
                     logging.info(f"Successfully deleted {len(duplicate_event_ids)} duplicate events from database")
                 else:
                     logging.error(f"Failed to delete some duplicate events from database")
@@ -1636,8 +1649,16 @@ Respond with ONLY valid JSON in this exact format:
                 logging.info(f"  [DRY RUN] Would delete event_id {decision['incorrect_event_id']}")
                 logging.info(f"  Reasoning: {decision['reasoning']}")
             else:
-                delete_sql = "DELETE FROM events WHERE event_id = :event_id"
-                self.db_handler.execute_query(delete_sql, {"event_id": decision['incorrect_event_id']})
+                self.db_handler.delete_event_with_event_id(
+                    int(decision['incorrect_event_id']),
+                    deletion_source="dedup_llm.resolve_venue_time_conflicts",
+                    deletion_reason="llm_venue_time_conflict_resolution",
+                    extra_context={
+                        "confidence": decision.get('confidence'),
+                        "reasoning": decision.get('reasoning', ''),
+                        "correct_event_id": decision.get('correct_event_id'),
+                    },
+                )
                 logging.info(f"  DELETED event_id {decision['incorrect_event_id']}")
                 logging.info(f"  Reasoning: {decision['reasoning']}")
                 deleted_count += 1

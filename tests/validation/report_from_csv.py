@@ -66,6 +66,7 @@ def build_html(results: dict, output_path: str) -> None:
 
     alias_data = summarize_address_alias_audit(results.get('config', {}))
     llm_data = summarize_llm_provider_activity(results.get('timestamp'), results.get('config', {}))
+    suspicious_deletes_data = summarize_suspicious_deletes(results.get('timestamp'), results.get('config', {}))
     reliability_scorecard = summarize_reliability_scorecard(results, llm_data, alias_data)
     reliability_gates = evaluate_reliability_gates(reliability_scorecard, results.get('config', {}))
     reliability_issues = extract_reliability_issues(results, llm_data, alias_data, reliability_gates)
@@ -145,6 +146,10 @@ def build_html(results: dict, output_path: str) -> None:
     html += "<h2>LLM Provider Activity</h2>"
     html += build_llm_provider_activity_html(llm_data)
 
+    # Likely Incorrect Deletes
+    html += "<h2>Likely Incorrect Deletes</h2>"
+    html += build_suspicious_deletes_html(suspicious_deletes_data)
+
     # Optimization Recommendations
     html += "<h2>Optimization Recommendations</h2>"
     html += build_optimization_html(optimization_plan)
@@ -174,11 +179,30 @@ def build_html(results: dict, output_path: str) -> None:
         json.dump(optimization_plan, f, indent=2)
     with open(os.path.join(output_dir, 'reliability_action_queue.json'), 'w', encoding='utf-8') as f:
         json.dump(action_queue, f, indent=2)
+    with open(os.path.join(output_dir, 'suspicious_deletes.json'), 'w', encoding='utf-8') as f:
+        json.dump(suspicious_deletes_data, f, indent=2)
     logging.info("HTML report saved: %s", output_path)
 
 
 def escape_html(value: str) -> str:
     return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text_value = str(value).strip()
+    if not text_value:
+        return None
+    if text_value.endswith("Z"):
+        text_value = text_value[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text_value)
+    except ValueError:
+        try:
+            return datetime.fromisoformat(text_value[:10])
+        except ValueError:
+            return None
 
 
 def summarize_address_alias_audit(config: dict) -> dict:
@@ -301,11 +325,272 @@ def build_address_alias_audit_html(alias_data: dict) -> str:
     return html
 
 
+def summarize_suspicious_deletes(report_timestamp: str | None, config: dict) -> dict:
+    output_cfg = config.get('output', {}) if isinstance(config, dict) else {}
+    validation_cfg = config.get('testing', {}).get('validation', {}) if isinstance(config, dict) else {}
+    reporting_cfg = validation_cfg.get('reporting', {}) if isinstance(validation_cfg, dict) else {}
+    audit_path = output_cfg.get('deleted_events_audit', 'logs/deleted_events_audit.jsonl')
+    days_window = int(reporting_cfg.get('suspicious_delete_days', 14) or 14)
+    max_rows = int(reporting_cfg.get('suspicious_delete_max_rows', 40) or 40)
+
+    summary = {
+        'available': False,
+        'path': audit_path,
+        'days_window': days_window,
+        'rows_analyzed': 0,
+        'window_rows': 0,
+        'exact_duplicate_deletes': 0,
+        'fuzzy_model_candidate_deletes': 0,
+        'flagged_count': 0,
+        'category_counts': [],
+        'flagged_rows': [],
+        'error': '',
+    }
+
+    if not os.path.exists(audit_path):
+        summary['error'] = f"Deleted-events audit file not found: {audit_path}"
+        return summary
+
+    end_ts = datetime.now()
+    parsed_report_ts = parse_iso_datetime(report_timestamp)
+    if parsed_report_ts is not None:
+        end_ts = parsed_report_ts
+    start_ts = end_ts - timedelta(days=days_window)
+    today_date = end_ts.date()
+
+    category_counts: Counter = Counter()
+    flagged_rows: list[dict] = []
+
+    try:
+        with open(audit_path, 'r', encoding='utf-8') as file:
+            for line in file:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    record = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                summary['rows_analyzed'] += 1
+
+                deleted_at = parse_iso_datetime(record.get('deleted_at_utc'))
+                if deleted_at is None or not (start_ts <= deleted_at <= end_ts):
+                    continue
+                summary['window_rows'] += 1
+
+                event = record.get('event') or {}
+                if not isinstance(event, dict):
+                    continue
+                deletion_source = str(record.get('deletion_source') or '')
+                deletion_reason = str(record.get('deletion_reason') or '')
+                extra_context = record.get('extra_context') if isinstance(record.get('extra_context'), dict) else {}
+                if deletion_source == 'db.dedup':
+                    summary['exact_duplicate_deletes'] += 1
+                if deletion_source in {
+                    'db.fuzzy_duplicates',
+                    'irrelevant_rows.delete_irrelevant_rows',
+                    'dedup_llm.delete_duplicates',
+                    'dedup_llm.deduplicate_with_embeddings',
+                    'dedup_llm.resolve_venue_time_conflicts',
+                }:
+                    summary['fuzzy_model_candidate_deletes'] += 1
+                event_name = str(event.get('event_name') or '')
+                url = str(event.get('url') or '')
+                location = str(event.get('location') or '')
+                start_date_raw = str(event.get('start_date') or '')
+                time_stamp_raw = str(event.get('time_stamp') or '')
+                dance_style = str(event.get('dance_style') or '')
+                description = str(event.get('description') or '')
+
+                score = 0
+                signals: list[str] = []
+                category = ''
+                fuzzy_score_raw = extra_context.get('fuzzy_score')
+                try:
+                    fuzzy_score = int(fuzzy_score_raw) if fuzzy_score_raw is not None else None
+                except (TypeError, ValueError):
+                    fuzzy_score = None
+
+                if deletion_source in {
+                    'irrelevant_rows.delete_irrelevant_rows',
+                    'dedup_llm.delete_duplicates',
+                    'dedup_llm.deduplicate_with_embeddings',
+                    'dedup_llm.resolve_venue_time_conflicts',
+                }:
+                    score += 2
+                    category = category or 'model_driven_delete_requires_review'
+                    signals.append("Delete came from model-driven/fuzzy pipeline.")
+
+                if deletion_source == 'db.fuzzy_duplicates':
+                    if fuzzy_score is not None and fuzzy_score < 90:
+                        score += 2
+                        category = category or 'low_confidence_fuzzy_duplicate'
+                        signals.append(f"Fuzzy duplicate merged at low score ({fuzzy_score}).")
+
+                start_dt = parse_iso_datetime(start_date_raw)
+                if start_dt is not None and start_dt.date() >= today_date:
+                    if deletion_source in {
+                        'db.delete_old_events',
+                        'db.delete_likely_dud_events',
+                        'db.delete_events_with_nulls',
+                    }:
+                        score += 3
+                        category = 'future_event_deleted_by_cleanup'
+                        signals.append("Future-dated event removed by cleanup path.")
+
+                if deletion_reason in {'outside_bc_filter', 'outside_canada_filter'}:
+                    loc_low = location.lower()
+                    if any(tok in loc_low for tok in ['victoria', 'vancouver island', ', bc', 'british columbia']):
+                        score += 3
+                        if not category:
+                            category = 'local_looking_location_deleted_as_non_local'
+                        signals.append("Location text appears local but removed by geo filter.")
+
+                if deletion_reason == 'empty_source_dance_style_url_no_address':
+                    if url.strip() or dance_style.strip() or len(description.strip()) >= 40:
+                        score += 2
+                        if not category:
+                            category = 'non_empty_event_deleted_as_empty_dud'
+                        signals.append("Dud-delete reason conflicts with non-empty event fields.")
+
+                if deletion_reason == 'empty_dance_style_url_other_no_location_description':
+                    if event_name.strip() and (url.strip() or len(description.strip()) >= 40):
+                        score += 2
+                        if not category:
+                            category = 'non_empty_other_deleted_as_empty'
+                        signals.append("Delete reason conflicts with populated URL/description.")
+
+                created_at = parse_iso_datetime(time_stamp_raw)
+                if created_at is not None:
+                    age_hours = (deleted_at - created_at).total_seconds() / 3600.0
+                    if 0 <= age_hours <= 6:
+                        score += 1
+                        if not category:
+                            category = 'rapid_post_ingest_delete'
+                        signals.append(f"Deleted {age_hours:.1f}h after ingest.")
+
+                if deletion_source == 'db.dedup' and score < 4:
+                    continue
+                if deletion_source == 'db.fuzzy_duplicates' and (fuzzy_score is None or fuzzy_score >= 90) and score < 4:
+                    continue
+
+                if score >= 2:
+                    category_counts.update([category or 'other_suspicious'])
+                    flagged_rows.append({
+                        'deleted_at_utc': str(record.get('deleted_at_utc') or ''),
+                        'event_id': event.get('event_id'),
+                        'event_name': event_name,
+                        'start_date': start_date_raw,
+                        'source': event.get('source'),
+                        'deletion_source': deletion_source,
+                        'deletion_reason': deletion_reason,
+                        'url': url,
+                        'location': location,
+                        'suspicion_score': score,
+                        'signals': signals,
+                    })
+    except Exception as e:
+        summary['error'] = f"Failed reading deleted-events audit: {e}"
+        return summary
+
+    flagged_rows.sort(
+        key=lambda row: (
+            -int(row.get('suspicion_score') or 0),
+            str(row.get('deleted_at_utc') or ''),
+        )
+    )
+    summary['available'] = True
+    summary['flagged_count'] = len(flagged_rows)
+    summary['category_counts'] = category_counts.most_common(10)
+    summary['flagged_rows'] = flagged_rows[:max_rows]
+    return summary
+
+
+def build_suspicious_deletes_html(suspicious_data: dict) -> str:
+    if not suspicious_data:
+        return "<p class='error-box'>❌ Suspicious delete summary unavailable.</p>"
+    if not suspicious_data.get('available'):
+        err = escape_html(suspicious_data.get('error', 'Suspicious delete audit unavailable'))
+        path = escape_html(suspicious_data.get('path', ''))
+        return (
+            "<p class='error-box'>"
+            f"⚠ Suspicious delete audit not available.<br>{err}<br><strong>Path:</strong> {path}"
+            "</p>"
+        )
+
+    flagged_rows = suspicious_data.get('flagged_rows', []) or []
+    category_rows = suspicious_data.get('category_counts', []) or []
+    html = (
+        "<div class='metric-container'>"
+        f"<div class='metric'><div class='metric-value'>{int(suspicious_data.get('rows_analyzed', 0))}</div><div class='metric-label'>Audit Rows (All Time)</div></div>"
+        f"<div class='metric'><div class='metric-value'>{int(suspicious_data.get('window_rows', 0))}</div><div class='metric-label'>Rows in Window</div></div>"
+        f"<div class='metric'><div class='metric-value'>{int(suspicious_data.get('exact_duplicate_deletes', 0))}</div><div class='metric-label'>Exact Duplicate Deletes</div></div>"
+        f"<div class='metric'><div class='metric-value'>{int(suspicious_data.get('fuzzy_model_candidate_deletes', 0))}</div><div class='metric-label'>Fuzzy/Model Delete Candidates</div></div>"
+        f"<div class='metric'><div class='metric-value'>{int(suspicious_data.get('flagged_count', 0))}</div><div class='metric-label'>Likely Incorrect Deletes</div></div>"
+        "</div>"
+        f"<p><strong>Window:</strong> Last {int(suspicious_data.get('days_window', 0))} day(s)</p>"
+        f"<p><strong>Audit Path:</strong> {escape_html(suspicious_data.get('path', ''))}</p>"
+    )
+
+    if category_rows:
+        html += "<h3>Top Suspicion Categories</h3><table><tr><th>Category</th><th>Count</th></tr>"
+        for category, count in category_rows:
+            html += (
+                "<tr>"
+                f"<td>{escape_html(category)}</td>"
+                f"<td>{int(count)}</td>"
+                "</tr>"
+            )
+        html += "</table>"
+
+    if not flagged_rows:
+        return html + "<p>No likely incorrect deletes were detected in this window.</p>"
+
+    html += (
+        "<h3>Flagged Events (Review)</h3>"
+        "<table><tr>"
+        "<th>Deleted At</th><th>Score</th><th>Event ID</th><th>Event</th><th>Start Date</th>"
+        "<th>Delete Source</th><th>Delete Reason</th><th>Signals</th><th>URL</th>"
+        "</tr>"
+    )
+    for row in flagged_rows:
+        signals = "; ".join(row.get('signals', []) or [])
+        html += (
+            "<tr>"
+            f"<td>{escape_html(row.get('deleted_at_utc', ''))}</td>"
+            f"<td>{int(row.get('suspicion_score', 0))}</td>"
+            f"<td>{escape_html(row.get('event_id', ''))}</td>"
+            f"<td>{escape_html(row.get('event_name', ''))}</td>"
+            f"<td>{escape_html(row.get('start_date', ''))}</td>"
+            f"<td>{escape_html(row.get('deletion_source', ''))}</td>"
+            f"<td>{escape_html(row.get('deletion_reason', ''))}</td>"
+            f"<td>{escape_html(signals)}</td>"
+            f"<td>{escape_html(row.get('url', ''))}</td>"
+            "</tr>"
+        )
+    html += "</table>"
+    return html
+
+
 def parse_log_timestamp(line: str) -> datetime | None:
     try:
         return datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
     except Exception:
         return None
+
+
+def parse_llm_query_provider_model(line: str) -> tuple[str, str] | None:
+    """Extract provider/model from any LLM query log line shape."""
+    low = line.lower()
+    for provider in ("openai", "openrouter", "mistral", "gemini"):
+        marker = f"querying {provider} model "
+        idx = low.find(marker)
+        if idx >= 0:
+            model = line[idx + len(marker):].strip().split()[0] if line[idx + len(marker):].strip() else ""
+            return provider, model
+    return None
 
 
 def summarize_llm_provider_activity(report_timestamp: str | None, config: dict) -> dict:
@@ -344,6 +629,7 @@ def summarize_llm_provider_activity(report_timestamp: str | None, config: dict) 
     file_attempts: Counter = Counter()
     model_attempts: Counter = Counter()
     total_provider_exhausted = 0
+    total_accesses = 0
     lines_scanned = 0
 
     for path in log_files:
@@ -359,23 +645,13 @@ def summarize_llm_provider_activity(report_timestamp: str | None, config: dict) 
                     lines_scanned += 1
                     low = line.lower()
 
-                    if "query_llm(): querying openai" in low:
-                        stats["openai"]["attempts"] += 1
+                    parsed_query = parse_llm_query_provider_model(line)
+                    if parsed_query:
+                        provider, model = parsed_query
+                        total_accesses += 1
                         file_attempts[path] += 1
-                    if "query_llm(): querying openrouter" in low:
-                        stats["openrouter"]["attempts"] += 1
-                        file_attempts[path] += 1
-                    if "query_llm(): querying mistral" in low:
-                        stats["mistral"]["attempts"] += 1
-                        file_attempts[path] += 1
-                    if "query_llm(): querying gemini" in low:
-                        stats["gemini"]["attempts"] += 1
-                        file_attempts[path] += 1
-                    for provider in providers:
-                        marker = f"query_llm(): querying {provider} model "
-                        idx = low.find(marker)
-                        if idx >= 0:
-                            model = line[idx + len(marker):].strip().split()[0]
+                        if provider in stats:
+                            stats[provider]["attempts"] += 1
                             if model:
                                 model_attempts[f"{provider}:{model}"] += 1
 
@@ -418,7 +694,8 @@ def summarize_llm_provider_activity(report_timestamp: str | None, config: dict) 
         except Exception as e:
             logging.warning("summarize_llm_provider_activity: Failed to parse %s: %s", path, e)
 
-    total_attempts = sum(v["attempts"] for v in stats.values())
+    total_provider_attempts = sum(v["attempts"] for v in stats.values())
+    total_attempts = total_accesses
     total_rate_limits = sum(v["rate_limits"] for v in stats.values())
     total_timeouts = sum(v["timeouts"] for v in stats.values())
     gemini_attempts = int(stats.get("gemini", {}).get("attempts", 0))
@@ -471,6 +748,8 @@ def summarize_llm_provider_activity(report_timestamp: str | None, config: dict) 
         "end_ts": end_ts.isoformat(sep=" "),
         "providers": stats,
         "total_attempts": total_attempts,
+        "total_accesses": total_accesses,
+        "total_provider_attempts": total_provider_attempts,
         "provider_exhausted_count": total_provider_exhausted,
         "lines_scanned": lines_scanned,
         "top_files": file_attempts.most_common(8),
@@ -486,7 +765,7 @@ def build_llm_provider_activity_html(llm_data: dict) -> str:
     if not llm_data:
         return "<p class='error-box'>❌ LLM activity summary unavailable</p>"
 
-    total_attempts = int(llm_data.get("total_attempts", 0))
+    total_attempts = int(llm_data.get("total_accesses", llm_data.get("total_attempts", 0)))
     exhausted = int(llm_data.get("provider_exhausted_count", 0))
     lines_scanned = int(llm_data.get("lines_scanned", 0))
     total_rate_limits = int(llm_data.get("total_rate_limits", 0))
@@ -500,7 +779,7 @@ def build_llm_provider_activity_html(llm_data: dict) -> str:
 
     html = (
         "<div class=\"metric-container\">"
-        f"<div class=\"metric\"><div class=\"metric-value\">{total_attempts}</div><div class=\"metric-label\">LLM Attempts (Window)</div></div>"
+        f"<div class=\"metric\"><div class=\"metric-value\">{total_attempts}</div><div class=\"metric-label\">LLM Accesses (Window)</div></div>"
         f"<div class=\"metric\"><div class=\"metric-value\">{exhausted}</div><div class=\"metric-label\">All-Provider Exhausted</div></div>"
         f"<div class=\"metric\"><div class=\"metric-value\">{lines_scanned}</div><div class=\"metric-label\">Log Lines Scanned</div></div>"
         f"<div class=\"metric\"><div class=\"metric-value\">{total_rate_limits}</div><div class=\"metric-label\">Rate Limits (All Providers)</div></div>"
@@ -558,7 +837,9 @@ def summarize_reliability_scorecard(results: dict, llm_data: dict, alias_data: d
     avg_score = float(chatbot_summary.get('average_score', 0) or 0)
     exec_rate = float(chatbot_summary.get('execution_success_rate', 0) or 0)
 
-    total_attempts = int((llm_data or {}).get('total_attempts', 0) or 0)
+    total_attempts = int(
+        (llm_data or {}).get('total_accesses', (llm_data or {}).get('total_attempts', 0)) or 0
+    )
     providers = (llm_data or {}).get('providers', {}) or {}
     total_successes = sum(int((providers.get(p, {}) or {}).get('successes', 0) or 0) for p in ("openai", "openrouter", "mistral", "gemini"))
     total_rate_limits = int((llm_data or {}).get('total_rate_limits', 0) or 0)
@@ -719,7 +1000,7 @@ def build_reliability_scorecard_html(
         f"<div class=\"metric\"><div class=\"metric-value\">{float(scorecard.get('score', 0)):.1f}</div><div class=\"metric-label\">Reliability Score</div></div>"
         f"<div class=\"metric\"><div class=\"metric-value\">{escape_html(status)}</div><div class=\"metric-label\">Reliability Status</div></div>"
         f"<div class=\"metric\"><div class=\"metric-value\">{open_issues}</div><div class=\"metric-label\">Normalized Open Issues</div></div>"
-        f"<div class=\"metric\"><div class=\"metric-value\">{int(metrics.get('llm_attempts', 0))}</div><div class=\"metric-label\">LLM Attempts (Window)</div></div>"
+        f"<div class=\"metric\"><div class=\"metric-value\">{int(metrics.get('llm_attempts', 0))}</div><div class=\"metric-label\">LLM Accesses (Window)</div></div>"
         f"<div class=\"metric\"><div class=\"metric-value\">{int(metrics.get('llm_rate_limits', 0))}</div><div class=\"metric-label\">LLM Rate Limits</div></div>"
         "</div>"
     )

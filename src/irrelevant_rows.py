@@ -325,7 +325,12 @@ class IrrelevantRowsHandler:
         to_be_deleted_event_list = df.loc[df["Label"] == 1, "event_id"].tolist()
         logging.info(f"def delete_irrelevant_rows(): Number of event_id(s) to be deleted is: {len(to_be_deleted_event_list)}")  
         if to_be_deleted_event_list:
-            if self.db_handler.delete_multiple_events(to_be_deleted_event_list):
+            if self.db_handler.delete_multiple_events(
+                to_be_deleted_event_list,
+                deletion_source="irrelevant_rows.delete_irrelevant_rows",
+                deletion_reason="llm_irrelevant_label",
+                extra_context={"llm_label": 1},
+            ):
                 logging.info("def delete_irrelevant_rows(): All selected events successfully deleted.")
             else:
                 logging.error("def delete_irrelevant_rows(): Some selected events could not be deleted.")
