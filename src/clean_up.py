@@ -717,22 +717,38 @@ class CleanUp:
         """
         Deletes known incorrect events from the database.
         """
-        conditions = " OR ".join(f"url ILIKE '%{kw}%'" for kw in known_incorrect_urls)
-        
+        where_parts: List[str] = []
+        params: Dict[str, Any] = {}
+
+        for idx, keyword in enumerate(known_incorrect_urls):
+            key = f"url_kw_{idx}"
+            where_parts.append(f"url ILIKE :{key}")
+            params[key] = f"%{keyword}%"
+
         # Also delete events with specific problematic location
-        location_condition = "location = 'BC Swing Dance Club, Victoria, BC, CA'"
-        
-        # Also delete events with "Carolyn Gebbie", "BC Swing Dance Club Victoria", or "Swing X" in the source column
-        source_condition = "source = 'Carolyn Gebbie' OR source = 'BC Swing Dance Club Victoria' OR source = 'Swing X'"
-        
-        sql = f"""
-            DELETE FROM events
-            WHERE {conditions} OR {location_condition} OR ({source_condition});
-        """
-        rows_deleted = self.db_handler.execute_query(sql)
-        if rows_deleted is not None:
+        where_parts.append("location = :problem_location")
+        params["problem_location"] = "BC Swing Dance Club, Victoria, BC, CA"
+
+        # Also delete events with specific problematic source values
+        where_parts.append(
+            "source IN (:source_1, :source_2, :source_3)"
+        )
+        params["source_1"] = "Carolyn Gebbie"
+        params["source_2"] = "BC Swing Dance Club Victoria"
+        params["source_3"] = "Swing X"
+
+        deleted_count = self.db_handler.delete_events_by_filter(
+            where_clause=" OR ".join(where_parts),
+            params=params,
+            deletion_source="clean_up.known_incorrect",
+            deletion_reason="known_incorrect_rules",
+            extra_context={"known_incorrect_urls": known_incorrect_urls},
+        )
+        if deleted_count >= 0:
             logging.info(
-                f"known_incorrect(): Deleted {rows_deleted} event(s) matching keywords: {known_incorrect_urls}, problematic location, or problematic sources"
+                "known_incorrect(): Deleted %d event(s) matching keywords: %s, problematic location, or problematic sources",
+                deleted_count,
+                known_incorrect_urls,
             )
         else:
             logging.error(
@@ -1222,8 +1238,12 @@ class CleanUp:
         logging.info("Starting deletion of events at closed venues...")
         
         # Delete Victoria Event Centre events
-        deleted_count_vec = self.db_handler.execute_query(
-            "DELETE FROM events WHERE location ILIKE '%Victoria Event Centre%'"
+        deleted_count_vec = self.db_handler.delete_events_by_filter(
+            where_clause="location ILIKE :location_pattern",
+            params={"location_pattern": "%Victoria Event Centre%"},
+            deletion_source="clean_up.delete_closed_venue_events",
+            deletion_reason="closed_venue_victoria_event_centre",
+            extra_context={"location_pattern": "%Victoria Event Centre%"},
         )
         
         if deleted_count_vec is not None and deleted_count_vec > 0:
@@ -1232,8 +1252,12 @@ class CleanUp:
             logging.info("delete_closed_venue_events(): No events found at Victoria Event Centre")
         
         # Delete BC Swing Dance Club Victoria events
-        deleted_count_bcswing = self.db_handler.execute_query(
-            "DELETE FROM events WHERE location ILIKE '%BC Swing Dance Club Victoria%'"
+        deleted_count_bcswing = self.db_handler.delete_events_by_filter(
+            where_clause="location ILIKE :location_pattern",
+            params={"location_pattern": "%BC Swing Dance Club Victoria%"},
+            deletion_source="clean_up.delete_closed_venue_events",
+            deletion_reason="closed_venue_bc_swing_dance_club_victoria",
+            extra_context={"location_pattern": "%BC Swing Dance Club Victoria%"},
         )
         
         if deleted_count_bcswing is not None and deleted_count_bcswing > 0:

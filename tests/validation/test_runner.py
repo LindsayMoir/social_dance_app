@@ -101,6 +101,7 @@ class ValidationTestRunner:
             'timestamp': datetime.now().isoformat(),
             'scraping_validation': None,
             'chatbot_testing': None,
+            'chatbot_problem_category_gate': None,
             'overall_status': 'PASS',
             'reliability_gates': None,
         }
@@ -203,6 +204,10 @@ class ValidationTestRunner:
 
             score_threshold = chatbot_config.get('score_threshold', 70)
             exec_threshold = chatbot_config.get('execution_threshold', 0.90)
+            problem_gate = self._evaluate_chatbot_problem_category_gate(chatbot_report, chatbot_config)
+            chatbot_report['category_gate'] = problem_gate
+            results['chatbot_problem_category_gate'] = problem_gate
+            self._write_chatbot_problem_category_regressions(output_dir, chatbot_report)
 
             if avg_score < score_threshold:
                 results['overall_status'] = 'FAIL'
@@ -222,6 +227,13 @@ class ValidationTestRunner:
                     f"✅ Chatbot tests passed: avg_score={avg_score:.1f}, "
                     f"exec_rate={exec_rate:.2%}"
                 )
+
+            if problem_gate.get("status") == "FAIL":
+                results['overall_status'] = 'FAIL'
+                logging.error("❌ Chatbot category gate failed: %s", problem_gate.get("detail", ""))
+            elif problem_gate.get("status") == "WARNING" and results['overall_status'] == 'PASS':
+                results['overall_status'] = 'WARNING'
+                logging.warning("⚠️  Chatbot category gate warning: %s", problem_gate.get("detail", ""))
 
         except Exception as e:
             logging.error(f"Chatbot testing failed: {e}", exc_info=True)
@@ -281,6 +293,45 @@ class ValidationTestRunner:
         logging.info("=" * 80)
 
         return results
+
+    def _evaluate_chatbot_problem_category_gate(self, chatbot_report: dict, chatbot_config: dict) -> dict:
+        """Evaluate category-level chatbot quality gate from problem-category buckets."""
+        categories = chatbot_report.get("problem_categories", []) if isinstance(chatbot_report, dict) else []
+        min_count = int(chatbot_config.get("problem_category_min_count", 2) or 2)
+        max_allowed = int(chatbot_config.get("max_problem_categories", 0) or 0)
+        mode = str(chatbot_config.get("problem_category_gate_mode", "warning") or "warning").lower()
+        relevant = [c for c in categories if int((c or {}).get("count", 0) or 0) >= min_count]
+        count = len(relevant)
+        detail = (
+            f"relevant_categories={count} (min_count={min_count}) max_allowed={max_allowed}; "
+            f"categories={', '.join(str(c.get('name', '')) for c in relevant[:5]) or 'none'}"
+        )
+        if count > max_allowed:
+            status = "FAIL" if mode == "fail" else "WARNING"
+        else:
+            status = "PASS"
+        return {
+            "status": status,
+            "mode": mode,
+            "max_allowed": max_allowed,
+            "min_count": min_count,
+            "relevant_count": count,
+            "detail": detail,
+        }
+
+    def _write_chatbot_problem_category_regressions(self, output_dir: str, chatbot_report: dict) -> None:
+        """Persist deterministic regression cases from chatbot problem categories."""
+        os.makedirs(output_dir, exist_ok=True)
+        cases = chatbot_report.get("problem_category_regression_cases", []) if isinstance(chatbot_report, dict) else []
+        payload = {
+            "generated_at": datetime.now().isoformat(),
+            "count": len(cases),
+            "cases": cases,
+        }
+        path = os.path.join(output_dir, "chatbot_problem_category_regressions.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        logging.info("Chatbot problem-category regression cases saved: %s", path)
 
     def _generate_html_report(self, results: dict) -> None:
         """
@@ -2537,9 +2588,23 @@ class ValidationTestRunner:
         scraper_timeout_count = int(scraper_network.get("timeout_count", 0) or 0)
         scraper_degraded = bool(scraper_network.get("degraded", False))
         failure_types = scraping_summary.get("failure_types", {}) if isinstance(scraping_summary, dict) else {}
+        failure_stage_counts = scraping_summary.get("failure_stage_counts", {}) if isinstance(scraping_summary, dict) else {}
         scrape_not_accessed_urls = int((failure_types or {}).get("not_attempted", 0) or 0)
         scrape_keyword_misses_after_access = int(
             scraping_summary.get("keyword_failures_after_scrape", 0) or 0
+        )
+        attempted_no_keywords = int((failure_stage_counts or {}).get("attempted_no_keywords", 0) or 0)
+        attempted_extraction_or_llm_failure = int(
+            (failure_stage_counts or {}).get("attempted_extraction_or_llm_failure", 0) or 0
+        )
+        other_post_scrape_reasons = max(
+            0,
+            post_scrape_failures - attempted_no_keywords - attempted_extraction_or_llm_failure,
+        )
+        scrape_total_failure_reasons = (
+            f"attempted_no_keywords={attempted_no_keywords}; "
+            f"attempted_extraction_or_llm_failure={attempted_extraction_or_llm_failure}; "
+            f"other_post_scrape={other_post_scrape_reasons}"
         )
         keyword_miss_rate = (
             scrape_keyword_misses_after_access / attempted_url_denominator
@@ -2587,6 +2652,7 @@ class ValidationTestRunner:
             "metrics": {
                 "scrape_critical_failures": critical_failures,
                 "scrape_total_failures": int(scraping_summary.get('total_failures', 0) or 0),
+                "scrape_total_failure_reasons": scrape_total_failure_reasons,
                 "scrape_total_important_urls": total_important_urls,
                 "scrape_attempted_url_denominator": attempted_url_denominator,
                 "scrape_attempted_failure_rate": round(attempted_failure_rate, 4) if attempted_url_denominator > 0 else None,
@@ -2873,6 +2939,7 @@ class ValidationTestRunner:
         metric_descriptions = {
             "scrape_critical_failures": "Critical whitelist/edge-case scrape failures. Source scope: cross-pipeline DB validation (multi-source), not scraper_log-only.",
             "scrape_total_failures": "Post-scrape failures across important URLs (excludes not-attempted URLs; includes keyword/irrelevant failures after scrape). Source scope: cross-pipeline DB validation (multi-source), not scraper_log-only.",
+            "scrape_total_failure_reasons": "Reason composition of scrape_total_failures (attempted URL failures only). Counts are categorized into no-keyword, extraction/LLM, and other post-scrape causes.",
             "scrape_not_accessed_urls": "Important URLs with no scrape attempt in-window (not_attempted). Source scope: scraping validation URL checks.",
             "scrape_keyword_misses_after_access": "Attempted URLs classified irrelevant/no-keyword after access (marked_irrelevant). Source scope: scraping validation URL checks.",
             "scraper_exception_rate": "Downloader exceptions / scraper requests. Source scope: scraper.py stats from logs/scraper_log.txt only.",
@@ -2892,6 +2959,7 @@ class ValidationTestRunner:
         for key in (
             "scrape_critical_failures",
             "scrape_total_failures",
+            "scrape_total_failure_reasons",
             "scrape_not_accessed_urls",
             "scrape_keyword_misses_after_access",
             "scraper_exception_rate",
@@ -3284,11 +3352,13 @@ class ValidationTestRunner:
         items = action_queue.get("items", []) or []
         if not items:
             return "<p>✅ No queued reliability actions.</p>"
-        html = "<table><tr><th>Priority</th><th>Source Section</th><th>Metric Key</th><th>Action</th><th>Reason</th><th>Suggested Change</th><th>Acceptance Test</th></tr>"
+        html = "<table><tr><th>Priority</th><th>Status</th><th>Owner</th><th>Source Section</th><th>Metric Key</th><th>Action</th><th>Reason</th><th>Suggested Change</th><th>Acceptance Test</th></tr>"
         for item in items:
             html += (
                 "<tr>"
                 f"<td>{self._escape_html(item.get('priority', ''))}</td>"
+                f"<td>{self._escape_html(item.get('status', 'open'))}</td>"
+                f"<td>{self._escape_html(item.get('owner', 'unassigned'))}</td>"
                 f"<td>{self._escape_html(item.get('source_section', ''))}</td>"
                 f"<td>{self._escape_html(item.get('metric_key', ''))}</td>"
                 f"<td>{self._escape_html(item.get('title', ''))}</td>"
@@ -3411,6 +3481,17 @@ class ValidationTestRunner:
         registry_summary: dict,
     ) -> dict:
         """Build prioritized action queue from gates, recurring issues, and optimization signals."""
+        default_owner = str(
+            self.validation_config.get("reporting", {})
+            .get("action_queue", {})
+            .get("default_owner", "unassigned")
+        )
+        default_status = str(
+            self.validation_config.get("reporting", {})
+            .get("action_queue", {})
+            .get("default_status", "open")
+        )
+
         def _step_to_section(step: str) -> str:
             mapping = {
                 "scraping_validation": "Scraping Validation",
@@ -3438,6 +3519,8 @@ class ValidationTestRunner:
                 "reason": gate.get("detail", "Gate threshold breached."),
                 "suggested_change": "Adjust provider routing/threshold regressions and rerun validation.",
                 "acceptance_test": f"Gate `{gate_name}` is PASS in reliability_gates.json",
+                "status": default_status,
+                "owner": default_owner,
             })
 
         for recurring in (registry_summary or {}).get("top_recurring", [])[:3]:
@@ -3454,6 +3537,8 @@ class ValidationTestRunner:
                 "reason": f"Recurring {occ} times since {recurring.get('first_seen', '')}.",
                 "suggested_change": "Add deterministic regression test and tighten parser/fallback for this signature.",
                 "acceptance_test": f"`{issue_id}` occurrence trend decreases in reliability_issue_registry.json",
+                "status": default_status,
+                "owner": default_owner,
             })
 
         change_targets = (optimization_plan or {}).get("change_targets", []) or []
@@ -3466,6 +3551,8 @@ class ValidationTestRunner:
                 "reason": str(target.get("reason", "")),
                 "suggested_change": "Review config_patch_preview and apply routing change if aligned with quality goals.",
                 "acceptance_test": str(target.get("acceptance_test", "Target metric improves in next run")),
+                "status": default_status,
+                "owner": default_owner,
             })
         if not change_targets:
             for rec in (optimization_plan or {}).get("recommendations", [])[:3]:
@@ -3477,6 +3564,8 @@ class ValidationTestRunner:
                     "reason": rec,
                     "suggested_change": "Review config_patch_preview and apply routing change if aligned with quality goals.",
                     "acceptance_test": "Recommendation is implemented and validated in next run.",
+                    "status": default_status,
+                    "owner": default_owner,
                 })
 
         # Deduplicate by title while preserving order
@@ -3664,6 +3753,21 @@ class ValidationTestRunner:
                 f"excluded_not_attempted={int((summary.get('failure_types', {}) or {}).get('not_attempted', 0) or 0)}"
                 "</p>"
             )
+        attempted_no_keywords = int(failure_stage_counts.get('attempted_no_keywords', 0) or 0)
+        attempted_extraction_or_llm_failure = int(
+            failure_stage_counts.get('attempted_extraction_or_llm_failure', 0) or 0
+        )
+        other_post_scrape = max(
+            0,
+            post_scrape_failures - attempted_no_keywords - attempted_extraction_or_llm_failure,
+        )
+        html += (
+            "<p><strong>Post-Scrape Failure Reasons:</strong> "
+            f"attempted_no_keywords={attempted_no_keywords}; "
+            f"attempted_extraction_or_llm_failure={attempted_extraction_or_llm_failure}; "
+            f"other_post_scrape={other_post_scrape}"
+            "</p>"
+        )
 
         if not_attempted_breakdown:
             categories = not_attempted_breakdown.get("categories", {}) or {}
@@ -3802,6 +3906,55 @@ class ValidationTestRunner:
                         """
                     html += "</table>"
 
+                trend = dist.get('trend_monitoring', {}) if isinstance(dist, dict) else {}
+                if trend:
+                    alerts = trend.get('alerts', []) or []
+                    html += "<h4>Top-Source Trend Monitoring</h4>"
+                    html += (
+                        f"<p><strong>Run ID:</strong> {self._escape_html(str(trend.get('run_id', '')))} | "
+                        f"<strong>History Runs Used:</strong> {int(trend.get('history_runs_used', 0) or 0)} | "
+                        f"<strong>Lookback Runs:</strong> {int(trend.get('lookback_runs', 0) or 0)}</p>"
+                    )
+
+                    baseline_top = trend.get('baseline_top_10', []) or []
+                    if baseline_top:
+                        html += "<p><strong>Baseline Top Sources (Avg Count):</strong></p>"
+                        html += "<table><tr><th>Rank</th><th>Source</th><th>Baseline Avg Count</th></tr>"
+                        for i, row in enumerate(baseline_top[:10], 1):
+                            html += (
+                                "<tr>"
+                                f"<td>{i}</td>"
+                                f"<td>{self._escape_html(str(row.get('source', '')))}</td>"
+                                f"<td>{float(row.get('avg_count', 0) or 0):.2f}</td>"
+                                "</tr>"
+                            )
+                        html += "</table>"
+
+                    if alerts:
+                        html += "<p class='error-box'><strong>Trend Alerts:</strong> Significant source changes detected.</p>"
+                        html += (
+                            "<table><tr>"
+                            "<th>Source</th><th>Alert Type</th><th>Severity</th>"
+                            "<th>Current Count</th><th>Baseline Avg</th><th>% Change</th>"
+                            "</tr>"
+                        )
+                        for alert in alerts:
+                            html += (
+                                "<tr class='problematic'>"
+                                f"<td>{self._escape_html(str(alert.get('source', '')))}</td>"
+                                f"<td>{self._escape_html(str(alert.get('alert_type', '')))}</td>"
+                                f"<td>{self._escape_html(str(alert.get('severity', '')))}</td>"
+                                f"<td>{int(alert.get('current_count', 0) or 0)}</td>"
+                                f"<td>{float(alert.get('baseline_avg', 0) or 0):.2f}</td>"
+                                f"<td>{float(alert.get('pct_change', 0) or 0):.1%}</td>"
+                                "</tr>"
+                            )
+                        html += "</table>"
+                    elif int(trend.get('history_runs_used', 0) or 0) > 0:
+                        html += "<p>✅ No top-source trend anomalies detected in this run.</p>"
+                    else:
+                        html += "<p>ℹ️ Baseline is still warming up (insufficient prior runs).</p>"
+
             # Warnings
             if dist.get('warnings'):
                 html += "<h4>Warnings</h4><ul>"
@@ -3848,6 +4001,20 @@ class ValidationTestRunner:
             html += f"<tr><td>{range_name}</td><td>{count}</td></tr>"
 
         html += "</table>"
+        category_gate = chatbot_data.get("category_gate") if isinstance(chatbot_data, dict) else None
+        if isinstance(category_gate, dict):
+            gate_status = str(category_gate.get("status", "PASS") or "PASS").upper()
+            gate_class = {
+                "PASS": "status-pass",
+                "WARNING": "status-warning",
+                "FAIL": "status-fail",
+            }.get(gate_status, "status-warning")
+            html += (
+                "<p><strong>Problem Category Gate:</strong> "
+                f"<span class='{gate_class}'>{self._escape_html(gate_status)}</span> "
+                f"({self._escape_html(str(category_gate.get('detail', '')))}"
+                ")</p>"
+            )
 
         if chatbot_data.get('problematic_questions'):
             html += "<h3>Problematic Questions (Score < 50)</h3>"

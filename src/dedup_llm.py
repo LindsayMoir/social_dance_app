@@ -317,13 +317,44 @@ class DeduplicationHandler:
                 logging.warning(f"def process_chunk_with_llm(): Received empty response for chunk {chunk_index}.")
                 return None
 
-            return self.parse_llm_response(response_chunk)
+            return self.parse_llm_response(response_chunk, chunk_index=chunk_index)
 
         except Exception as e:
             logging.error(f"def process_chunk_with_llm(): Error processing chunk {chunk_index}: {e}")
             return None
 
-    def parse_llm_response(self, response_chunk):
+    @staticmethod
+    def _safe_preview(value: str, max_chars: int = 800) -> str:
+        """Return a compact single-line response preview for diagnostics."""
+        if value is None:
+            return ""
+        text = str(value).replace("\n", "\\n").replace("\r", "\\r")
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + "...[truncated]"
+
+    def _write_dedup_parse_artifact(
+        self,
+        reason: str,
+        response_chunk: str,
+        chunk_index: Optional[int] = None,
+    ) -> None:
+        """Persist parse failures for dedup LLM responses."""
+        try:
+            os.makedirs("output", exist_ok=True)
+            artifact_path = os.path.join("output", "dedup_parse_failures.jsonl")
+            payload = {
+                "time": datetime.now().isoformat(),
+                "reason": reason,
+                "chunk_index": chunk_index,
+                "response_preview": self._safe_preview(response_chunk, max_chars=1500),
+            }
+            with open(artifact_path, "a", encoding="utf-8") as artifact_file:
+                artifact_file.write(json.dumps(payload, ensure_ascii=True) + "\n")
+        except Exception as artifact_error:
+            logging.warning("def clean_response(): Failed to write parse artifact: %s", artifact_error)
+
+    def parse_llm_response(self, response_chunk, chunk_index: Optional[int] = None):
         # 1) Try schema-aware parser from LLMHandler first
         try:
             parsed = self.llm_handler.extract_and_parse_json(response_chunk, '', 'deduplication_response')
@@ -351,7 +382,17 @@ class DeduplicationHandler:
                 text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
                 start_idx = text.find('[')
                 if start_idx == -1:
-                    logging.error("def clean_response(): No '[' found; cannot locate JSON array in response.")
+                    logging.error(
+                        "def clean_response(): No '[' found; cannot locate JSON array in response. "
+                        "chunk_index=%s preview=%s",
+                        chunk_index,
+                        self._safe_preview(response_chunk),
+                    )
+                    self._write_dedup_parse_artifact(
+                        reason="no_json_array",
+                        response_chunk=response_chunk,
+                        chunk_index=chunk_index,
+                    )
                     return pd.DataFrame()
                 bracket = 0
                 end_idx = -1
@@ -364,7 +405,17 @@ class DeduplicationHandler:
                             end_idx = i
                             break
                 if end_idx == -1:
-                    logging.error("def clean_response(): Unbalanced brackets; cannot extract JSON array.")
+                    logging.error(
+                        "def clean_response(): Unbalanced brackets; cannot extract JSON array. "
+                        "chunk_index=%s preview=%s",
+                        chunk_index,
+                        self._safe_preview(response_chunk),
+                    )
+                    self._write_dedup_parse_artifact(
+                        reason="unbalanced_brackets",
+                        response_chunk=response_chunk,
+                        chunk_index=chunk_index,
+                    )
                     return pd.DataFrame()
                 json_str = text[start_idx:end_idx+1]
 
@@ -374,16 +425,31 @@ class DeduplicationHandler:
                 obj = json.loads(html.unescape(json_str))
             if not isinstance(obj, list):
                 logging.error("def clean_response(): Top-level JSON is not a list.")
+                self._write_dedup_parse_artifact(
+                    reason="top_level_not_list",
+                    response_chunk=response_chunk,
+                    chunk_index=chunk_index,
+                )
                 return pd.DataFrame()
             df = pd.DataFrame(obj)
             required = {"group_id", "event_id", "Label"}
             if not required.issubset(df.columns):
                 logging.error(f"def clean_response(): Extracted JSON is missing required columns: {list(df.columns)}")
+                self._write_dedup_parse_artifact(
+                    reason=f"missing_columns:{sorted(required - set(df.columns))}",
+                    response_chunk=response_chunk,
+                    chunk_index=chunk_index,
+                )
                 return pd.DataFrame()
             logging.info(f"def clean_response(): Successfully extracted {len(df)} rows from fallback parser.")
             return df
         except Exception as e:
             logging.error(f"def clean_response(): Error parsing LLM response to JSON: {e}")
+            self._write_dedup_parse_artifact(
+                reason=f"exception:{type(e).__name__}",
+                response_chunk=response_chunk,
+                chunk_index=chunk_index,
+            )
             return pd.DataFrame()
 
     def merge_and_save_results(self, df, response_dfs):

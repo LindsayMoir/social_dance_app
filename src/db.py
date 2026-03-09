@@ -928,6 +928,60 @@ class DatabaseHandler():
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(audit_record, default=str) + "\n")
 
+    def _write_deleted_event_to_history(self, event_row: Dict[str, Any]) -> None:
+        """
+        Persist a deleted events row into events_history.
+
+        events_history uses its own serial primary key (event_id), so the deleted
+        events.event_id is stored in original_event_id.
+        """
+        if not isinstance(event_row, dict):
+            return
+
+        insert_sql = text(
+            """
+            INSERT INTO events_history (
+                original_event_id, event_name, dance_style, description, day_of_week,
+                start_date, end_date, start_time, end_time, source, location, price,
+                url, event_type, address_id, time_stamp
+            ) VALUES (
+                :original_event_id, :event_name, :dance_style, :description, :day_of_week,
+                :start_date, :end_date, :start_time, :end_time, :source, :location, :price,
+                :url, :event_type, :address_id, :time_stamp
+            )
+            """
+        )
+        params = {
+            "original_event_id": event_row.get("event_id"),
+            "event_name": event_row.get("event_name"),
+            "dance_style": event_row.get("dance_style"),
+            "description": event_row.get("description"),
+            "day_of_week": event_row.get("day_of_week"),
+            "start_date": event_row.get("start_date"),
+            "end_date": event_row.get("end_date"),
+            "start_time": event_row.get("start_time"),
+            "end_time": event_row.get("end_time"),
+            "source": event_row.get("source"),
+            "location": event_row.get("location"),
+            "price": event_row.get("price"),
+            "url": event_row.get("url"),
+            "event_type": event_row.get("event_type"),
+            "address_id": event_row.get("address_id"),
+            "time_stamp": event_row.get("time_stamp"),
+        }
+
+        # Keep delete flow resilient: history write failures must not block deletion.
+        try:
+            with self.conn.begin() as conn:
+                conn.execute(insert_sql, params)
+        except Exception as e:
+            logging.warning(
+                "_write_deleted_event_to_history: Failed to write deleted event to events_history "
+                "(original_event_id=%s): %s",
+                params.get("original_event_id"),
+                e,
+            )
+
     def _delete_events_with_audit(
         self,
         delete_sql_without_returning: str,
@@ -970,6 +1024,7 @@ class DatabaseHandler():
                     reason=reason,
                     extra_context=extra_context,
                 )
+                self._write_deleted_event_to_history(payload)
             else:
                 deleted_events.append({"raw": str(payload)})
         if deleted_events:
@@ -2708,8 +2763,13 @@ class DatabaseHandler():
             WHERE address_id IS NOT NULL
               AND address_id NOT IN (SELECT address_id FROM address);
             """
-            events_count = self.execute_query(cleanup_events_sql)
-            cleanup_counts['events'] = events_count or 0
+            deleted_events = self._delete_events_with_audit(
+                delete_sql_without_returning=cleanup_events_sql,
+                params=None,
+                deletion_source="db.clean_orphaned_references",
+                reason="orphaned_address_id_reference",
+            )
+            cleanup_counts['events'] = len(deleted_events)
 
             # Clean up events_history with non-existent address_ids (critical for preventing corruption)
             cleanup_events_history_sql = """
@@ -3167,6 +3227,61 @@ class DatabaseHandler():
             logging.info("delete_event_with_event_id: Deleted event with event_id %d successfully.", event_id)
         except Exception as e:
             logging.error("delete_event_with_event_id: Failed to delete event with event_id %d: %s", event_id, e)
+
+    def delete_events_by_filter(
+        self,
+        where_clause: str,
+        params: Optional[Dict[str, Any]] = None,
+        deletion_source: str = "db.delete_events_by_filter",
+        deletion_reason: str = "delete_by_filter",
+        extra_context: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """
+        Delete events matching a WHERE clause and audit every deleted row.
+
+        Args:
+            where_clause: SQL predicate used after `WHERE` in a DELETE statement.
+            params: Optional bound parameters for the predicate.
+            deletion_source: Logical source identifier for audit trail.
+            deletion_reason: Short reason tag for audit trail.
+            extra_context: Optional JSON-serializable context attached to each audit row.
+
+        Returns:
+            Number of deleted rows.
+        """
+        try:
+            predicate = (where_clause or "").strip().strip(";")
+            if not predicate:
+                logging.warning("delete_events_by_filter: Empty where_clause, skipping delete.")
+                return 0
+
+            delete_query = f"""
+            DELETE FROM events
+            WHERE {predicate}
+            """
+            deleted_rows = self._delete_events_with_audit(
+                delete_sql_without_returning=delete_query,
+                params=params or {},
+                deletion_source=deletion_source,
+                reason=deletion_reason,
+                extra_context=extra_context,
+            )
+            deleted_count = len(deleted_rows)
+            logging.info(
+                "delete_events_by_filter: Deleted %d event(s) for %s (%s)",
+                deleted_count,
+                deletion_source,
+                deletion_reason,
+            )
+            return deleted_count
+        except Exception as e:
+            logging.error(
+                "delete_events_by_filter: Failed delete for %s (%s): %s",
+                deletion_source,
+                deletion_reason,
+                e,
+            )
+            return 0
 
     
     def delete_multiple_events(

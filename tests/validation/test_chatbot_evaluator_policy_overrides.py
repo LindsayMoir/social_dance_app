@@ -206,3 +206,62 @@ def test_problem_category_does_not_label_weekend_without_weekend_definition_erro
     categories = report.get("problem_categories", [])
     assert categories
     assert categories[0]["name"] != "Weekend Calculation"
+
+
+def test_problem_category_does_not_label_event_type_defaults_for_valid_class_filter(tmp_path):
+    scored_results = [
+        {
+            "question": "Show me tango classes this weekend",
+            "category": "static",
+            "execution_success": True,
+            "sql_query": (
+                "SELECT * FROM events WHERE dance_style ILIKE '%tango%' "
+                "AND start_date >= '2026-03-06' AND start_date <= '2026-03-08' "
+                "AND (event_type ILIKE '%class%' OR event_type ILIKE '%workshop%')"
+            ),
+            "results_count": 5,
+            "evaluation": {
+                "score": 80,
+                "reasoning": "Query is mostly correct and uses class/workshop event_type filters.",
+                "criteria_matched": ["dance_style", "timeframe", "event_type"],
+                "criteria_missed": [],
+                "sql_issues": [],
+                "interpretation_evaluation": {"score": 100},
+            },
+        }
+    ]
+
+    report = generate_chatbot_report(scored_results, output_dir=str(tmp_path))
+    categories = report.get("problem_categories", [])
+    assert categories
+    assert categories[0]["name"] != "Event Type Defaults"
+
+
+def test_problem_category_regression_cases_are_emitted(tmp_path):
+    scored_results = [
+        {
+            "question": "Show me lindy hop events tonight",
+            "category": "static",
+            "execution_success": True,
+            "sql_query": (
+                "SELECT * FROM events WHERE dance_style ILIKE '%lindy hop%' "
+                "AND start_date = '2026-03-09' AND start_time >= '18:00:00'"
+            ),
+            "results_count": 2,
+            "evaluation": {
+                "score": 80,
+                "reasoning": "Tonight query has a restrictive start_time filter.",
+                "criteria_matched": ["dance_style", "timeframe"],
+                "criteria_missed": [],
+                "sql_issues": ["time filter too restrictive"],
+                "interpretation_evaluation": {"score": 100},
+            },
+        }
+    ]
+
+    report = generate_chatbot_report(scored_results, output_dir=str(tmp_path))
+    cases = report.get("problem_category_regression_cases", [])
+    assert cases
+    assert cases[0]["regression_id"] == "CAT-001"
+    assert cases[0]["category"]
+    assert cases[0]["question"]

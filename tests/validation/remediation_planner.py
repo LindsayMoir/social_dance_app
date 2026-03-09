@@ -222,7 +222,9 @@ def assess_sections(output_dir: str, report_sections: List[str]) -> List[dict]:
             avg_score = float(chatbot_summary.get("average_score", 0) or 0)
             exec_rate = float(chatbot_summary.get("execution_success_rate", 0) or 0)
             problem_categories = chatbot.get("problem_categories", []) if isinstance(chatbot.get("problem_categories"), list) else []
-            needs = len(problem_categories) > 0
+            category_gate = chatbot.get("category_gate", {}) if isinstance(chatbot.get("category_gate"), dict) else {}
+            category_gate_status = str(category_gate.get("status", "UNKNOWN") or "UNKNOWN").upper()
+            needs = len(problem_categories) > 0 or category_gate_status in {"FAIL", "WARNING"}
             top_issue = first_matching_issue(issues_by_step, "chatbot_testing")
             assessments.append(
                 make_section_assessment(
@@ -232,6 +234,7 @@ def assess_sections(output_dir: str, report_sections: List[str]) -> List[dict]:
                     issue_understanding=(
                         f"Chatbot quality has avg_score={avg_score:.1f}, exec_rate={exec_rate:.2%}. "
                         f"There are {len(problem_categories)} problem category bucket(s), "
+                        f"category_gate={category_gate_status}, "
                         f"top issue signature: {top_issue.get('input_signature', 'n/a')}."
                     ),
                     fix_plan=[
@@ -244,6 +247,7 @@ def assess_sections(output_dir: str, report_sections: List[str]) -> List[dict]:
                         f"average_score={avg_score:.1f}",
                         f"execution_success_rate={exec_rate:.2%}",
                         f"problem_categories={len(problem_categories)}",
+                        f"category_gate={category_gate_status}",
                     ],
                 )
             )
@@ -596,6 +600,8 @@ def build_plan(output_dir: str) -> dict:
             "acceptance_tests": [str(item.get("acceptance_test", "") or "") for item in section_actions if item.get("acceptance_test")],
             "metric_keys": [str(item.get("metric_key", "") or "") for item in section_actions if item.get("metric_key")],
             "action_titles": [str(item.get("title", "") or "") for item in section_actions if item.get("title")],
+            "owners": [str(item.get("owner", "") or "") for item in section_actions if item.get("owner")],
+            "statuses": [str(item.get("status", "") or "") for item in section_actions if item.get("status")],
         })
 
     return {
@@ -681,8 +687,12 @@ def write_markdown(path: str, plan: dict) -> None:
             metric_keys = row.get("metric_keys", []) or []
             acceptance_tests = row.get("acceptance_tests", []) or []
             action_titles = row.get("action_titles", []) or []
+            owners = row.get("owners", []) or []
+            statuses = row.get("statuses", []) or []
             lines.append(f"   - Metric Keys: {', '.join(metric_keys) if metric_keys else 'n/a'}")
             lines.append(f"   - Actions: {', '.join(action_titles) if action_titles else 'n/a'}")
+            lines.append(f"   - Owners: {', '.join(owners) if owners else 'n/a'}")
+            lines.append(f"   - Statuses: {', '.join(statuses) if statuses else 'n/a'}")
             lines.append(f"   - Acceptance: {', '.join(acceptance_tests) if acceptance_tests else 'n/a'}")
 
     lines.extend(["", f"Next Step: {plan.get('next_step', '')}", ""])

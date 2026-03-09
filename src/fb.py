@@ -244,6 +244,17 @@ def is_non_content_facebook_url(url: str) -> bool:
     return False
 
 
+def is_facebook_event_detail_url(url: str) -> bool:
+    """
+    Return True when URL points to a concrete Facebook event detail page (/events/<id>/...).
+    """
+    parsed = urlparse(url or "")
+    host = (parsed.netloc or "").lower()
+    if "facebook.com" not in host:
+        return False
+    return _FACEBOOK_EVENT_ID_RE.search(parsed.path or "") is not None
+
+
 def diagnose_facebook_access(current_url: str, page_content: str) -> tuple[str, str]:
     """
     Diagnose Facebook access outcome as (state, reason).
@@ -1784,6 +1795,24 @@ class FacebookEventScraper():
                 # Honor the run limit
                 if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
                     break
+
+                # Optimization: event-detail base URLs are already scraped by process_fb_url().
+                # Skip the follow-up extract_event_links() pass to avoid high-cost revisits.
+                if is_facebook_event_detail_url(base_url):
+                    fb_urls_df.loc[fb_urls_df['link'] == raw_base_url, 'events_processed'] = True
+                    fb_urls_df.loc[fb_urls_df['link'] == base_url, 'events_processed'] = True
+                    mark_checkpoint_dirty()
+                    logging.info(
+                        "def driver_fb_urls(): Skipping link extraction for event-detail base URL: %s",
+                        base_url,
+                    )
+                    if base_yielded_events:
+                        db_handler.write_url_to_db([base_url, parent_url, source, keywords, True, 1, datetime.now()])
+                        logging.info(
+                            "def driver_fb_urls(): Base URL marked relevant due to yielded events: %s",
+                            base_url,
+                        )
+                    continue
 
                 # 4) Now scrape *all* event links by auto-navigating to /events/
                 fb_event_links = list(self.extract_event_links(base_url))

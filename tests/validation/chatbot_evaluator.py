@@ -1475,8 +1475,29 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'outpu
 
         if any(k in q for k in ["tonight", "tomorrow night"]) or ("tonight" in reason):
             return "Tonight / Time Filter"
-        if "event_type" in reason or ("social dance" in q and "event_type" in sql and "social" not in sql):
+
+        q_requests_classes = any(k in q for k in [" class", " classes", "workshop", "lesson", "lessons", "learn "])
+        q_requests_social = "social dance" in q or (" social " in f" {q} " and not q_requests_classes)
+        sql_has_event_type = "event_type" in sql
+        sql_has_class_intent = any(k in sql for k in ["class", "workshop", "lesson"])
+        sql_has_social_intent = "social" in sql
+        explicit_event_type_error = any(
+            term in reason or term in sql_issues_text
+            for term in [
+                "wrong event type",
+                "incorrect event type",
+                "event_type mismatch",
+                "missing event_type",
+                "event type defaults",
+            ]
+        )
+        if explicit_event_type_error:
             return "Event Type Defaults"
+        if q_requests_social and sql_has_event_type and not sql_has_social_intent:
+            return "Event Type Defaults"
+        if q_requests_classes and sql_has_event_type and not sql_has_class_intent:
+            return "Event Type Defaults"
+
         if any(k in sql for k in ["current_date +", "current_date -"]):
             return "Date Arithmetic"
         return "Other"
@@ -1520,6 +1541,16 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'outpu
         'category_breakdown': category_stats,
         'problematic_questions': problematic[:20],  # Limit to first 20
         'problem_categories': problem_categories,
+        'problem_category_regression_cases': [
+            {
+                "regression_id": f"CAT-{idx:03d}",
+                "category": cat.get("name", ""),
+                "question": (cat.get("example", {}) or {}).get("question", ""),
+                "sql": (cat.get("example", {}) or {}).get("sql", ""),
+                "expected_signal": (cat.get("name", "") or ""),
+            }
+            for idx, cat in enumerate(problem_categories, start=1)
+        ],
         'failed_interpretations': interpretation_failed[:20],  # Limit to first 20
         'recommendations': _generate_recommendations(scored_results, category_stats, interpretation_failed)
     }

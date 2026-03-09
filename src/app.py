@@ -121,6 +121,17 @@ logging.info(f"app.py: Loaded chatbot instructions from {instructions_path}")
 
 st.markdown(chatbot_instructions)
 
+WAIT_NOTICE = (
+    "Checking providers. About 2/3 of requests finish within 15 seconds. "
+    "If this takes longer, traffic is likely high."
+)
+
+
+def _post_with_wait(url: str, payload: dict):
+    """Run API request with user-visible wait notice and bounded client timeout."""
+    with st.spinner(WAIT_NOTICE):
+        return requests.post(url, json=payload, timeout=55)
+
 def error_handling(e, custom_message=None):
     """
     Handle errors by appending a standardized error message to the chat history.
@@ -209,7 +220,7 @@ if process_input:
             "user_input": input_to_process,
             "session_token": st.session_state["session_token"]
         }
-        response = requests.post(FASTAPI_QUERY_URL, json=payload)
+        response = _post_with_wait(FASTAPI_QUERY_URL, payload)
         response.raise_for_status()
         data = response.json()
         
@@ -366,7 +377,7 @@ if st.session_state["messages"]:
                                 "session_token": st.session_state["session_token"]
                             }
                             try:
-                                response = requests.post(FASTAPI_CONFIRM_URL, json=confirm_payload)
+                                response = _post_with_wait(FASTAPI_CONFIRM_URL, confirm_payload)
                                 response.raise_for_status()
                                 data = response.json()
                                 
@@ -405,7 +416,7 @@ if st.session_state["messages"]:
                                 "session_token": st.session_state["session_token"]
                             }
                             try:
-                                response = requests.post(FASTAPI_CONFIRM_URL, json=reject_payload)
+                                response = _post_with_wait(FASTAPI_CONFIRM_URL, reject_payload)
                                 response.raise_for_status()
                                 data = response.json()
                                 
@@ -441,7 +452,7 @@ if st.session_state["messages"]:
                                         "clarification": clarification_text
                                     }
                                     try:
-                                        response = requests.post(FASTAPI_CONFIRM_URL, json=clarify_payload)
+                                        response = _post_with_wait(FASTAPI_CONFIRM_URL, clarify_payload)
                                         response.raise_for_status()
                                         data = response.json()
                                         
@@ -524,7 +535,7 @@ if st.session_state["messages"]:
                                     "user_input": followup_input,
                                     "session_token": st.session_state["session_token"]
                                 }
-                                response = requests.post(FASTAPI_QUERY_URL, json=payload)
+                                response = _post_with_wait(FASTAPI_QUERY_URL, payload)
                                 response.raise_for_status()
                                 data = response.json()
                                 
@@ -559,15 +570,19 @@ if st.session_state["messages"]:
                                 user_question = followup_input.lower()
                                 
                                 if len(events) == 0:
-                                    # Provide context-aware response for no results
-                                    if any(word in user_question for word in ['duplicate', 'same', 'similar', 'correct', 'which one']):
-                                        assistant_content = "I can't analyze or compare events to determine duplicates, but I can help you search for specific events. Could you tell me more about what you're looking for?"
-                                    elif any(word in user_question for word in ['why', 'how', 'explain', 'what does']) and not any(word in user_question for word in ['show me', 'find', 'search', 'events', 'dance']):
-                                        assistant_content = "I'm designed to search for dance events, but I can't provide detailed explanations about event data. Let me help you find the events you're interested in instead!"
-                                    elif any(word in user_question for word in ['when', 'where', 'time', 'location', 'address']):
-                                        assistant_content = "I couldn't find events matching that specific query. Try asking about dance events in a broader way, like 'salsa events this week' or 'dance classes near me'."
+                                    backend_message = data.get('message')
+                                    if backend_message:
+                                        assistant_content = backend_message
                                     else:
-                                        assistant_content = "I couldn't find events matching your request. I specialize in finding dance events - try asking about specific dance styles, locations, or time periods!"
+                                        # Provide context-aware response for no results
+                                        if any(word in user_question for word in ['duplicate', 'same', 'similar', 'correct', 'which one']):
+                                            assistant_content = "I can't analyze or compare events to determine duplicates, but I can help you search for specific events. Could you tell me more about what you're looking for?"
+                                        elif any(word in user_question for word in ['why', 'how', 'explain', 'what does']) and not any(word in user_question for word in ['show me', 'find', 'search', 'events', 'dance']):
+                                            assistant_content = "I'm designed to search for dance events, but I can't provide detailed explanations about event data. Let me help you find the events you're interested in instead!"
+                                        elif any(word in user_question for word in ['when', 'where', 'time', 'location', 'address']):
+                                            assistant_content = "I couldn't find events matching that specific query. Try asking about dance events in a broader way, like 'salsa events this week' or 'dance classes near me'."
+                                        else:
+                                            assistant_content = "I couldn't find events matching your request. I specialize in finding dance events - try asking about specific dance styles, locations, or time periods!"
                                 else:
                                     assistant_content = f"Found {len(events)} events"
                                 

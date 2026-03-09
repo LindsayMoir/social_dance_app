@@ -16,7 +16,7 @@ from datetime import datetime
 import json
 import logging
 import os
-from typing import Dict, List
+from typing import Any, Dict, List
 import pandas as pd
 
 
@@ -401,6 +401,246 @@ class ScrapingValidator:
             "categories": categories,
         }
 
+    def _ensure_source_distribution_history_tables(self) -> None:
+        """Ensure source-distribution trend tables exist."""
+        create_counts = """
+            CREATE TABLE IF NOT EXISTS source_event_counts_history (
+                id SERIAL PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                run_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                source TEXT NOT NULL,
+                event_count INTEGER NOT NULL,
+                rank_in_run INTEGER,
+                total_events INTEGER NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(run_id, source)
+            )
+        """
+        create_alerts = """
+            CREATE TABLE IF NOT EXISTS source_distribution_alerts_history (
+                id SERIAL PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                run_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                source TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                current_count INTEGER,
+                baseline_avg DOUBLE PRECISION,
+                pct_change DOUBLE PRECISION,
+                details_json TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_source_event_counts_history_run_ts ON source_event_counts_history(run_ts)",
+            "CREATE INDEX IF NOT EXISTS idx_source_event_counts_history_source ON source_event_counts_history(source)",
+            "CREATE INDEX IF NOT EXISTS idx_source_event_counts_history_run_id ON source_event_counts_history(run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_source_distribution_alerts_history_run_ts ON source_distribution_alerts_history(run_ts)",
+            "CREATE INDEX IF NOT EXISTS idx_source_distribution_alerts_history_source ON source_distribution_alerts_history(source)",
+            "CREATE INDEX IF NOT EXISTS idx_source_distribution_alerts_history_run_id ON source_distribution_alerts_history(run_id)",
+        ]
+        self.db_handler.execute_query(create_counts)
+        self.db_handler.execute_query(create_alerts)
+        for stmt in indexes:
+            self.db_handler.execute_query(stmt)
+
+    def _persist_source_counts_snapshot(
+        self,
+        run_id: str,
+        run_ts: str,
+        total_events: int,
+        ordered_sources: List[Dict[str, Any]],
+    ) -> None:
+        """Persist this run's source counts for long-term trend monitoring."""
+        insert_stmt = """
+            INSERT INTO source_event_counts_history
+                (run_id, run_ts, source, event_count, rank_in_run, total_events)
+            VALUES
+                (:run_id, :run_ts, :source, :event_count, :rank_in_run, :total_events)
+            ON CONFLICT (run_id, source) DO UPDATE
+            SET
+                run_ts = EXCLUDED.run_ts,
+                event_count = EXCLUDED.event_count,
+                rank_in_run = EXCLUDED.rank_in_run,
+                total_events = EXCLUDED.total_events
+        """
+        for rank, row in enumerate(ordered_sources, start=1):
+            source = str(row.get('source', '') or '').strip()
+            if not source:
+                continue
+            params = {
+                'run_id': run_id,
+                'run_ts': run_ts,
+                'source': source,
+                'event_count': int(row.get('count', 0) or 0),
+                'rank_in_run': rank,
+                'total_events': int(total_events),
+            }
+            self.db_handler.execute_query(insert_stmt, params)
+
+    def _build_source_trend_summary(
+        self,
+        run_id: str,
+        run_ts: str,
+        all_sources: Dict[str, int],
+        top_10_sources: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Compare current run source counts against recent runs and flag anomalies.
+        """
+        trend_cfg = self.scraping_config.get('source_trend_monitoring', {})
+        lookback_runs = int(trend_cfg.get('lookback_runs', 14) or 14)
+        min_baseline_count = int(trend_cfg.get('min_baseline_count', 5) or 5)
+        drop_threshold_pct = float(trend_cfg.get('drop_threshold_pct', 0.60) or 0.60)
+        spike_threshold_pct = float(trend_cfg.get('spike_threshold_pct', 1.00) or 1.00)
+
+        summary: Dict[str, Any] = {
+            'enabled': True,
+            'run_id': run_id,
+            'run_ts': run_ts,
+            'lookback_runs': lookback_runs,
+            'min_baseline_count': min_baseline_count,
+            'drop_threshold_pct': drop_threshold_pct,
+            'spike_threshold_pct': spike_threshold_pct,
+            'history_runs_used': 0,
+            'baseline_top_10': [],
+            'current_top_10': top_10_sources[:10],
+            'alerts': [],
+        }
+
+        prev_runs_sql = """
+            SELECT DISTINCT run_id, run_ts
+            FROM source_event_counts_history
+            WHERE run_id <> :run_id
+            ORDER BY run_ts DESC
+            LIMIT :limit_runs
+        """
+        prev_runs = self.db_handler.execute_query(
+            prev_runs_sql, {'run_id': run_id, 'limit_runs': lookback_runs}
+        ) or []
+        if not prev_runs:
+            return summary
+
+        run_ids = [str(row[0]) for row in prev_runs if row and row[0]]
+        summary['history_runs_used'] = len(run_ids)
+        if not run_ids:
+            return summary
+
+        run_id_filters: List[str] = []
+        params: Dict[str, Any] = {'min_baseline_count': min_baseline_count}
+        for i, prev_run_id in enumerate(run_ids):
+            key = f"rid_{i}"
+            run_id_filters.append(f"run_id = :{key}")
+            params[key] = prev_run_id
+        where_clause = " OR ".join(run_id_filters) if run_id_filters else "1=0"
+        baseline_sql = f"""
+            SELECT source, AVG(event_count) AS avg_count
+            FROM source_event_counts_history
+            WHERE ({where_clause})
+            GROUP BY source
+            HAVING AVG(event_count) >= :min_baseline_count
+            ORDER BY avg_count DESC
+            LIMIT 10
+        """
+        baseline_rows = self.db_handler.execute_query(baseline_sql, params) or []
+
+        baseline_top_10: List[Dict[str, Any]] = []
+        baseline_map: Dict[str, float] = {}
+        for row in baseline_rows:
+            source = str(row[0] or '').strip()
+            avg_count = float(row[1] or 0.0)
+            if not source:
+                continue
+            baseline_top_10.append({'source': source, 'avg_count': round(avg_count, 2)})
+            baseline_map[source] = avg_count
+        summary['baseline_top_10'] = baseline_top_10
+        if not baseline_map:
+            return summary
+
+        alert_insert_sql = """
+            INSERT INTO source_distribution_alerts_history
+                (run_id, run_ts, source, alert_type, severity, current_count, baseline_avg, pct_change, details_json)
+            VALUES
+                (:run_id, :run_ts, :source, :alert_type, :severity, :current_count, :baseline_avg, :pct_change, :details_json)
+        """
+
+        def _record_alert(
+            source: str,
+            alert_type: str,
+            severity: str,
+            current_count: int,
+            baseline_avg: float,
+            pct_change: float,
+            details: Dict[str, Any],
+        ) -> None:
+            summary['alerts'].append({
+                'source': source,
+                'alert_type': alert_type,
+                'severity': severity,
+                'current_count': current_count,
+                'baseline_avg': round(baseline_avg, 2),
+                'pct_change': round(pct_change, 4),
+                'details': details,
+            })
+            params = {
+                'run_id': run_id,
+                'run_ts': run_ts,
+                'source': source,
+                'alert_type': alert_type,
+                'severity': severity,
+                'current_count': current_count,
+                'baseline_avg': baseline_avg,
+                'pct_change': pct_change,
+                'details_json': json.dumps(details),
+            }
+            self.db_handler.execute_query(alert_insert_sql, params)
+
+        for source, baseline_avg in baseline_map.items():
+            current_count = int(all_sources.get(source, 0) or 0)
+            pct_change = (current_count - baseline_avg) / max(1.0, baseline_avg)
+            if current_count == 0:
+                _record_alert(
+                    source=source,
+                    alert_type='dropout',
+                    severity='critical',
+                    current_count=0,
+                    baseline_avg=baseline_avg,
+                    pct_change=-1.0,
+                    details={
+                        'message': 'Source was in baseline top-10 and is absent in current run',
+                        'history_runs_used': summary['history_runs_used'],
+                    },
+                )
+                continue
+            if pct_change <= -abs(drop_threshold_pct):
+                _record_alert(
+                    source=source,
+                    alert_type='drop',
+                    severity='warning',
+                    current_count=current_count,
+                    baseline_avg=baseline_avg,
+                    pct_change=pct_change,
+                    details={
+                        'message': 'Source count dropped significantly vs baseline',
+                        'drop_threshold_pct': drop_threshold_pct,
+                    },
+                )
+            elif pct_change >= abs(spike_threshold_pct):
+                _record_alert(
+                    source=source,
+                    alert_type='spike',
+                    severity='warning',
+                    current_count=current_count,
+                    baseline_avg=baseline_avg,
+                    pct_change=pct_change,
+                    details={
+                        'message': 'Source count increased significantly vs baseline',
+                        'spike_threshold_pct': spike_threshold_pct,
+                    },
+                )
+
+        return summary
+
     def classify_important_urls(self) -> pd.DataFrame:
         """
         Identify important URLs from three sources.
@@ -734,11 +974,13 @@ class ScrapingValidator:
             all_sources = {}
             top_10_sources = []
             top_10_total = 0
+            ordered_sources = []
 
             for i, row in enumerate(result):
                 source = row[0]
                 count = row[1]
                 all_sources[source] = count
+                ordered_sources.append({'source': source, 'count': count})
 
                 # Keep top 10 for reporting
                 if i < 10:
@@ -790,6 +1032,40 @@ class ScrapingValidator:
                     )
                     status = 'FAIL'  # Missing critical source = FAIL
 
+            run_id = str(os.getenv("DS_RUN_ID", "") or datetime.now().strftime("%Y%m%d-%H%M%S"))
+            run_ts = datetime.now().isoformat()
+            trend_summary: Dict[str, Any] = {
+                'enabled': False,
+                'run_id': run_id,
+                'run_ts': run_ts,
+                'alerts': [],
+            }
+
+            # Persist and analyze source trends (non-fatal)
+            try:
+                self._ensure_source_distribution_history_tables()
+                self._persist_source_counts_snapshot(run_id, run_ts, int(total_events), ordered_sources)
+                trend_summary = self._build_source_trend_summary(
+                    run_id=run_id,
+                    run_ts=run_ts,
+                    all_sources=all_sources,
+                    top_10_sources=top_10_sources,
+                )
+                if trend_summary.get('alerts'):
+                    status = 'WARNING' if status == 'PASS' else status
+                    warnings.append(
+                        f"Source trend alerts: {len(trend_summary.get('alerts', []))} anomaly/anomalies flagged."
+                    )
+            except Exception as trend_err:
+                logging.warning(f"Source trend monitoring unavailable: {trend_err}")
+                trend_summary = {
+                    'enabled': False,
+                    'run_id': run_id,
+                    'run_ts': run_ts,
+                    'alerts': [],
+                    'error': str(trend_err),
+                }
+
             # Log results
             logging.info(f"Total events: {total_events}")
             logging.info(f"Total sources: {len(all_sources)}")
@@ -811,7 +1087,8 @@ class ScrapingValidator:
                 'top_10_total': top_10_total,
                 'top_10_percentage': round(top_10_percentage, 1),
                 'missing_sources': missing_sources,
-                'warnings': warnings
+                'warnings': warnings,
+                'trend_monitoring': trend_summary,
             }
 
         except Exception as e:

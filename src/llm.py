@@ -132,9 +132,12 @@ class LLMHandler:
 
         # Set up Mistral client with timeout
         mistral_api_key = os.environ["MISTRAL_API_KEY"]
-        # Set reasonable timeout for Mistral API calls (60 seconds = 60000 milliseconds)
-        # Note: Mistral uses timeout_ms (milliseconds) instead of timeout (seconds)
-        self.mistral_client = Mistral(api_key=mistral_api_key, timeout_ms=60000)
+        self.mistral_timeout_seconds = int(llm_config.get("mistral_timeout_seconds", 60) or 60)
+        # Note: Mistral uses timeout_ms (milliseconds) instead of timeout (seconds).
+        self.mistral_client = Mistral(
+            api_key=mistral_api_key,
+            timeout_ms=int(self.mistral_timeout_seconds * 1000),
+        )
         self.mistral_rate_limit_strikes = 0
         self.mistral_rate_limit_max_strikes = int(llm_config.get('mistral_rate_limit_max_strikes', 2) or 2)
         self.mistral_cooldown_seconds = int(llm_config.get('mistral_cooldown_seconds', 300) or 300)
@@ -382,27 +385,74 @@ class LLMHandler:
                 parsed_result = self.extract_and_parse_json(llm_response, url, schema_type)
 
                 if parsed_result:
-                    # If the OCR layer provided a Detected_Date/Detected_Day hint, override parsed dates to match it.
+                    # If OCR provided Detected_Date, use it only to fill missing dates.
+                    # Never clobber event-level parsed dates.
                     try:
-                        import re as _re
-                        m = _re.search(r"(?im)^Detected_Date:\s*(\d{4}-\d{2}-\d{2})", extracted_text or "")
+                        m = re.search(r"(?im)^Detected_Date:\s*(\d{4}-\d{2}-\d{2})", extracted_text or "")
                         detected_date = m.group(1) if m else None
                     except Exception:
                         detected_date = None
                     events_df = pd.DataFrame(parsed_result)
-                    if detected_date:
+                    if detected_date and not events_df.empty:
                         try:
-                            events_df['start_date'] = detected_date
-                            events_df['end_date'] = events_df.get('end_date', '')
-                            events_df['end_date'] = events_df['end_date'].where(events_df['end_date'].astype(str).str.len() > 0, detected_date)
-                            import pandas as _pd
-                            _sd = _pd.to_datetime(detected_date, errors='coerce')
-                            wd = _sd.day_name() if _sd is not _pd.NaT else None
-                            if wd:
-                                events_df['day_of_week'] = wd
-                            logging.info(f"process_llm_response: Overrode dates from Detected_Date hint: {detected_date}")
+                            if 'start_date' not in events_df.columns:
+                                events_df['start_date'] = ''
+                            if 'end_date' not in events_df.columns:
+                                events_df['end_date'] = ''
+                            if 'day_of_week' not in events_df.columns:
+                                events_df['day_of_week'] = ''
+                            if 'description' not in events_df.columns:
+                                events_df['description'] = ''
+                            if 'event_name' not in events_df.columns:
+                                events_df['event_name'] = ''
+
+                            start_series = events_df['start_date'].fillna('').astype(str).str.strip()
+                            end_series = events_df['end_date'].fillna('').astype(str).str.strip()
+                            day_series = events_df['day_of_week'].fillna('').astype(str).str.strip()
+                            parsed_nonempty = start_series.ne('')
+                            conflicting_dates = parsed_nonempty & start_series.ne(detected_date)
+
+                            recurrence_text = (
+                                events_df['event_name'].fillna('').astype(str)
+                                + ' '
+                                + events_df['description'].fillna('').astype(str)
+                            )
+                            recurrence_pattern = r"\b(every|weekly|recurs?)\b|from\s+[A-Za-z]+\s+to\s+[A-Za-z]+"
+                            recurrence_guard = recurrence_text.str.contains(
+                                recurrence_pattern, case=False, regex=True, na=False
+                            )
+
+                            fill_start_mask = (~parsed_nonempty) & (~recurrence_guard)
+                            events_df.loc[fill_start_mask, 'start_date'] = detected_date
+                            events_df.loc[fill_start_mask & end_series.eq(''), 'end_date'] = detected_date
+
+                            parsed_detected = pd.to_datetime(detected_date, errors='coerce')
+                            detected_weekday = parsed_detected.day_name() if pd.notna(parsed_detected) else None
+                            if detected_weekday:
+                                events_df.loc[fill_start_mask & day_series.eq(''), 'day_of_week'] = detected_weekday
+
+                            fill_count = int(fill_start_mask.sum())
+                            conflict_count = int(conflicting_dates.sum())
+                            recurrence_skip_count = int((~parsed_nonempty & recurrence_guard).sum())
+
+                            if conflict_count > 0:
+                                logging.warning(
+                                    "process_llm_response: detected_date_conflict url=%s detected_date=%s conflicts=%d",
+                                    url,
+                                    detected_date,
+                                    conflict_count,
+                                )
+                            logging.info(
+                                "process_llm_response: detected_date_fill_summary url=%s detected_date=%s filled=%d skipped_recurrence=%d conflicts=%d total_events=%d",
+                                url,
+                                detected_date,
+                                fill_count,
+                                recurrence_skip_count,
+                                conflict_count,
+                                len(events_df),
+                            )
                         except Exception as _e:
-                            logging.warning(f"process_llm_response: Failed to apply Detected_Date override: {_e}")
+                            logging.warning(f"process_llm_response: Failed to apply Detected_Date fill logic: {_e}")
                     self.db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_list)
                     logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
                     return True
@@ -450,6 +500,41 @@ class LLMHandler:
             + "\n...[TRUNCATED]...\n"
             + (extracted_text[-tail_chars:] if tail_chars > 0 else "")
         )
+
+    @staticmethod
+    def _safe_preview(value: str, max_chars: int = 600) -> str:
+        """Return a single-line preview for logs/artifacts."""
+        if value is None:
+            return ""
+        text = str(value).replace("\n", "\\n").replace("\r", "\\r")
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + "...[truncated]"
+
+    @staticmethod
+    def _write_parse_failure_artifact(
+        reason: str,
+        url: str,
+        schema_type: str,
+        raw_response: str,
+        cleaned_blob: str = "",
+    ) -> None:
+        """Append parse-failure diagnostics to output/llm_parse_failures.jsonl."""
+        try:
+            os.makedirs("output", exist_ok=True)
+            artifact_path = os.path.join("output", "llm_parse_failures.jsonl")
+            payload = {
+                "time": datetime.now().isoformat(),
+                "reason": reason,
+                "url": url,
+                "schema_type": schema_type,
+                "raw_preview": LLMHandler._safe_preview(raw_response, max_chars=1200),
+                "cleaned_preview": LLMHandler._safe_preview(cleaned_blob, max_chars=1200),
+            }
+            with open(artifact_path, "a", encoding="utf-8") as artifact_file:
+                artifact_file.write(json.dumps(payload, ensure_ascii=True) + "\n")
+        except Exception as artifact_error:
+            logging.warning("extract_and_parse_json(): Failed to write parse artifact: %s", artifact_error)
 
     @staticmethod
     def _resolve_prompt_config(
@@ -1332,7 +1417,16 @@ class LLMHandler:
         raise ValueError(f"Invalid LLM provider: {provider}")
 
 
-    def query_llm(self, url, prompt, schema_type=None, tools=None, max_iterations=3):
+    def query_llm(
+        self,
+        url,
+        prompt,
+        schema_type=None,
+        tools=None,
+        max_iterations=3,
+        provider_override: str | None = None,
+        disable_fallback: bool = False,
+    ):
         """
         Query the configured LLM with a given prompt and return the response.
         Fallback occurs between Mistral and OpenAI if one fails.
@@ -1356,12 +1450,23 @@ class LLMHandler:
 
         # If tools provided, use tool calling logic
         if tools:
-            result = self._query_with_tools(url, prompt, tools, max_iterations)
+            result = self._query_with_tools(
+                url,
+                prompt,
+                tools,
+                max_iterations,
+                provider_override=provider_override,
+                disable_fallback=disable_fallback,
+            )
             return result.get('content') if result else None
         
         provider = self._select_primary_provider(url, for_tools=False)
-
-        candidates = self._candidate_providers_for_request(url, provider)
+        if provider_override:
+            candidates = [str(provider_override).strip().lower()]
+        elif disable_fallback:
+            candidates = [provider]
+        else:
+            candidates = self._candidate_providers_for_request(url, provider)
 
         # Deprioritize providers during active cooldown windows.
         if self._mistral_in_cooldown() and len(candidates) > 1:
@@ -1386,7 +1491,15 @@ class LLMHandler:
         logging.error("query_llm(): All configured LLM providers failed to provide a response.")
         return None
 
-    def _query_with_tools(self, url, prompt, tools, max_iterations=3):
+    def _query_with_tools(
+        self,
+        url,
+        prompt,
+        tools,
+        max_iterations=3,
+        provider_override: str | None = None,
+        disable_fallback: bool = False,
+    ):
         """
         Internal method: Query the LLM with function/tool calling support.
 
@@ -1417,7 +1530,12 @@ class LLMHandler:
 
         # Determine provider candidate order (same logic as query_llm, but tool-capable)
         primary_provider = self._select_primary_provider(url, for_tools=True)
-        provider_candidates = self._candidate_providers_for_request(url, primary_provider)
+        if provider_override:
+            provider_candidates = [str(provider_override).strip().lower()]
+        elif disable_fallback:
+            provider_candidates = [primary_provider]
+        else:
+            provider_candidates = self._candidate_providers_for_request(url, primary_provider)
 
         # Initialize conversation messages
         messages = [{"role": "user", "content": prompt}]
@@ -2604,7 +2722,17 @@ class LLMHandler:
                 blob = '[' + result[fb:lb+1] + ']'
             else:
                 logging.error(
-                    f"extract_and_parse_json(): Couldn't isolate JSON blob from {url}"
+                    "extract_and_parse_json(): Couldn't isolate JSON blob from %s schema=%s preview=%s",
+                    url,
+                    schema_type,
+                    self._safe_preview(result),
+                )
+                self._write_parse_failure_artifact(
+                    reason="no_json_blob",
+                    url=url,
+                    schema_type=schema_type or "",
+                    raw_response=result,
+                    cleaned_blob="",
                 )
                 return None
         else:
@@ -2613,7 +2741,20 @@ class LLMHandler:
         # Allow shorter blobs for address deduplication 
         min_blob_length = 30 if ("address_id" in blob and "Label" in blob) or "canonical_address_id" in blob else 100
         if len(blob) < min_blob_length:
-            logging.info(f"extract_and_parse_json(): Blob too short (< {min_blob_length} chars):\n{blob}")
+            logging.info(
+                "extract_and_parse_json(): Blob too short (< %d chars) url=%s schema=%s preview=%s",
+                min_blob_length,
+                url,
+                schema_type,
+                self._safe_preview(blob),
+            )
+            self._write_parse_failure_artifact(
+                reason="blob_too_short",
+                url=url,
+                schema_type=schema_type or "",
+                raw_response=result,
+                cleaned_blob=blob,
+            )
             return None
 
         # 3) Basic cleanup
@@ -2650,7 +2791,19 @@ class LLMHandler:
         # 5) Fallback to line-based parse using explicit schema type
         records = self.line_based_parse(cleaned, schema_type)
         if not records:
-            logging.info("extract_and_parse_json(): No complete records parsed.")
+            logging.info(
+                "extract_and_parse_json(): No complete records parsed. url=%s schema=%s cleaned_preview=%s",
+                url,
+                schema_type,
+                self._safe_preview(cleaned),
+            )
+            self._write_parse_failure_artifact(
+                reason="no_complete_records",
+                url=url,
+                schema_type=schema_type or "",
+                raw_response=result,
+                cleaned_blob=cleaned,
+            )
             return None
 
         return records

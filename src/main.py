@@ -15,6 +15,7 @@ import logging
 import yaml
 import uuid
 import json
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 from time import perf_counter
 from zoneinfo import ZoneInfo
@@ -84,6 +85,23 @@ engine = create_engine(DATABASE_URL)
 logging.info("main.py: SQLAlchemy engine created.")
 
 SLOW_CHATBOT_RESPONSE_SECONDS = 20.0
+CHATBOT_HEDGE_OPENAI_DELAY_SECONDS = 15.0
+CHATBOT_HEDGE_OPENROUTER_DELAY_SECONDS = 15.0
+CHATBOT_HEDGE_TOTAL_TIMEOUT_SECONDS = 45.0
+CHATBOT_WAIT_NOTICE = "Most requests complete within about 15 seconds, but traffic spikes can take longer."
+
+
+class ChatbotLLMTimeoutError(RuntimeError):
+    """Raised when the chatbot hedged provider chain exceeds max wait time."""
+
+
+def _chatbot_traffic_timeout_message() -> str:
+    """User-facing fallback when all chatbot provider windows time out."""
+    return (
+        "I'm experiencing heavy traffic right now and couldn't complete your request within 45 seconds. "
+        "Please try again in a moment. "
+        f"{CHATBOT_WAIT_NOTICE}"
+    )
 
 
 def _ensure_chatbot_metrics_tables() -> None:
@@ -347,7 +365,18 @@ def _query_llm_timed(
         prompt_len=len(prompt or ""),
     )
     try:
-        response = llm_handler.query_llm(request_url, prompt, tools=tools)
+        if str(request_url or "").lower() == "chatbot":
+            response, winner = _query_llm_chatbot_hedged(
+                request_id=request_id,
+                endpoint=endpoint,
+                stage=stage,
+                request_url=request_url,
+                prompt=prompt,
+                tools=tools,
+            )
+        else:
+            response = llm_handler.query_llm(request_url, prompt, tools=tools)
+            winner = "standard"
         _log_timing_end(
             request_id,
             endpoint,
@@ -355,11 +384,118 @@ def _query_llm_timed(
             started,
             has_response=bool(response),
             response_len=len(response) if isinstance(response, str) else 0,
+            llm_winner=winner,
         )
         return response
+    except ChatbotLLMTimeoutError:
+        _log_timing_end(request_id, endpoint, stage, started, error="timeout", llm_winner="none")
+        raise
     except Exception:
         _log_timing_end(request_id, endpoint, stage, started, error="exception")
         raise
+
+
+def _query_llm_chatbot_hedged(
+    request_id: str,
+    endpoint: str,
+    stage: str,
+    request_url: str,
+    prompt: str,
+    tools=None,
+) -> Tuple[str | None, str]:
+    """
+    Staged hedged chatbot strategy:
+    - T+0s: OpenAI
+    - T+15s: OpenRouter (DeepSeek)
+    - T+30s: Gemini
+    - T+45s: fail request
+    Returns first non-empty response and winning provider.
+    """
+    plan = [
+        ("openai", 0.0),
+        ("openrouter", CHATBOT_HEDGE_OPENAI_DELAY_SECONDS),
+        (
+            "gemini",
+            CHATBOT_HEDGE_OPENAI_DELAY_SECONDS + CHATBOT_HEDGE_OPENROUTER_DELAY_SECONDS,
+        ),
+    ]
+    hard_deadline_at = perf_counter() + CHATBOT_HEDGE_TOTAL_TIMEOUT_SECONDS
+    pending: dict = {}
+    launched: set[str] = set()
+
+    def _run_provider_lane(provider: str) -> str | None:
+        lane_stage = f"{stage}_hedge_{provider}"
+        lane_started = _log_timing_start(
+            request_id,
+            endpoint,
+            lane_stage,
+            hedged=True,
+            provider=provider,
+            disable_fallback=True,
+        )
+        try:
+            response = llm_handler.query_llm(
+                request_url,
+                prompt,
+                tools=tools,
+                provider_override=provider,
+                disable_fallback=True,
+            )
+            _log_timing_end(
+                request_id,
+                endpoint,
+                lane_stage,
+                lane_started,
+                has_response=bool(response),
+                response_len=len(response) if isinstance(response, str) else 0,
+            )
+            return response
+        except Exception:
+            _log_timing_end(request_id, endpoint, lane_stage, lane_started, error="exception")
+            return None
+
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="chatbot-hedge") as executor:
+        while perf_counter() < hard_deadline_at:
+            elapsed = CHATBOT_HEDGE_TOTAL_TIMEOUT_SECONDS - (hard_deadline_at - perf_counter())
+            for provider, start_at in plan:
+                if provider in launched:
+                    continue
+                if elapsed >= start_at:
+                    launched.add(provider)
+                    pending[executor.submit(_run_provider_lane, provider)] = provider
+
+            if not pending:
+                continue
+
+            next_start_offsets = [start_at for _, start_at in plan if start_at > elapsed]
+            time_to_next_start = (
+                min(next_start_offsets) - elapsed if next_start_offsets else None
+            )
+            remaining_total = max(0.0, hard_deadline_at - perf_counter())
+            wait_timeout = remaining_total
+            if time_to_next_start is not None:
+                wait_timeout = max(0.0, min(wait_timeout, time_to_next_start))
+
+            done, _ = wait(
+                set(pending.keys()),
+                timeout=wait_timeout,
+                return_when=FIRST_COMPLETED,
+            )
+            if not done:
+                continue
+
+            for fut in done:
+                provider = pending.pop(fut, "unknown")
+                try:
+                    response = fut.result()
+                except Exception:
+                    response = None
+                if response:
+                    for loser in list(pending.keys()):
+                        loser.cancel()
+                    return response, provider
+
+    raise ChatbotLLMTimeoutError("chatbot_hedged_timeout_exceeded_45s")
 
 
 def _execute_query_timed(request_id: str, endpoint: str, stage: str, sql_query: str):
@@ -1188,6 +1324,15 @@ def process_confirmation(request: ConfirmationRequest):
                 "confirmed": True
             }
             
+        except ChatbotLLMTimeoutError:
+            logging.error("CONFIRMATION: LLM timeout while resolving confirmed query.")
+            conversation_manager.clear_pending_query(conversation_id)
+            result_type = "confirm_llm_timeout"
+            _finish_confirmation_timing()
+            raise HTTPException(
+                status_code=503,
+                detail=_chatbot_traffic_timeout_message(),
+            )
         except Exception as db_err:
             logging.error("CONFIRMATION: Query execution pipeline failed: %s", db_err)
             conversation_manager.clear_pending_query(conversation_id)
@@ -1432,14 +1577,22 @@ def process_query(request: QueryRequest):
 
     # Query the language model for a raw SQL query with date calculator tool support
     from date_calculator import CALCULATE_DATE_RANGE_TOOL
-    sql_query = _query_llm_timed(
-        request_id=request_id,
-        endpoint="/query",
-        stage="sql_generation_primary",
-        request_url='chatbot',
-        prompt=prompt,
-        tools=[CALCULATE_DATE_RANGE_TOOL],
-    )
+    try:
+        sql_query = _query_llm_timed(
+            request_id=request_id,
+            endpoint="/query",
+            stage="sql_generation_primary",
+            request_url='chatbot',
+            prompt=prompt,
+            tools=[CALCULATE_DATE_RANGE_TOOL],
+        )
+    except ChatbotLLMTimeoutError:
+        result_type = "llm_timeout"
+        return {
+            "message": _chatbot_traffic_timeout_message(),
+            "confirmation_required": False,
+            "retry_recommended": True,
+        }
     logging.info(f"Raw SQL Query: {sql_query}")
 
     # Always generate interpretation and confirmation, even if SQL didn't come back yet
@@ -1577,6 +1730,13 @@ def process_query(request: QueryRequest):
             "sql_query": sanitized_query if (sanitized_query and sanitized_query.upper().startswith('SELECT')) else None
         }
 
+    except ChatbotLLMTimeoutError:
+        result_type = "llm_timeout"
+        return {
+            "message": _chatbot_traffic_timeout_message(),
+            "confirmation_required": False,
+            "retry_recommended": True,
+        }
     except Exception as e:
         logging.error(f"Error generating interpretation: {e}")
         result_type = "confirmation_fallback"
