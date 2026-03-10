@@ -942,6 +942,19 @@ def generate_interpretation(user_query: str, config: dict, request_id: str | Non
                     f"That would be from {_format_date(sd)} to {_format_date(ed)}."
                 )
 
+            # Any explicit range not covered by named phrases.
+            if sd and ed and sd != ed:
+                parts = ["social dance events"]
+                if include_classes:
+                    parts.append("classes")
+                if include_live:
+                    parts.append("live music events")
+                event_phrase = " and ".join([", ".join(parts[:-1])] + [parts[-1]]) if len(parts) > 1 else parts[0]
+                return (
+                    f"My understanding is that you want to see all {event_phrase} available in the {default_city} area. "
+                    f"That would be from {_format_date(sd)} to {_format_date(ed)}."
+                )
+
             # Specific day
             parts = ["social dance events"]
             if include_classes:

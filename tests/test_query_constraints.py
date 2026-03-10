@@ -45,3 +45,15 @@ def test_derive_constraints_first_week_of_next_month() -> None:
     constraints = derive_constraints_from_text("Where can I dance the first week of next month?", "2026-03-09")
     assert constraints["start_date"] == "2026-04-01"
     assert constraints["end_date"] == "2026-04-07"
+
+
+def test_clarification_not_just_single_day_does_not_narrow_week_range() -> None:
+    base = derive_constraints_from_text("Where can I dance during the first week of april", "2026-03-09")
+    updated = derive_constraints_from_text(
+        "The first week, not just April 1.",
+        "2026-03-09",
+        base_constraints=base,
+        is_clarification=True,
+    )
+    assert updated["start_date"] == "2026-04-01"
+    assert updated["end_date"] == "2026-04-07"

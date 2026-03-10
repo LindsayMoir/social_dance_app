@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from typing import Any, Dict, List
 
 from date_calculator import resolve_temporal_from_text
@@ -41,6 +42,18 @@ class QueryConstraints:
         )
 
 
+def _date_span_days(start_date: str, end_date: str) -> int:
+    """Return inclusive day span for YYYY-MM-DD dates; 0 when invalid/missing."""
+    if not start_date or not end_date:
+        return 0
+    try:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    except ValueError:
+        return 0
+    return max(0, (end_dt - start_dt).days + 1)
+
+
 def derive_constraints_from_text(
     text: str,
     current_date: str,
@@ -51,13 +64,22 @@ def derive_constraints_from_text(
     user_text = str(text or "").strip()
     user_text_l = user_text.lower()
 
+    prior_start = constraints.start_date
+    prior_end = constraints.end_date
     resolved = resolve_temporal_from_text(user_text, current_date)
+    negated_narrowing_language = ("not just", "not only")
+    should_avoid_narrowing = is_clarification and any(t in user_text_l for t in negated_narrowing_language)
     if resolved:
-        constraints.temporal_phrase = str(resolved.get("temporal_phrase") or "")
-        constraints.start_date = str(resolved.get("start_date") or "")
-        constraints.end_date = str(resolved.get("end_date") or "")
-        constraints.time_filter = str(resolved.get("time_filter") or "")
-        constraints.end_time_filter = str(resolved.get("end_time_filter") or "")
+        next_start = str(resolved.get("start_date") or "")
+        next_end = str(resolved.get("end_date") or "")
+        prior_span = _date_span_days(prior_start, prior_end)
+        next_span = _date_span_days(next_start, next_end)
+        if not (should_avoid_narrowing and prior_span > next_span > 0):
+            constraints.temporal_phrase = str(resolved.get("temporal_phrase") or "")
+            constraints.start_date = next_start
+            constraints.end_date = next_end
+            constraints.time_filter = str(resolved.get("time_filter") or "")
+            constraints.end_time_filter = str(resolved.get("end_time_filter") or "")
 
     explicit_all_styles = wants_all_styles(user_text)
     if explicit_all_styles:
