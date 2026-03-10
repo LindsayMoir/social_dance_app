@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import logging
 import os
 import uuid
+from sqlalchemy import create_engine, text
 
 # Load .env from src directory (where this script is located)
 env_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -1622,6 +1623,251 @@ def validate_llm_models_step():
     finally:
         restore_config(original_config, "validate_llm_models")
 
+
+# ------------------------
+# TASKS FOR RENDER -> LOCAL CHATBOT METRICS SYNC
+# ------------------------
+@task
+def sync_render_chatbot_metrics_last_90_days():
+    """
+    Pull chatbot metrics from Render production DB and upsert into local DB for last 90 days.
+    This keeps local reporting close to production behavior while remaining idempotent.
+    """
+    # This sync is intended for local runs. On Render there is no local target DB.
+    if os.getenv("RENDER", "").lower() == "true":
+        logger.info("sync_render_chatbot_metrics_last_90_days(): Running on Render; skipping local sync.")
+        return {
+            "status": "skipped",
+            "reason": "render_environment",
+        }
+
+    from db_config import get_production_database_url
+
+    local_db_url = os.getenv("DATABASE_CONNECTION_STRING")
+    if not local_db_url:
+        logger.warning("sync_render_chatbot_metrics_last_90_days(): DATABASE_CONNECTION_STRING not set; skipping.")
+        return {
+            "status": "skipped",
+            "reason": "missing_local_database_connection_string",
+        }
+
+    render_db_url = get_production_database_url()
+    if not render_db_url:
+        logger.warning("sync_render_chatbot_metrics_last_90_days(): Render production DB URL unavailable; skipping.")
+        return {
+            "status": "skipped",
+            "reason": "missing_render_database_url",
+        }
+
+    window_days = 90
+    start_ts = datetime.datetime.utcnow() - datetime.timedelta(days=window_days)
+    logger.info(
+        "sync_render_chatbot_metrics_last_90_days(): Syncing from Render -> local for rows since %s (UTC).",
+        start_ts.isoformat(timespec="seconds"),
+    )
+
+    source_engine = create_engine(render_db_url)
+    target_engine = create_engine(local_db_url)
+
+    ensure_requests_sql = """
+    CREATE TABLE IF NOT EXISTS chatbot_request_metrics (
+        id SERIAL PRIMARY KEY,
+        request_id TEXT UNIQUE NOT NULL,
+        endpoint TEXT NOT NULL,
+        session_suffix TEXT,
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP,
+        duration_ms DOUBLE PRECISION,
+        result_type TEXT,
+        user_input TEXT,
+        sql_snippet TEXT,
+        has_response BOOLEAN,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+    ensure_stages_sql = """
+    CREATE TABLE IF NOT EXISTS chatbot_stage_metrics (
+        id SERIAL PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        endpoint TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP,
+        duration_ms DOUBLE PRECISION,
+        metadata_json TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
+    ensure_indexes_sql = [
+        "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_started_at ON chatbot_request_metrics(started_at);",
+        "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_endpoint ON chatbot_request_metrics(endpoint);",
+        "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_started_at ON chatbot_stage_metrics(started_at);",
+        "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_stage ON chatbot_stage_metrics(stage);",
+        "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_request_id ON chatbot_stage_metrics(request_id);",
+        (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_chatbot_stage_metrics_nk "
+            "ON chatbot_stage_metrics(request_id, endpoint, stage, started_at, duration_ms);"
+        ),
+    ]
+
+    select_requests_sql = text(
+        """
+        SELECT
+            request_id, endpoint, session_suffix, started_at, finished_at, duration_ms,
+            result_type, user_input, sql_snippet, has_response, created_at, updated_at
+        FROM chatbot_request_metrics
+        WHERE started_at >= :start_ts
+        ORDER BY started_at ASC
+        """
+    )
+    select_stages_sql = text(
+        """
+        SELECT
+            request_id, endpoint, stage, started_at, finished_at, duration_ms, metadata_json, created_at
+        FROM chatbot_stage_metrics
+        WHERE started_at >= :start_ts
+        ORDER BY started_at ASC
+        """
+    )
+
+    upsert_request_sql = text(
+        """
+        INSERT INTO chatbot_request_metrics (
+            request_id, endpoint, session_suffix, started_at, finished_at, duration_ms,
+            result_type, user_input, sql_snippet, has_response, created_at, updated_at
+        ) VALUES (
+            :request_id, :endpoint, :session_suffix, :started_at, :finished_at, :duration_ms,
+            :result_type, :user_input, :sql_snippet, :has_response, :created_at, :updated_at
+        )
+        ON CONFLICT (request_id)
+        DO UPDATE SET
+            endpoint = EXCLUDED.endpoint,
+            session_suffix = COALESCE(EXCLUDED.session_suffix, chatbot_request_metrics.session_suffix),
+            started_at = COALESCE(EXCLUDED.started_at, chatbot_request_metrics.started_at),
+            finished_at = COALESCE(EXCLUDED.finished_at, chatbot_request_metrics.finished_at),
+            duration_ms = COALESCE(EXCLUDED.duration_ms, chatbot_request_metrics.duration_ms),
+            result_type = COALESCE(EXCLUDED.result_type, chatbot_request_metrics.result_type),
+            user_input = COALESCE(EXCLUDED.user_input, chatbot_request_metrics.user_input),
+            sql_snippet = COALESCE(EXCLUDED.sql_snippet, chatbot_request_metrics.sql_snippet),
+            has_response = COALESCE(EXCLUDED.has_response, chatbot_request_metrics.has_response),
+            created_at = COALESCE(chatbot_request_metrics.created_at, EXCLUDED.created_at),
+            updated_at = COALESCE(EXCLUDED.updated_at, chatbot_request_metrics.updated_at)
+        """
+    )
+    upsert_stage_sql = text(
+        """
+        INSERT INTO chatbot_stage_metrics (
+            request_id, endpoint, stage, started_at, finished_at, duration_ms, metadata_json, created_at
+        ) VALUES (
+            :request_id, :endpoint, :stage, :started_at, :finished_at, :duration_ms, :metadata_json, :created_at
+        )
+        ON CONFLICT (request_id, endpoint, stage, started_at, duration_ms)
+        DO UPDATE SET
+            finished_at = COALESCE(EXCLUDED.finished_at, chatbot_stage_metrics.finished_at),
+            metadata_json = COALESCE(EXCLUDED.metadata_json, chatbot_stage_metrics.metadata_json),
+            created_at = COALESCE(chatbot_stage_metrics.created_at, EXCLUDED.created_at)
+        """
+    )
+
+    def _clean_records(df: pd.DataFrame) -> list[dict]:
+        if df.empty:
+            return []
+        cleaned = df.where(pd.notnull(df), None)
+        return cleaned.to_dict(orient="records")
+
+    try:
+        with target_engine.begin() as target_conn:
+            target_conn.execute(text(ensure_requests_sql))
+            target_conn.execute(text(ensure_stages_sql))
+            for stmt in ensure_indexes_sql:
+                target_conn.execute(text(stmt))
+
+        requests_df = pd.read_sql(select_requests_sql, source_engine, params={"start_ts": start_ts})
+        stages_df = pd.read_sql(select_stages_sql, source_engine, params={"start_ts": start_ts})
+
+        request_records = _clean_records(requests_df)
+        stage_records = _clean_records(stages_df)
+
+        with target_engine.begin() as target_conn:
+            if request_records:
+                target_conn.execute(upsert_request_sql, request_records)
+            if stage_records:
+                target_conn.execute(upsert_stage_sql, stage_records)
+            request_window_count = int(
+                target_conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*)
+                        FROM chatbot_request_metrics
+                        WHERE started_at >= :start_ts
+                        """
+                    ),
+                    {"start_ts": start_ts},
+                ).scalar()
+                or 0
+            )
+            stage_window_count = int(
+                target_conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*)
+                        FROM chatbot_stage_metrics
+                        WHERE started_at >= :start_ts
+                        """
+                    ),
+                    {"start_ts": start_ts},
+                ).scalar()
+                or 0
+            )
+            request_total_count = int(
+                target_conn.execute(
+                    text("SELECT COUNT(*) FROM chatbot_request_metrics")
+                ).scalar()
+                or 0
+            )
+            stage_total_count = int(
+                target_conn.execute(
+                    text("SELECT COUNT(*) FROM chatbot_stage_metrics")
+                ).scalar()
+                or 0
+            )
+
+        summary = {
+            "status": "ok",
+            "window_days": window_days,
+            "start_ts_utc": start_ts.isoformat(timespec="seconds"),
+            "requests_fetched": len(request_records),
+            "stages_fetched": len(stage_records),
+            "local_post_sync_counts": {
+                "chatbot_request_metrics": {
+                    "window_90d": request_window_count,
+                    "total": request_total_count,
+                },
+                "chatbot_stage_metrics": {
+                    "window_90d": stage_window_count,
+                    "total": stage_total_count,
+                },
+            },
+        }
+        logger.info("sync_render_chatbot_metrics_last_90_days(): %s", summary)
+        return summary
+    finally:
+        source_engine.dispose()
+        target_engine.dispose()
+
+
+@flow(name="Sync Render Chatbot Metrics Step")
+def sync_render_chatbot_metrics_step():
+    """Final pipeline step: pull last 90 days of chatbot metrics from Render into local DB."""
+    logger.info("=" * 70)
+    logger.info("SYNC RENDER CHATBOT METRICS STEP")
+    logger.info("Upsert last 90 days of chatbot metrics from Render production DB into local DB")
+    logger.info("=" * 70)
+    result = sync_render_chatbot_metrics_last_90_days()
+    logger.info("sync_render_chatbot_metrics_step: result=%s", result)
+    return True
+
 # ------------------------
 # PIPELINE EXECUTION
 # ------------------------
@@ -1647,7 +1893,8 @@ PIPELINE_STEPS = [
     ("validation", validation_step),  # Pre-commit validation before prod deployment
     ("result_analyzer", result_analyzer_step),  # LLM analysis of validation results
     ("remediation_planner", remediation_planner_step),  # Read-only plan from reliability artifacts
-    ("copy_dev_to_prod", copy_dev_db_to_prod_db_step)
+    ("copy_dev_to_prod", copy_dev_db_to_prod_db_step),
+    ("sync_render_chatbot_metrics", sync_render_chatbot_metrics_step),
 ]
 
 def list_available_steps():

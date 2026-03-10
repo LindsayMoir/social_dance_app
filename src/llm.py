@@ -339,7 +339,14 @@ class LLMHandler:
         prompt_attempts = [prompt_text, prompt_text + retry_suffix]
 
         for attempt_index, prompt_attempt in enumerate(prompt_attempts, start=1):
-            llm_response = self.query_llm(url, prompt_attempt, schema_type)
+            llm_response, llm_meta = self.query_llm(
+                url,
+                prompt_attempt,
+                schema_type,
+                return_metadata=True,
+            )
+            provider = str((llm_meta or {}).get("provider", "unknown") or "unknown")
+            model = str((llm_meta or {}).get("model", "unknown") or "unknown")
 
             if llm_response:
                 logging.info(
@@ -356,6 +363,14 @@ class LLMHandler:
                     else 100
                 )
                 if "no events found" in llm_response_lower:
+                    self._log_extraction_attempt_result(
+                        url=url,
+                        attempt=attempt_index,
+                        provider=provider,
+                        model=model,
+                        outcome="no_events",
+                        response_len=len(llm_response),
+                    )
                     logging.warning(
                         "def process_llm_response: URL %s attempt=%d returned 'no events found'; treating as non-fatal miss.",
                         url,
@@ -363,6 +378,14 @@ class LLMHandler:
                     )
                     return False
                 if len(llm_response) <= min_response_length:
+                    self._log_extraction_attempt_result(
+                        url=url,
+                        attempt=attempt_index,
+                        provider=provider,
+                        model=model,
+                        outcome="too_short",
+                        response_len=len(llm_response),
+                    )
                     logging.warning(
                         "def process_llm_response: URL %s attempt=%d returned too-short response (%d <= %d); treating as non-fatal miss.",
                         url,
@@ -385,6 +408,14 @@ class LLMHandler:
                 parsed_result = self.extract_and_parse_json(llm_response, url, schema_type)
 
                 if parsed_result:
+                    self._log_extraction_attempt_result(
+                        url=url,
+                        attempt=attempt_index,
+                        provider=provider,
+                        model=model,
+                        outcome="success",
+                        response_len=len(llm_response),
+                    )
                     # If OCR provided Detected_Date, use it only to fill missing dates.
                     # Never clobber event-level parsed dates.
                     try:
@@ -458,14 +489,39 @@ class LLMHandler:
                     return True
 
                 if attempt_index < len(prompt_attempts):
+                    self._log_extraction_attempt_result(
+                        url=url,
+                        attempt=attempt_index,
+                        provider=provider,
+                        model=model,
+                        outcome="parse_retry",
+                        response_len=len(llm_response),
+                    )
                     logging.warning(
                         "def process_llm_response: URL %s attempt=%d returned non-parseable response; retrying once with strict JSON instruction.",
                         url,
                         attempt_index,
                     )
                     continue
+                self._log_extraction_attempt_result(
+                    url=url,
+                    attempt=attempt_index,
+                    provider=provider,
+                    model=model,
+                    outcome="hard_failure",
+                    response_len=len(llm_response),
+                )
 
             else:
+                outcome = "no_response_retry" if attempt_index < len(prompt_attempts) else "hard_failure"
+                self._log_extraction_attempt_result(
+                    url=url,
+                    attempt=attempt_index,
+                    provider=provider,
+                    model=model,
+                    outcome=outcome,
+                    response_len=0,
+                )
                 logging.warning(
                     "def process_llm_response: URL %s attempt=%d returned empty LLM response.",
                     url,
@@ -476,6 +532,27 @@ class LLMHandler:
 
         logging.error(f"def process_llm_response: Failed to process LLM response for URL: {url}")
         return False
+
+    @staticmethod
+    def _log_extraction_attempt_result(
+        url: str,
+        attempt: int,
+        provider: str,
+        model: str,
+        outcome: str,
+        response_len: int,
+    ) -> None:
+        """Emit a deterministic per-attempt extraction log for downstream quality attribution."""
+        payload = {
+            "url": str(url or ""),
+            "attempt": int(attempt or 0),
+            "provider": str(provider or "unknown"),
+            "model": str(model or "unknown"),
+            "outcome": str(outcome or "unknown"),
+            "response_len": int(response_len or 0),
+            "timestamp": datetime.now().isoformat(),
+        }
+        logging.info("llm_extract_attempt_result: %s", json.dumps(payload, ensure_ascii=True))
 
     @staticmethod
     def _trim_extracted_text_for_budget(extracted_text: str, max_chars: int) -> str:
@@ -1231,7 +1308,13 @@ class LLMHandler:
                 resolved[provider] = f"unresolved: {e}"
         return resolved
 
-    def _query_provider_once(self, provider: str, prompt: str, schema_type: str | None, request_url: str | None = None):
+    def _query_provider_once(
+        self,
+        provider: str,
+        prompt: str,
+        schema_type: str | None,
+        request_url: str | None = None,
+    ) -> tuple[str | None, str | None]:
         """
         Execute one provider query attempt and return text or None.
         """
@@ -1241,7 +1324,7 @@ class LLMHandler:
         if provider == "openai":
             if self._openai_in_timeout_cooldown():
                 logging.warning("query_llm(): Skipping OpenAI query due to active timeout cooldown.")
-                return None
+                return None, None
             model = self._resolve_model_for_provider("openai")
             logging.info("query_llm(): Querying OpenAI model %s", model)
             max_attempts = max(1, self.provider_retry_max_attempts) if self.self_healing_enabled else 1
@@ -1254,7 +1337,7 @@ class LLMHandler:
                         logging.info("query_llm(): OpenAI response received.")
                     else:
                         logging.warning("query_llm(): OpenAI returned no response.")
-                    return response
+                    return response, model
                 except Exception as e:
                     last_error = e
                     if self._is_model_not_found_error(e):
@@ -1278,12 +1361,12 @@ class LLMHandler:
                     time.sleep(delay_s)
             if last_error is not None:
                 raise last_error
-            return None
+            return None, model
 
         if provider == "openrouter":
             if self._openrouter_in_cooldown():
                 logging.warning("query_llm(): Skipping OpenRouter query due to active cooldown.")
-                return None
+                return None, None
             last_error = None
             max_attempts = max(1, self.provider_retry_max_attempts) if self.self_healing_enabled else 1
             for model in self._openrouter_candidates_for_attempt(request_url=request_url):
@@ -1294,7 +1377,7 @@ class LLMHandler:
                         self._record_openrouter_result()
                         if response:
                             logging.info("query_llm(): OpenRouter response received.")
-                            return response
+                            return response, model
                         logging.warning("query_llm(): OpenRouter returned no response for model %s.", model)
                         break
                     except Exception as e:
@@ -1325,12 +1408,12 @@ class LLMHandler:
 
             if last_error is not None:
                 raise last_error
-            return None
+            return None, None
 
         if provider == "mistral":
             if self._mistral_in_cooldown():
                 logging.warning("query_llm(): Skipping Mistral query due to active cooldown.")
-                return None
+                return None, None
             try:
                 model = self._resolve_model_for_provider("mistral")
                 logging.info("query_llm(): Querying Mistral model %s", model)
@@ -1344,7 +1427,7 @@ class LLMHandler:
                             logging.info("query_llm(): Mistral response received.")
                         else:
                             logging.warning("query_llm(): Mistral returned no response.")
-                        return response
+                        return response, model
                     except Exception as e:
                         last_error = e
                         if self._is_model_not_found_error(e):
@@ -1368,14 +1451,14 @@ class LLMHandler:
                         time.sleep(delay_s)
                 if last_error is not None:
                     raise last_error
-                return None
+                return None, model
             except Exception as e:
                 raise
 
         if provider == "gemini":
             if self._gemini_in_timeout_cooldown():
                 logging.warning("query_llm(): Skipping Gemini query due to active timeout cooldown.")
-                return None
+                return None, None
             model = self._resolve_model_for_provider("gemini")
             logging.info("query_llm(): Querying Gemini model %s", model)
             max_attempts = max(1, self.provider_retry_max_attempts) if self.self_healing_enabled else 1
@@ -1388,7 +1471,7 @@ class LLMHandler:
                         logging.info("query_llm(): Gemini response received.")
                     else:
                         logging.warning("query_llm(): Gemini returned no response.")
-                    return response
+                    return response, model
                 except Exception as e:
                     last_error = e
                     if self._is_model_not_found_error(e):
@@ -1412,7 +1495,7 @@ class LLMHandler:
                     time.sleep(delay_s)
             if last_error is not None:
                 raise last_error
-            return None
+            return None, model
 
         raise ValueError(f"Invalid LLM provider: {provider}")
 
@@ -1426,6 +1509,7 @@ class LLMHandler:
         max_iterations=3,
         provider_override: str | None = None,
         disable_fallback: bool = False,
+        return_metadata: bool = False,
     ):
         """
         Query the configured LLM with a given prompt and return the response.
@@ -1458,7 +1542,10 @@ class LLMHandler:
                 provider_override=provider_override,
                 disable_fallback=disable_fallback,
             )
-            return result.get('content') if result else None
+            content = result.get('content') if result else None
+            if return_metadata:
+                return content, {"provider": "unknown", "model": "unknown"}
+            return content
         
         provider = self._select_primary_provider(url, for_tools=False)
         if provider_override:
@@ -1481,14 +1568,18 @@ class LLMHandler:
         response = None
         for candidate in candidates:
             try:
-                response = self._query_provider_once(candidate, prompt, schema_type, request_url=url)
+                response, model = self._query_provider_once(candidate, prompt, schema_type, request_url=url)
                 if response:
+                    if return_metadata:
+                        return response, {"provider": candidate, "model": model or "unknown"}
                     return response
             except Exception as e:
                 error_message = str(e).replace('error', 'rejection')
                 logging.warning("query_llm(): %s query failed: %s", candidate.capitalize(), error_message)
 
         logging.error("query_llm(): All configured LLM providers failed to provide a response.")
+        if return_metadata:
+            return None, {"provider": "unknown", "model": "unknown"}
         return None
 
     def _query_with_tools(
