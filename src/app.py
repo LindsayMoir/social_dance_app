@@ -122,7 +122,7 @@ logging.info(f"app.py: Loaded chatbot instructions from {instructions_path}")
 st.markdown(chatbot_instructions)
 
 WAIT_NOTICE = (
-    "Checking providers. About 2/3 of requests finish within 15 seconds. "
+    "About 2/3 of requests finish within 15 seconds. "
     "If this takes longer, traffic is likely high."
 )
 
