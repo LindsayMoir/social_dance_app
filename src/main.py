@@ -39,6 +39,11 @@ print("Current working directory:", os.getcwd())
 from llm import LLMHandler  # Import the LLMHandler module
 from db import DatabaseHandler  # Import DatabaseHandler for conversation management
 from conversation_manager import ConversationManager  # Import ConversationManager
+from query_constraints import (
+    build_sql_from_constraints,
+    constraints_to_query_text,
+    derive_constraints_from_text,
+)
 
 # Load environment variables
 load_dotenv()
@@ -1084,6 +1089,12 @@ def process_confirmation(request: ConfirmationRequest):
             current_date = now_pacific.strftime("%Y-%m-%d")
 
             sanitized_query = pending_query.get("sql_query") or ""
+            pending_constraints = pending_query.get("constraints") or {}
+            if pending_constraints:
+                constraint_sql = build_sql_from_constraints(pending_constraints)
+                if constraint_sql:
+                    sanitized_query = constraint_sql
+
             if not sanitized_query.upper().startswith("SELECT"):
                 # Rebuild prompt and regenerate SQL now that the user confirmed intent
                 prompts_cfg = config.get('prompts', {})
@@ -1327,18 +1338,62 @@ def process_confirmation(request: ConfirmationRequest):
     
     elif confirmation == "clarify":
         # Handle clarification.
-        # Use the explicit clarification text as the reroute input so the new constraint
-        # is not drowned out by duplicated prior context.
+        # Apply clarification as structured constraint updates instead of string concatenation.
         if not clarification:
             raise HTTPException(status_code=400, detail="Clarification text is required when selecting 'clarify' option.")
 
-        # Clear pending and re-run with clarification input
-        conversation_manager.clear_pending_query(conversation_id)
+        clarification_input = clarification.strip()
+        pacific_tz = ZoneInfo("America/Los_Angeles")
+        now_pacific = datetime.now(pacific_tz)
+        current_date = now_pacific.strftime("%Y-%m-%d")
+        default_base_query = pending_query.get("combined_query") or pending_query.get("user_input") or ""
+        base_constraints = pending_query.get("constraints") or derive_constraints_from_text(
+            default_base_query,
+            current_date,
+        )
+        try:
+            updated_constraints = derive_constraints_from_text(
+                clarification_input,
+                current_date,
+                base_constraints=base_constraints,
+                is_clarification=True,
+            )
+        except Exception:
+            updated_constraints = base_constraints
 
-        clarification_request = QueryRequest(user_input=clarification.strip(), session_token=session_token)
-        result_type = "clarify_reroute"
+        rewritten_query = constraints_to_query_text(updated_constraints, fallback_text=clarification_input)
+        interpretation = generate_interpretation(rewritten_query, config, request_id=request_id)
+        interpretation = _force_style_in_interpretation(interpretation, rewritten_query)
+
+        sql_from_constraints = build_sql_from_constraints(updated_constraints)
+        if sql_from_constraints:
+            sql_from_constraints = _enforce_default_event_type(sql_from_constraints, rewritten_query)
+            sql_from_constraints = enforce_dance_style(sql_from_constraints, rewritten_query)
+
+        # Replace pending query with the clarified structured query.
+        conversation_manager.clear_pending_query(conversation_id)
+        conversation_manager.store_pending_query(
+            conversation_id=conversation_id,
+            user_input=clarification_input,
+            combined_query=rewritten_query,
+            interpretation=interpretation,
+            sql_query=sql_from_constraints if sql_from_constraints else None,
+            constraints=updated_constraints,
+        )
+        conversation_manager.update_conversation_context(
+            conversation_id,
+            {"last_search_query": "", "concatenation_count": 1},
+        )
+        result_type = "clarify_updated"
         _finish_confirmation_timing()
-        return process_query(clarification_request)
+        return {
+            "interpretation": interpretation,
+            "confirmation_required": True,
+            "conversation_id": conversation_id,
+            "message": f"{interpretation}\n\nIf that is correct, please confirm using the buttons below:",
+            "options": ["yes", "clarify", "no"],
+            "sql_query": sql_from_constraints if sql_from_constraints else None,
+        }
     
     elif confirmation == "no":
         # User rejected the interpretation - clear pending query
@@ -1676,12 +1731,22 @@ def process_query(request: QueryRequest):
 
         if use_contextual_prompt and session_token:
             try:
+                pending_constraints = derive_constraints_from_text(
+                    query_for_interpretation,
+                    current_date,
+                )
+                if pending_constraints:
+                    deterministic_sql = build_sql_from_constraints(pending_constraints)
+                    if deterministic_sql:
+                        sanitized_query = deterministic_sql
+
                 conversation_manager.store_pending_query(
                     conversation_id=conversation_id,
                     user_input=user_input,
                     combined_query=query_for_interpretation,
                     interpretation=interpretation,
-                    sql_query=sanitized_query if (sanitized_query and sanitized_query.upper().startswith('SELECT')) else None
+                    sql_query=sanitized_query if (sanitized_query and sanitized_query.upper().startswith('SELECT')) else None,
+                    constraints=pending_constraints,
                 )
                 search_context = {
                     "last_search_query": context.get('last_search_query', combined_query),

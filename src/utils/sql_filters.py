@@ -19,15 +19,84 @@ _STYLE_SYNONYMS: Dict[str, Set[str]] = {
 }
 
 
+def _is_all_styles_request(text: str) -> bool:
+    """Return True when user asks for broad style coverage instead of a specific style filter."""
+    t = (text or "").lower()
+    broad_patterns = (
+        "all dance events",
+        "all dances",
+        "all styles",
+        "any dance style",
+        "any styles",
+        "not just",
+        "not only",
+    )
+    return any(p in t for p in broad_patterns)
+
+
+def wants_all_styles(text: str) -> bool:
+    """Public helper for broad style requests."""
+    return _is_all_styles_request(text)
+
+
+def _is_negated_style_mention(text: str, start_idx: int) -> bool:
+    """Detect obvious negation immediately before a style mention."""
+    window = text[max(0, start_idx - 24):start_idx]
+    return bool(
+        re.search(
+            r"(?:\bnot\s+(?:just|only)?\s*|\bno\s+|\bwithout\s+|\bexcluding?\s+|\bexcept\s+)$",
+            window,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _is_excluded_style_mention(text: str, start_idx: int) -> bool:
+    """Detect exclusion language near a style token."""
+    window = text[max(0, start_idx - 24):start_idx]
+    return bool(
+        re.search(
+            r"(?:\bno\s+|\bwithout\s+|\bexcluding?\s+|\bexcept\s+)$",
+            window,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
 def _styles_from_text(text: str) -> List[str]:
     """Return a list of canonical styles mentioned in the text (case-insensitive)."""
     t = (text or "").lower()
+    if _is_all_styles_request(t):
+        return []
+
     found: List[str] = []
     for canonical, syns in _STYLE_SYNONYMS.items():
-        if any(s in t for s in syns):
-            # store canonical name once
-            if canonical not in found:
-                found.append(canonical)
+        for syn in syns:
+            pattern = rf"\b{re.escape(syn)}\b"
+            matches = list(re.finditer(pattern, t, flags=re.IGNORECASE))
+            if not matches:
+                continue
+            if any(not _is_negated_style_mention(t, m.start()) for m in matches):
+                if canonical not in found:
+                    found.append(canonical)
+                break
+    return found
+
+
+def detect_excluded_styles_in_text(text: str) -> List[str]:
+    """Return canonical styles that are explicitly excluded by the user text."""
+    t = (text or "").lower()
+    found: List[str] = []
+    for canonical, syns in _STYLE_SYNONYMS.items():
+        for syn in syns:
+            pattern = rf"\b{re.escape(syn)}\b"
+            matches = list(re.finditer(pattern, t, flags=re.IGNORECASE))
+            if not matches:
+                continue
+            if any(_is_excluded_style_mention(t, m.start()) for m in matches):
+                if canonical not in found:
+                    found.append(canonical)
+                break
     return found
 
 
@@ -62,6 +131,9 @@ def enforce_dance_style(sql: str, user_text: str) -> str:
 
     # Only consider dance_style present if it appears in a condition, not just in SELECT list
     if re.search(r"(?i)\bdance_style\s*(=|ILIKE|LIKE|IN|IS)\b", sql):
+        return sql
+
+    if _is_all_styles_request(user_text):
         return sql
 
     styles = _styles_from_text(user_text)

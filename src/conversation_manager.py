@@ -170,8 +170,15 @@ class ConversationManager:
         
         self.db_handler.execute_query(update_query, params)
     
-    def store_pending_query(self, conversation_id: str, user_input: str, combined_query: str, 
-                           interpretation: str, sql_query: str):
+    def store_pending_query(
+        self,
+        conversation_id: str,
+        user_input: str,
+        combined_query: str,
+        interpretation: str,
+        sql_query: Optional[str],
+        constraints: Optional[Dict[str, Any]] = None,
+    ):
         """
         Store a pending query awaiting user confirmation.
         
@@ -188,6 +195,7 @@ class ConversationManager:
             "pending_combined_query": combined_query,
             "pending_interpretation": interpretation,
             "pending_sql_query": sql_query,
+            "pending_constraints": constraints or {},
             "pending_timestamp": datetime.now().isoformat()
         }
         
@@ -212,6 +220,7 @@ class ConversationManager:
                 "combined_query": context.get("pending_combined_query"),
                 "interpretation": context.get("pending_interpretation"),
                 "sql_query": context.get("pending_sql_query"),
+                "constraints": context.get("pending_constraints") or {},
                 "timestamp": context.get("pending_timestamp")
             }
         
@@ -230,6 +239,7 @@ class ConversationManager:
             "pending_combined_query": None,
             "pending_interpretation": None,
             "pending_sql_query": None,
+            "pending_constraints": None,
             "pending_timestamp": None
         }
         

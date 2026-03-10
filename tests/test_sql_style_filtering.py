@@ -2,7 +2,8 @@ import re
 
 import sys
 sys.path.insert(0, 'src')
-from utils.sql_filters import enforce_dance_style
+from utils.sql_filters import enforce_dance_style, detect_styles_in_text
+from utils.sql_filters import detect_excluded_styles_in_text, wants_all_styles
 
 
 def _norm(s: str) -> str:
@@ -78,3 +79,31 @@ def test_abbreviation_ecs_and_full_name():
     low = out.lower()
     assert "dance_style ilike '%east coast swing%'" in low
     assert "dance_style ilike '%ecs%'" in low
+
+
+def test_not_just_style_does_not_force_style_filter():
+    user = "All dance events not just salsa on this date"
+    sql = (
+        "SELECT event_name, event_type, dance_style, day_of_week, start_date, end_date, "
+        "start_time, end_time, source, url, price, description, location "
+        "FROM events WHERE start_date >= '2026-03-18' AND start_date <= '2026-03-18' "
+        "ORDER BY start_date, start_time LIMIT 30"
+    )
+    out = enforce_dance_style(sql, user)
+    assert out == sql
+
+
+def test_detect_styles_ignores_negated_mentions():
+    user = "all dance events, not just salsa"
+    styles = detect_styles_in_text(user)
+    assert styles == []
+
+
+def test_detect_excluded_style_mentions():
+    user = "show me dance events without salsa"
+    excluded = detect_excluded_styles_in_text(user)
+    assert "salsa" in excluded
+
+
+def test_wants_all_styles_for_broad_requests():
+    assert wants_all_styles("show me all styles this weekend") is True
