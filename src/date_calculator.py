@@ -37,6 +37,19 @@ _MONTH_PATTERN = (
     r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
     r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
 )
+_WEEK_ORDINALS = {
+    "first": 1,
+    "1st": 1,
+    "second": 2,
+    "2nd": 2,
+    "third": 3,
+    "3rd": 3,
+    "fourth": 4,
+    "4th": 4,
+    "fifth": 5,
+    "5th": 5,
+}
+_RELATIVE_MONTH_TOKENS = ("this month", "next month", "last month")
 
 
 def _normalize_text(text: str) -> str:
@@ -95,6 +108,111 @@ def _parse_explicit_date_phrase(temporal_phrase: str, current: datetime) -> str 
 
     return None
 
+
+def _parse_ordinal_week_of_month_phrase(temporal_phrase: str, current: datetime) -> dict | None:
+    """Parse phrases like 'first week of april 2026' into a date range."""
+    phrase = _normalize_text(temporal_phrase)
+    week_match = re.fullmatch(
+        rf"(?:the\s+)?(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th)\s+week\s+(?:of|in)\s+"
+        rf"({_MONTH_PATTERN}|this month|next month|last month)(?:\s+(\d{{4}}))?",
+        phrase,
+    )
+    if not week_match:
+        return None
+
+    ordinal_token = week_match.group(1)
+    month_token = week_match.group(2)
+    year_token = week_match.group(4)
+    week_num = _WEEK_ORDINALS.get(ordinal_token)
+    if month_token in _RELATIVE_MONTH_TOKENS:
+        month_range = _resolve_relative_month_range(month_token, current)
+        month_num = month_range["month_number"]
+        year_num = month_range["year"]
+    else:
+        month_num = _MONTH_LOOKUP.get(month_token, current.month)
+        year_num = int(year_token) if year_token else current.year
+
+    if not week_num:
+        return None
+
+    start_day = (week_num - 1) * 7 + 1
+    month_last_day = calendar.monthrange(year_num, month_num)[1]
+    if start_day > month_last_day:
+        return None
+    end_day = min(start_day + 6, month_last_day)
+    return {
+        "start_date": f"{year_num:04d}-{month_num:02d}-{start_day:02d}",
+        "end_date": f"{year_num:04d}-{month_num:02d}-{end_day:02d}",
+        "month_number": month_num,
+        "year": year_num,
+    }
+
+
+def _resolve_relative_month_range(token: str, current: datetime) -> dict:
+    """Resolve this/next/last month to month/year and month range."""
+    month = current.month
+    year = current.year
+    token = _normalize_text(token)
+
+    if token == "this month":
+        target_month = month
+        target_year = year
+    elif token == "next month":
+        target_month = month + 1 if month < 12 else 1
+        target_year = year + 1 if month == 12 else year
+    elif token == "last month":
+        target_month = month - 1 if month > 1 else 12
+        target_year = year - 1 if month == 1 else year
+    else:
+        target_month = month
+        target_year = year
+
+    month_last_day = calendar.monthrange(target_year, target_month)[1]
+    return {
+        "start_date": f"{target_year:04d}-{target_month:02d}-01",
+        "end_date": f"{target_year:04d}-{target_month:02d}-{month_last_day:02d}",
+        "month_number": target_month,
+        "year": target_year,
+    }
+
+
+def _parse_date_range_expression(temporal_phrase: str, current_date: str) -> dict | None:
+    """Parse compound ranges like 'between X and Y' or 'from X to Y'."""
+    phrase = _normalize_text(temporal_phrase)
+    pairs: list[tuple[str, str]] = []
+
+    m_between = re.fullmatch(r"(?:between)\s+(.+?)\s+and\s+(.+)", phrase)
+    if m_between:
+        pairs.append((m_between.group(1), m_between.group(2)))
+    m_from_to = re.fullmatch(r"(?:from)\s+(.+?)\s+to\s+(.+)", phrase)
+    if m_from_to:
+        pairs.append((m_from_to.group(1), m_from_to.group(2)))
+    m_plain_to = re.fullmatch(r"(.+?)\s+to\s+(.+)", phrase)
+    if m_plain_to:
+        pairs.append((m_plain_to.group(1), m_plain_to.group(2)))
+
+    for left, right in pairs:
+        left_phrase = extract_temporal_phrase(left) or _normalize_text(left)
+        right_phrase = extract_temporal_phrase(right) or _normalize_text(right)
+        try:
+            left_range = calculate_date_range(left_phrase, current_date)
+            right_range = calculate_date_range(right_phrase, current_date)
+            start_date = str(left_range.get("start_date") or "")
+            end_date = str(right_range.get("end_date") or "")
+            if not start_date or not end_date:
+                continue
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+            if end_dt < start_dt:
+                start_dt, end_dt = end_dt, start_dt
+            return {
+                "start_date": start_dt.strftime("%Y-%m-%d"),
+                "end_date": end_dt.strftime("%Y-%m-%d"),
+            }
+        except Exception:
+            continue
+    return None
+
 # Load config for temporal expressions
 _config = None
 
@@ -137,12 +255,20 @@ def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
 
     temporal_phrase = _normalize_text(temporal_phrase)
 
+    range_expression = _parse_date_range_expression(temporal_phrase, current_date)
+    if range_expression:
+        return range_expression
+
     explicit_date = _parse_explicit_date_phrase(temporal_phrase, current)
     if explicit_date:
         return {
             "start_date": explicit_date,
             "end_date": explicit_date,
         }
+
+    ordinal_week_range = _parse_ordinal_week_of_month_phrase(temporal_phrase, current)
+    if ordinal_week_range:
+        return ordinal_week_range
 
     # Month name (optional year), e.g. "march", "mar 2026"
     month_match = re.fullmatch(rf"{_MONTH_PATTERN}(?:\s+(\d{{4}}))?", temporal_phrase)
@@ -295,54 +421,11 @@ def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
 
     # Next month
     elif temporal_phrase == "next month":
-        # Algorithm: month + 1, wrap if > 12, increment year if wrapped
-        month = current.month
-        year = current.year
-
-        next_month = month + 1 if month < 12 else 1
-        next_year = year + 1 if month == 12 else year
-
-        # First day of next month
-        first_day = datetime(next_year, next_month, 1)
-
-        # Last day of next month
-        if next_month == 12:
-            last_day = datetime(next_year, 12, 31)
-        else:
-            following_month_first = datetime(next_year, next_month + 1, 1)
-            last_day = following_month_first - timedelta(days=1)
-
-        return {
-            "start_date": first_day.strftime("%Y-%m-%d"),
-            "end_date": last_day.strftime("%Y-%m-%d"),
-            "month_number": next_month,
-            "year": next_year
-        }
+        return _resolve_relative_month_range("next month", current)
 
     # Last month
     elif temporal_phrase == "last month":
-        month = current.month
-        year = current.year
-
-        last_month = month - 1 if month > 1 else 12
-        last_year = year - 1 if month == 1 else year
-
-        # First day of last month
-        first_day = datetime(last_year, last_month, 1)
-
-        # Last day of last month
-        if last_month == 12:
-            last_day = datetime(last_year, 12, 31)
-        else:
-            current_month_first = datetime(last_year, last_month + 1, 1)
-            last_day = current_month_first - timedelta(days=1)
-
-        return {
-            "start_date": first_day.strftime("%Y-%m-%d"),
-            "end_date": last_day.strftime("%Y-%m-%d"),
-            "month_number": last_month,
-            "year": last_year
-        }
+        return _resolve_relative_month_range("last month", current)
 
     # This year
     elif temporal_phrase == "this year":
@@ -505,10 +588,28 @@ def extract_temporal_phrase(user_text: str) -> str | None:
         return None
     text = _normalize_text(user_text)
 
+    # Compound date ranges
+    m_range = re.search(
+        rf"\b(?:between\s+.+?\s+and\s+.+|from\s+.+?\s+to\s+.+|"
+        rf"(?:{_MONTH_PATTERN}\s+\d{{1,2}}(?:,?\s+\d{{4}})?\s+to\s+{_MONTH_PATTERN}\s+\d{{1,2}}(?:,?\s+\d{{4}})?))\b",
+        text,
+    )
+    if m_range:
+        return m_range.group(0)
+
     # Exact YYYY-MM-DD date
     m_date = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
     if m_date:
         return m_date.group(1)
+
+    # Month Day [,] Year
+    m_ordinal_week = re.search(
+        rf"\b(?:the\s+)?(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th)\s+week\s+(?:of|in)\s+"
+        rf"(?:{_MONTH_PATTERN}|this month|next month|last month)(?:\s+\d{{4}})?\b",
+        text,
+    )
+    if m_ordinal_week:
+        return m_ordinal_week.group(0)
 
     # Month Day [,] Year
     m_month_day = re.search(rf"\b{_MONTH_PATTERN}\s+\d{{1,2}}(?:,?\s+\d{{4}})?\b", text)
@@ -578,6 +679,21 @@ def extract_temporal_phrase(user_text: str) -> str | None:
         if re.search(rf"\b{re.escape(phrase)}\b", text):
             return phrase
     return None
+
+
+def resolve_temporal_from_text(user_text: str, current_date: str) -> dict | None:
+    """Extract and calculate temporal range from free-form user text."""
+    if not user_text:
+        return None
+    phrase = extract_temporal_phrase(user_text)
+    if not phrase:
+        return None
+    try:
+        result = calculate_date_range(phrase, current_date)
+    except Exception:
+        return None
+    result["temporal_phrase"] = phrase
+    return result
 
 
 def _generate_temporal_phrase_enum():

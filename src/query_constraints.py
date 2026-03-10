@@ -4,7 +4,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List
 
-from date_calculator import calculate_date_range, extract_temporal_phrase
+from date_calculator import resolve_temporal_from_text
 from utils.sql_filters import detect_excluded_styles_in_text, detect_styles_in_text, wants_all_styles
 
 
@@ -51,10 +51,9 @@ def derive_constraints_from_text(
     user_text = str(text or "").strip()
     user_text_l = user_text.lower()
 
-    temporal_phrase = extract_temporal_phrase(user_text)
-    if temporal_phrase:
-        resolved = calculate_date_range(temporal_phrase, current_date)
-        constraints.temporal_phrase = temporal_phrase
+    resolved = resolve_temporal_from_text(user_text, current_date)
+    if resolved:
+        constraints.temporal_phrase = str(resolved.get("temporal_phrase") or "")
         constraints.start_date = str(resolved.get("start_date") or "")
         constraints.end_date = str(resolved.get("end_date") or "")
         constraints.time_filter = str(resolved.get("time_filter") or "")

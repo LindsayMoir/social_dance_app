@@ -1624,6 +1624,7 @@ def process_query(request: QueryRequest):
         )
     except ChatbotLLMTimeoutError:
         result_type = "llm_timeout"
+        _finish_query_timing()
         return {
             "message": _chatbot_traffic_timeout_message(),
             "confirmation_required": False,
@@ -1684,35 +1685,62 @@ def process_query(request: QueryRequest):
 
         # Ensure we actually have a SELECT statement; otherwise re-query with stricter instructions
         if sanitized_query and not sanitized_query.upper().startswith("SELECT"):
-            logging.warning("Preflight: No valid SELECT found. Re-querying with explicit SQL-only instruction.")
-            sql_only_suffix = (
-                "\n\nSTRICT FIX: Return ONLY a raw SQL SELECT statement (no tool calls, no JSON, no explanations). "
-                "Call calculate_date_range internally and embed the dates directly in WHERE clauses."
+            # Prefer deterministic SQL synthesis from parsed constraints before retrying LLM.
+            constraint_source_query = combined_query if use_contextual_prompt else user_input
+            synthesized_constraints = derive_constraints_from_text(
+                constraint_source_query,
+                current_date,
             )
-            sql_only_prompt = f"{prompt}\n{sql_only_suffix}"
-            sql_query3 = _query_llm_timed(
-                request_id=request_id,
-                endpoint="/query",
-                stage="sql_generation_select_retry",
-                request_url='chatbot',
-                prompt=sql_only_prompt,
-                tools=[CALCULATE_DATE_RANGE_TOOL],
-            )
-            if sql_query3:
-                s3 = sql_query3.replace("```sql", "").replace("```", "").strip()
-                si3 = s3.upper().find("SELECT")
-                if si3 != -1:
-                    s3 = s3[si3:]
-                s3 = s3.split(";")[0]
-                if s3.upper().startswith("SELECT") and not _sql_has_illegal_date_arithmetic(s3):
-                    sanitized_query = s3
-                    logging.info("Preflight: Successfully regenerated a valid SELECT SQL.")
-                    logging.info(
-                        "chatbot_trace_sql: request_id=%s endpoint=/query stage=sql_select_retry sql=%s",
-                        request_id,
-                        _safe_log_snippet(sanitized_query, max_len=320),
+            deterministic_sql = build_sql_from_constraints(synthesized_constraints)
+            if deterministic_sql:
+                sanitized_query = deterministic_sql
+                logging.info("Preflight: Built deterministic SQL from constraints after non-SELECT LLM output.")
+                logging.info(
+                    "chatbot_trace_sql: request_id=%s endpoint=/query stage=sql_constraints_fallback sql=%s",
+                    request_id,
+                    _safe_log_snippet(sanitized_query, max_len=320),
+                )
+                _persist_request_trace(request_id=request_id, sql_snippet=_safe_log_snippet(sanitized_query, max_len=1000))
+            else:
+                logging.warning("Preflight: No valid SELECT found. Re-querying with explicit SQL-only instruction.")
+                sql_only_suffix = (
+                    "\n\nSTRICT FIX: Return ONLY a raw SQL SELECT statement (no tool calls, no JSON, no explanations). "
+                    "Call calculate_date_range internally and embed the dates directly in WHERE clauses."
+                )
+                sql_only_prompt = f"{prompt}\n{sql_only_suffix}"
+                try:
+                    sql_query3 = _query_llm_timed(
+                        request_id=request_id,
+                        endpoint="/query",
+                        stage="sql_generation_select_retry",
+                        request_url='chatbot',
+                        prompt=sql_only_prompt,
+                        tools=[CALCULATE_DATE_RANGE_TOOL],
                     )
-                    _persist_request_trace(request_id=request_id, sql_snippet=_safe_log_snippet(sanitized_query, max_len=1000))
+                except ChatbotLLMTimeoutError:
+                    result_type = "llm_timeout"
+                    _finish_query_timing()
+                    return {
+                        "message": _chatbot_traffic_timeout_message(),
+                        "confirmation_required": False,
+                        "retry_recommended": True,
+                    }
+
+                if sql_query3:
+                    s3 = sql_query3.replace("```sql", "").replace("```", "").strip()
+                    si3 = s3.upper().find("SELECT")
+                    if si3 != -1:
+                        s3 = s3[si3:]
+                    s3 = s3.split(";")[0]
+                    if s3.upper().startswith("SELECT") and not _sql_has_illegal_date_arithmetic(s3):
+                        sanitized_query = s3
+                        logging.info("Preflight: Successfully regenerated a valid SELECT SQL.")
+                        logging.info(
+                            "chatbot_trace_sql: request_id=%s endpoint=/query stage=sql_select_retry sql=%s",
+                            request_id,
+                            _safe_log_snippet(sanitized_query, max_len=320),
+                        )
+                        _persist_request_trace(request_id=request_id, sql_snippet=_safe_log_snippet(sanitized_query, max_len=1000))
 
     # Generate natural language interpretation and always confirm intent
     try:

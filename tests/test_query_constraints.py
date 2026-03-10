@@ -33,3 +33,15 @@ def test_constraints_build_sql_keeps_date_and_no_style_filter_when_all_styles() 
     assert "start_date >= '2026-03-18'" in sql_l
     assert "start_date <= '2026-03-18'" in sql_l
     assert "dance_style ilike" not in sql_l
+
+
+def test_derive_constraints_first_week_of_april() -> None:
+    constraints = derive_constraints_from_text("Where can I dance the first week of April?", "2026-03-09")
+    assert constraints["start_date"] == "2026-04-01"
+    assert constraints["end_date"] == "2026-04-07"
+
+
+def test_derive_constraints_first_week_of_next_month() -> None:
+    constraints = derive_constraints_from_text("Where can I dance the first week of next month?", "2026-03-09")
+    assert constraints["start_date"] == "2026-04-01"
+    assert constraints["end_date"] == "2026-04-07"
