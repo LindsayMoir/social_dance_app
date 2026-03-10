@@ -878,20 +878,12 @@ def generate_interpretation(user_query: str, config: dict, request_id: str | Non
 
     def _fallback_interpretation(uq: str) -> str:
         try:
-            from date_calculator import calculate_date_range
+            from date_calculator import calculate_date_range, extract_temporal_phrase
             uq_l = uq.lower()
             tz_abbr = current_time.split()[-1]
             include_live = ("live music" in uq_l) or ("music" in uq_l)
             include_classes = any(w in uq_l for w in ["class", "classes", "workshop", "workshops", "lesson", "lessons"])
-
-            # Map simple phrases
-            phrases = [
-                "tonight", "tomorrow night", "tomorrow",
-                "this weekend", "next weekend",
-                "this week", "next week",
-                "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
-            ]
-            temporal = next((p for p in phrases if p in uq_l), None)
+            temporal = extract_temporal_phrase(uq)
 
             if not temporal:
                 return f"My understanding is that you want to see dance events available in the {default_city} area."
@@ -976,12 +968,9 @@ def generate_interpretation(user_query: str, config: dict, request_id: str | Non
     current_time = now_pacific.strftime("%H:%M %Z")
     default_city = config.get('location', {}).get('epicentre', 'your area')
     
-    # If the query contains a clear temporal phrase, prefer deterministic tool-based fallback
-    uq_l_pref = user_query.lower()
-    if any(p in uq_l_pref for p in [
-        "tonight", "tomorrow night", "tomorrow", "this weekend", "next weekend",
-        "this week", "next week", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
-    ]):
+    # If the query contains a tool-recognized temporal phrase, prefer deterministic tool-based fallback
+    from date_calculator import extract_temporal_phrase
+    if extract_temporal_phrase(user_query):
         return _fallback_interpretation(user_query)
 
     # Format the interpretation prompt
@@ -1181,16 +1170,9 @@ def process_confirmation(request: ConfirmationRequest):
             if not is_valid_sql:
                 logging.warning("CONFIRMATION: SQL validation failed, using deterministic fallback. Error: %s", validation_error)
                 # Deterministic SQL fallback using date_calculator
-                from date_calculator import calculate_date_range
+                from date_calculator import calculate_date_range, extract_temporal_phrase
                 cq = pending_query.get('combined_query') or pending_query.get('user_input') or ''
-                cq_l = cq.lower()
-                phrases = [
-                    "tonight", "tomorrow night", "tomorrow",
-                    "this weekend", "next weekend",
-                    "this week", "next week",
-                    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
-                ]
-                temporal = next((p for p in phrases if p in cq_l), None)
+                temporal = extract_temporal_phrase(cq)
                 if temporal:
                     rng = calculate_date_range(temporal, current_date)
                     sd, ed = rng.get('start_date'), rng.get('end_date')
@@ -1344,17 +1326,16 @@ def process_confirmation(request: ConfirmationRequest):
             )
     
     elif confirmation == "clarify":
-        # Handle clarification — merge with prior combined query for better context
+        # Handle clarification.
+        # Use the explicit clarification text as the reroute input so the new constraint
+        # is not drowned out by duplicated prior context.
         if not clarification:
             raise HTTPException(status_code=400, detail="Clarification text is required when selecting 'clarify' option.")
 
-        prior = pending_query.get('combined_query') or pending_query.get('user_input') or ''
-        merged = (prior + ' ' + clarification).strip()
-
-        # Clear pending and re-run with merged input
+        # Clear pending and re-run with clarification input
         conversation_manager.clear_pending_query(conversation_id)
 
-        clarification_request = QueryRequest(user_input=merged, session_token=session_token)
+        clarification_request = QueryRequest(user_input=clarification.strip(), session_token=session_token)
         result_type = "clarify_reroute"
         _finish_confirmation_timing()
         return process_query(clarification_request)

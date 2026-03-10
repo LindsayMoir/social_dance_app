@@ -10,11 +10,90 @@ Version: 1.1.0
 """
 
 from datetime import datetime, timedelta
+import calendar
 import logging
 import os
+import re
 import yaml
 
 logger = logging.getLogger(__name__)
+
+_MONTH_LOOKUP = {
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
+}
+
+_MONTH_PATTERN = (
+    r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
+    r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+)
+
+
+def _normalize_text(text: str) -> str:
+    """Normalize text for temporal parsing."""
+    normalized = str(text or "").lower().strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip(" .,!?:;\"'")
+
+
+def _build_iso_date(year: int, month: int, day: int) -> str:
+    """Validate date parts and return YYYY-MM-DD."""
+    return datetime(year, month, day).strftime("%Y-%m-%d")
+
+
+def _parse_explicit_date_phrase(temporal_phrase: str, current: datetime) -> str | None:
+    """Parse explicit date phrases into an ISO date string when possible."""
+    phrase = _normalize_text(temporal_phrase)
+
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", phrase):
+        return phrase
+
+    # MM/DD/YYYY or MM/DD (current year)
+    m_numeric = re.fullmatch(r"(\d{1,2})/(\d{1,2})(?:/(\d{4}))?", phrase)
+    if m_numeric:
+        month = int(m_numeric.group(1))
+        day = int(m_numeric.group(2))
+        year = int(m_numeric.group(3)) if m_numeric.group(3) else current.year
+        try:
+            return _build_iso_date(year, month, day)
+        except ValueError:
+            return None
+
+    # Month Day [,] [Year] e.g. march 18, 2026
+    m_month_day = re.fullmatch(rf"{_MONTH_PATTERN}\s+(\d{{1,2}})(?:,?\s+(\d{{4}}))?", phrase)
+    if m_month_day:
+        month_token = m_month_day.group(1)
+        day = int(m_month_day.group(2))
+        year = int(m_month_day.group(3)) if m_month_day.group(3) else current.year
+        month = _MONTH_LOOKUP.get(month_token, current.month)
+        try:
+            return _build_iso_date(year, month, day)
+        except ValueError:
+            return None
+
+    # Day Month [Year] e.g. 18 march 2026
+    m_day_month = re.fullmatch(rf"(\d{{1,2}})\s+{_MONTH_PATTERN}(?:\s+(\d{{4}}))?", phrase)
+    if m_day_month:
+        day = int(m_day_month.group(1))
+        month_token = m_day_month.group(2)
+        year = int(m_day_month.group(3)) if m_day_month.group(3) else current.year
+        month = _MONTH_LOOKUP.get(month_token, current.month)
+        try:
+            return _build_iso_date(year, month, day)
+        except ValueError:
+            return None
+
+    return None
 
 # Load config for temporal expressions
 _config = None
@@ -56,7 +135,47 @@ def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
         logger.error(f"Invalid date format: {current_date}, error: {e}")
         raise ValueError(f"current_date must be in YYYY-MM-DD format, got: {current_date}")
 
-    temporal_phrase = temporal_phrase.lower().strip()
+    temporal_phrase = _normalize_text(temporal_phrase)
+
+    explicit_date = _parse_explicit_date_phrase(temporal_phrase, current)
+    if explicit_date:
+        return {
+            "start_date": explicit_date,
+            "end_date": explicit_date,
+        }
+
+    # Month name (optional year), e.g. "march", "mar 2026"
+    month_match = re.fullmatch(rf"{_MONTH_PATTERN}(?:\s+(\d{{4}}))?", temporal_phrase)
+    if month_match:
+        month_token = month_match.group(1)
+        year_token = month_match.group(2)
+        month_num = _MONTH_LOOKUP.get(month_token, current.month)
+        year_num = int(year_token) if year_token else current.year
+        month_last_day = calendar.monthrange(year_num, month_num)[1]
+        return {
+            "start_date": f"{year_num:04d}-{month_num:02d}-01",
+            "end_date": f"{year_num:04d}-{month_num:02d}-{month_last_day:02d}",
+            "month_number": month_num,
+            "year": year_num,
+        }
+
+    # before/after wrappers over any supported phrase
+    if temporal_phrase.startswith("before "):
+        inner = temporal_phrase[len("before "):].strip()
+        inner_range = calculate_date_range(inner, current_date)
+        inner_start = datetime.strptime(inner_range["start_date"], "%Y-%m-%d")
+        return {
+            "start_date": "1900-01-01",
+            "end_date": (inner_start - timedelta(days=1)).strftime("%Y-%m-%d"),
+        }
+    if temporal_phrase.startswith("after "):
+        inner = temporal_phrase[len("after "):].strip()
+        inner_range = calculate_date_range(inner, current_date)
+        inner_end = datetime.strptime(inner_range["end_date"], "%Y-%m-%d")
+        return {
+            "start_date": (inner_end + timedelta(days=1)).strftime("%Y-%m-%d"),
+            "end_date": (inner_end + timedelta(days=365)).strftime("%Y-%m-%d"),
+        }
 
     # Today
     if temporal_phrase == "today":
@@ -282,6 +401,30 @@ def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
                 "dow_filter": [target_dow]
             }
 
+    # This [day] queries (e.g., "this wednesday")
+    for day_name, target_dow in day_names.items():
+        if temporal_phrase == f"this {day_name}":
+            current_dow = current.weekday()
+            days_ahead = (target_dow - current_dow) % 7
+            target_date = current + timedelta(days=days_ahead)
+            return {
+                "start_date": target_date.strftime("%Y-%m-%d"),
+                "end_date": target_date.strftime("%Y-%m-%d"),
+                "dow_filter": [target_dow]
+            }
+
+    # Next [day] queries (e.g., "next wednesday")
+    for day_name, target_dow in day_names.items():
+        if temporal_phrase == f"next {day_name}":
+            current_monday = current - timedelta(days=current.weekday())
+            next_monday = current_monday + timedelta(days=7)
+            target_date = next_monday + timedelta(days=target_dow)
+            return {
+                "start_date": target_date.strftime("%Y-%m-%d"),
+                "end_date": target_date.strftime("%Y-%m-%d"),
+                "dow_filter": [target_dow]
+            }
+
     # Last [day] queries (e.g., "last monday", "last wednesday")
     for day_name, target_dow in day_names.items():
         if temporal_phrase == f"last {day_name}":
@@ -352,6 +495,91 @@ def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
         raise ValueError(f"Unsupported temporal phrase: {temporal_phrase}")
 
 
+def extract_temporal_phrase(user_text: str) -> str | None:
+    """
+    Extract the best-supported temporal phrase from free-form user text.
+
+    This is intentionally heuristic and prefers the most specific/longest match.
+    """
+    if not user_text:
+        return None
+    text = _normalize_text(user_text)
+
+    # Exact YYYY-MM-DD date
+    m_date = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
+    if m_date:
+        return m_date.group(1)
+
+    # Month Day [,] Year
+    m_month_day = re.search(rf"\b{_MONTH_PATTERN}\s+\d{{1,2}}(?:,?\s+\d{{4}})?\b", text)
+    if m_month_day:
+        return m_month_day.group(0)
+
+    # Day Month [Year]
+    m_day_month = re.search(rf"\b\d{{1,2}}\s+{_MONTH_PATTERN}(?:\s+\d{{4}})?\b", text)
+    if m_day_month:
+        return m_day_month.group(0)
+
+    # MM/DD[/YYYY]
+    m_slash = re.search(r"\b\d{1,2}/\d{1,2}(?:/\d{4})?\b", text)
+    if m_slash:
+        return m_slash.group(0)
+
+    # Month or month + year
+    m_month = re.search(rf"\b{_MONTH_PATTERN}(?:\s+\d{{4}})?\b", text)
+    if m_month:
+        return m_month.group(0)
+
+    cfg = _load_config()
+    day_names = list((cfg.get("temporal_expressions", {}).get("day_names", {}) or {}).keys())
+    time_periods = list((cfg.get("temporal_expressions", {}).get("time_periods", {}) or {}).keys())
+
+    # Priority phrases (longer/specific first)
+    phrase_candidates = [
+        "tomorrow night",
+        "coming weekend",
+        "this weekend",
+        "next weekend",
+        "this week",
+        "next week",
+        "this month",
+        "next month",
+        "last month",
+        "this year",
+        "next year",
+        "last year",
+        "tonight",
+        "tomorrow",
+        "yesterday",
+        "today",
+    ]
+    # Day/time, this/next/last day, plain day
+    for day in day_names:
+        phrase_candidates.append(f"next {day}")
+    for day in day_names:
+        phrase_candidates.append(f"this {day}")
+    for day in day_names:
+        phrase_candidates.append(f"last {day}")
+    for day in day_names:
+        for period in time_periods:
+            phrase_candidates.append(f"{day} {period}")
+    phrase_candidates.extend(day_names)
+
+    # before/after wrappers
+    wrapped_patterns = []
+    for phrase in phrase_candidates:
+        wrapped_patterns.append(f"before {phrase}")
+        wrapped_patterns.append(f"after {phrase}")
+    phrase_candidates = wrapped_patterns + phrase_candidates
+
+    # Longest phrase first for specificity.
+    phrase_candidates = sorted(set(phrase_candidates), key=len, reverse=True)
+    for phrase in phrase_candidates:
+        if re.search(rf"\b{re.escape(phrase)}\b", text):
+            return phrase
+    return None
+
+
 def _generate_temporal_phrase_enum():
     """Generate the enum list of supported temporal phrases based on config."""
     # Base temporal phrases
@@ -382,14 +610,23 @@ def _generate_temporal_phrase_enum():
     # Add day-specific phrases
     all_phrases = base_phrases + day_names
 
-    # Add "last [day]" phrases (e.g., "last monday", "last wednesday")
+    # Add "last/this/next [day]" phrases
     for day in day_names:
         all_phrases.append(f"last {day}")
+        all_phrases.append(f"this {day}")
+        all_phrases.append(f"next {day}")
 
     # Add day + time period combinations
     for day in day_names:
         for period in time_periods:
             all_phrases.append(f"{day} {period}")
+
+    # Add before/after wrappers
+    wrapped = []
+    for phrase in list(all_phrases):
+        wrapped.append(f"before {phrase}")
+        wrapped.append(f"after {phrase}")
+    all_phrases.extend(wrapped)
 
     return sorted(all_phrases)
 
@@ -407,8 +644,10 @@ CALCULATE_DATE_RANGE_TOOL = {
             "properties": {
                 "temporal_phrase": {
                     "type": "string",
-                    "description": "The temporal expression from the user query",
-                    "enum": _generate_temporal_phrase_enum()
+                    "description": (
+                        "The temporal expression from the user query. "
+                        "Examples: 'next wednesday', 'this weekend', 'after next friday', 'before march'."
+                    ),
                 },
                 "current_date": {
                     "type": "string",
