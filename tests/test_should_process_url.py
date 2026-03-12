@@ -21,6 +21,7 @@ class DummyDB(DatabaseHandler):
         self.urls_gb = pd.DataFrame(columns=['link','hit_ratio','crawl_try'])
         self._whitelist_set = set()
         self._should_process_decision_counters = Counter()
+        self._last_should_process_reason_by_url = {}
         self._history_start_dates = {}
 
     def execute_query(self, query, params=None):
@@ -64,6 +65,7 @@ def test_should_skip_stale_facebook_event_detail_url_when_already_seen():
     assert db.should_process_url(url) is False
     counts = db.get_should_process_decision_counts()
     assert counts.get("skip_stale_facebook_event_detail", 0) >= 1
+    assert db.get_should_process_decision_reason(url) == "skip_stale_facebook_event_detail"
 
 
 def test_should_skip_stale_eventbrite_event_detail_url_when_already_seen():
@@ -81,6 +83,7 @@ def test_should_skip_stale_eventbrite_event_detail_url_when_already_seen():
     assert db.should_process_url(url) is False
     counts = db.get_should_process_decision_counts()
     assert counts.get("skip_stale_eventbrite_event_detail", 0) >= 1
+    assert db.get_should_process_decision_reason(url) == "skip_stale_eventbrite_event_detail"
 
 
 def test_should_not_apply_stale_static_skip_to_non_static_page_urls():

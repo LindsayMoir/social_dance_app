@@ -1870,7 +1870,21 @@ class FacebookEventScraper():
 
                 # Check urls to see if they should be scraped
                 if not db_handler.should_process_url(base_url):
-                    logging.info(f"def eventbrite_search(): Skipping URL {base_url} based on historical relevancy.")
+                    decision_reason = db_handler.get_should_process_decision_reason(base_url) or "skip_unknown"
+                    if decision_reason.startswith("skip_stale_"):
+                        db_handler.write_url_to_db(
+                            [base_url, parent_url, source, keywords, False, 1, datetime.now(), decision_reason]
+                        )
+                        logging.info(
+                            "def driver_fb_urls(): Logged stale skip for base URL in urls table: %s (%s)",
+                            base_url,
+                            decision_reason,
+                        )
+                    logging.info(
+                        "def driver_fb_urls(): Skipping URL %s based on should_process_url decision (%s).",
+                        base_url,
+                        decision_reason,
+                    )
                     continue
 
                 # Track whether this base URL yields events either directly or via /events/.
@@ -1963,7 +1977,21 @@ class FacebookEventScraper():
                     
                     # Check urls to see if they should be scraped
                     if not db_handler.should_process_url(event_url):
-                        logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
+                        decision_reason = db_handler.get_should_process_decision_reason(event_url) or "skip_unknown"
+                        if decision_reason.startswith("skip_stale_"):
+                            db_handler.write_url_to_db(
+                                [event_url, base_url, source, keywords, False, 1, datetime.now(), decision_reason]
+                            )
+                            logging.info(
+                                "def driver_fb_urls(): Logged stale skip for discovered event URL in urls table: %s (%s)",
+                                event_url,
+                                decision_reason,
+                            )
+                        logging.info(
+                            "def driver_fb_urls(): Skipping URL %s based on should_process_url decision (%s).",
+                            event_url,
+                            decision_reason,
+                        )
                         continue
 
                     event_events_before = self.events_written_to_db

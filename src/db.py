@@ -89,6 +89,7 @@ class DatabaseHandler():
         self.metadata = MetaData()
         # Reflect the existing database schema into metadata
         self.metadata.reflect(bind=self.conn)
+        self.ensure_urls_decision_reason_column()
 
         # Get google api key
         self.google_api_key = os.getenv("GOOGLE_KEY_PW")
@@ -135,6 +136,7 @@ class DatabaseHandler():
             self.urls_gb = pd.DataFrame()
             logging.info("__init__(): Skipping urls_gb and raw_locations table creation on production")
         self._should_process_decision_counters: Counter = Counter()
+        self._last_should_process_reason_by_url: Dict[str, str] = {}
 
 
     def set_llm_handler(self, llm_handler):
@@ -142,6 +144,16 @@ class DatabaseHandler():
         Inject an instance of LLMHandler after both classes are constructed.
         """
         self.llm_handler = llm_handler
+
+    def ensure_urls_decision_reason_column(self) -> None:
+        """
+        Ensure urls.decision_reason exists so skip/process decisions can be audited.
+        """
+        try:
+            self.execute_query("ALTER TABLE urls ADD COLUMN IF NOT EXISTS decision_reason TEXT")
+            logging.info("ensure_urls_decision_reason_column: ensured urls.decision_reason exists")
+        except Exception as e:
+            logging.warning("ensure_urls_decision_reason_column: could not ensure column (continuing): %s", e)
         
 
     def load_blacklist_domains(self):
@@ -1074,6 +1086,7 @@ class DatabaseHandler():
                 - relevant (bool | int): Indicator of relevance.
                 - crawl_try (int): Number of crawl attempts.
                 - time_stamp (str | datetime): Timestamp of the activity.
+                - decision_reason (str, optional): Structured reason for process/skip decision.
 
         Raises:
             Exception: Logs an error if the database insertion fails.
@@ -1082,8 +1095,12 @@ class DatabaseHandler():
             - Appends a new row to the 'urls' table in the connected database.
             - Logs success or failure of the operation.
         """
-        # 1) Unpack
-        link, parent_url, source, keywords, relevant, crawl_try, time_stamp = url_row
+        # 1) Unpack (support backward-compatible 7-item rows)
+        if len(url_row) >= 8:
+            link, parent_url, source, keywords, relevant, crawl_try, time_stamp, decision_reason = url_row[:8]
+        else:
+            link, parent_url, source, keywords, relevant, crawl_try, time_stamp = url_row
+            decision_reason = None
 
         # 2) Normalize keywords into a simple comma-separated string
         if not isinstance(keywords, str):
@@ -1105,7 +1122,8 @@ class DatabaseHandler():
             'keywords':       keywords,
             'relevant':       relevant,
             'crawl_try':      crawl_try,
-            'time_stamp':     time_stamp
+            'time_stamp':     time_stamp,
+            'decision_reason': str(decision_reason or "").strip() or None,
         }])
 
         # 5) Append to the table
@@ -3703,12 +3721,26 @@ class DatabaseHandler():
             counters = self._should_process_decision_counters
         counters[str(decision_key)] += 1
 
+    def _set_last_should_process_reason(self, normalized_url: str, decision_key: str) -> None:
+        """Store most recent should_process_url reason for a normalized URL."""
+        if not normalized_url:
+            return
+        if not hasattr(self, "_last_should_process_reason_by_url"):
+            self._last_should_process_reason_by_url = {}
+        self._last_should_process_reason_by_url[str(normalized_url)] = str(decision_key)
+
     def get_should_process_decision_counts(self) -> Dict[str, int]:
         """Return a snapshot of should_process_url decision counters."""
         counters = getattr(self, "_should_process_decision_counters", None)
         if counters is None:
             return {}
         return {str(k): int(v) for k, v in counters.items()}
+
+    def get_should_process_decision_reason(self, url: str) -> Optional[str]:
+        """Return the most recent decision reason for URL seen in should_process_url."""
+        normalized_url = self._normalize_for_compare(self.normalize_url(url))
+        decision_map = getattr(self, "_last_should_process_reason_by_url", {})
+        return decision_map.get(normalized_url)
 
     def _should_skip_stale_static_event_url(self, normalized_url: str) -> tuple[bool, Optional[str]]:
         """
@@ -3826,15 +3858,17 @@ class DatabaseHandler():
         Returns:
              bool: True if the URL should be processed according to the criteria above, False otherwise.
         """
-        # If urls_df is empty (e.g., on production), always process
-        if self.urls_df.empty:
-            logging.info(f"should_process_url: URLs table not loaded (production mode), processing URL.")
-            self._record_should_process_decision("process_urls_df_not_loaded")
-            return True
-
         # Normalize URL to handle Instagram/FB CDN dynamic parameters
         normalized_url = self.normalize_url(url)
         generic_norm = self._normalize_for_compare(normalized_url)
+
+        # If urls_df is empty (e.g., on production), always process
+        if self.urls_df.empty:
+            logging.info(f"should_process_url: URLs table not loaded (production mode), processing URL.")
+            decision = "process_urls_df_not_loaded"
+            self._record_should_process_decision(decision)
+            self._set_last_should_process_reason(generic_norm, decision)
+            return True
 
         # Log normalization if URL changed
         if normalized_url != url:
@@ -3844,7 +3878,9 @@ class DatabaseHandler():
         try:
             if self.is_whitelisted_url(url) or self.is_whitelisted_url(normalized_url):
                 logging.info(f"should_process_url: URL {normalized_url[:100]}... is whitelisted, processing it.")
-                self._record_should_process_decision("process_whitelisted")
+                decision = "process_whitelisted"
+                self._record_should_process_decision(decision)
+                self._set_last_should_process_reason(generic_norm, decision)
                 return True
         except Exception as e:
             logging.warning(f"should_process_url: whitelist check error: {e}")
@@ -3854,7 +3890,9 @@ class DatabaseHandler():
         # If we've never recorded this normalized URL, process it
         if df_url.empty:
             logging.info(f"should_process_url: URL {normalized_url[:100]}... has never been seen before, processing it.")
-            self._record_should_process_decision("process_never_seen")
+            decision = "process_never_seen"
+            self._record_should_process_decision(decision)
+            self._set_last_should_process_reason(generic_norm, decision)
             return True
 
         # 1b. For static event-detail URLs (Facebook/Eventbrite), skip when historical event is stale.
@@ -3865,14 +3903,18 @@ class DatabaseHandler():
                 normalized_url[:100] + "...",
                 stale_reason,
             )
-            self._record_should_process_decision(stale_reason or "skip_stale_static_event_detail")
+            decision = stale_reason or "skip_stale_static_event_detail"
+            self._record_should_process_decision(decision)
+            self._set_last_should_process_reason(generic_norm, decision)
             return False
 
         # 2. Look at the most recent "relevant" value
         last_relevant = df_url.iloc[-1]['relevant']
         if last_relevant and self.stale_date(normalized_url):
             logging.info(f"should_process_url: URL {normalized_url[:100]}... was last seen as relevant, processing it.")
-            self._record_should_process_decision("process_last_relevant_and_stale_date")
+            decision = "process_last_relevant_and_stale_date"
+            self._record_should_process_decision(decision)
+            self._set_last_should_process_reason(generic_norm, decision)
             return True
 
         # 3. Last was False → check hit_ratio in self.urls_gb
@@ -3889,12 +3931,16 @@ class DatabaseHandler():
                     "but hit_ratio (%.2f) > 0.1 or crawl_try (%d) ≤ 3, processing it.",
                     normalized_url[:100] + "...", hit_ratio, crawl_trys
                 )
-                self._record_should_process_decision("process_hit_ratio_or_crawl_try")
+                decision = "process_hit_ratio_or_crawl_try"
+                self._record_should_process_decision(decision)
+                self._set_last_should_process_reason(generic_norm, decision)
                 return True
 
         # 4. Otherwise, do not process this URL
         logging.info(f"should_process_url: URL {normalized_url[:100]}... does not meet criteria for processing, skipping it.")
-        self._record_should_process_decision("skip_default_rules")
+        decision = "skip_default_rules"
+        self._record_should_process_decision(decision)
+        self._set_last_should_process_reason(generic_norm, decision)
         return False
 
 
