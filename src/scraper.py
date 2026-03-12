@@ -259,6 +259,8 @@ class EventSpider(scrapy.Spider):
             if str(u).strip()
         }
         self.attempted_whitelist_roots: set[str] = set()
+        self.whitelist_transferred_to_fb_roots: set[str] = set()
+        self.whitelist_non_text_response_roots: set[str] = set()
         crawling_cfg = self.config.get("crawling", {})
         self.scraper_download_timeout_seconds = int(
             crawling_cfg.get("scraper_download_timeout_seconds", 35) or 35
@@ -302,6 +304,56 @@ class EventSpider(scrapy.Spider):
             return urlparse(url).netloc.lower().strip()
         except Exception:
             return ""
+
+    def _whitelist_root_for_url(self, url: str) -> str | None:
+        """Return the matching whitelist root for a URL, if any."""
+        norm_url = normalize_url_for_compare(url)
+        for root in getattr(self, "whitelist_roots", set()):
+            if norm_url.startswith(root):
+                return root
+        return None
+
+    def _mark_whitelist_status(self, url: str, status: str) -> str | None:
+        """
+        Track per-root whitelist status for clearer run-limit diagnostics.
+
+        status:
+            - attempted: parse() entered for this whitelist root.
+            - transferred_fb: scraper intentionally handed URL to fb.py.
+            - non_text: parse() got non-text response for whitelist root.
+        """
+        root = self._whitelist_root_for_url(url)
+        if not root:
+            return None
+
+        if status == "attempted":
+            if not hasattr(self, "attempted_whitelist_roots"):
+                self.attempted_whitelist_roots = set()
+            self.attempted_whitelist_roots.add(root)
+            return root
+        if status == "transferred_fb":
+            if not hasattr(self, "whitelist_transferred_to_fb_roots"):
+                self.whitelist_transferred_to_fb_roots = set()
+            self.whitelist_transferred_to_fb_roots.add(root)
+            return root
+        if status == "non_text":
+            if not hasattr(self, "whitelist_non_text_response_roots"):
+                self.whitelist_non_text_response_roots = set()
+            self.whitelist_non_text_response_roots.add(root)
+            return root
+        return root
+
+    def _remaining_scraper_owned_whitelist_roots(self) -> set[str]:
+        """
+        Return whitelist roots still pending scraper parse attempts.
+
+        Roots owned by fb.py are excluded so the pending count reflects
+        only scraper-owned backlog.
+        """
+        whitelist_roots = getattr(self, "whitelist_roots", set())
+        attempted = getattr(self, "attempted_whitelist_roots", set())
+        transferred_fb = getattr(self, "whitelist_transferred_to_fb_roots", set())
+        return whitelist_roots - attempted - transferred_fb
 
     def _prune_domain_failures(self, domain: str, now_ts: datetime) -> None:
         """Keep only failures that are still inside the rolling failure window."""
@@ -501,6 +553,7 @@ class EventSpider(scrapy.Spider):
             # Facebook URLs are owned by fb.py and must never be crawled by scraper.py.
             if is_facebook_url(url):
                 logging.info("start(): Skipping Facebook URL (owned by fb.py): %s", url)
+                self._mark_whitelist_status(url, "transferred_fb")
                 child_row = [url, '', source, [], False, 1, datetime.now()]
                 db_handler.write_url_to_db(child_row)
                 continue
@@ -562,8 +615,18 @@ class EventSpider(scrapy.Spider):
         5) Fetch Google Calendar events where found.
         6) Filter out unwanted links, record them, and follow remaining links.
         """
+        # Track whitelist attempt immediately when parse starts.
+        matched_whitelist_root = self._mark_whitelist_status(url, "attempted")
+
         # Skip non-text responses (e.g., images, PDFs, etc.)
         if not isinstance(response, TextResponse):
+            if matched_whitelist_root:
+                self._mark_whitelist_status(url, "non_text")
+                logging.info(
+                    "def parse(): Whitelist URL returned non-text response; root=%s url=%s",
+                    matched_whitelist_root,
+                    url,
+                )
             return
         self._record_domain_success(response.url)
         
@@ -572,18 +635,16 @@ class EventSpider(scrapy.Spider):
         except Exception:
             is_whitelisted_origin = False
         is_whitelisted_origin = is_whitelisted_origin or is_whitelist_candidate(url, self.whitelist_roots)
-        if is_whitelisted_origin:
-            norm_current = normalize_url_for_compare(url)
-            for root in self.whitelist_roots:
-                if norm_current.startswith(root):
-                    self.attempted_whitelist_roots.add(root)
-                    break
+        if is_whitelisted_origin and matched_whitelist_root is None:
+            # Backstop for URLs considered whitelisted via DB lookup only.
+            self._mark_whitelist_status(url, "attempted")
 
-        if is_facebook_url(url):
-            child_row = [url, '', source, [], False, 1, datetime.now()]
-            db_handler.write_url_to_db(child_row)
-            logging.info("def parse(): Skipping Facebook URL (owned by fb.py): %s", url)
-            return
+            if is_facebook_url(url):
+                self._mark_whitelist_status(url, "transferred_fb")
+                child_row = [url, '', source, [], False, 1, datetime.now()]
+                db_handler.write_url_to_db(child_row)
+                logging.info("def parse(): Skipping Facebook URL (owned by fb.py): %s", url)
+                return
 
         if 'instagram' in url.lower() and not is_whitelisted_origin:
             # record it as unwanted and stop processing immediately
@@ -721,12 +782,16 @@ class EventSpider(scrapy.Spider):
             db_handler.write_url_to_db(child_row)
 
             if len(self.visited_link) >= self.config['crawling']['urls_run_limit']:
-                remaining_whitelist = len(self.whitelist_roots - self.attempted_whitelist_roots)
-                if remaining_whitelist > 0 and not force_follow:
+                remaining_scraper_owned_roots = self._remaining_scraper_owned_whitelist_roots()
+                if remaining_scraper_owned_roots and not force_follow:
+                    transferred_fb_count = len(getattr(self, "whitelist_transferred_to_fb_roots", set()))
+                    non_text_count = len(getattr(self, "whitelist_non_text_response_roots", set()))
                     logging.info(
-                        "parse(): URL run limit reached but %d whitelist roots are still unattempted; "
-                        "skipping non-whitelist link: %s",
-                        remaining_whitelist,
+                        "parse(): URL run limit reached with %d scraper-owned whitelist roots still unattempted "
+                        "(fb_owned=%d, non_text=%d); skipping non-whitelist link: %s",
+                        len(remaining_scraper_owned_roots),
+                        transferred_fb_count,
+                        non_text_count,
                         link,
                     )
                     continue

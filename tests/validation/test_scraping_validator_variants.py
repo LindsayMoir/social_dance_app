@@ -116,7 +116,7 @@ def test_generate_report_categorizes_not_attempted_reasons(tmp_path):
         "\n".join(
             [
                 "2026-03-03 10:00:00 - INFO - should_process_url: URL https://skip-me.com/ does not meet criteria for processing, skipping it.",
-                "2026-03-03 10:01:00 - INFO - parse(): URL run limit reached but 9 whitelist roots are still unattempted; skipping non-whitelist link: https://run-limit.com/path",
+                "2026-03-03 10:01:00 - INFO - parse(): URL run limit reached with 1 scraper-owned whitelist roots still unattempted (fb_owned=8, non_text=1); skipping non-whitelist link: https://run-limit.com/path",
                 "2026-03-03 10:02:00 - INFO - {'finish_reason': 'URL run limit reached'}",
             ]
         ),
@@ -150,9 +150,13 @@ def test_generate_report_categorizes_not_attempted_reasons(tmp_path):
     report = validator.generate_report(failures_df)
     breakdown = report["summary"]["not_attempted_reason_breakdown"]
     categories = breakdown["categories"]
+    context = breakdown["run_limit_whitelist_context"]
 
     assert breakdown["total_not_attempted"] == 3
     assert breakdown["global_url_run_limit_reached"] is True
+    assert context["pending_scraper_owned_roots_max"] == 1
+    assert context["fb_owned_roots_max"] == 8
+    assert context["non_text_roots_max"] == 1
     assert categories["explicit_should_process_url_skip"] == 1
     assert categories["explicit_url_run_limit_skip"] == 1
     assert categories["unattributed_with_global_run_limit"] == 1

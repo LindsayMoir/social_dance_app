@@ -16,6 +16,7 @@ from datetime import datetime
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, List
 import pandas as pd
 
@@ -309,6 +310,11 @@ class ScrapingValidator:
             "total_not_attempted": 0,
             "global_url_run_limit_reached": False,
             "per_url_stage": {},
+            "run_limit_whitelist_context": {
+                "pending_scraper_owned_roots_max": 0,
+                "fb_owned_roots_max": 0,
+                "non_text_roots_max": 0,
+            },
             "categories": {
                 "explicit_url_run_limit_skip": 0,
                 "explicit_should_process_url_skip": 0,
@@ -335,6 +341,9 @@ class ScrapingValidator:
         run_limit_urls: set[str] = set()
         should_skip_urls: set[str] = set()
         global_run_limit_reached = False
+        pending_scraper_owned_roots_max = 0
+        fb_owned_roots_max = 0
+        non_text_roots_max = 0
 
         for log_path in self._log_files:
             if not os.path.exists(log_path):
@@ -345,6 +354,21 @@ class ScrapingValidator:
                         lower_line = line.lower()
                         if "url run limit reached" in lower_line:
                             global_run_limit_reached = True
+                            context_match = re.search(
+                                r"url run limit reached with (\d+) scraper-owned whitelist roots still unattempted "
+                                r"\(fb_owned=(\d+), non_text=(\d+)\)",
+                                lower_line,
+                            )
+                            if context_match:
+                                pending_scraper_owned_roots_max = max(
+                                    pending_scraper_owned_roots_max, int(context_match.group(1))
+                                )
+                                fb_owned_roots_max = max(
+                                    fb_owned_roots_max, int(context_match.group(2))
+                                )
+                                non_text_roots_max = max(
+                                    non_text_roots_max, int(context_match.group(3))
+                                )
 
                         if "skipping non-whitelist link:" in lower_line and "url run limit reached" in lower_line:
                             logged_url = self._extract_logged_url(
@@ -398,6 +422,11 @@ class ScrapingValidator:
             "total_not_attempted": len(urls),
             "global_url_run_limit_reached": global_run_limit_reached,
             "per_url_stage": per_url_stage,
+            "run_limit_whitelist_context": {
+                "pending_scraper_owned_roots_max": pending_scraper_owned_roots_max,
+                "fb_owned_roots_max": fb_owned_roots_max,
+                "non_text_roots_max": non_text_roots_max,
+            },
             "categories": categories,
         }
 

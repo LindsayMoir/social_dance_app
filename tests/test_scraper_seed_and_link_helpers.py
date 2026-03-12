@@ -6,7 +6,7 @@ from collections import defaultdict, deque
 sys.path.insert(0, 'src')
 
 import yaml
-from scrapy.http import HtmlResponse, Request
+from scrapy.http import HtmlResponse, Request, Response
 
 from scraper import (
     EventSpider,
@@ -59,6 +59,52 @@ def test_is_whitelist_candidate_matches_root_and_subpath():
     assert is_whitelist_candidate("https://latindancecanada.com/", whitelist_roots)
     assert is_whitelist_candidate("https://latindancecanada.com/group-classes/", whitelist_roots)
     assert not is_whitelist_candidate("https://example.com/events", whitelist_roots)
+
+
+def test_remaining_scraper_owned_whitelist_roots_excludes_fb_owned():
+    spider = EventSpider.__new__(EventSpider)
+    spider.whitelist_roots = {
+        normalize_url_for_compare("https://latindancecanada.com/"),
+        normalize_url_for_compare("https://www.facebook.com/groups/123456/"),
+    }
+    spider.attempted_whitelist_roots = {normalize_url_for_compare("https://latindancecanada.com/")}
+    spider.whitelist_transferred_to_fb_roots = {normalize_url_for_compare("https://www.facebook.com/groups/123456/")}
+
+    assert spider._remaining_scraper_owned_whitelist_roots() == set()
+
+
+def test_parse_marks_whitelist_non_text_response(monkeypatch):
+    import scraper as scraper_module
+
+    class DummyDB:
+        def is_whitelisted_url(self, _url: str) -> bool:
+            return False
+
+    monkeypatch.setattr(scraper_module, "db_handler", DummyDB(), raising=False)
+
+    spider = EventSpider.__new__(EventSpider)
+    spider.whitelist_roots = {normalize_url_for_compare("https://www.instagram.com/bachatavictoria/")}
+    spider.attempted_whitelist_roots = set()
+    spider.whitelist_transferred_to_fb_roots = set()
+    spider.whitelist_non_text_response_roots = set()
+
+    response = Response(
+        url="https://www.instagram.com/bachatavictoria/",
+        request=Request(url="https://www.instagram.com/bachatavictoria/"),
+    )
+
+    list(
+        spider.parse(
+            response,
+            keywords="bachata",
+            source="Sebastian y Hannah",
+            url="https://www.instagram.com/bachatavictoria/",
+        )
+    )
+
+    root = normalize_url_for_compare("https://www.instagram.com/bachatavictoria/")
+    assert root in spider.attempted_whitelist_roots
+    assert root in spider.whitelist_non_text_response_roots
 
 
 def test_merge_seed_urls_always_includes_whitelist_and_dedups():

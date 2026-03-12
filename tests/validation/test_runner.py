@@ -3911,12 +3911,20 @@ class ValidationTestRunner:
 
         if not_attempted_breakdown:
             categories = not_attempted_breakdown.get("categories", {}) or {}
+            run_limit_ctx = not_attempted_breakdown.get("run_limit_whitelist_context", {}) or {}
+            pending_scraper_owned = int(run_limit_ctx.get("pending_scraper_owned_roots_max", 0) or 0)
+            fb_owned_roots = int(run_limit_ctx.get("fb_owned_roots_max", 0) or 0)
+            non_text_roots = int(run_limit_ctx.get("non_text_roots_max", 0) or 0)
             html += (
                 "<h3>Not-Attempted Reason Breakdown</h3>"
                 "<p><strong>Total Not Attempted:</strong> "
                 f"{int(not_attempted_breakdown.get('total_not_attempted', 0) or 0)} | "
                 "<strong>Run Ended By URL Limit:</strong> "
                 f"{'Yes' if bool(not_attempted_breakdown.get('global_url_run_limit_reached', False)) else 'No'}</p>"
+                "<p><strong>Run-Limit Whitelist Context (max seen in logs):</strong> "
+                f"pending_scraper_owned_roots={pending_scraper_owned}; "
+                f"fb_owned_roots={fb_owned_roots}; "
+                f"non_text_roots={non_text_roots}</p>"
                 "<table><tr><th>Reason</th><th>Affected URLs</th></tr>"
                 "<tr><td>Explicit URL run-limit skip</td>"
                 f"<td>{int(categories.get('explicit_url_run_limit_skip', 0) or 0)}</td></tr>"
