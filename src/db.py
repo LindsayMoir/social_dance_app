@@ -10,6 +10,7 @@ It also includes methods for fuzzy matching addresses and deduplicating the addr
 """
 
 from datetime import datetime, timedelta
+from collections import Counter
 import csv
 from dotenv import load_dotenv
 load_dotenv()
@@ -30,6 +31,7 @@ import sys
 import yaml
 import warnings
 
+from config_runtime import load_config
 # Import database configuration utility
 from db_config import get_database_config
 
@@ -127,12 +129,12 @@ class DatabaseHandler():
                 .reset_index()
             )
             logging.info(f"__init__(): urls_gb has {len(self.urls_gb)} rows and {len(self.urls_gb.columns)} columns.")
-
             # Create raw_locations table for caching location strings (only needed for pipeline)
             self.create_raw_locations_table()
         else:
             self.urls_gb = pd.DataFrame()
             logging.info("__init__(): Skipping urls_gb and raw_locations table creation on production")
+        self._should_process_decision_counters: Counter = Counter()
 
 
     def set_llm_handler(self, llm_handler):
@@ -3598,6 +3600,138 @@ class DatabaseHandler():
             # In case of any error, default to True (safer to re‐process)
             return True
 
+    @staticmethod
+    def _facebook_event_id_from_url(url: str) -> Optional[str]:
+        """Return Facebook event id for /events/<id>/ URLs."""
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url or "")
+            host = (parsed.netloc or "").lower()
+            if "facebook.com" not in host:
+                return None
+            match = re.search(r"/events/(\d+)", parsed.path or "")
+            if not match:
+                return None
+            return match.group(1)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _eventbrite_ticket_id_from_url(url: str) -> Optional[str]:
+        """Return Eventbrite ticket id from event-detail URLs."""
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url or "")
+            host = (parsed.netloc or "").lower()
+            if "eventbrite." not in host:
+                return None
+            match = re.search(r"-tickets-(\d+)", parsed.path or "")
+            if not match:
+                return None
+            return match.group(1)
+        except Exception:
+            return None
+
+    def _classify_static_event_detail_url(self, normalized_url: str) -> tuple[Optional[str], List[str]]:
+        """
+        Classify URL as a static event-detail URL and return lookup candidates for history checks.
+
+        Returns:
+            tuple[str|None, list[str]]:
+                - kind: one of {"facebook_event_detail", "eventbrite_event_detail"} or None
+                - lookup candidates used to search historical events for the same detail page
+        """
+        try:
+            from urllib.parse import urlparse, urlunparse
+        except Exception:
+            return None, []
+
+        parsed = urlparse(normalized_url or "")
+        host = (parsed.netloc or "").lower()
+        scheme = (parsed.scheme or "https").lower()
+        path = parsed.path or ""
+        candidates: List[str] = []
+
+        fb_event_id = self._facebook_event_id_from_url(normalized_url)
+        if fb_event_id:
+            canonical = f"{scheme}://www.facebook.com/events/{fb_event_id}/"
+            candidates.extend([normalized_url, canonical, canonical.rstrip("/")])
+            return "facebook_event_detail", list(dict.fromkeys(candidates))
+
+        eb_ticket_id = self._eventbrite_ticket_id_from_url(normalized_url)
+        if eb_ticket_id and "eventbrite." in host:
+            no_query = urlunparse((scheme, parsed.netloc, path, "", "", ""))
+            candidates.extend([normalized_url, no_query, no_query.rstrip("/")])
+            return "eventbrite_event_detail", list(dict.fromkeys(candidates))
+
+        return None, []
+
+    def _latest_event_start_date_for_urls(self, url_candidates: List[str]) -> Optional[datetime.date]:
+        """Return latest historical start_date across provided URL candidates."""
+        latest_date: Optional[datetime.date] = None
+        for candidate in url_candidates:
+            try:
+                rows = self.execute_query(
+                    """
+                    SELECT start_date
+                    FROM events_history
+                    WHERE url = :url
+                    ORDER BY start_date DESC
+                    LIMIT 1
+                    """,
+                    {"url": candidate},
+                )
+                if not rows:
+                    continue
+                row_start = rows[0][0]
+                if row_start is None:
+                    continue
+                parsed_date = pd.to_datetime(row_start).date()
+                if latest_date is None or parsed_date > latest_date:
+                    latest_date = parsed_date
+            except Exception:
+                continue
+        return latest_date
+
+    def _record_should_process_decision(self, decision_key: str) -> None:
+        """Track should_process_url decision counts for runtime reporting."""
+        counters = getattr(self, "_should_process_decision_counters", None)
+        if counters is None:
+            self._should_process_decision_counters = Counter()
+            counters = self._should_process_decision_counters
+        counters[str(decision_key)] += 1
+
+    def get_should_process_decision_counts(self) -> Dict[str, int]:
+        """Return a snapshot of should_process_url decision counters."""
+        counters = getattr(self, "_should_process_decision_counters", None)
+        if counters is None:
+            return {}
+        return {str(k): int(v) for k, v in counters.items()}
+
+    def _should_skip_stale_static_event_url(self, normalized_url: str) -> tuple[bool, Optional[str]]:
+        """
+        Return skip decision for already-seen static event-detail URLs.
+
+        For Facebook/Eventbrite event-detail URLs, if history shows the latest start_date is
+        before today, skip reprocessing.
+        """
+        kind, candidates = self._classify_static_event_detail_url(normalized_url)
+        if not kind or not candidates:
+            return False, None
+        latest_date = self._latest_event_start_date_for_urls(candidates)
+        if latest_date is None:
+            return False, None
+        if latest_date < datetime.now().date():
+            reason = (
+                "skip_stale_facebook_event_detail"
+                if kind == "facebook_event_detail"
+                else "skip_stale_eventbrite_event_detail"
+            )
+            return True, reason
+        return False, None
+
 
     def normalize_url(self, url):
         """
@@ -3695,6 +3829,7 @@ class DatabaseHandler():
         # If urls_df is empty (e.g., on production), always process
         if self.urls_df.empty:
             logging.info(f"should_process_url: URLs table not loaded (production mode), processing URL.")
+            self._record_should_process_decision("process_urls_df_not_loaded")
             return True
 
         # Normalize URL to handle Instagram/FB CDN dynamic parameters
@@ -3709,6 +3844,7 @@ class DatabaseHandler():
         try:
             if self.is_whitelisted_url(url) or self.is_whitelisted_url(normalized_url):
                 logging.info(f"should_process_url: URL {normalized_url[:100]}... is whitelisted, processing it.")
+                self._record_should_process_decision("process_whitelisted")
                 return True
         except Exception as e:
             logging.warning(f"should_process_url: whitelist check error: {e}")
@@ -3718,12 +3854,25 @@ class DatabaseHandler():
         # If we've never recorded this normalized URL, process it
         if df_url.empty:
             logging.info(f"should_process_url: URL {normalized_url[:100]}... has never been seen before, processing it.")
+            self._record_should_process_decision("process_never_seen")
             return True
+
+        # 1b. For static event-detail URLs (Facebook/Eventbrite), skip when historical event is stale.
+        should_skip_stale, stale_reason = self._should_skip_stale_static_event_url(normalized_url)
+        if should_skip_stale:
+            logging.info(
+                "should_process_url: URL %s skipped due to stale static event-detail URL (%s).",
+                normalized_url[:100] + "...",
+                stale_reason,
+            )
+            self._record_should_process_decision(stale_reason or "skip_stale_static_event_detail")
+            return False
 
         # 2. Look at the most recent "relevant" value
         last_relevant = df_url.iloc[-1]['relevant']
         if last_relevant and self.stale_date(normalized_url):
             logging.info(f"should_process_url: URL {normalized_url[:100]}... was last seen as relevant, processing it.")
+            self._record_should_process_decision("process_last_relevant_and_stale_date")
             return True
 
         # 3. Last was False → check hit_ratio in self.urls_gb
@@ -3740,10 +3889,12 @@ class DatabaseHandler():
                     "but hit_ratio (%.2f) > 0.1 or crawl_try (%d) ≤ 3, processing it.",
                     normalized_url[:100] + "...", hit_ratio, crawl_trys
                 )
+                self._record_should_process_decision("process_hit_ratio_or_crawl_try")
                 return True
 
         # 4. Otherwise, do not process this URL
         logging.info(f"should_process_url: URL {normalized_url[:100]}... does not meet criteria for processing, skipping it.")
+        self._record_should_process_decision("skip_default_rules")
         return False
 
 
@@ -4352,8 +4503,7 @@ if __name__ == "__main__":
     from logging_config import setup_logging
     setup_logging('db')
 
-    with open('config/config.yaml', 'r') as file:
-        config = yaml.safe_load(file)
+    config = load_config()
 
     logging.info("\n\ndb.py starting...")
 

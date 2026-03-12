@@ -33,6 +33,7 @@ import random
 from urllib.parse import urljoin, urlparse
 import yaml
 
+from config_runtime import get_config_path, load_config
 from llm import LLMHandler
 from credentials import get_credentials  # Import the utility function
 from secret_paths import get_auth_file
@@ -62,7 +63,7 @@ def get_db_handler():
     """Get or create the global db_handler instance."""
     global db_handler
     if db_handler is None:
-        llm_handler = LLMHandler("config/config.yaml")
+        llm_handler = LLMHandler(get_config_path())
         db_handler = llm_handler.db_handler
     return db_handler
 
@@ -94,9 +95,8 @@ def validate_edge_case_social_url_ownership(df: pd.DataFrame) -> int:
 
 
 class ReadExtract:
-    def __init__(self, config_path="config/config.yaml"):
-        with open(config_path, 'r') as file:
-            self.config = yaml.safe_load(file)
+    def __init__(self, config_path=None):
+        self.config = load_config(config_path)
         self.playwright = None
         self.browser = None
         self.context = None
@@ -849,8 +849,8 @@ if __name__ == "__main__":
     setup_logging('rd_ext')
 
     # Get config
-    with open('config/config.yaml', 'r') as file:
-        config = yaml.safe_load(file)
+    config = load_config()
+    runtime_config_path = get_config_path()
 
     logging.info("\n\nrd_ext.py starting...")
 
@@ -859,8 +859,8 @@ if __name__ == "__main__":
     logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
 
     # Instantiate the classes
-    read_extract = ReadExtract("config/config.yaml")
-    llm_handler = LLMHandler("config/config.yaml")
+    read_extract = ReadExtract(runtime_config_path)
+    llm_handler = LLMHandler(runtime_config_path)
     
     # Set the module-level db_handler
     db_handler = llm_handler.db_handler

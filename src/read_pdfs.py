@@ -10,9 +10,10 @@ import requests
 import yaml
 from dateutil import parser as dateparser
 
+from config_runtime import get_config_path, load_config
+
 # ── 1) Load configuration ───────────────────────────────────────────────────────
-with open('config/config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
+config = load_config()
 
 # ── 2) Set up centralized logging ──────────────────────────────────────────────
 from logging_config import setup_logging
@@ -22,7 +23,7 @@ setup_logging('read_pdfs')
 from llm import LLMHandler
 from db import DatabaseHandler
 
-llm_handler = LLMHandler(config_path='config/config.yaml')
+llm_handler = LLMHandler(config_path=get_config_path())
 db_handler = llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
 
 # ── 4) Parser registry decorator ───────────────────────────────────────────────

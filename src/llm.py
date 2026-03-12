@@ -96,16 +96,16 @@ from urllib.parse import urlparse
 import yaml
 
 from db import DatabaseHandler
+from config_runtime import get_config_path
 
 
 class LLMHandler:
     def __init__(self, config_path=None):
-        # Calculate the path to config.yaml
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        config_path = os.path.join(base_dir, 'config', 'config.yaml')
+        # Resolve config path from explicit argument, runtime env, or default.
+        resolved_config_path = get_config_path(config_path)
 
         # Get config
-        with open(config_path, 'r') as file:
+        with open(resolved_config_path, 'r', encoding='utf-8') as file:
             self.config = yaml.safe_load(file)
 
         # Instantiate DatabaseHandler

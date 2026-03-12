@@ -23,6 +23,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 from scrapy import Selector
 from sqlalchemy import text
 import yaml
+from config_runtime import get_config_path, load_config
 
 from db import DatabaseHandler
 from llm import LLMHandler
@@ -52,9 +53,8 @@ load_dotenv()
 from logging_config import setup_logging
 setup_logging('images')
 
-config_path = Path("config/config.yaml")
-with config_path.open() as f:
-    config = yaml.safe_load(f)
+config_path = Path(get_config_path())
+config = load_config(str(config_path))
 
 logger = logging.getLogger(__name__)
 logger.info("\n\nStarting images.py ...")
@@ -192,7 +192,7 @@ class ImageScraper:
         self.urls_visited = set()
 
         # Handlers
-        self.llm_handler = LLMHandler(config)
+        self.llm_handler = LLMHandler(config_path=str(config_path))
         self.db_handler = self.llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
         self.keywords_list = self.llm_handler.get_keywords()
         self.images_per_page_limit = int(

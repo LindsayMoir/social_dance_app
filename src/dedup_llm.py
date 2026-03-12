@@ -40,6 +40,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import yaml
 
+from config_runtime import get_config_path, load_config
 from llm import LLMHandler
 from db import DatabaseHandler
 
@@ -49,10 +50,11 @@ class DeduplicationHandler:
         """
         Initializes the DeduplicationHandler with configuration, database, and API connections.
         """
-        self._load_config(config_path)
+        resolved_config_path = get_config_path(config_path)
+        self._load_config(resolved_config_path)
         self.source_score_penalties = self._load_source_score_penalties()
         self._setup_logging()
-        self.llm_handler = LLMHandler(config_path)
+        self.llm_handler = LLMHandler(resolved_config_path)
         self.db_handler = self.llm_handler.db_handler  # Use connected handler
         self._setup_database()
     
@@ -1869,11 +1871,10 @@ Respond with ONLY valid JSON in this exact format:
 
 if __name__ == "__main__":
 
-    with open('config/config.yaml', 'r') as file:
-        config = yaml.safe_load(file)
+    config = load_config()
 
     # Initialize the class libraries
-    deduper = DeduplicationHandler()
+    deduper = DeduplicationHandler(get_config_path())
     db_handler = deduper.db_handler  # Use the connected handler
 
     # Get the file name of the code that is running

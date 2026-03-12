@@ -59,6 +59,7 @@ import sys
 from urllib.parse import urlparse
 import yaml
 
+from config_runtime import get_config_path, load_config
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_config import setup_logging
@@ -442,11 +443,22 @@ class EventbriteScraper:
         """ Saves the run statistics to the database. """
         elapsed_time = str(self.end_time - self.start_time)  # Convert timedelta to a string
         python_file_name = __file__.split('/')[-1]
+        should_process_counts = {}
+        try:
+            should_process_counts = self.db_handler.get_should_process_decision_counts()
+        except Exception:
+            should_process_counts = {}
+        stale_fb_skips = int(should_process_counts.get("skip_stale_facebook_event_detail", 0) or 0)
+        stale_ebs_skips = int(should_process_counts.get("skip_stale_eventbrite_event_detail", 0) or 0)
 
         # Create a DataFrame for the run statistics
         run_data = pd.DataFrame([{
             "run_name": self.run_name,
-            "run_description": self.run_description,
+            "run_description": (
+                f"{self.run_description}"
+                f" | should_process_stale_fb_skips={stale_fb_skips}"
+                f" | should_process_stale_ebs_skips={stale_ebs_skips}"
+            ),
             "start_time": self.start_time,
             "end_time": self.end_time,
             "elapsed_time": elapsed_time,  # Now stored as a string
@@ -548,8 +560,8 @@ def import_ebs_events_from_csv(db_handler, config):
 
 async def main():
     """ Main function to initialize and run the Eventbrite scraper. """
-    with open('config/config.yaml', 'r') as file:
-        config = yaml.safe_load(file)
+    config = load_config()
+    runtime_config_path = get_config_path()
 
     # Setup centralized logging
     os.environ["DS_STEP_NAME"] = "ebs"
@@ -564,7 +576,7 @@ async def main():
     logging.info(f"__main__: Running on Render: {is_render}")
 
     # Initialize handlers needed for both modes
-    llm_handler = LLMHandler(config_path='config/config.yaml')
+    llm_handler = LLMHandler(config_path=runtime_config_path)
     db_handler = llm_handler.db_handler
     file_name = os.path.basename(__file__)
 
@@ -579,7 +591,7 @@ async def main():
         logging.info("__main__: LOCAL MODE - Scraping Eventbrite and exporting to CSV")
 
         # Initialize the scraper components
-        read_extract = ReadExtract(config_path='config/config.yaml')
+        read_extract = ReadExtract(config_path=runtime_config_path)
         ebs_instance = EventbriteScraper(
             config=config,
             read_extract=read_extract,

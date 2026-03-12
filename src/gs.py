@@ -28,6 +28,7 @@ import pandas as pd
 from urllib.parse import urlparse
 import yaml
 
+from config_runtime import get_config_path, load_config
 # Import the DatabaseHandler and LLMHandler class
 from db import DatabaseHandler
 from llm import LLMHandler
@@ -35,7 +36,7 @@ from llm import LLMHandler
 from credentials import get_credentials
 
 class GoogleSearch():
-    def __init__(self, config_path="config/config.yaml"):
+    def __init__(self, config_path=None):
         """
         Initialize GoogleSearch by loading configuration from a YAML file,
         setting up logging based on config, and retrieving Google API credentials.
@@ -45,14 +46,15 @@ class GoogleSearch():
                                Defaults to "config/config.yaml".
         """
         # Load configuration
-        with open(config_path, 'r') as file:
+        resolved_config_path = get_config_path(config_path)
+        with open(resolved_config_path, 'r', encoding='utf-8') as file:
             self.config = yaml.safe_load(file)
 
         # Retrieve and store API credentials using credentials.py
         self.appid_uid, self.key_pw, self.cse_id = get_credentials('Google')
 
         # Instantiate LLMHandler
-        self.llm_handler = LLMHandler(config_path=config_path)
+        self.llm_handler = LLMHandler(config_path=resolved_config_path)
 
         self.keywords_list = self.llm_handler.get_keywords()
     
@@ -190,8 +192,7 @@ class GoogleSearch():
 
 
 if __name__ == "__main__":
-    with open('config/config.yaml', 'r') as file:
-        config = yaml.safe_load(file)
+    config = load_config()
 
     # Setup centralized logging
     from logging_config import setup_logging

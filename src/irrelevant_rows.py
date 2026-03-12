@@ -30,6 +30,7 @@ import re
 from sqlalchemy import create_engine, text
 import yaml
 
+from config_runtime import get_config_path
 from llm import LLMHandler
 from db import DatabaseHandler
 
@@ -39,10 +40,11 @@ class IrrelevantRowsHandler:
         """
         Initializes the IrrelevantRowsHandler with configuration, database, and API connections.
         """
-        self._load_config(config_path)
+        resolved_config_path = get_config_path(config_path)
+        self._load_config(resolved_config_path)
         self._setup_logging()
         self.db_handler = DatabaseHandler(self.config)
-        self.llm_handler = LLMHandler(config_path)
+        self.llm_handler = LLMHandler(resolved_config_path)
 
         # Get the file name of the code that is running
         self.file_name = os.path.basename(__file__)
@@ -347,7 +349,7 @@ if __name__ == "__main__":
     start_time = datetime.now()
 
     # Instantiate class libraries
-    irrelevant = IrrelevantRowsHandler('config/config.yaml')
+    irrelevant = IrrelevantRowsHandler(get_config_path())
 
     # Process irrelevant rows
     irrelevant.process_rows()

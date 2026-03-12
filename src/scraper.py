@@ -30,6 +30,7 @@ import csv
 from urllib.parse import urljoin, urlparse, urlunparse
 
 from credentials import get_credentials
+from config_runtime import get_config_path, load_config
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_config import setup_logging
@@ -38,8 +39,7 @@ from logging_config import setup_logging
 # Global objects initialization.
 # (These globals will be used by EventSpider.)
 # --------------------------------------------------
-with open('config/config.yaml', 'r') as file:
-    config = yaml.safe_load(file)
+config = load_config()
 
 # Handlers will be instantiated when needed to avoid blocking module import
 _handlers_cache = None
@@ -202,7 +202,7 @@ def get_handlers():
     global _handlers_cache
     if _handlers_cache is None:
         db_handler = DatabaseHandler(config)
-        llm_handler = LLMHandler(config_path="config/config.yaml")
+        llm_handler = LLMHandler(config_path=get_config_path())
         db_handler.set_llm_handler(llm_handler)  # Connect the LLM to the DB handler
         _handlers_cache = {
             'db_handler': db_handler,
@@ -1090,8 +1090,7 @@ if __name__ == "__main__":
     logging.info("\n\nscraper.py starting...")
     start_time = datetime.now()
 
-    with open('config/config.yaml', 'r') as file:
-        config = yaml.safe_load(file)
+    config = load_config()
 
     # Get handlers using lazy initialization to avoid blocking imports
     handlers = get_handlers()

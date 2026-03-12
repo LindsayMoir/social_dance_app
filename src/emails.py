@@ -38,8 +38,9 @@ import pandas as pd
 import re
 import yaml
 
-with open('config/config.yaml', "r") as file:
-    config = yaml.safe_load(file)
+from config_runtime import get_config_path, load_config
+
+config = load_config()
 
 from db import DatabaseHandler
 from logging_config import setup_logging
@@ -304,7 +305,7 @@ class GmailProcessor:
         from llm import LLMHandler  # Import here to avoid circular dependency
 
         # Instantiate LLM handler with config
-        llm_handler = LLMHandler(config_path="config/config.yaml")
+        llm_handler = LLMHandler(config_path=get_config_path())
 
         # Create GmailProcessor with shared authentication
         gmail_processor = GmailProcessor(llm_handler=llm_handler)

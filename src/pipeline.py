@@ -63,6 +63,7 @@ log_dir = log_cfg.get("dir") or os.path.dirname(log_cfg.get("log_file", "")) or 
 os.makedirs(log_dir, exist_ok=True)
 
 logger = logging.getLogger(__name__)
+_STEP_RUNTIME_CONFIG_PATHS: dict[str, str] = {}
 
 _TRANSIENT_DB_ERROR_MARKERS = (
     "database is locked",
@@ -140,7 +141,7 @@ PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_temp_block_wait_max_seconds"] = 60
 
 @task
 def backup_and_update_config(step: str, updates: dict) -> dict:
-    with open(CONFIG_PATH, "r") as f:
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         original_config = yaml.safe_load(f)
     logger.info("def backup_and_update_config(): Original config loaded.")
     logger.info("def backup_and_update_config(): Starting pipeline.py")
@@ -150,16 +151,37 @@ def backup_and_update_config(step: str, updates: dict) -> dict:
             updated_config[key].update(value)
         else:
             updated_config[key] = value
-    with open(CONFIG_PATH, "w") as f:
-        yaml.dump(updated_config, f)
-    logger.info(f"def backup_and_update_config(): Updated config for step '{step}' written to disk with updates: {updates}")
+    run_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    runtime_config_name = f"runtime_config_{step}_{run_time}_{uuid.uuid4().hex[:8]}.yaml"
+    runtime_config_dir = os.path.join("config", "run_specific_configs")
+    os.makedirs(runtime_config_dir, exist_ok=True)
+    runtime_config_path = os.path.join(runtime_config_dir, runtime_config_name)
+    with open(runtime_config_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(updated_config, f, sort_keys=False)
+    _STEP_RUNTIME_CONFIG_PATHS[step] = runtime_config_path
+    os.environ["DS_CONFIG_PATH"] = runtime_config_path
+    logger.info(
+        "def backup_and_update_config(): Runtime config for step '%s' written to %s with updates: %s",
+        step,
+        runtime_config_path,
+        updates,
+    )
     return original_config
 
 @task
 def restore_config(original_config: dict, step: str):
-    with open(CONFIG_PATH, "w") as f:
-        yaml.dump(original_config, f)
-    logger.info(f"def restore_config(): Original config restored after step '{step}'.")
+    _ = original_config
+    runtime_config_path = _STEP_RUNTIME_CONFIG_PATHS.pop(step, "")
+    if runtime_config_path:
+        try:
+            os.remove(runtime_config_path)
+            logger.info("def restore_config(): Removed runtime config for step '%s': %s", step, runtime_config_path)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning("def restore_config(): Could not remove runtime config '%s': %s", runtime_config_path, e)
+    os.environ.pop("DS_CONFIG_PATH", None)
+    logger.info(f"def restore_config(): Cleared runtime config override after step '{step}'.")
 
 # ------------------------
 # HELPER TASK: Write Run-Specific Config (for traceability)
@@ -237,25 +259,30 @@ def credential_validation_step():
     logger.info("Browser will open for user interaction if needed")
     logger.info("=" * 70)
 
-    # Pre-process
-    pre_result = pre_process_credential_validation()
-    logger.info(f"credential_validation_step: pre_process returned: {pre_result}")
-    if not pre_result:
-        raise Exception("Credential validation pre-processing failed. Pipeline stopped.")
+    original_config = backup_and_update_config("credential_validation", updates={})
+    write_run_config.submit("credential_validation", original_config)
+    try:
+        # Pre-process
+        pre_result = pre_process_credential_validation()
+        logger.info(f"credential_validation_step: pre_process returned: {pre_result}")
+        if not pre_result:
+            raise Exception("Credential validation pre-processing failed. Pipeline stopped.")
 
-    # Main validation - this should BLOCK until complete
-    logger.info("credential_validation_step: About to call run_credential_validation()")
-    validation_result = run_credential_validation()
-    logger.info(f"credential_validation_step: run_credential_validation returned: {validation_result}")
+        # Main validation - this should BLOCK until complete
+        logger.info("credential_validation_step: About to call run_credential_validation()")
+        validation_result = run_credential_validation()
+        logger.info(f"credential_validation_step: run_credential_validation returned: {validation_result}")
 
-    # Post-process
-    post_result = post_process_credential_validation()
-    logger.info(f"credential_validation_step: post_process returned: {post_result}")
-    if not post_result:
-        raise Exception("Credential validation post-processing failed. Pipeline stopped.")
+        # Post-process
+        post_result = post_process_credential_validation()
+        logger.info(f"credential_validation_step: post_process returned: {post_result}")
+        if not post_result:
+            raise Exception("Credential validation post-processing failed. Pipeline stopped.")
 
-    logger.info("credential_validation_step: Step completed successfully")
-    return True
+        logger.info("credential_validation_step: Step completed successfully")
+        return True
+    finally:
+        restore_config(original_config, "credential_validation")
 
 # ------------------------
 # TASK: COPY LOG FILES
@@ -973,14 +1000,8 @@ def db_step():
     run_db_script()
     dummy_post_process("db")
     restore_config(original_config, "db")
-    # After the first run, if drop_tables is True, update the config file to set it to False.
-    with open(CONFIG_PATH, "r") as f:
-        updated_config = yaml.safe_load(f)
-    if updated_config['testing'].get('drop_tables', False):
-        updated_config['testing']['drop_tables'] = False
-        with open(CONFIG_PATH, "w") as f:
-            yaml.dump(updated_config, f)
-        logger.info("db_step: Updated config['testing']['drop_tables'] to False after first run.")
+    # Do not mutate config/config.yaml from pipeline runtime.
+    logger.info("db_step: Skipping persistent config mutation for testing.drop_tables.")
     return True
 
 # ------------------------

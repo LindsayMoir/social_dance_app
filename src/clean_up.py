@@ -43,6 +43,7 @@ import unicodedata
 import urllib.parse
 import yaml
 
+from config_runtime import load_config
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_utils import log_extracted_text
@@ -2106,8 +2107,7 @@ Examples:
 # ------------------------------------------------------------------------
 
 async def main():
-    with open("config/config.yaml", "r") as file:
-        config = yaml.safe_load(file)
+    config = load_config()
 
     # Set up logging
     # Setup centralized logging

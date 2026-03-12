@@ -82,14 +82,14 @@ import yaml
 
 # Import other classes
 from credentials import get_credentials
+from config_runtime import get_config_path, load_config
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_utils import log_extracted_text
 from secret_paths import get_auth_file
 
 # Get config
-with open('config/config.yaml', 'r') as file:
-    config = yaml.safe_load(file)
+config = load_config()
 
 # Global handlers for class methods (declared at module level, initialized in main())
 llm_handler = None
@@ -2030,6 +2030,13 @@ class FacebookEventScraper():
 
         elapsed_time = str(end_time - self.start_time)
         time_stamp = datetime.now()
+        should_process_counts = {}
+        try:
+            should_process_counts = db_handler.get_should_process_decision_counts()
+        except Exception:
+            should_process_counts = {}
+        stale_fb_skips = int(should_process_counts.get("skip_stale_facebook_event_detail", 0) or 0)
+        stale_ebs_skips = int(should_process_counts.get("skip_stale_eventbrite_event_detail", 0) or 0)
 
         run_data = pd.DataFrame([{
             "run_name": self.run_name,
@@ -2037,6 +2044,8 @@ class FacebookEventScraper():
                 f"{self.run_description}"
                 f" | fb_temp_block_strikes={int(getattr(self, 'fb_run_temp_block_strikes', 0) or 0)}"
                 f" | fb_run_abort_reason={str(getattr(self, 'fb_run_abort_reason', '') or 'none')}"
+                f" | should_process_stale_fb_skips={stale_fb_skips}"
+                f" | should_process_stale_ebs_skips={stale_ebs_skips}"
             ),
             "start_time": self.start_time,
             "end_time": end_time,
@@ -2134,8 +2143,8 @@ class FacebookEventScraper():
 
 def main():
     """ Main function to initialize and run the Facebook scraper. """
-    with open('config/config.yaml', 'r') as file:
-        config = yaml.safe_load(file)
+    config = load_config()
+    runtime_config_path = get_config_path()
 
     # Setup centralized logging
     from logging_config import setup_logging
@@ -2149,7 +2158,7 @@ def main():
 
     # Initialize handlers - make them global for class methods
     global llm_handler, db_handler
-    llm_handler = LLMHandler(config_path='config/config.yaml')
+    llm_handler = LLMHandler(config_path=runtime_config_path)
     db_handler = llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
 
     # Get the file name of the running script
@@ -2159,7 +2168,7 @@ def main():
     start_df = db_handler.count_events_urls_start(file_name)
 
     # Initialize scraper
-    fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
+    fb_scraper = FacebookEventScraper(config_path=runtime_config_path)
 
     try:
         # Run

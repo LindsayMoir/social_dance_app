@@ -41,9 +41,10 @@ import os
 import random
 import yaml
 
+from config_runtime import get_config_path, load_config, write_config
+
 # Load configuration
-with open('config/config.yaml', 'r') as file:
-    config = yaml.safe_load(file)
+config = load_config()
 
 
 @contextmanager
@@ -51,7 +52,7 @@ def _temporary_headless_config(headless: bool):
     """
     Temporarily force config/config.yaml crawling.headless for validators that load config from disk.
     """
-    config_path = 'config/config.yaml'
+    config_path = get_config_path()
     with open(config_path, 'r', encoding='utf-8') as f:
         original_config = yaml.safe_load(f)
 
@@ -61,8 +62,7 @@ def _temporary_headless_config(headless: bool):
     updated_config['crawling']['headless'] = bool(headless)
 
     if original_headless != bool(headless):
-        with open(config_path, 'w', encoding='utf-8') as f:
-            yaml.safe_dump(updated_config, f)
+        write_config(updated_config, config_path)
         logging.info(
             "_temporary_headless_config(): Set crawling.headless=%s for credential validation",
             bool(headless),
@@ -71,8 +71,7 @@ def _temporary_headless_config(headless: bool):
         yield
     finally:
         if original_headless != bool(headless):
-            with open(config_path, 'w', encoding='utf-8') as f:
-                yaml.safe_dump(original_config, f)
+            write_config(original_config, config_path)
             logging.info(
                 "_temporary_headless_config(): Restored crawling.headless=%s after credential validation",
                 original_headless,
