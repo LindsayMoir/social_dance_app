@@ -1718,9 +1718,110 @@ class FacebookEventScraper():
             checkpoint_updates += 1
             flush_checkpoint(force=False)
 
+        processed_base_urls: set[str] = set()
+
+        def process_new_social_delta_urls() -> None:
+            """
+            Final in-run delta pass: pick up new facebook/instagram URLs written by
+            parallel scrapers during this fb.py run and process only unseen Facebook URLs.
+            """
+            nonlocal fb_urls_df
+            if getattr(self, "fb_run_abort_requested", False):
+                logging.warning(
+                    "process_new_social_delta_urls(): skipped due to temp block policy (reason=%s).",
+                    str(getattr(self, "fb_run_abort_reason", "") or "unknown"),
+                )
+                return
+            try:
+                delta_query = text(
+                    """
+                    SELECT link, parent_url, source, keywords, time_stamp
+                    FROM urls
+                    WHERE time_stamp >= :run_start
+                      AND (link ILIKE :fb_pattern OR link ILIKE :ig_pattern)
+                    ORDER BY time_stamp ASC
+                    """
+                )
+                delta_df = pd.read_sql(
+                    delta_query,
+                    db_handler.conn,
+                    params={
+                        "run_start": self.start_time,
+                        "fb_pattern": "%facebook%",
+                        "ig_pattern": "%instagram.com%",
+                    },
+                )
+            except Exception as e:
+                logging.warning("process_new_social_delta_urls(): failed querying delta URLs: %s", e)
+                return
+
+            if delta_df.empty:
+                logging.info("process_new_social_delta_urls(): no new social URLs detected since run start.")
+                return
+
+            fb_candidates = 0
+            fb_processed = 0
+            ig_detected = 0
+            for _, delta_row in delta_df.iterrows():
+                raw_url = str(delta_row.get("link", "") or "").strip()
+                if not raw_url:
+                    continue
+                url_l = raw_url.lower()
+                if "instagram.com" in url_l:
+                    ig_detected += 1
+                    continue
+                if "facebook" not in url_l:
+                    continue
+
+                base_url = self.normalize_facebook_url(raw_url)
+                fb_candidates += 1
+                if is_non_content_facebook_url(base_url):
+                    continue
+                if base_url in self.urls_visited or base_url in processed_base_urls:
+                    continue
+                if not db_handler.should_process_url(base_url):
+                    continue
+
+                parent_url = delta_row.get("parent_url", "")
+                source = delta_row.get("source", "")
+                keywords = delta_row.get("keywords", "")
+                self.process_fb_url(base_url, parent_url, source, keywords)
+                self.urls_visited.add(base_url)
+                processed_base_urls.add(base_url)
+                fb_processed += 1
+
+                if base_url not in existing_links:
+                    new_row = pd.DataFrame({
+                        "link": [base_url],
+                        "source": [source],
+                        "keywords": [keywords],
+                        "processed": [True],
+                        "events_processed": [True],
+                    })
+                    fb_urls_df = pd.concat([fb_urls_df, new_row], ignore_index=True)
+                    existing_links.add(base_url)
+                else:
+                    fb_urls_df.loc[fb_urls_df["link"] == base_url, "processed"] = True
+                    fb_urls_df.loc[fb_urls_df["link"] == base_url, "events_processed"] = True
+                mark_checkpoint_dirty()
+
+                if len(self.urls_visited) >= self.config['crawling']['urls_run_limit']:
+                    logging.info(
+                        "process_new_social_delta_urls(): reached URLs run limit (%s).",
+                        self.config['crawling']['urls_run_limit'],
+                    )
+                    break
+
+            logging.info(
+                "process_new_social_delta_urls(): delta_social_rows=%d fb_candidates=%d fb_processed=%d ig_detected=%d",
+                len(delta_df),
+                fb_candidates,
+                fb_processed,
+                ig_detected,
+            )
+
         # 3) Iterate each base Facebook URL
         if fb_urls_df.shape[0] > 0:
-            processed_base_urls = set()
             if self.fb_randomize_base_url_order:
                 fb_urls_df = fb_urls_df.sample(frac=1).reset_index(drop=True)
                 logging.info(
@@ -1915,6 +2016,8 @@ class FacebookEventScraper():
 
         else:
             logging.warning("def driver_fb_urls(): No Facebook URLs returned from the database.")
+        # Final delta pass to capture newly written social URLs from parallel scraper.py.
+        process_new_social_delta_urls()
         flush_checkpoint(force=True)
 
 
