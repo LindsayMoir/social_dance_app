@@ -268,6 +268,64 @@ def test_driver_fb_urls_does_not_mark_base_relevant_when_no_events_yield(monkeyp
     )
 
 
+def test_driver_fb_urls_logs_stale_skip_reason_to_urls_table(monkeypatch):
+    class DummyDB:
+        def __init__(self):
+            self.conn = object()
+            self.rows = []
+
+        def should_process_url(self, _url):
+            return False
+
+        def get_should_process_decision_reason(self, _url):
+            return "skip_stale_facebook_event_detail"
+
+        def write_url_to_db(self, row):
+            self.rows.append(row)
+
+    dummy_db = DummyDB()
+    monkeypatch.setattr(fb_module, "db_handler", dummy_db, raising=False)
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setattr(
+        fb_module.pd,
+        "read_sql",
+        lambda *args, **kwargs: pd.DataFrame(
+            [
+                {
+                    "link": "https://www.facebook.com/events/1018836737121988/",
+                    "parent_url": "",
+                    "source": "Test Source",
+                    "keywords": "salsa",
+                }
+            ]
+        ),
+    )
+
+    scraper = FacebookEventScraper.__new__(FacebookEventScraper)
+    scraper.config = {"crawling": {"urls_run_limit": 10}, "checkpoint": {"fb_urls_write_every": 10}}
+    scraper.urls_visited = set()
+    scraper.events_written_to_db = 0
+    scraper.fb_base_urls_limit = 0
+    scraper.fb_event_links_per_base_limit = 0
+    scraper.fb_randomize_base_url_order = False
+    scraper.fb_randomize_event_link_order = False
+    scraper.fb_inter_request_wait_min_ms = 0
+    scraper.fb_inter_request_wait_max_ms = 0
+    scraper._ensure_authenticated_or_raise = lambda: None
+    scraper.normalize_facebook_url = lambda u: u
+    scraper.extract_event_links = lambda _u: []
+    scraper.process_fb_url = lambda *_args, **_kwargs: None
+
+    scraper.driver_fb_urls()
+
+    assert any(
+        len(row) >= 8
+        and row[0] == "https://www.facebook.com/events/1018836737121988/"
+        and row[7] == "skip_stale_facebook_event_detail"
+        for row in dummy_db.rows
+    )
+
+
 def test_temp_block_policy_first_strike_waits_and_continues(monkeypatch):
     scraper = FacebookEventScraper.__new__(FacebookEventScraper)
     scraper.fb_temp_block_policy_enabled = True
