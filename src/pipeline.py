@@ -110,7 +110,7 @@ COMMON_CONFIG_UPDATES = {
 }
 
 PARALLEL_CRAWL_CONFIG_UPDATES = copy.deepcopy(COMMON_CONFIG_UPDATES)
-PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["urls_run_limit"] = 500
+PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["urls_run_limit"] = 1500
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["max_website_urls"] = 10
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_download_timeout_seconds"] = 50
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["scraper_playwright_timeout_ms"] = 35000
@@ -748,7 +748,7 @@ def post_process_scraper():
 @flow(name="Scraper Step")
 def scraper_step():
     scraper_updates = copy.deepcopy(COMMON_CONFIG_UPDATES)
-    scraper_updates["crawling"]["urls_run_limit"] = 900
+    scraper_updates["crawling"]["urls_run_limit"] = 1500
     scraper_updates["crawling"]["scraper_download_timeout_seconds"] = 50
     scraper_updates["crawling"]["scraper_playwright_timeout_ms"] = 35000
     scraper_updates["crawling"]["scraper_retry_times"] = 2

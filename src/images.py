@@ -195,6 +195,9 @@ class ImageScraper:
         self.llm_handler = LLMHandler(config)
         self.db_handler = self.llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
         self.keywords_list = self.llm_handler.get_keywords()
+        self.images_per_page_limit = int(
+            self.config.get("crawling", {}).get("images_per_page_limit", 10) or 10
+        )
 
         # Directories
         self.download_dir = Path(config.get("image_download_dir", "images/"))
@@ -723,6 +726,13 @@ class ImageScraper:
         )
         imgs = Selector(text=rendered_html).xpath('//img/@src').getall()
         img_urls = [urljoin(page_url, u) for u in imgs if self.is_image_url(u)]
+        if self.images_per_page_limit > 0:
+            img_urls = img_urls[: self.images_per_page_limit]
+        self.logger.info(
+            "process_webpage_url(): considering %d image(s) on page after cap=%d",
+            len(img_urls),
+            self.images_per_page_limit,
+        )
 
         # Establish a minimum size for the img_urls.
         MIN_W, MIN_H = 500, 500
@@ -762,7 +772,10 @@ class ImageScraper:
                 self.logger.info(f"Skipping {url}: too small ({w}x{h})")
 
         # now process only the valid ones
-        for src in valid_imgs[:config['crawling']['max_website_urls']]:
+        per_page_process_limit = self.images_per_page_limit
+        if per_page_process_limit <= 0:
+            per_page_process_limit = int(self.config.get('crawling', {}).get('max_website_urls', 10) or 10)
+        for src in valid_imgs[:per_page_process_limit]:
             self.process_image_url(src, page_url, source, keywords)
 
 
