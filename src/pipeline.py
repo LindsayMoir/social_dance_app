@@ -20,6 +20,7 @@ import sys
 import time
 import yaml
 from email_notifier import send_report_email
+from utils.crawl_telemetry_tuning import tune_crawl_config_from_first_pass
 
 # Setup centralized logging (logging_config.py is in the same directory)
 from logging_config import setup_logging
@@ -134,6 +135,17 @@ PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_state_ttl_days"] = 45
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_temp_block_policy_enabled"] = True
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_temp_block_wait_min_seconds"] = 300
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_temp_block_wait_max_seconds"] = 600
+
+
+def _merge_nested_updates(base: dict, overlay: dict) -> dict:
+    """Merge nested dict updates without mutating inputs."""
+    merged = copy.deepcopy(base)
+    for key, value in (overlay or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key].update(value)
+        else:
+            merged[key] = value
+    return merged
 
 # ------------------------
 # HELPER TASKS: Backup and Restore Config
@@ -892,7 +904,19 @@ def parallel_crawlers_step():
     This avoids config race conditions from each individual step wrapper.
     """
     scripts = ["src/rd_ext.py", "src/ebs.py", "src/scraper.py", "src/fb.py"]
-    original_config = backup_and_update_config("parallel_crawlers", updates=PARALLEL_CRAWL_CONFIG_UPDATES)
+    scraper_log_path = str(cfg.get("logging", {}).get("scraper_log_file", "logs/scraper_log.txt"))
+    fb_log_path = os.path.join(os.path.dirname(scraper_log_path), "fb_log.txt")
+    tuning = tune_crawl_config_from_first_pass(
+        current_updates=PARALLEL_CRAWL_CONFIG_UPDATES,
+        scraper_log_path=scraper_log_path,
+        fb_log_path=fb_log_path,
+    )
+    runtime_updates = _merge_nested_updates(PARALLEL_CRAWL_CONFIG_UPDATES, tuning.updates)
+    logger.info("parallel_crawlers_step(): phase3 telemetry=%s", tuning.telemetry)
+    for decision in tuning.decisions:
+        logger.info("parallel_crawlers_step(): phase3 decision: %s", decision)
+
+    original_config = backup_and_update_config("parallel_crawlers", updates=runtime_updates)
     write_run_config.submit("parallel_crawlers", original_config)
 
     failures: list[str] = []
