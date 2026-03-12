@@ -214,6 +214,38 @@ class ImageScraper:
             self.logger.error("Instagram login failed. Exiting.")
             sys.exit(1)
 
+    async def _extract_page_text_playwright(self, page_url: str) -> str | None:
+        """
+        Extract page text using the existing authenticated Playwright page.
+
+        This path is used for Instagram pages because rd_ext intentionally skips
+        social URLs in its generic extractor.
+        """
+        try:
+            await self.read_extract.page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
+            await self.read_extract.page.wait_for_timeout(2500)
+            content = await self.read_extract.page.content()
+        except Exception as e:
+            self.logger.warning("_extract_page_text_playwright(): failed for %s: %s", page_url, e)
+            return None
+
+        soup = BeautifulSoup(content, "html.parser")
+        for tag in soup(["script", "style"]):
+            tag.decompose()
+        text = " ".join(soup.get_text(separator=" ").split())
+        return text or None
+
+    def _extract_dynamic_page_text(self, page_url: str) -> str | None:
+        """
+        Extract dynamic page text with service ownership-aware routing.
+
+        - Instagram pages: use local Playwright extractor in images.py.
+        - All other pages: use rd_ext extractor service.
+        """
+        if "instagram.com" in (page_url or "").lower():
+            return self.loop.run_until_complete(self._extract_page_text_playwright(page_url))
+        return self.loop.run_until_complete(self.read_extract.extract_event_text(page_url))
+
 
     def _load_instagram_cookies(self) -> list | None:
         """
@@ -685,9 +717,7 @@ class ImageScraper:
         # Fallback to Playwright for JS‑heavy or too‑short scrapes
         if not text or len(text) < 200 or "instagram.com" in page_url:
             self.logger.info(f"process_webpage_url(): Falling back to Playwright for {page_url}")
-            pw_text = self.loop.run_until_complete(
-                self.read_extract.extract_event_text(page_url)
-            )
+            pw_text = self._extract_dynamic_page_text(page_url)
             if not pw_text:
                 self.logger.info(f"process_webpage_url(): Playwright extraction failed for {page_url}")
                 self.db_handler.write_url_to_db(url_row)

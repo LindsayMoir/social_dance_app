@@ -67,6 +67,32 @@ def get_db_handler():
     return db_handler
 
 
+def extract_edge_case_url_series(df: pd.DataFrame) -> pd.Series:
+    """
+    Return the URL series from edge-case input data.
+
+    Supports the expected named-column format and the legacy positional format.
+    """
+    if "url" in df.columns:
+        return df["url"].astype(str)
+    if df.shape[1] >= 3:
+        return df.iloc[:, 2].astype(str)
+    return pd.Series(dtype=str)
+
+
+def validate_edge_case_social_url_ownership(df: pd.DataFrame) -> int:
+    """
+    Ensure rd_ext edge_cases input does not include social URLs owned by other steps.
+
+    Returns:
+        int: count of disallowed social rows detected.
+    """
+    urls = extract_edge_case_url_series(df)
+    if urls.empty:
+        return 0
+    return int(urls.map(is_social_media_url).sum())
+
+
 class ReadExtract:
     def __init__(self, config_path="config/config.yaml"):
         with open(config_path, 'r') as file:
@@ -847,6 +873,14 @@ if __name__ == "__main__":
 
     # Read .csv file to deal with oddities
     df = pd.read_csv(config['input']['edge_cases'])
+    disallowed_social = validate_edge_case_social_url_ownership(df)
+    if disallowed_social > 0:
+        msg = (
+            f"edge_cases.csv contains {disallowed_social} social URL(s) (fb/ig), "
+            "which are owned by fb.py/images.py and must not be processed by rd_ext.py."
+        )
+        logging.error("__main__: %s", msg)
+        raise ValueError(msg)
 
     # Define async function to process all URLs with single browser instance
     async def process_all_urls():
