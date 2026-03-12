@@ -46,7 +46,7 @@ crawling:
   scraper_priority_retry_times: 3
   scraper_retry_times: 1
   scroll_depth: 2
-  urls_run_limit: 500
+  urls_run_limit: 1000
 date_range:
   days_ahead: 365
   months: 3

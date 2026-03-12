@@ -3652,13 +3652,47 @@ class DatabaseHandler():
         except Exception:
             return None
 
+    @staticmethod
+    def _instagram_post_id_from_url(url: str) -> Optional[tuple[str, str]]:
+        """
+        Return (kind, id) for Instagram post-detail URLs.
+
+        Supported kinds:
+            - p (standard post)
+            - reel
+            - tv
+        """
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url or "")
+            host = (parsed.netloc or "").lower()
+            if "instagram.com" not in host:
+                return None
+
+            path = (parsed.path or "").strip("/")
+            if not path:
+                return None
+            parts = [p for p in path.split("/") if p]
+            if len(parts) < 2:
+                return None
+            kind = parts[0].lower()
+            if kind not in {"p", "reel", "tv"}:
+                return None
+            post_id = (parts[1] or "").strip()
+            if not post_id:
+                return None
+            return kind, post_id
+        except Exception:
+            return None
+
     def _classify_static_event_detail_url(self, normalized_url: str) -> tuple[Optional[str], List[str]]:
         """
         Classify URL as a static event-detail URL and return lookup candidates for history checks.
 
         Returns:
             tuple[str|None, list[str]]:
-                - kind: one of {"facebook_event_detail", "eventbrite_event_detail"} or None
+                - kind: one of {"facebook_event_detail", "eventbrite_event_detail", "instagram_post_detail"} or None
                 - lookup candidates used to search historical events for the same detail page
         """
         try:
@@ -3683,6 +3717,14 @@ class DatabaseHandler():
             no_query = urlunparse((scheme, parsed.netloc, path, "", "", ""))
             candidates.extend([normalized_url, no_query, no_query.rstrip("/")])
             return "eventbrite_event_detail", list(dict.fromkeys(candidates))
+
+        ig_post = self._instagram_post_id_from_url(normalized_url)
+        if ig_post:
+            ig_kind, ig_id = ig_post
+            no_query = urlunparse((scheme, parsed.netloc, path, "", "", ""))
+            canonical = f"{scheme}://www.instagram.com/{ig_kind}/{ig_id}/"
+            candidates.extend([normalized_url, no_query, no_query.rstrip("/"), canonical, canonical.rstrip("/")])
+            return "instagram_post_detail", list(dict.fromkeys(candidates))
 
         return None, []
 
@@ -3756,11 +3798,12 @@ class DatabaseHandler():
         if latest_date is None:
             return False, None
         if latest_date < datetime.now().date():
-            reason = (
-                "skip_stale_facebook_event_detail"
-                if kind == "facebook_event_detail"
-                else "skip_stale_eventbrite_event_detail"
-            )
+            reason_map = {
+                "facebook_event_detail": "skip_stale_facebook_event_detail",
+                "eventbrite_event_detail": "skip_stale_eventbrite_event_detail",
+                "instagram_post_detail": "skip_stale_instagram_post_detail",
+            }
+            reason = reason_map.get(kind, "skip_stale_static_event_detail")
             return True, reason
         return False, None
 

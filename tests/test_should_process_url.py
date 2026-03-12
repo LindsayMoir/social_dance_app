@@ -100,3 +100,37 @@ def test_should_not_apply_stale_static_skip_to_non_static_page_urls():
 
     # Non-static pages should continue through existing history rules.
     assert db.should_process_url(url) is True
+
+
+def test_should_skip_stale_instagram_post_detail_url_when_already_seen():
+    db = DummyDB()
+    url = "https://www.instagram.com/p/DAabc123XYZ/?utm_source=ig_web_copy_link"
+    norm_url = db.normalize_url(url)
+    db.urls_df = pd.DataFrame(
+        [{"link": norm_url, "parent_url": "", "source": "ig", "keywords": [], "relevant": False, "crawl_try": 1, "time_stamp": datetime.now()}]
+    )
+    db.urls_gb = pd.DataFrame(
+        [{"link": norm_url, "hit_ratio": 0.5, "crawl_try": 1}]
+    )
+    db._history_start_dates[norm_url] = datetime.now().date() - timedelta(days=5)
+
+    assert db.should_process_url(url) is False
+    counts = db.get_should_process_decision_counts()
+    assert counts.get("skip_stale_instagram_post_detail", 0) >= 1
+    assert db.get_should_process_decision_reason(url) == "skip_stale_instagram_post_detail"
+
+
+def test_should_not_apply_stale_static_skip_to_instagram_profile_page():
+    db = DummyDB()
+    url = "https://www.instagram.com/socialdancevictoria/"
+    norm_url = db.normalize_url(url)
+    db.urls_df = pd.DataFrame(
+        [{"link": norm_url, "parent_url": "", "source": "ig", "keywords": [], "relevant": False, "crawl_try": 1, "time_stamp": datetime.now()}]
+    )
+    db.urls_gb = pd.DataFrame(
+        [{"link": norm_url, "hit_ratio": 0.5, "crawl_try": 1}]
+    )
+    db._history_start_dates[norm_url] = datetime.now().date() - timedelta(days=15)
+
+    # Profile pages are rolling pages, not static post-detail URLs.
+    assert db.should_process_url(url) is True
