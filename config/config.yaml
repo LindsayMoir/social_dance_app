@@ -156,7 +156,7 @@ llm:
   - openrouter
   - openai
   - gemini
-  regular_openai_first_every_n_requests: 2
+  regular_openai_first_every_n_requests: 0
   self_healing_enabled: true
   spend_money: true
 location:

@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import logging
 import os
+import json
 import uuid
 from sqlalchemy import create_engine, text
 
@@ -21,6 +22,12 @@ import time
 import yaml
 from email_notifier import send_report_email
 from utils.crawl_telemetry_tuning import tune_crawl_config_from_first_pass
+from utils.chatbot_metrics_sync_utils import (
+    count_nullish_datetime_values,
+    safe_db_target_label,
+    sanitize_records_for_sql,
+    utc_now_iso_seconds,
+)
 
 # Setup centralized logging (logging_config.py is in the same directory)
 from logging_config import setup_logging
@@ -84,12 +91,35 @@ _TRANSIENT_DB_ERROR_MARKERS = (
     "could not translate host name",
     "the database system is starting up",
 )
+CHATBOT_METRICS_SYNC_LOG_PATH = os.path.join(log_dir, "chatbot_metrics_sync_log.txt")
 
 
 def _is_transient_database_error(message: str) -> bool:
     """Return True if text looks like a retriable database failure."""
     lowered = (message or "").lower()
     return any(marker in lowered for marker in _TRANSIENT_DB_ERROR_MARKERS)
+
+
+def _append_chatbot_sync_log(event: str, details: dict | None = None, level: str = "INFO") -> None:
+    """Append one structured line for chatbot metrics sync diagnostics."""
+    payload = {
+        "timestamp_utc": utc_now_iso_seconds(),
+        "level": str(level or "INFO").upper(),
+        "event": event,
+        "details": details or {},
+    }
+    serialized = json.dumps(payload, ensure_ascii=True) + "\n"
+    targets = [CHATBOT_METRICS_SYNC_LOG_PATH]
+    archive_dir = os.getenv("DS_LOG_ARCHIVE_DIR", "").strip()
+    if archive_dir:
+        targets.append(os.path.join(archive_dir, "chatbot_metrics_sync_log.txt"))
+    try:
+        for target in targets:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "a", encoding="utf-8") as fh:
+                fh.write(serialized)
+    except Exception as e:
+        logger.warning("_append_chatbot_sync_log(): failed to append diagnostic log: %s", e)
 
 # Define common configuration updates for all pipeline steps
 COMMON_CONFIG_UPDATES = {
@@ -308,6 +338,7 @@ def copy_log_files():
     
     # Create the archive folder
     os.makedirs(archive_folder, exist_ok=True)
+    os.environ["DS_LOG_ARCHIVE_DIR"] = archive_folder
     logger.info(f"def copy_log_files(): Created archive folder: {archive_folder}")
     
     # Get all log files from logs directory
@@ -1678,9 +1709,16 @@ def sync_render_chatbot_metrics_last_90_days():
     Pull chatbot metrics from Render production DB and upsert into local DB for last 90 days.
     This keeps local reporting close to production behavior while remaining idempotent.
     """
+    _append_chatbot_sync_log("sync_started")
+
     # This sync is intended for local runs. On Render there is no local target DB.
     if os.getenv("RENDER", "").lower() == "true":
         logger.info("sync_render_chatbot_metrics_last_90_days(): Running on Render; skipping local sync.")
+        _append_chatbot_sync_log(
+            "sync_skipped",
+            {"reason": "render_environment"},
+            level="WARNING",
+        )
         return {
             "status": "skipped",
             "reason": "render_environment",
@@ -1691,6 +1729,11 @@ def sync_render_chatbot_metrics_last_90_days():
     local_db_url = os.getenv("DATABASE_CONNECTION_STRING")
     if not local_db_url:
         logger.warning("sync_render_chatbot_metrics_last_90_days(): DATABASE_CONNECTION_STRING not set; skipping.")
+        _append_chatbot_sync_log(
+            "sync_skipped",
+            {"reason": "missing_local_database_connection_string"},
+            level="WARNING",
+        )
         return {
             "status": "skipped",
             "reason": "missing_local_database_connection_string",
@@ -1699,6 +1742,11 @@ def sync_render_chatbot_metrics_last_90_days():
     render_db_url = get_production_database_url()
     if not render_db_url:
         logger.warning("sync_render_chatbot_metrics_last_90_days(): Render production DB URL unavailable; skipping.")
+        _append_chatbot_sync_log(
+            "sync_skipped",
+            {"reason": "missing_render_database_url"},
+            level="WARNING",
+        )
         return {
             "status": "skipped",
             "reason": "missing_render_database_url",
@@ -1710,9 +1758,17 @@ def sync_render_chatbot_metrics_last_90_days():
         "sync_render_chatbot_metrics_last_90_days(): Syncing from Render -> local for rows since %s (UTC).",
         start_ts.isoformat(timespec="seconds"),
     )
-
-    source_engine = create_engine(render_db_url)
-    target_engine = create_engine(local_db_url)
+    _append_chatbot_sync_log(
+        "sync_config",
+        {
+            "window_days": window_days,
+            "start_ts_utc": start_ts.isoformat(timespec="seconds"),
+            "source_target": safe_db_target_label(render_db_url),
+            "local_target": safe_db_target_label(local_db_url),
+        },
+    )
+    source_engine = None
+    target_engine = None
 
     ensure_requests_sql = """
     CREATE TABLE IF NOT EXISTS chatbot_request_metrics (
@@ -1815,13 +1871,9 @@ def sync_render_chatbot_metrics_last_90_days():
         """
     )
 
-    def _clean_records(df: pd.DataFrame) -> list[dict]:
-        if df.empty:
-            return []
-        cleaned = df.where(pd.notnull(df), None)
-        return cleaned.to_dict(orient="records")
-
     try:
+        source_engine = create_engine(render_db_url)
+        target_engine = create_engine(local_db_url)
         with target_engine.begin() as target_conn:
             target_conn.execute(text(ensure_requests_sql))
             target_conn.execute(text(ensure_stages_sql))
@@ -1830,9 +1882,31 @@ def sync_render_chatbot_metrics_last_90_days():
 
         requests_df = pd.read_sql(select_requests_sql, source_engine, params={"start_ts": start_ts})
         stages_df = pd.read_sql(select_stages_sql, source_engine, params={"start_ts": start_ts})
+        _append_chatbot_sync_log(
+            "source_rows_fetched",
+            {
+                "requests_rows": int(len(requests_df)),
+                "stages_rows": int(len(stages_df)),
+                "request_nullish_datetime_counts": count_nullish_datetime_values(
+                    requests_df,
+                    ["started_at", "finished_at", "created_at", "updated_at"],
+                ),
+                "stage_nullish_datetime_counts": count_nullish_datetime_values(
+                    stages_df,
+                    ["started_at", "finished_at", "created_at"],
+                ),
+            },
+        )
 
-        request_records = _clean_records(requests_df)
-        stage_records = _clean_records(stages_df)
+        request_records = sanitize_records_for_sql(requests_df)
+        stage_records = sanitize_records_for_sql(stages_df)
+        _append_chatbot_sync_log(
+            "records_sanitized",
+            {
+                "requests_records": int(len(request_records)),
+                "stages_records": int(len(stage_records)),
+            },
+        )
 
         with target_engine.begin() as target_conn:
             if request_records:
@@ -1896,10 +1970,24 @@ def sync_render_chatbot_metrics_last_90_days():
             },
         }
         logger.info("sync_render_chatbot_metrics_last_90_days(): %s", summary)
+        _append_chatbot_sync_log("sync_completed", summary)
         return summary
+    except Exception as e:
+        import traceback
+
+        error_payload = {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "traceback": traceback.format_exc(),
+        }
+        logger.exception("sync_render_chatbot_metrics_last_90_days(): failed")
+        _append_chatbot_sync_log("sync_failed", error_payload, level="ERROR")
+        raise
     finally:
-        source_engine.dispose()
-        target_engine.dispose()
+        if source_engine is not None:
+            source_engine.dispose()
+        if target_engine is not None:
+            target_engine.dispose()
 
 
 @flow(name="Sync Render Chatbot Metrics Step")

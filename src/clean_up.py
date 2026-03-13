@@ -1305,8 +1305,13 @@ Examples:
 - If event is clearly at a specific venue, return that venue name
 """
                 
-                # Get LLM response
-                response = await self.llm_handler.get_completion(prompt, "chatbot_instructions")
+                # Use the standard LLM query path; run in a thread to avoid blocking async flow.
+                response = await asyncio.to_thread(
+                    self.llm_handler.query_llm,
+                    "clean_up_source_fix",
+                    prompt,
+                    None,
+                )
                 
                 if response and response.strip():
                     new_source = response.strip()

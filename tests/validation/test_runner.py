@@ -351,6 +351,8 @@ class ValidationTestRunner:
         fb_block_summary = self._summarize_fb_block_health(results.get('timestamp'))
         fb_ig_funnel_summary = self._summarize_fb_ig_url_funnel(results.get('timestamp'), fb_block_summary)
         suspicious_deletes_summary = self._summarize_suspicious_deletes(results.get('timestamp'))
+        report_run_id = str(fb_block_summary.get("run_id", "") or "").strip() or self._infer_latest_pipeline_run_id(results.get('timestamp'))
+        pipeline_runtime_summary = self._summarize_pipeline_runtime(results.get('timestamp'), report_run_id)
         reliability_scorecard = self._summarize_reliability_scorecard(
             results, llm_activity_summary, alias_audit_summary, scraper_network_summary, fb_block_summary
         )
@@ -362,6 +364,18 @@ class ValidationTestRunner:
         trend_summary = self._update_and_summarize_reliability_history(output_dir, reliability_scorecard)
         reliability_issues, registry_summary = self._update_reliability_issue_registry(output_dir, reliability_issues)
         action_queue = self._build_action_queue(reliability_gates, optimization_plan, reliability_issues, registry_summary)
+        control_panel_summary = self._summarize_run_control_panel(
+            output_dir=output_dir,
+            run_id=report_run_id,
+            reliability_scorecard=reliability_scorecard,
+            llm_activity=llm_activity_summary,
+            llm_quality=llm_extraction_quality,
+            scraping_results=results.get('scraping_validation'),
+            fb_ig_funnel=fb_ig_funnel_summary,
+            scraper_network=scraper_network_summary,
+            pipeline_runtime=pipeline_runtime_summary,
+            chatbot_performance=chatbot_performance_summary,
+        )
 
         # Build HTML
         llm_total_access_denominator = int(
@@ -402,6 +416,9 @@ class ValidationTestRunner:
         <p><strong>Overall Status:</strong>
             <span class="status-{results['overall_status'].lower()}">{results['overall_status']}</span>
         </p>
+
+        <h2>0. Run Control Panel (Cost / Accuracy / Runtime)</h2>
+        {self._build_run_control_panel_html(control_panel_summary, action_queue)}
 
         <h2>1. Reliability Scorecard</h2>
         {self._build_reliability_scorecard_html(reliability_scorecard, reliability_issues, reliability_gates, trend_summary, registry_summary)}
@@ -485,6 +502,9 @@ class ValidationTestRunner:
         chatbot_metrics_sync_path = os.path.join(output_dir, 'chatbot_metrics_sync_summary.json')
         with open(chatbot_metrics_sync_path, 'w', encoding='utf-8') as f:
             json.dump(chatbot_metrics_sync_summary, f, indent=2)
+        control_panel_path = os.path.join(output_dir, 'run_control_panel.json')
+        with open(control_panel_path, 'w', encoding='utf-8') as f:
+            json.dump(control_panel_summary, f, indent=2)
 
         logging.info(f"HTML report saved: {output_path}")
         logging.info(f"Reliability scorecard saved: {scorecard_path}")
@@ -496,6 +516,7 @@ class ValidationTestRunner:
         logging.info(f"Chatbot performance summary saved: {chatbot_performance_path}")
         logging.info(f"Suspicious deletes summary saved: {suspicious_deletes_path}")
         logging.info(f"Chatbot metrics sync summary saved: {chatbot_metrics_sync_path}")
+        logging.info(f"Run control panel saved: {control_panel_path}")
 
     @staticmethod
     def _escape_html(value: str) -> str:
@@ -957,6 +978,608 @@ class ValidationTestRunner:
                 model = line[idx + len(marker):].strip().split()[0] if line[idx + len(marker):].strip() else ""
                 return provider, model
         return None
+
+    def _infer_latest_pipeline_run_id(self, report_timestamp: str | None) -> str:
+        """Return latest pipeline run_id from logs/pipeline_log.txt near report timestamp."""
+        path = "logs/pipeline_log.txt"
+        if not os.path.exists(path):
+            return ""
+
+        end_ts = datetime.now()
+        if report_timestamp:
+            parsed = self._parse_iso_datetime(report_timestamp)
+            if parsed is not None:
+                end_ts = parsed
+        start_ts = end_ts - timedelta(hours=48)
+        run_re = re.compile(r"\[run_id=([^\]]+)\]")
+        latest_run_id = ""
+        latest_ts: datetime | None = None
+
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as file:
+                for line in file:
+                    ts = self._parse_log_timestamp(line)
+                    if ts is None or ts < start_ts or ts > end_ts:
+                        continue
+                    m = run_re.search(line)
+                    if not m:
+                        continue
+                    if latest_ts is None or ts >= latest_ts:
+                        latest_ts = ts
+                        latest_run_id = m.group(1).strip()
+        except Exception:
+            return ""
+        return latest_run_id
+
+    def _summarize_pipeline_runtime(self, report_timestamp: str | None, run_id: str) -> dict:
+        """Approximate end-to-end runtime using top-level log timestamps for one run_id."""
+        summary = {
+            "available": False,
+            "run_id": str(run_id or ""),
+            "start_ts": "",
+            "end_ts": "",
+            "runtime_seconds": 0.0,
+            "runtime_hours": 0.0,
+            "step_log_spans": [],
+            "error": "",
+        }
+        if not run_id:
+            summary["error"] = "run_id unavailable for runtime summarization"
+            return summary
+
+        log_dir = "logs"
+        if not os.path.isdir(log_dir):
+            summary["error"] = "logs directory not found"
+            return summary
+
+        end_ts = datetime.now()
+        if report_timestamp:
+            parsed = self._parse_iso_datetime(report_timestamp)
+            if parsed is not None:
+                end_ts = parsed
+        start_window = end_ts - timedelta(days=3)
+
+        run_marker = f"[run_id={run_id}]"
+        global_start: datetime | None = None
+        global_end: datetime | None = None
+        spans: list[dict] = []
+
+        for name in sorted(os.listdir(log_dir)):
+            if not name.endswith("_log.txt"):
+                continue
+            path = os.path.join(log_dir, name)
+            if not os.path.isfile(path):
+                continue
+            file_start: datetime | None = None
+            file_end: datetime | None = None
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as file:
+                    for line in file:
+                        if run_marker not in line:
+                            continue
+                        ts = self._parse_log_timestamp(line)
+                        if ts is None or ts < start_window or ts > end_ts:
+                            continue
+                        if file_start is None or ts < file_start:
+                            file_start = ts
+                        if file_end is None or ts > file_end:
+                            file_end = ts
+                if file_start is None or file_end is None:
+                    continue
+                duration_s = max(0.0, (file_end - file_start).total_seconds())
+                spans.append(
+                    {
+                        "log_file": name,
+                        "start_ts": file_start.isoformat(sep=" "),
+                        "end_ts": file_end.isoformat(sep=" "),
+                        "duration_seconds": round(duration_s, 1),
+                        "duration_minutes": round(duration_s / 60.0, 2),
+                    }
+                )
+                if global_start is None or file_start < global_start:
+                    global_start = file_start
+                if global_end is None or file_end > global_end:
+                    global_end = file_end
+            except Exception:
+                continue
+
+        if global_start is None or global_end is None:
+            summary["error"] = f"no timestamps found for run_id={run_id}"
+            return summary
+
+        runtime_seconds = max(0.0, (global_end - global_start).total_seconds())
+        spans.sort(key=lambda row: float(row.get("duration_seconds", 0.0) or 0.0), reverse=True)
+        summary.update(
+            {
+                "available": True,
+                "start_ts": global_start.isoformat(sep=" "),
+                "end_ts": global_end.isoformat(sep=" "),
+                "runtime_seconds": round(runtime_seconds, 1),
+                "runtime_hours": round(runtime_seconds / 3600.0, 3),
+                "step_log_spans": spans[:12],
+            }
+        )
+        return summary
+
+    @staticmethod
+    def _status_class(status: str) -> str:
+        """Map PASS/WARN/FAIL-like status to CSS class suffix."""
+        normalized = str(status or "").strip().upper()
+        if normalized in {"PASS", "HEALTHY"}:
+            return "status-pass"
+        if normalized in {"WARN", "WARNING", "WATCH"}:
+            return "status-warning"
+        return "status-fail"
+
+    @staticmethod
+    def _status_rank(status: str) -> int:
+        """Return severity rank for status comparisons."""
+        normalized = str(status or "").strip().upper()
+        if normalized in {"FAIL", "AT_RISK", "DEGRADED"}:
+            return 2
+        if normalized in {"WARN", "WARNING", "WATCH"}:
+            return 1
+        return 0
+
+    def _control_status_from_checks(self, checks: list[dict]) -> str:
+        """Reduce check-level statuses to one objective status."""
+        worst_rank = 0
+        for check in checks:
+            worst_rank = max(worst_rank, self._status_rank(str(check.get("status", "PASS"))))
+        if worst_rank >= 2:
+            return "FAIL"
+        if worst_rank == 1:
+            return "WARN"
+        return "PASS"
+
+    def _update_and_summarize_run_control_history(self, output_dir: str, record: dict) -> dict:
+        """Persist control-panel KPIs and return short trend deltas vs recent history."""
+        os.makedirs(output_dir, exist_ok=True)
+        history_path = os.path.join(output_dir, "run_control_history.jsonl")
+        with open(history_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+
+        rows: list[dict] = []
+        try:
+            with open(history_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    raw = line.strip()
+                    if not raw:
+                        continue
+                    try:
+                        rows.append(json.loads(raw))
+                    except Exception:
+                        continue
+        except Exception:
+            rows = [record]
+
+        recent = rows[-8:]
+        prev = recent[:-1] if len(recent) > 1 else []
+
+        def _avg(key: str) -> float | None:
+            vals: list[float] = []
+            for row in prev:
+                val = row.get(key)
+                if val is None:
+                    continue
+                try:
+                    vals.append(float(val))
+                except Exception:
+                    continue
+            if not vals:
+                return None
+            return sum(vals) / len(vals)
+
+        trends = {
+            "path": history_path,
+            "runs_considered": len(prev),
+            "runtime_hours_avg_prev": _avg("runtime_hours"),
+            "event_yield_rate_avg_prev": _avg("event_yield_rate"),
+            "llm_calls_per_event_url_avg_prev": _avg("llm_calls_per_event_url"),
+        }
+        return trends
+
+    def _summarize_run_control_panel(
+        self,
+        output_dir: str,
+        run_id: str,
+        reliability_scorecard: dict,
+        llm_activity: dict,
+        llm_quality: dict,
+        scraping_results: dict | None,
+        fb_ig_funnel: dict,
+        scraper_network: dict,
+        pipeline_runtime: dict,
+        chatbot_performance: dict,
+    ) -> dict:
+        """Build cost/accuracy/runtime control panel focused on operator decisions."""
+        reporting_cfg = self.validation_config.get("reporting", {}) if isinstance(self.validation_config, dict) else {}
+        control_cfg = reporting_cfg.get("control_panel_targets", {}) if isinstance(reporting_cfg, dict) else {}
+        cost_cfg = control_cfg.get("cost", {}) if isinstance(control_cfg, dict) else {}
+        accuracy_cfg = control_cfg.get("accuracy", {}) if isinstance(control_cfg, dict) else {}
+        runtime_cfg = control_cfg.get("runtime", {}) if isinstance(control_cfg, dict) else {}
+
+        llm_total_attempts = int((llm_quality or {}).get("total_attempts", 0) or 0)
+        event_urls = int((llm_quality or {}).get("successful_urls", 0) or 0)
+        too_short_urls = int((llm_quality or {}).get("too_short_urls", 0) or 0)
+        quality_total_urls = int((llm_quality or {}).get("total_urls", 0) or 0)
+        llm_calls_per_event_url = (llm_total_attempts / event_urls) if event_urls > 0 else None
+        too_short_rate = (too_short_urls / quality_total_urls) if quality_total_urls > 0 else None
+        pressure_level = str((llm_activity or {}).get("pressure_level", "LOW") or "LOW").upper()
+        pressure_rank = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}.get(pressure_level, 2)
+
+        max_calls_warn = float(cost_cfg.get("max_llm_calls_per_event_url_warn", 1.75) or 1.75)
+        max_calls_fail = float(cost_cfg.get("max_llm_calls_per_event_url_fail", 2.5) or 2.5)
+        max_short_warn = float(cost_cfg.get("max_too_short_rate_warn", 0.20) or 0.20)
+        max_short_fail = float(cost_cfg.get("max_too_short_rate_fail", 0.35) or 0.35)
+
+        cost_checks: list[dict] = []
+        if llm_calls_per_event_url is None:
+            cost_checks.append({
+                "name": "LLM Calls / Event URL",
+                "actual": "N/A",
+                "target": f"<= {max_calls_warn:.2f} warn, <= {max_calls_fail:.2f} fail",
+                "delta": "N/A",
+                "status": "WARN",
+                "details": "No successful event URLs in window.",
+            })
+        else:
+            status = "PASS"
+            if llm_calls_per_event_url > max_calls_fail:
+                status = "FAIL"
+            elif llm_calls_per_event_url > max_calls_warn:
+                status = "WARN"
+            cost_checks.append({
+                "name": "LLM Calls / Event URL",
+                "actual": f"{llm_calls_per_event_url:.2f}",
+                "target": f"<= {max_calls_warn:.2f} warn, <= {max_calls_fail:.2f} fail",
+                "delta": f"{llm_calls_per_event_url - max_calls_warn:+.2f} vs warn",
+                "status": status,
+                "details": f"{llm_total_attempts} attempts / {event_urls} event-producing URLs",
+            })
+        if too_short_rate is None:
+            too_short_status = "WARN"
+            too_short_actual = "N/A"
+            too_short_delta = "N/A"
+        else:
+            too_short_status = "PASS"
+            if too_short_rate > max_short_fail:
+                too_short_status = "FAIL"
+            elif too_short_rate > max_short_warn:
+                too_short_status = "WARN"
+            too_short_actual = f"{too_short_rate:.1%}"
+            too_short_delta = f"{too_short_rate - max_short_warn:+.1%} vs warn"
+        cost_checks.append({
+            "name": "Too-Short Extraction Rate",
+            "actual": too_short_actual,
+            "target": f"<= {max_short_warn:.0%} warn, <= {max_short_fail:.0%} fail",
+            "delta": too_short_delta,
+            "status": too_short_status,
+            "details": f"{too_short_urls}/{quality_total_urls} URL outcomes were too_short",
+        })
+        pressure_status = "PASS" if pressure_rank == 0 else ("WARN" if pressure_rank == 1 else "FAIL")
+        cost_checks.append({
+            "name": "LLM Cost Pressure",
+            "actual": pressure_level,
+            "target": "LOW",
+            "delta": f"rank={pressure_rank}",
+            "status": pressure_status,
+            "details": "; ".join((llm_activity or {}).get("pressure_reasons", [])[:3]) or "No pressure reasons logged.",
+        })
+        cost_status = self._control_status_from_checks(cost_checks)
+
+        url_level_score = float((reliability_scorecard or {}).get("url_level_score", (reliability_scorecard or {}).get("score", 0)) or 0)
+        chatbot_avg_score = float(((reliability_scorecard or {}).get("metrics", {}) or {}).get("chatbot_average_score", 0) or 0)
+        event_yield_rate = fb_ig_funnel.get("events_over_passed_rate")
+        hard_failure_rate = float((llm_quality or {}).get("hard_failure_rate", 0.0) or 0.0)
+
+        min_url_score_warn = float(accuracy_cfg.get("min_url_level_score_warn", 80.0) or 80.0)
+        min_url_score_fail = float(accuracy_cfg.get("min_url_level_score_fail", 75.0) or 75.0)
+        min_event_yield_warn = float(accuracy_cfg.get("min_event_yield_rate_warn", 0.20) or 0.20)
+        min_event_yield_fail = float(accuracy_cfg.get("min_event_yield_rate_fail", 0.10) or 0.10)
+        min_chatbot_warn = float(accuracy_cfg.get("min_chatbot_average_score_warn", 75.0) or 75.0)
+        min_chatbot_fail = float(accuracy_cfg.get("min_chatbot_average_score_fail", 70.0) or 70.0)
+        max_hard_fail_warn = float(accuracy_cfg.get("max_llm_hard_failure_rate_warn", 0.08) or 0.08)
+        max_hard_fail_fail = float(accuracy_cfg.get("max_llm_hard_failure_rate_fail", 0.15) or 0.15)
+
+        accuracy_checks: list[dict] = []
+        url_score_status = "PASS"
+        if url_level_score < min_url_score_fail:
+            url_score_status = "FAIL"
+        elif url_level_score < min_url_score_warn:
+            url_score_status = "WARN"
+        accuracy_checks.append({
+            "name": "URL-Level Reliability Score",
+            "actual": f"{url_level_score:.1f}",
+            "target": f">= {min_url_score_warn:.1f} warn, >= {min_url_score_fail:.1f} fail",
+            "delta": f"{url_level_score - min_url_score_warn:+.1f} vs warn",
+            "status": url_score_status,
+            "details": "Primary accuracy guard for report grading.",
+        })
+        if event_yield_rate is None:
+            event_yield_status = "WARN"
+            event_yield_actual = "N/A"
+            event_yield_delta = "N/A"
+            event_yield_details = "No passed-for-scraping denominator."
+        else:
+            event_yield_status = "PASS"
+            if float(event_yield_rate) < min_event_yield_fail:
+                event_yield_status = "FAIL"
+            elif float(event_yield_rate) < min_event_yield_warn:
+                event_yield_status = "WARN"
+            event_yield_actual = f"{float(event_yield_rate):.1%}"
+            event_yield_delta = f"{float(event_yield_rate) - min_event_yield_warn:+.1%} vs warn"
+            event_yield_details = (
+                f"{int(fb_ig_funnel.get('urls_with_events', 0) or 0)} URLs with events / "
+                f"{int(fb_ig_funnel.get('urls_passed_for_scraping', 0) or 0)} passed-for-scraping URLs"
+            )
+        accuracy_checks.append({
+            "name": "Event Yield (URLs with events / URLs passed)",
+            "actual": event_yield_actual,
+            "target": f">= {min_event_yield_warn:.0%} warn, >= {min_event_yield_fail:.0%} fail",
+            "delta": event_yield_delta,
+            "status": event_yield_status,
+            "details": event_yield_details,
+        })
+        chatbot_status = "PASS"
+        if chatbot_avg_score < min_chatbot_fail:
+            chatbot_status = "FAIL"
+        elif chatbot_avg_score < min_chatbot_warn:
+            chatbot_status = "WARN"
+        accuracy_checks.append({
+            "name": "Chatbot Average Score",
+            "actual": f"{chatbot_avg_score:.1f}",
+            "target": f">= {min_chatbot_warn:.1f} warn, >= {min_chatbot_fail:.1f} fail",
+            "delta": f"{chatbot_avg_score - min_chatbot_warn:+.1f} vs warn",
+            "status": chatbot_status,
+            "details": "Included for end-user answer quality control.",
+        })
+        hard_fail_status = "PASS"
+        if hard_failure_rate > max_hard_fail_fail:
+            hard_fail_status = "FAIL"
+        elif hard_failure_rate > max_hard_fail_warn:
+            hard_fail_status = "WARN"
+        accuracy_checks.append({
+            "name": "LLM Hard Failure Rate",
+            "actual": f"{hard_failure_rate:.1%}",
+            "target": f"<= {max_hard_fail_warn:.0%} warn, <= {max_hard_fail_fail:.0%} fail",
+            "delta": f"{hard_failure_rate - max_hard_fail_warn:+.1%} vs warn",
+            "status": hard_fail_status,
+            "details": "From llm_extract_attempt_result outcomes.",
+        })
+        accuracy_status = self._control_status_from_checks(accuracy_checks)
+
+        runtime_hours = float((pipeline_runtime or {}).get("runtime_hours", 0.0) or 0.0)
+        scraper_exception_rate = float((scraper_network or {}).get("exception_rate", 0.0) or 0.0)
+        total_events = int((((scraping_results or {}).get("source_distribution", {}) or {}).get("total_events", 0) or 0))
+        events_per_hour = (float(total_events) / runtime_hours) if runtime_hours > 0 and total_events > 0 else None
+        query_p95_ms = float((((chatbot_performance or {}).get("query_latency_ms", {}) or {}).get("p95", 0.0) or 0.0))
+
+        max_runtime_warn = float(runtime_cfg.get("max_pipeline_runtime_hours_warn", 6.0) or 6.0)
+        max_runtime_fail = float(runtime_cfg.get("max_pipeline_runtime_hours_fail", 8.0) or 8.0)
+        min_throughput_warn = float(runtime_cfg.get("min_events_per_hour_warn", 30.0) or 30.0)
+        min_throughput_fail = float(runtime_cfg.get("min_events_per_hour_fail", 20.0) or 20.0)
+        max_scraper_exc_warn = float(runtime_cfg.get("max_scraper_exception_rate_warn", 0.20) or 0.20)
+        max_scraper_exc_fail = float(runtime_cfg.get("max_scraper_exception_rate_fail", 0.30) or 0.30)
+        max_query_p95_warn = float(runtime_cfg.get("max_chatbot_query_p95_ms_warn", 15000.0) or 15000.0)
+        max_query_p95_fail = float(runtime_cfg.get("max_chatbot_query_p95_ms_fail", 25000.0) or 25000.0)
+
+        runtime_checks: list[dict] = []
+        runtime_status_metric = "PASS"
+        if runtime_hours > max_runtime_fail:
+            runtime_status_metric = "FAIL"
+        elif runtime_hours > max_runtime_warn:
+            runtime_status_metric = "WARN"
+        runtime_checks.append({
+            "name": "Pipeline Runtime (hours)",
+            "actual": f"{runtime_hours:.2f}",
+            "target": f"<= {max_runtime_warn:.2f} warn, <= {max_runtime_fail:.2f} fail",
+            "delta": f"{runtime_hours - max_runtime_warn:+.2f}h vs warn",
+            "status": runtime_status_metric,
+            "details": "Computed from run_id timestamps across top-level logs.",
+        })
+        if events_per_hour is None:
+            throughput_status = "WARN"
+            throughput_actual = "N/A"
+            throughput_delta = "N/A"
+            throughput_details = "Need runtime + total_events for throughput."
+        else:
+            throughput_status = "PASS"
+            if events_per_hour < min_throughput_fail:
+                throughput_status = "FAIL"
+            elif events_per_hour < min_throughput_warn:
+                throughput_status = "WARN"
+            throughput_actual = f"{events_per_hour:.1f}"
+            throughput_delta = f"{events_per_hour - min_throughput_warn:+.1f} vs warn"
+            throughput_details = f"{total_events} events / {runtime_hours:.2f} runtime hours"
+        runtime_checks.append({
+            "name": "Event Throughput (events/hour)",
+            "actual": throughput_actual,
+            "target": f">= {min_throughput_warn:.1f} warn, >= {min_throughput_fail:.1f} fail",
+            "delta": throughput_delta,
+            "status": throughput_status,
+            "details": throughput_details,
+        })
+        exc_status = "PASS"
+        if scraper_exception_rate > max_scraper_exc_fail:
+            exc_status = "FAIL"
+        elif scraper_exception_rate > max_scraper_exc_warn:
+            exc_status = "WARN"
+        runtime_checks.append({
+            "name": "Scraper Exception Rate (request-level)",
+            "actual": f"{scraper_exception_rate:.1%}",
+            "target": f"<= {max_scraper_exc_warn:.0%} warn, <= {max_scraper_exc_fail:.0%} fail",
+            "delta": f"{scraper_exception_rate - max_scraper_exc_warn:+.1%} vs warn",
+            "status": exc_status,
+            "details": "Informational telemetry (not grade-driving).",
+        })
+        query_status = "PASS"
+        if query_p95_ms > max_query_p95_fail:
+            query_status = "FAIL"
+        elif query_p95_ms > max_query_p95_warn:
+            query_status = "WARN"
+        runtime_checks.append({
+            "name": "Chatbot Query P95 (ms)",
+            "actual": f"{query_p95_ms:.0f}",
+            "target": f"<= {max_query_p95_warn:.0f} warn, <= {max_query_p95_fail:.0f} fail",
+            "delta": f"{query_p95_ms - max_query_p95_warn:+.0f}ms vs warn",
+            "status": query_status,
+            "details": "User-facing responsiveness guard.",
+        })
+        runtime_status = self._control_status_from_checks(runtime_checks)
+
+        overall_status = self._control_status_from_checks(
+            [{"status": cost_status}, {"status": accuracy_status}, {"status": runtime_status}]
+        )
+
+        history_record = {
+            "timestamp": datetime.now().isoformat(),
+            "run_id": str(run_id or ""),
+            "status": overall_status,
+            "cost_status": cost_status,
+            "accuracy_status": accuracy_status,
+            "runtime_status": runtime_status,
+            "runtime_hours": runtime_hours,
+            "event_yield_rate": float(event_yield_rate) if event_yield_rate is not None else None,
+            "llm_calls_per_event_url": float(llm_calls_per_event_url) if llm_calls_per_event_url is not None else None,
+        }
+        trend = self._update_and_summarize_run_control_history(output_dir, history_record)
+        return {
+            "run_id": str(run_id or ""),
+            "overall_status": overall_status,
+            "cost": {"status": cost_status, "checks": cost_checks},
+            "accuracy": {"status": accuracy_status, "checks": accuracy_checks},
+            "runtime": {"status": runtime_status, "checks": runtime_checks},
+            "trend": trend,
+            "runtime_summary": pipeline_runtime or {},
+        }
+
+    def _build_run_control_panel_html(self, panel_data: dict, action_queue: dict | None = None) -> str:
+        """Render operator-first control panel for cost, accuracy, and runtime."""
+        if not panel_data:
+            return "<p class='error-box'>❌ Run control panel unavailable</p>"
+        cost = panel_data.get("cost", {}) or {}
+        accuracy = panel_data.get("accuracy", {}) or {}
+        runtime = panel_data.get("runtime", {}) or {}
+        trend = panel_data.get("trend", {}) or {}
+        overall_status = str(panel_data.get("overall_status", "WARN") or "WARN")
+
+        html = (
+            "<div class='metric-container'>"
+            f"<div class='metric'><div class='metric-value'><span class='{self._status_class(overall_status)}'>{self._escape_html(overall_status)}</span></div><div class='metric-label'>Control Panel Status</div></div>"
+            f"<div class='metric'><div class='metric-value'><span class='{self._status_class(cost.get('status', 'WARN'))}'>{self._escape_html(str(cost.get('status', 'WARN')))}</span></div><div class='metric-label'>Cost Status</div></div>"
+            f"<div class='metric'><div class='metric-value'><span class='{self._status_class(accuracy.get('status', 'WARN'))}'>{self._escape_html(str(accuracy.get('status', 'WARN')))}</span></div><div class='metric-label'>Accuracy Status</div></div>"
+            f"<div class='metric'><div class='metric-value'><span class='{self._status_class(runtime.get('status', 'WARN'))}'>{self._escape_html(str(runtime.get('status', 'WARN')))}</span></div><div class='metric-label'>Runtime Status</div></div>"
+            "</div>"
+        )
+        html += f"<p><strong>Run ID:</strong> {self._escape_html(str(panel_data.get('run_id', '')))}</p>"
+
+        def _build_check_table(title: str, checks: list[dict]) -> str:
+            block = f"<h3>{self._escape_html(title)}</h3>"
+            block += "<table><tr><th>KPI</th><th>Actual</th><th>Target</th><th>Delta</th><th>Status</th><th>Details</th></tr>"
+            for row in checks or []:
+                block += (
+                    "<tr>"
+                    f"<td>{self._escape_html(str(row.get('name', '')))}</td>"
+                    f"<td>{self._escape_html(str(row.get('actual', '')))}</td>"
+                    f"<td>{self._escape_html(str(row.get('target', '')))}</td>"
+                    f"<td>{self._escape_html(str(row.get('delta', '')))}</td>"
+                    f"<td><span class='{self._status_class(str(row.get('status', 'WARN')))}'>{self._escape_html(str(row.get('status', 'WARN')))}</span></td>"
+                    f"<td>{self._escape_html(str(row.get('details', '')))}</td>"
+                    "</tr>"
+                )
+            block += "</table>"
+            return block
+
+        html += _build_check_table("Cost KPIs", cost.get("checks", []) or [])
+        html += _build_check_table("Accuracy KPIs", accuracy.get("checks", []) or [])
+        html += _build_check_table("Runtime KPIs", runtime.get("checks", []) or [])
+
+        runs_considered = int(trend.get("runs_considered", 0) or 0)
+        html += (
+            "<h3>Trend Snapshot (Last 7 Prior Runs)</h3>"
+            "<table><tr><th>KPI</th><th>Current</th><th>Prev Avg</th><th>Delta</th></tr>"
+        )
+
+        def _trend_row(name: str, current: float | None, avg_prev: float | None, as_pct: bool = False) -> str:
+            if current is None:
+                cur_s = "N/A"
+            else:
+                cur_s = f"{current:.1%}" if as_pct else f"{current:.2f}"
+            if avg_prev is None:
+                avg_s = "N/A"
+                delta_s = "N/A"
+            else:
+                avg_s = f"{avg_prev:.1%}" if as_pct else f"{avg_prev:.2f}"
+                delta = current - avg_prev if current is not None else 0.0
+                delta_s = f"{delta:+.1%}" if as_pct else f"{delta:+.2f}"
+            return (
+                "<tr>"
+                f"<td>{self._escape_html(name)}</td>"
+                f"<td>{self._escape_html(cur_s)}</td>"
+                f"<td>{self._escape_html(avg_s)}</td>"
+                f"<td>{self._escape_html(delta_s)}</td>"
+                "</tr>"
+            )
+
+        runtime_hours_current = float((panel_data.get("runtime_summary", {}) or {}).get("runtime_hours", 0.0) or 0.0)
+        event_yield_current = None
+        for check in accuracy.get("checks", []) or []:
+            if str(check.get("name", "")).startswith("Event Yield"):
+                try:
+                    raw = str(check.get("actual", "")).replace("%", "").strip()
+                    event_yield_current = float(raw) / 100.0 if raw and raw != "N/A" else None
+                except Exception:
+                    event_yield_current = None
+                break
+        calls_per_event_current = None
+        for check in cost.get("checks", []) or []:
+            if str(check.get("name", "")).startswith("LLM Calls / Event URL"):
+                try:
+                    raw = str(check.get("actual", "")).strip()
+                    calls_per_event_current = float(raw) if raw and raw != "N/A" else None
+                except Exception:
+                    calls_per_event_current = None
+                break
+
+        html += _trend_row("Pipeline Runtime (hours)", runtime_hours_current, trend.get("runtime_hours_avg_prev"), as_pct=False)
+        html += _trend_row("Event Yield Rate", event_yield_current, trend.get("event_yield_rate_avg_prev"), as_pct=True)
+        html += _trend_row("LLM Calls / Event URL", calls_per_event_current, trend.get("llm_calls_per_event_url_avg_prev"), as_pct=False)
+        html += "</table>"
+        html += (
+            f"<p><strong>History Path:</strong> {self._escape_html(str(trend.get('path', '')))} | "
+            f"<strong>Prior Runs Used:</strong> {runs_considered}</p>"
+        )
+
+        queue_items = (action_queue or {}).get("items", []) if isinstance(action_queue, dict) else []
+        if queue_items:
+            mapped: list[dict] = []
+            for item in queue_items:
+                source = str(item.get("source_section", "") or "")
+                if source in {
+                    "LLM Provider Activity",
+                    "LLM Extraction Quality Scorecard",
+                    "Scraper Network Reliability",
+                    "FB/IG URL Funnel",
+                    "Chatbot Performance",
+                    "Reliability Scorecard",
+                }:
+                    mapped.append(item)
+            if mapped:
+                html += "<h3>Priority Actions (Cost/Accuracy/Runtime)</h3>"
+                html += "<table><tr><th>Priority</th><th>Source Section</th><th>Metric Key</th><th>Action</th><th>Acceptance Test</th></tr>"
+                for item in mapped[:12]:
+                    html += (
+                        "<tr>"
+                        f"<td>{self._escape_html(str(item.get('priority', '')))}</td>"
+                        f"<td>{self._escape_html(str(item.get('source_section', '')))}</td>"
+                        f"<td>{self._escape_html(str(item.get('metric_key', '')))}</td>"
+                        f"<td>{self._escape_html(str(item.get('title', '')))}</td>"
+                        f"<td>{self._escape_html(str(item.get('acceptance_test', '')))}</td>"
+                        "</tr>"
+                    )
+                html += "</table>"
+        return html
 
     def _summarize_llm_provider_activity(self, report_timestamp: str | None) -> dict:
         """
@@ -1810,6 +2433,26 @@ class ValidationTestRunner:
         }
 
         try:
+            table_exists_rows = self.db_handler.execute_query(
+                """
+                SELECT
+                    to_regclass('public.chatbot_request_metrics') IS NOT NULL AS request_exists,
+                    to_regclass('public.chatbot_stage_metrics') IS NOT NULL AS stage_exists
+                """
+            ) or []
+            request_exists = bool(table_exists_rows and table_exists_rows[0][0])
+            stage_exists = bool(table_exists_rows and table_exists_rows[0][1])
+            if not request_exists or not stage_exists:
+                missing = []
+                if not request_exists:
+                    missing.append("chatbot_request_metrics")
+                if not stage_exists:
+                    missing.append("chatbot_stage_metrics")
+                summary["status"] = "MISSING"
+                summary["status_reasons"] = [f"chatbot metrics tables unavailable in local DB: {', '.join(missing)}."]
+                summary["error"] = f"missing_tables={','.join(missing)}"
+                return summary
+
             rows = self.db_handler.execute_query(
                 """
                 SELECT COUNT(*) FROM chatbot_request_metrics WHERE started_at >= :start_ts

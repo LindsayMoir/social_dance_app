@@ -1732,6 +1732,14 @@ class FacebookEventScraper():
                     str(getattr(self, "fb_run_abort_reason", "") or "unknown"),
                 )
                 return
+            run_start = getattr(self, "start_time", None)
+            if not isinstance(run_start, datetime):
+                run_start = datetime.now()
+                self.start_time = run_start
+                logging.info(
+                    "process_new_social_delta_urls(): start_time missing; initialized run_start=%s for delta query safety.",
+                    run_start.isoformat(timespec="seconds"),
+                )
             try:
                 delta_query = text(
                     """
@@ -1746,7 +1754,7 @@ class FacebookEventScraper():
                     delta_query,
                     db_handler.conn,
                     params={
-                        "run_start": self.start_time,
+                        "run_start": run_start,
                         "fb_pattern": "%facebook%",
                         "ig_pattern": "%instagram.com%",
                     },
