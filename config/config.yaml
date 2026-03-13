@@ -348,6 +348,10 @@ testing:
   status: true
   validation:
     chatbot:
+      clarification_sample_ratio: 0.5
+      clarification_min_depth: 1
+      clarification_max_depth: 3
+      max_clarification_turns: 4
       execution_threshold: 0.9
       fallback_scoring: true
       llm_evaluation: true

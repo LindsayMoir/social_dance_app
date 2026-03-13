@@ -22,6 +22,7 @@ import numpy as np
 import os
 import pandas as pd
 import re
+import random
 import time
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -272,6 +273,95 @@ class ChatbotTestExecutor:
             logging.error(f"Error generating interpretation: {e}")
             return f"My understanding is that you want to search for: {user_query}"
 
+    def _build_sql_prompt(
+        self,
+        question_dict: dict,
+        current_date: str,
+        current_day_of_week: str,
+        current_question: str,
+        conversation_history: str = "",
+    ) -> str:
+        """Build SQL-generation prompt with optional synthetic clarification history."""
+        prompt = self.sql_prompt_template.format(
+            context_info="",
+            conversation_history=conversation_history,
+            intent="search",
+            entities=str(question_dict.get('parameters', {})),
+            current_date=current_date,
+            current_day_of_week=current_day_of_week
+        )
+        prompt += f"\n\nCurrent User Question: \"{current_question}\""
+        return prompt
+
+    @staticmethod
+    def _column_reply_options() -> dict[str, list[str]]:
+        """Natural clarification snippets mapped to query columns/filters."""
+        return {
+            "dance_style": [
+                "Salsa and bachata.",
+                "West coast swing.",
+                "Tango only.",
+                "Any partner dance style.",
+            ],
+            "event_type": [
+                "Social dances only.",
+                "Classes and socials.",
+                "Workshops only.",
+                "Live music dance events.",
+            ],
+            "timeframe": [
+                "This weekend.",
+                "Next week.",
+                "Tomorrow night.",
+                "First week of next month.",
+            ],
+            "location": [
+                "In Victoria.",
+                "Downtown Victoria.",
+                "Anywhere in Greater Victoria.",
+                "Victoria or Sidney.",
+            ],
+            "price": [
+                "Free events only.",
+                "Paid is fine too.",
+                "Under $30 if possible.",
+                "No price preference.",
+            ],
+        }
+
+    @staticmethod
+    def _infer_clarification_column(clarification_text: str) -> str:
+        """Infer likely filter column from assistant clarification text."""
+        low = str(clarification_text or "").lower()
+        if any(t in low for t in ("style", "dance style", "salsa", "bachata", "tango", "swing")):
+            return "dance_style"
+        if any(t in low for t in ("event type", "class", "social", "workshop", "live music")):
+            return "event_type"
+        if any(t in low for t in ("date", "when", "timeframe", "week", "weekend", "day", "tonight", "tomorrow")):
+            return "timeframe"
+        if any(t in low for t in ("location", "city", "where", "venue", "area", "victoria", "sidney")):
+            return "location"
+        if any(t in low for t in ("price", "cost", "free", "budget", "$", "dollar")):
+            return "price"
+        return "timeframe"
+
+    def _generate_column_based_clarification_reply(
+        self,
+        clarification_text: str,
+        used_columns: set[str],
+    ) -> tuple[str, str]:
+        """
+        Generate natural follow-up by adding one unresolved filter dimension.
+        Returns (reply_text, column_name).
+        """
+        options_by_col = self._column_reply_options()
+        inferred = self._infer_clarification_column(clarification_text)
+        ordered_cols = [inferred] + [c for c in options_by_col if c != inferred]
+        chosen_col = next((c for c in ordered_cols if c not in used_columns), inferred)
+        replies = options_by_col.get(chosen_col, options_by_col["timeframe"])
+        reply_text = random.choice(replies)
+        return reply_text, chosen_col
+
     def execute_test_question(self, question_dict: dict) -> dict:
         """
         Execute a single test question through full chatbot pipeline.
@@ -305,23 +395,78 @@ class ChatbotTestExecutor:
             current_time=current_time
         )
 
-        # Build prompt (simplified - no conversation history for batch tests)
-        prompt = self.sql_prompt_template.format(
-            context_info="",
-            conversation_history="",
-            intent="search",
-            entities=str(question_dict.get('parameters', {})),
-            current_date=current_date,
-            current_day_of_week=current_day_of_week
-        )
-        prompt += f"\n\nCurrent User Question: \"{question}\""
-
         try:
             # Import date calculator tool
             from date_calculator import CALCULATE_DATE_RANGE_TOOL
 
-            # Query LLM for SQL with date calculator tool support
-            sql_raw = self.llm_handler.query_llm('', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+            chatbot_cfg = (
+                self.config.get('testing', {})
+                .get('validation', {})
+                .get('chatbot', {})
+            )
+            min_depth = int(chatbot_cfg.get("clarification_min_depth", 1) or 1)
+            max_depth = int(chatbot_cfg.get("clarification_max_depth", 3) or 3)
+            if max_depth < min_depth:
+                max_depth = min_depth
+            target_depth = random.randint(min_depth, max_depth)
+            max_turns = int(chatbot_cfg.get("max_clarification_turns", max(4, max_depth + 1)) or max(4, max_depth + 1))
+
+            clarification_chain: list[dict] = []
+            conversation_lines: list[str] = []
+            current_question = question
+            sql_raw = None
+            turns_executed = 0
+            used_columns: set[str] = set()
+
+            # Multi-turn clarification drill: if clarification occurs, continue with synthetic follow-up responses.
+            for turn_idx in range(1, max_turns + 1):
+                turns_executed = turn_idx
+                conversation_history = "\n".join(conversation_lines)
+                prompt = self._build_sql_prompt(
+                    question_dict=question_dict,
+                    current_date=current_date,
+                    current_day_of_week=current_day_of_week,
+                    current_question=current_question,
+                    conversation_history=conversation_history,
+                )
+                sql_raw = self.llm_handler.query_llm('', prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
+                if not sql_raw:
+                    return self._create_error_result(question_dict, "LLM returned empty response")
+
+                stripped = sql_raw.strip()
+                if not stripped.startswith("CLARIFICATION:"):
+                    break
+
+                clarification_text = stripped.replace("CLARIFICATION:", "").strip()
+                chain_row = {
+                    "turn": turn_idx,
+                    "clarification_text": clarification_text,
+                }
+                clarification_chain.append(chain_row)
+                logging.info("QUESTION: %s", question)
+                logging.info(
+                    "CLARIFICATION TURN %s/%s (target_depth=%s): %s",
+                    turn_idx,
+                    max_turns,
+                    target_depth,
+                    clarification_text,
+                )
+
+                if len(clarification_chain) >= target_depth and turn_idx >= target_depth:
+                    # Depth target met; keep the clarification result visible for scoring/diagnostics.
+                    break
+
+                user_reply, clarified_column = self._generate_column_based_clarification_reply(
+                    clarification_text=clarification_text,
+                    used_columns=used_columns,
+                )
+                used_columns.add(clarified_column)
+                chain_row["synthetic_user_reply"] = user_reply
+                chain_row["clarified_column"] = clarified_column
+                conversation_lines.append(f"User: {current_question}")
+                conversation_lines.append(f"Assistant: {clarification_text}")
+                conversation_lines.append(f"User Clarification: {user_reply}")
+                current_question = user_reply
 
             if not sql_raw:
                 return self._create_error_result(question_dict, "LLM returned empty response")
@@ -345,7 +490,11 @@ class ChatbotTestExecutor:
                     'timestamp': datetime.now().isoformat(),
                     'current_date_used': current_date,
                     'current_timezone': "America/Los_Angeles",
-                    'is_clarification': True
+                    'is_clarification': True,
+                    'clarification_depth_target': target_depth,
+                    'clarification_depth_achieved': len(clarification_chain) if clarification_chain else 1,
+                    'clarification_chain': clarification_chain or [{"turn": 1, "clarification_text": clarification_text}],
+                    'clarification_turns_executed': turns_executed,
                 }
 
             # Sanitize SQL
@@ -362,7 +511,15 @@ class ChatbotTestExecutor:
                     "Never add/subtract integers to dates (e.g., CURRENT_DATE + 7). If referencing CURRENT_DATE, use INTERVAL syntax only, "
                     "but prefer explicit dates from the tool. Return ONLY SQL."
                 )
-                strict_prompt = f"{prompt}\n{strict_suffix}"
+                strict_history = "\n".join(conversation_lines)
+                strict_base_prompt = self._build_sql_prompt(
+                    question_dict,
+                    current_date,
+                    current_day_of_week,
+                    current_question,
+                    strict_history,
+                )
+                strict_prompt = f"{strict_base_prompt}\n{strict_suffix}"
                 sql_raw2 = self.llm_handler.query_llm('', strict_prompt, tools=[CALCULATE_DATE_RANGE_TOOL])
                 if sql_raw2:
                     sql2 = sql_raw2.replace("```sql", "").replace("```", "").strip()
@@ -417,7 +574,11 @@ class ChatbotTestExecutor:
                 'sample_results': sample_results,
                 'timestamp': datetime.now().isoformat(),
                 'current_date_used': current_date,
-                'current_timezone': "America/Los_Angeles"
+                'current_timezone': "America/Los_Angeles",
+                'clarification_depth_target': target_depth,
+                'clarification_depth_achieved': len(clarification_chain),
+                'clarification_chain': clarification_chain,
+                'clarification_turns_executed': turns_executed,
             }
 
         except Exception as e:

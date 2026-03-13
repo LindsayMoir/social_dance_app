@@ -86,6 +86,82 @@ class ValidationTestRunner:
 
         logging.info("ValidationTestRunner initialized")
 
+    @staticmethod
+    def _is_clarification_candidate_question(question_text: str) -> bool:
+        """
+        Heuristic: classify prompts likely to exercise clarification/temporal disambiguation paths.
+        """
+        text = str(question_text or "").strip().lower()
+        if not text:
+            return False
+        markers = (
+            "this weekend",
+            "next weekend",
+            "this week",
+            "next week",
+            "tomorrow night",
+            "tonight",
+            "tomorrow",
+            "next month",
+            "this month",
+            "best place",
+            "what's happening",
+            "what dance events are happening",
+            "where can i dance",
+        )
+        return any(marker in text for marker in markers)
+
+    def _sample_questions_with_clarification_quota(
+        self,
+        questions: list[dict],
+        sample_n: int,
+        clarification_ratio: float,
+    ) -> tuple[list[dict], int, int]:
+        """
+        Sample questions while ensuring a minimum clarification-candidate share.
+        """
+        if sample_n <= 0 or len(questions) <= sample_n:
+            selected = list(questions)
+            clar_count = sum(
+                1 for q in selected
+                if self._is_clarification_candidate_question((q or {}).get("question", ""))
+            )
+            return selected, clar_count, len(selected)
+
+        ratio = max(0.0, min(1.0, float(clarification_ratio)))
+        required_clar = int(round(sample_n * ratio))
+
+        clar_pool: list[dict] = []
+        non_clar_pool: list[dict] = []
+        for question in questions:
+            q_text = (question or {}).get("question", "")
+            if self._is_clarification_candidate_question(q_text):
+                clar_pool.append(question)
+            else:
+                non_clar_pool.append(question)
+
+        random.shuffle(clar_pool)
+        random.shuffle(non_clar_pool)
+        selected: list[dict] = []
+        selected.extend(clar_pool[:required_clar])
+        remaining = sample_n - len(selected)
+
+        if remaining > 0:
+            selected.extend(non_clar_pool[:remaining])
+            remaining = sample_n - len(selected)
+
+        if remaining > 0:
+            clar_overflow_start = min(required_clar, len(clar_pool))
+            selected.extend(clar_pool[clar_overflow_start:clar_overflow_start + remaining])
+
+        random.shuffle(selected)
+        selected = selected[:sample_n]
+        clar_count = sum(
+            1 for q in selected
+            if self._is_clarification_candidate_question((q or {}).get("question", ""))
+        )
+        return selected, clar_count, len(selected)
+
     def run_all_validations(self) -> dict:
         """
         Run both scraping validation and chatbot testing.
@@ -179,9 +255,21 @@ class ValidationTestRunner:
                 sample_n = 0
 
             if sample_n > 0 and len(questions) > sample_n:
-                random.shuffle(questions)
-                questions = questions[:sample_n]
-                logging.info(f"Randomly selected {len(questions)} questions (random_test_limit={sample_n})")
+                clarification_ratio = float(chatbot_config.get("clarification_sample_ratio", 0.50) or 0.50)
+                questions, clar_count, selected_count = self._sample_questions_with_clarification_quota(
+                    questions=questions,
+                    sample_n=sample_n,
+                    clarification_ratio=clarification_ratio,
+                )
+                logging.info(
+                    "Randomly selected %s questions (random_test_limit=%s, clarification_ratio_target=%.0f%%, actual=%.0f%% [%s/%s])",
+                    len(questions),
+                    sample_n,
+                    clarification_ratio * 100.0,
+                    (clar_count / selected_count * 100.0) if selected_count else 0.0,
+                    clar_count,
+                    selected_count,
+                )
 
             # Execute tests
             executor = ChatbotTestExecutor(self.config, self.db_handler)
