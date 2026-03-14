@@ -281,6 +281,7 @@ class ValidationTestRunner:
             scorer = ChatbotScorer(self.llm_handler)
             scored_results = scorer.score_all_results(test_results)
             logging.info("Scoring complete")
+            self._persist_validation_chatbot_metrics(test_results)
 
             # Generate report
             output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'output')
@@ -383,6 +384,161 @@ class ValidationTestRunner:
 
         return results
 
+    def _persist_validation_chatbot_metrics(self, test_results: list[dict]) -> None:
+        """
+        Persist synthetic chatbot performance rows for validation-simulated queries.
+
+        Validation runs bypass FastAPI `/query` and `/confirm`, so they would otherwise
+        not contribute to chatbot_request_metrics/chatbot_stage_metrics.
+        """
+        if not test_results:
+            return
+
+        request_upsert_sql = """
+            INSERT INTO chatbot_request_metrics
+                (request_id, endpoint, started_at, finished_at, duration_ms, result_type, user_input, sql_snippet, has_response, updated_at)
+            VALUES
+                (:request_id, :endpoint, :started_at, :finished_at, :duration_ms, :result_type, :user_input, :sql_snippet, :has_response, :updated_at)
+            ON CONFLICT (request_id)
+            DO UPDATE SET
+                endpoint = EXCLUDED.endpoint,
+                started_at = EXCLUDED.started_at,
+                finished_at = EXCLUDED.finished_at,
+                duration_ms = EXCLUDED.duration_ms,
+                result_type = EXCLUDED.result_type,
+                user_input = EXCLUDED.user_input,
+                sql_snippet = EXCLUDED.sql_snippet,
+                has_response = EXCLUDED.has_response,
+                updated_at = EXCLUDED.updated_at
+        """
+        stage_insert_sql = """
+            INSERT INTO chatbot_stage_metrics
+                (request_id, endpoint, stage, started_at, finished_at, duration_ms, metadata_json)
+            VALUES
+                (:request_id, :endpoint, :stage, :started_at, :finished_at, :duration_ms, :metadata_json)
+        """
+
+        run_tag = datetime.now().strftime("%Y%m%d%H%M%S")
+        persisted_requests = 0
+        persisted_stages = 0
+
+        for idx, result in enumerate(test_results, start=1):
+            request_id = f"validation-{run_tag}-{idx:04d}"
+            endpoint = "/query"
+            finished_at = self._parse_iso_datetime(str(result.get("timestamp") or "")) or datetime.now()
+            duration_ms = float(result.get("execution_duration_ms") or 0.0)
+            if duration_ms <= 0:
+                duration_ms = 1.0
+            started_at = finished_at - timedelta(milliseconds=duration_ms)
+            sql_query = str(result.get("sql_query") or "")
+            sql_snippet = sql_query[:1000] if sql_query else ""
+            result_type = "validation_success" if bool(result.get("execution_success")) else "validation_failure"
+            has_response = bool((result.get("result_count") or 0) > 0)
+
+            try:
+                self.db_handler.execute_query(
+                    request_upsert_sql,
+                    {
+                        "request_id": request_id,
+                        "endpoint": endpoint,
+                        "started_at": started_at,
+                        "finished_at": finished_at,
+                        "duration_ms": duration_ms,
+                        "result_type": result_type,
+                        "user_input": str(result.get("question") or ""),
+                        "sql_snippet": sql_snippet,
+                        "has_response": has_response,
+                        "updated_at": datetime.now(),
+                    },
+                )
+                persisted_requests += 1
+            except Exception as e:
+                logging.warning("_persist_validation_chatbot_metrics: request upsert failed for %s: %s", request_id, e)
+                continue
+
+            stage_meta = {
+                "category": str(result.get("category") or ""),
+                "execution_success": bool(result.get("execution_success")),
+                "clarification_depth_target": int(result.get("clarification_depth_target") or 0),
+                "clarification_depth_achieved": int(result.get("clarification_depth_achieved") or 0),
+            }
+            try:
+                self.db_handler.execute_query(
+                    stage_insert_sql,
+                    {
+                        "request_id": request_id,
+                        "endpoint": endpoint,
+                        "stage": "validation_execute_test",
+                        "started_at": started_at,
+                        "finished_at": finished_at,
+                        "duration_ms": duration_ms,
+                        "metadata_json": json.dumps(stage_meta),
+                    },
+                )
+                persisted_stages += 1
+            except Exception as e:
+                logging.warning("_persist_validation_chatbot_metrics: stage insert failed for %s: %s", request_id, e)
+
+            clarification_turns = int(result.get("clarification_turns_executed") or 0)
+            if clarification_turns <= 0:
+                continue
+            per_turn_ms = max(1.0, round(duration_ms / max(clarification_turns, 1), 1))
+            for turn in range(clarification_turns):
+                confirm_request_id = f"{request_id}-confirm-{turn + 1}"
+                confirm_finished_at = finished_at
+                confirm_started_at = confirm_finished_at - timedelta(milliseconds=per_turn_ms)
+                try:
+                    self.db_handler.execute_query(
+                        request_upsert_sql,
+                        {
+                            "request_id": confirm_request_id,
+                            "endpoint": "/confirm",
+                            "started_at": confirm_started_at,
+                            "finished_at": confirm_finished_at,
+                            "duration_ms": per_turn_ms,
+                            "result_type": "validation_clarification_turn",
+                            "user_input": str(result.get("question") or ""),
+                            "sql_snippet": "",
+                            "has_response": has_response,
+                            "updated_at": datetime.now(),
+                        },
+                    )
+                    persisted_requests += 1
+                except Exception as e:
+                    logging.warning(
+                        "_persist_validation_chatbot_metrics: confirm request upsert failed for %s: %s",
+                        confirm_request_id,
+                        e,
+                    )
+                    continue
+                try:
+                    self.db_handler.execute_query(
+                        stage_insert_sql,
+                        {
+                            "request_id": confirm_request_id,
+                            "endpoint": "/confirm",
+                            "stage": "validation_clarification_turn",
+                            "started_at": confirm_started_at,
+                            "finished_at": confirm_finished_at,
+                            "duration_ms": per_turn_ms,
+                            "metadata_json": json.dumps({"turn": turn + 1, "parent_request_id": request_id}),
+                        },
+                    )
+                    persisted_stages += 1
+                except Exception as e:
+                    logging.warning(
+                        "_persist_validation_chatbot_metrics: confirm stage insert failed for %s: %s",
+                        confirm_request_id,
+                        e,
+                    )
+
+        logging.info(
+            "_persist_validation_chatbot_metrics: persisted request rows=%d stage rows=%d from validation results=%d",
+            persisted_requests,
+            persisted_stages,
+            len(test_results),
+        )
+
     def _evaluate_chatbot_problem_category_gate(self, chatbot_report: dict, chatbot_config: dict) -> dict:
         """Evaluate category-level chatbot quality gate from problem-category buckets."""
         categories = chatbot_report.get("problem_categories", []) if isinstance(chatbot_report, dict) else []
@@ -445,10 +601,12 @@ class ValidationTestRunner:
         openrouter_cost_summary = self._summarize_openrouter_run_cost(
             report_timestamp=results.get('timestamp'),
             pipeline_runtime=pipeline_runtime_summary,
+            output_dir=output_dir,
         )
         openai_cost_summary = self._summarize_openai_run_cost(
             report_timestamp=results.get('timestamp'),
             pipeline_runtime=pipeline_runtime_summary,
+            output_dir=output_dir,
         )
         reliability_scorecard = self._summarize_reliability_scorecard(
             results, llm_activity_summary, alias_audit_summary, scraper_network_summary, fb_block_summary
@@ -516,7 +674,7 @@ class ValidationTestRunner:
             <span class="status-{results['overall_status'].lower()}">{results['overall_status']}</span>
         </p>
 
-        <h2>0. Run Control Panel (Cost / Accuracy / Runtime)</h2>
+        <h2>0. Run Control Panel (Cost / Accuracy / Completeness / Runtime)</h2>
         {self._build_run_control_panel_html(control_panel_summary, action_queue)}
 
         <h2>1. Reliability Scorecard</h2>
@@ -1318,7 +1476,126 @@ class ValidationTestRunner:
             totals["tokens"] = toks
         return totals
 
-    def _summarize_openrouter_run_cost(self, report_timestamp: str | None, pipeline_runtime: dict | None) -> dict:
+    def _apply_snapshot_delta_cost(self, provider: str, summary: dict, output_dir: str | None) -> dict:
+        """
+        Convert cumulative provider totals into per-run deltas using local snapshots.
+
+        If no previous snapshot exists, keep raw totals and mark basis accordingly.
+        """
+        if not output_dir:
+            summary["cost_basis"] = summary.get("cost_basis") or "window_total_api"
+            return summary
+
+        provider_norm = str(provider or "").strip().lower()
+        if provider_norm not in {"openrouter", "openai"}:
+            return summary
+
+        raw_cost = self._safe_float(summary.get("cost_usd"))
+        raw_requests = self._safe_int(summary.get("requests"))
+        raw_tokens = self._safe_int(summary.get("tokens"))
+
+        summary["raw_cost_usd"] = raw_cost
+        summary["raw_requests"] = raw_requests
+        summary["raw_tokens"] = raw_tokens
+
+        if raw_cost is None and raw_requests is None and raw_tokens is None:
+            summary["cost_basis"] = "unavailable"
+            return summary
+
+        os.makedirs(output_dir, exist_ok=True)
+        history_path = os.path.join(output_dir, f"{provider_norm}_cost_snapshots.jsonl")
+
+        previous_snapshot: dict | None = None
+        try:
+            if os.path.exists(history_path):
+                with open(history_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            previous_snapshot = json.loads(line)
+                        except Exception:
+                            continue
+        except Exception:
+            previous_snapshot = None
+
+        snapshot_record = {
+            "timestamp": datetime.now().isoformat(),
+            "provider": provider_norm,
+            "start_ts": str(summary.get("start_ts", "") or ""),
+            "end_ts": str(summary.get("end_ts", "") or ""),
+            "endpoint_used": str(summary.get("endpoint_used", "") or ""),
+            "raw_cost_usd": raw_cost,
+            "raw_requests": raw_requests,
+            "raw_tokens": raw_tokens,
+        }
+        try:
+            append_record = True
+            if isinstance(previous_snapshot, dict):
+                if (
+                    str(previous_snapshot.get("start_ts", "") or "") == snapshot_record["start_ts"]
+                    and str(previous_snapshot.get("end_ts", "") or "") == snapshot_record["end_ts"]
+                    and self._safe_float(previous_snapshot.get("raw_cost_usd")) == raw_cost
+                    and self._safe_int(previous_snapshot.get("raw_requests")) == raw_requests
+                    and self._safe_int(previous_snapshot.get("raw_tokens")) == raw_tokens
+                ):
+                    append_record = False
+            if append_record:
+                with open(history_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(snapshot_record) + "\n")
+        except Exception as e:
+            summary["cost_basis"] = "window_total_api"
+            summary["delta_error"] = f"snapshot_write_failed: {e}"
+            return summary
+
+        prev_cost = self._safe_float((previous_snapshot or {}).get("raw_cost_usd"))
+        prev_requests = self._safe_int((previous_snapshot or {}).get("raw_requests"))
+        prev_tokens = self._safe_int((previous_snapshot or {}).get("raw_tokens"))
+
+        if prev_cost is None and prev_requests is None and prev_tokens is None:
+            summary["cost_basis"] = "window_total_api"
+            summary["snapshot_history_path"] = history_path
+            return summary
+
+        def _delta_float(cur: float | None, prev: float | None) -> float | None:
+            if cur is None or prev is None:
+                return None
+            return round(cur - prev, 6)
+
+        def _delta_int(cur: int | None, prev: int | None) -> int | None:
+            if cur is None or prev is None:
+                return None
+            return cur - prev
+
+        cost_delta = _delta_float(raw_cost, prev_cost)
+        req_delta = _delta_int(raw_requests, prev_requests)
+        tok_delta = _delta_int(raw_tokens, prev_tokens)
+
+        negative_delta = any(
+            v is not None and v < 0
+            for v in (cost_delta, req_delta, tok_delta)
+        )
+        if negative_delta:
+            summary["cost_basis"] = "window_total_api_reset_detected"
+            summary["delta_reference_timestamp"] = str((previous_snapshot or {}).get("timestamp", "") or "")
+            summary["snapshot_history_path"] = history_path
+            return summary
+
+        summary["cost_usd"] = cost_delta if cost_delta is not None else raw_cost
+        summary["requests"] = req_delta if req_delta is not None else raw_requests
+        summary["tokens"] = tok_delta if tok_delta is not None else raw_tokens
+        summary["cost_basis"] = "delta_from_snapshot"
+        summary["delta_reference_timestamp"] = str((previous_snapshot or {}).get("timestamp", "") or "")
+        summary["snapshot_history_path"] = history_path
+        return summary
+
+    def _summarize_openrouter_run_cost(
+        self,
+        report_timestamp: str | None,
+        pipeline_runtime: dict | None,
+        output_dir: str | None = None,
+    ) -> dict:
         """Fetch best-effort OpenRouter run usage/cost for the report window.
 
         OpenRouter account-level usage endpoints require a management key. We
@@ -1428,7 +1705,7 @@ class ValidationTestRunner:
                         "error": "",
                     }
                 )
-                return summary
+                return self._apply_snapshot_delta_cost("openrouter", summary, output_dir)
             except Exception as e:
                 last_error = f"{endpoint} request failed: {e}"
                 continue
@@ -1541,7 +1818,12 @@ class ValidationTestRunner:
             totals["tokens"] = toks
         return totals
 
-    def _summarize_openai_run_cost(self, report_timestamp: str | None, pipeline_runtime: dict | None) -> dict:
+    def _summarize_openai_run_cost(
+        self,
+        report_timestamp: str | None,
+        pipeline_runtime: dict | None,
+        output_dir: str | None = None,
+    ) -> dict:
         """Fetch best-effort OpenAI run usage/cost totals using management key endpoints."""
         summary = {
             "available": False,
@@ -1632,7 +1914,7 @@ class ValidationTestRunner:
                         "error": "",
                     }
                 )
-                return summary
+                return self._apply_snapshot_delta_cost("openai", summary, output_dir)
             except Exception as e:
                 last_error = f"{endpoint} request failed: {e}"
                 continue
@@ -1732,11 +2014,12 @@ class ValidationTestRunner:
         openrouter_cost: dict | None,
         openai_cost: dict | None,
     ) -> dict:
-        """Build cost/accuracy/runtime control panel focused on operator decisions."""
+        """Build cost/accuracy/completeness/runtime control panel focused on operator decisions."""
         reporting_cfg = self.validation_config.get("reporting", {}) if isinstance(self.validation_config, dict) else {}
         control_cfg = reporting_cfg.get("control_panel_targets", {}) if isinstance(reporting_cfg, dict) else {}
         cost_cfg = control_cfg.get("cost", {}) if isinstance(control_cfg, dict) else {}
         accuracy_cfg = control_cfg.get("accuracy", {}) if isinstance(control_cfg, dict) else {}
+        completeness_cfg = control_cfg.get("completeness", {}) if isinstance(control_cfg, dict) else {}
         runtime_cfg = control_cfg.get("runtime", {}) if isinstance(control_cfg, dict) else {}
 
         llm_total_attempts = int((llm_quality or {}).get("total_attempts", 0) or 0)
@@ -1782,7 +2065,8 @@ class ValidationTestRunner:
                 "details": (
                     f"requests={int((openrouter_cost or {}).get('requests', 0) or 0)}, "
                     f"tokens={int((openrouter_cost or {}).get('tokens', 0) or 0)}, "
-                    f"endpoint={str((openrouter_cost or {}).get('endpoint_used', ''))}"
+                    f"endpoint={str((openrouter_cost or {}).get('endpoint_used', ''))}, "
+                    f"basis={str((openrouter_cost or {}).get('cost_basis', 'window_total_api'))}"
                 ),
             })
 
@@ -1805,7 +2089,8 @@ class ValidationTestRunner:
                 "details": (
                     f"requests={int((openai_cost or {}).get('requests', 0) or 0)}, "
                     f"tokens={int((openai_cost or {}).get('tokens', 0) or 0)}, "
-                    f"endpoint={str((openai_cost or {}).get('endpoint_used', ''))}"
+                    f"endpoint={str((openai_cost or {}).get('endpoint_used', ''))}, "
+                    f"basis={str((openai_cost or {}).get('cost_basis', 'window_total_api'))}"
                 ),
             })
 
@@ -1961,6 +2246,95 @@ class ValidationTestRunner:
         })
         accuracy_status = self._control_status_from_checks(accuracy_checks)
 
+        source_distribution = ((scraping_results or {}).get("source_distribution", {}) or {})
+        source_dist_status_raw = str(source_distribution.get("status", "WARNING") or "WARNING").upper()
+        if source_dist_status_raw in {"PASS", "OK"}:
+            source_dist_status = "PASS"
+        elif source_dist_status_raw in {"WARN", "WARNING"}:
+            source_dist_status = "WARN"
+        else:
+            source_dist_status = "FAIL"
+        missing_sources = list(source_distribution.get("missing_sources", []) or [])
+        trend_monitoring = source_distribution.get("trend_monitoring", {}) or {}
+        trend_alerts = list(trend_monitoring.get("alerts", []) or [])
+        critical_alert_count = sum(
+            1 for alert in trend_alerts if str((alert or {}).get("severity", "")).lower() == "critical"
+        )
+        warning_alert_count = max(0, len(trend_alerts) - critical_alert_count)
+        top_10_percentage = self._safe_float(source_distribution.get("top_10_percentage"))
+
+        max_top10_warn = float(completeness_cfg.get("max_top_10_percentage_warn", 90.0) or 90.0)
+        max_top10_fail = float(completeness_cfg.get("max_top_10_percentage_fail", 95.0) or 95.0)
+        max_warning_alerts_warn = int(completeness_cfg.get("max_warning_trend_alerts_warn", 0) or 0)
+        max_critical_alerts_fail = int(completeness_cfg.get("max_critical_trend_alerts_fail", 0) or 0)
+
+        completeness_checks: list[dict] = []
+        completeness_checks.append({
+            "name": "Source Distribution Check Status",
+            "actual": source_dist_status_raw,
+            "target": "PASS",
+            "delta": "N/A",
+            "status": source_dist_status,
+            "details": "Direct status from Source Distribution Check section.",
+        })
+
+        missing_sources_status = "PASS" if len(missing_sources) == 0 else "FAIL"
+        completeness_checks.append({
+            "name": "Missing Required Sources",
+            "actual": str(len(missing_sources)),
+            "target": "0",
+            "delta": f"+{len(missing_sources)}",
+            "status": missing_sources_status,
+            "details": ", ".join(str(s) for s in missing_sources[:8]) if missing_sources else "All required sources present.",
+        })
+
+        trend_alert_status = "PASS"
+        if critical_alert_count > max_critical_alerts_fail:
+            trend_alert_status = "FAIL"
+        elif warning_alert_count > max_warning_alerts_warn:
+            trend_alert_status = "WARN"
+        completeness_checks.append({
+            "name": "Top-Source Trend Alerts",
+            "actual": f"critical={critical_alert_count}, warning={warning_alert_count}",
+            "target": (
+                f"critical <= {max_critical_alerts_fail}, "
+                f"warning <= {max_warning_alerts_warn}"
+            ),
+            "delta": (
+                f"critical={critical_alert_count - max_critical_alerts_fail:+d}, "
+                f"warning={warning_alert_count - max_warning_alerts_warn:+d}"
+            ),
+            "status": trend_alert_status,
+            "details": f"history_runs_used={int(trend_monitoring.get('history_runs_used', 0) or 0)}",
+        })
+
+        if top_10_percentage is None:
+            concentration_status = "WARN"
+            concentration_actual = "N/A"
+            concentration_delta = "N/A"
+            concentration_details = "Top-10 concentration unavailable."
+        else:
+            concentration_status = "PASS"
+            if top_10_percentage > max_top10_fail:
+                concentration_status = "FAIL"
+            elif top_10_percentage > max_top10_warn:
+                concentration_status = "WARN"
+            concentration_actual = f"{top_10_percentage:.1f}%"
+            concentration_delta = f"{top_10_percentage - max_top10_warn:+.1f}% vs warn"
+            concentration_details = (
+                f"top_10_total={int(source_distribution.get('top_10_total', 0) or 0)}, "
+                f"total_events={int(source_distribution.get('total_events', 0) or 0)}"
+            )
+        completeness_checks.append({
+            "name": "Top 10 Source Concentration",
+            "actual": concentration_actual,
+            "target": f"<= {max_top10_warn:.1f}% warn, <= {max_top10_fail:.1f}% fail",
+            "delta": concentration_delta,
+            "status": concentration_status,
+            "details": concentration_details,
+        })
+        completeness_status = self._control_status_from_checks(completeness_checks)
+
         runtime_hours = float((pipeline_runtime or {}).get("runtime_hours", 0.0) or 0.0)
         scraper_exception_rate = float((scraper_network or {}).get("exception_rate", 0.0) or 0.0)
         total_events = int((((scraping_results or {}).get("source_distribution", {}) or {}).get("total_events", 0) or 0))
@@ -2041,7 +2415,12 @@ class ValidationTestRunner:
         runtime_status = self._control_status_from_checks(runtime_checks)
 
         overall_status = self._control_status_from_checks(
-            [{"status": cost_status}, {"status": accuracy_status}, {"status": runtime_status}]
+            [
+                {"status": cost_status},
+                {"status": accuracy_status},
+                {"status": completeness_status},
+                {"status": runtime_status},
+            ]
         )
 
         history_record = {
@@ -2050,6 +2429,7 @@ class ValidationTestRunner:
             "status": overall_status,
             "cost_status": cost_status,
             "accuracy_status": accuracy_status,
+            "completeness_status": completeness_status,
             "runtime_status": runtime_status,
             "runtime_hours": runtime_hours,
             "event_yield_rate": float(event_yield_rate) if event_yield_rate is not None else None,
@@ -2066,6 +2446,9 @@ class ValidationTestRunner:
             "completeness_event_yield_rate": float(event_yield_rate) if event_yield_rate is not None else None,
             "completeness_urls_with_events": int(fb_ig_funnel.get("urls_with_events", 0) or 0),
             "completeness_urls_passed_for_scraping": int(fb_ig_funnel.get("urls_passed_for_scraping", 0) or 0),
+            "completeness_source_distribution_status": source_dist_status_raw,
+            "completeness_missing_required_sources": len(missing_sources),
+            "completeness_trend_alert_count": len(trend_alerts),
             "runtime_hours": runtime_hours,
             "runtime_start_ts": str((pipeline_runtime or {}).get("start_ts", "")),
             "runtime_end_ts": str((pipeline_runtime or {}).get("end_ts", "")),
@@ -2075,6 +2458,7 @@ class ValidationTestRunner:
             "overall_status": overall_status,
             "cost": {"status": cost_status, "checks": cost_checks},
             "accuracy": {"status": accuracy_status, "checks": accuracy_checks},
+            "completeness": {"status": completeness_status, "checks": completeness_checks},
             "runtime": {"status": runtime_status, "checks": runtime_checks},
             "simple_summary": simple_summary,
             "trend": trend,
@@ -2084,11 +2468,12 @@ class ValidationTestRunner:
         }
 
     def _build_run_control_panel_html(self, panel_data: dict, action_queue: dict | None = None) -> str:
-        """Render operator-first control panel for cost, accuracy, and runtime."""
+        """Render operator-first control panel for cost, accuracy, completeness, and runtime."""
         if not panel_data:
             return "<p class='error-box'>❌ Run control panel unavailable</p>"
         cost = panel_data.get("cost", {}) or {}
         accuracy = panel_data.get("accuracy", {}) or {}
+        completeness = panel_data.get("completeness", {}) or {}
         runtime = panel_data.get("runtime", {}) or {}
         simple_summary = panel_data.get("simple_summary", {}) or {}
         trend = panel_data.get("trend", {}) or {}
@@ -2099,6 +2484,7 @@ class ValidationTestRunner:
             f"<div class='metric'><div class='metric-value'><span class='{self._status_class(overall_status)}'>{self._escape_html(overall_status)}</span></div><div class='metric-label'>Control Panel Status</div></div>"
             f"<div class='metric'><div class='metric-value'><span class='{self._status_class(cost.get('status', 'WARN'))}'>{self._escape_html(str(cost.get('status', 'WARN')))}</span></div><div class='metric-label'>Cost Status</div></div>"
             f"<div class='metric'><div class='metric-value'><span class='{self._status_class(accuracy.get('status', 'WARN'))}'>{self._escape_html(str(accuracy.get('status', 'WARN')))}</span></div><div class='metric-label'>Accuracy Status</div></div>"
+            f"<div class='metric'><div class='metric-value'><span class='{self._status_class(completeness.get('status', 'WARN'))}'>{self._escape_html(str(completeness.get('status', 'WARN')))}</span></div><div class='metric-label'>Completeness Status</div></div>"
             f"<div class='metric'><div class='metric-value'><span class='{self._status_class(runtime.get('status', 'WARN'))}'>{self._escape_html(str(runtime.get('status', 'WARN')))}</span></div><div class='metric-label'>Runtime Status</div></div>"
             "</div>"
         )
@@ -2122,7 +2508,10 @@ class ValidationTestRunner:
             f"<tr><td>Completeness</td><td>{self._escape_html(event_yield_display)}</td>"
             f"<td>urls_with_events / urls_passed_for_scraping = "
             f"{int(simple_summary.get('completeness_urls_with_events', 0) or 0)} / "
-            f"{int(simple_summary.get('completeness_urls_passed_for_scraping', 0) or 0)}</td></tr>"
+            f"{int(simple_summary.get('completeness_urls_passed_for_scraping', 0) or 0)}; "
+            f"source_distribution_status={self._escape_html(str(simple_summary.get('completeness_source_distribution_status', 'N/A')))}; "
+            f"missing_required_sources={int(simple_summary.get('completeness_missing_required_sources', 0) or 0)}; "
+            f"trend_alerts={int(simple_summary.get('completeness_trend_alert_count', 0) or 0)}</td></tr>"
             f"<tr><td>Time Spent</td><td>{float(simple_summary.get('runtime_hours', 0.0) or 0.0):.2f}h</td>"
             f"<td>{self._escape_html(str(simple_summary.get('runtime_start_ts', '')))} to "
             f"{self._escape_html(str(simple_summary.get('runtime_end_ts', '')))}</td></tr>"
@@ -2148,6 +2537,7 @@ class ValidationTestRunner:
 
         html += _build_check_table("Cost KPIs", cost.get("checks", []) or [])
         html += _build_check_table("Accuracy KPIs", accuracy.get("checks", []) or [])
+        html += _build_check_table("Completeness KPIs", completeness.get("checks", []) or [])
         html += _build_check_table("Runtime KPIs", runtime.get("checks", []) or [])
 
         runs_considered = int(trend.get("runs_considered", 0) or 0)
@@ -2216,12 +2606,13 @@ class ValidationTestRunner:
                     "LLM Extraction Quality Scorecard",
                     "Scraper Network Reliability",
                     "FB/IG URL Funnel",
+                    "Source Distribution Check",
                     "Chatbot Performance",
                     "Reliability Scorecard",
                 }:
                     mapped.append(item)
             if mapped:
-                html += "<h3>Priority Actions (Cost/Accuracy/Runtime)</h3>"
+                html += "<h3>Priority Actions (Cost/Accuracy/Completeness/Runtime)</h3>"
                 html += "<table><tr><th>Priority</th><th>Source Section</th><th>Metric Key</th><th>Action</th><th>Acceptance Test</th></tr>"
                 for item in mapped[:12]:
                     html += (
