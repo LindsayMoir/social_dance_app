@@ -27,6 +27,7 @@ from sqlalchemy import create_engine, MetaData, Table, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional, List, Dict, Any
+from urllib.parse import urlparse
 import sys
 import yaml
 import warnings
@@ -63,6 +64,19 @@ class DatabaseHandler():
         "lindy",
         "lindy hop",
         "balboa",
+    }
+    _SOURCE_PLACEHOLDER_VALUES = {
+        "",
+        "unknown",
+        "unknown source",
+        "none",
+        "null",
+        "n/a",
+        "na",
+        "source",
+        "extracted text",
+        "text extracted",
+        "extracted_text",
     }
 
     def __init__(self, config):
@@ -1892,8 +1906,9 @@ class DatabaseHandler():
             df = self._rename_google_calendar_columns(df)
             df['dance_style'] = ', '.join(keywords) if isinstance(keywords, list) else keywords
 
-        source = source if source else (url.split('.')[-2] if url and '.' in url and len(url.split('.')) >= 2 else 'unknown')
+        source = self._resolve_event_source_label(source=source, url=url, parent_url=parent_url)
         df['source'] = df.get('source', pd.Series([''] * len(df))).replace('', source).fillna(source)
+        df = self._enforce_event_source_values(df, source)
         df['url'] = df.get('url', pd.Series([''] * len(df))).replace('', url).fillna(url)
         df = self._enforce_event_url_values(df, default_url=url, parent_url=parent_url, source=source)
         df = self._apply_event_overrides(df, url=url, parent_url=parent_url)
@@ -1984,6 +1999,88 @@ class DatabaseHandler():
         df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
         self.write_url_to_db([url, parent_url, source, keywords, True, 1, datetime.now()])
         logging.info("write_events_to_db: Events data written to the 'events' table.")
+
+    @classmethod
+    def _is_placeholder_source(cls, value: Any) -> bool:
+        """Return True when source label is blank or a known placeholder."""
+        if value is None:
+            return True
+        source_text = str(value).strip().lower()
+        if source_text in cls._SOURCE_PLACEHOLDER_VALUES:
+            return True
+        if "extracted text" in source_text:
+            return True
+        return False
+
+    @staticmethod
+    def _source_from_url(url: str) -> str:
+        """Derive a stable source label from URL host when possible."""
+        try:
+            parsed = urlparse(str(url or "").strip())
+            host = (parsed.netloc or "").strip().lower()
+            if not host:
+                return ""
+            if host.startswith("www."):
+                host = host[4:]
+            if ":" in host:
+                host = host.split(":", 1)[0]
+            labels = [label for label in host.split(".") if label]
+            if not labels:
+                return ""
+            if len(labels) >= 2:
+                return labels[-2]
+            return labels[0]
+        except Exception:
+            return ""
+
+    def _resolve_event_source_label(self, source: Any, url: str, parent_url: str) -> str:
+        """
+        Resolve canonical source label for event writes.
+
+        Priority:
+        1) Non-placeholder explicit source argument
+        2) URL host label
+        3) Parent URL host label
+        4) 'unknown'
+        """
+        source_text = "" if source is None else str(source).strip()
+        if not self._is_placeholder_source(source_text):
+            return source_text
+        from_url = self._source_from_url(url)
+        if from_url:
+            return from_url
+        from_parent = self._source_from_url(parent_url)
+        if from_parent:
+            return from_parent
+        return "unknown"
+
+    def _enforce_event_source_values(self, df: pd.DataFrame, fallback_source: str) -> pd.DataFrame:
+        """
+        Replace placeholder row-level source labels with the resolved source context.
+        """
+        if df is None or df.empty:
+            return pd.DataFrame() if df is None else df
+        working_df = df.copy()
+        if "source" not in working_df.columns:
+            working_df["source"] = fallback_source
+            return working_df
+
+        replacements = 0
+        normalized_source_values: List[str] = []
+        for raw_source in working_df["source"].tolist():
+            if self._is_placeholder_source(raw_source):
+                normalized_source_values.append(fallback_source)
+                replacements += 1
+            else:
+                normalized_source_values.append(str(raw_source).strip())
+        working_df["source"] = normalized_source_values
+        if replacements:
+            logging.info(
+                "_enforce_event_source_values: replaced %d placeholder source values with '%s'",
+                replacements,
+                fallback_source,
+            )
+        return working_df
 
     @staticmethod
     def _looks_like_http_url(value: Any) -> bool:
