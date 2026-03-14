@@ -13,6 +13,8 @@ Dependencies:
 import base64
 from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta, timezone
+from bs4 import BeautifulSoup, Comment
+import json
 import logging
 import os
 import pandas as pd
@@ -197,6 +199,100 @@ def has_event_signal(text: str) -> bool:
     return any(token in low for token in event_tokens)
 
 
+def extract_visible_text_from_html(html: str, max_chars: int = 20000) -> str:
+    """
+    Extract visible page text while removing script/template noise.
+
+    This reduces false positives from embedded JSON, related-thumbnail payloads,
+    and other non-rendered artifacts often present in raw HTML.
+    """
+    if not html:
+        return ""
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "noscript", "template", "svg"]):
+            tag.decompose()
+        for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
+            comment.extract()
+
+        main_node = soup.select_one("main, article, [role='main'], .event, .event-content")
+        text_chunks: list[str] = []
+        if main_node is not None:
+            text_chunks.append(" ".join(main_node.stripped_strings))
+        text_chunks.append(" ".join(soup.stripped_strings))
+        visible = " ".join(t for t in text_chunks if t).strip()
+        if not visible:
+            return ""
+        return visible[:max_chars]
+    except Exception:
+        # Fail-soft: if parsing fails, preserve previous behavior.
+        return (html or "")[:max_chars]
+
+
+def _is_event_detail_url(url: str) -> bool:
+    """Heuristic for single-event detail pages vs listing pages."""
+    try:
+        path = (urlparse(url).path or "").lower()
+    except Exception:
+        return False
+    if any(token in path for token in ("/events/month", "/events/list", "/calendar", "/schedule", "/upcoming")):
+        return False
+    if any(token in path for token in ("/event/", "/events/", "/show/")):
+        return True
+    return False
+
+
+def classify_page_archetype(
+    url: str,
+    visible_text: str,
+    page_links: list[str],
+    calendar_sources: list[str],
+    calendar_ids_count: int = 0,
+) -> str:
+    """
+    Classify page into extraction archetypes to guide scrape strategy.
+    """
+    low_url = (url or "").lower()
+    low_text = (visible_text or "").lower()
+    if is_calendar_candidate(url, set()) or calendar_sources or calendar_ids_count > 0:
+        return "google_calendar"
+    if "facebook.com" in low_url or "instagram.com" in low_url:
+        return "complicated_page"
+
+    event_like_links = [
+        l for l in page_links
+        if any(token in l.lower() for token in ("/event/", "/events/", "/show/", "ticket", "rsvp"))
+    ]
+    listing_signals = (
+        "view all",
+        "load more",
+        "more events",
+        "upcoming events",
+        "read more",
+        "learn more",
+        "tickets",
+    )
+    has_listing_signal = any(sig in low_text for sig in listing_signals)
+
+    if not _is_event_detail_url(url) and (len(event_like_links) >= 3 or (has_listing_signal and len(page_links) >= 6)):
+        return "incomplete_event"
+    if has_event_signal(low_text):
+        return "simple_page"
+    return "other"
+
+
+def should_extract_on_parent_page(archetype: str, url: str) -> bool:
+    """
+    Decide if this page should go through event extraction directly.
+    """
+    if archetype in {"simple_page", "google_calendar"}:
+        return True
+    if archetype == "incomplete_event":
+        # Still extract when URL itself appears to be a concrete event-detail page.
+        return _is_event_detail_url(url)
+    return False
+
+
 def get_handlers():
     """Initialize and return handlers only when needed."""
     global _handlers_cache
@@ -294,8 +390,23 @@ class EventSpider(scrapy.Spider):
         self.domain_exception_failure_counts: Counter = Counter()
         self.invalid_calendar_ids: set[str] = set()
         self.processed_calendar_ids: set[str] = set()
+        self.page_archetype_stats: dict[str, dict[str, int]] = {}
 
         logging.info("\n\nscraper.py starting...")
+
+    def _archetype_bucket(self, archetype: str) -> dict[str, int]:
+        """Return mutable telemetry bucket for a page archetype."""
+        key = str(archetype or "other")
+        if key not in self.page_archetype_stats:
+            self.page_archetype_stats[key] = {
+                "pages_seen": 0,
+                "parent_extraction_attempted": 0,
+                "parent_extraction_succeeded": 0,
+                "parent_extraction_failed": 0,
+                "parent_extraction_skipped": 0,
+                "child_links_followed": 0,
+            }
+        return self.page_archetype_stats[key]
 
     @staticmethod
     def _domain_for_url(url: str) -> str:
@@ -490,6 +601,11 @@ class EventSpider(scrapy.Spider):
         logging.info("domain_transient_failures_top: %s", top_transient)
         logging.info("domain_timeout_failures_top: %s", top_timeout)
         logging.info("domain_exception_failures_top: %s", top_exception)
+        summary = {
+            "reason": str(reason or ""),
+            "archetypes": self.page_archetype_stats,
+        }
+        logging.info("scraper_archetype_summary: %s", json.dumps(summary, ensure_ascii=True, sort_keys=True))
 
     def _build_playwright_request_meta(self, high_priority: bool = False) -> dict:
         """
@@ -627,6 +743,27 @@ class EventSpider(scrapy.Spider):
                     matched_whitelist_root,
                     url,
                 )
+            try:
+                db_handler.write_url_scrape_metric(
+                    {
+                        "run_id": os.getenv("DS_RUN_ID", "na"),
+                        "step_name": os.getenv("DS_STEP_NAME", "scraper"),
+                        "link": url,
+                        "parent_url": "",
+                        "source": source,
+                        "keywords": [],
+                        "archetype": "other",
+                        "extraction_attempted": False,
+                        "extraction_succeeded": False,
+                        "extraction_skipped": True,
+                        "decision_reason": "non_text_response",
+                        "links_discovered": 0,
+                        "links_followed": 0,
+                        "time_stamp": datetime.now(),
+                    }
+                )
+            except Exception:
+                pass
             return
         self._record_domain_success(response.url)
         
@@ -651,47 +788,33 @@ class EventSpider(scrapy.Spider):
             child_row = [url, '', source, [], False, 1, datetime.now()]
             db_handler.write_url_to_db(child_row)
             logging.info(f"def parse(): Skipping and recording unwanted original URL: {url}")
+            try:
+                db_handler.write_url_scrape_metric(
+                    {
+                        "run_id": os.getenv("DS_RUN_ID", "na"),
+                        "step_name": os.getenv("DS_STEP_NAME", "scraper"),
+                        "link": url,
+                        "parent_url": "",
+                        "source": source,
+                        "keywords": [],
+                        "archetype": "complicated_page",
+                        "extraction_attempted": False,
+                        "extraction_succeeded": False,
+                        "extraction_skipped": True,
+                        "decision_reason": "instagram_non_whitelist_skip",
+                        "links_discovered": 0,
+                        "links_followed": 0,
+                        "time_stamp": datetime.now(),
+                    }
+                )
+            except Exception:
+                pass
             return
         
-        # 1) Get rendered page text
-        extracted_text = response.text
+        # 1) Build visible page text (avoid raw-HTML/script noise in LLM extraction).
+        extracted_text = extract_visible_text_from_html(response.text)
 
-        # 2) Keyword & LLM logic
-        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
-        relevant    = False
-        parent_url  = ''
-        crawl_try   = 1
-        time_stamp  = datetime.now()
-        # build the initial record for this URL
-        url_row = [url, parent_url, source, found_keywords, relevant, crawl_try, time_stamp]
-
-        if found_keywords:
-            logging.info(f"def parse(): Found keywords for URL {url}: {found_keywords}")
-            should_run_llm = (
-                is_whitelisted_origin
-                or is_calendar_candidate(url, self.calendar_urls_set)
-                or has_event_signal(extracted_text)
-            )
-            if should_run_llm:
-                # Use URL-specific prompt mapping when available; LLMHandler falls back to default.
-                prompt_type = url
-                llm_status = llm_handler.process_llm_response(url, parent_url, extracted_text, source, keywords, prompt_type)
-                if llm_status:
-                    # mark as relevant
-                    url_row[4] = True
-                    db_handler.write_url_to_db(url_row)
-                    logging.info(f"def parse(): URL {url} marked as relevant (LLM positive).")
-                else:
-                    db_handler.write_url_to_db(url_row)
-                    logging.info(f"def parse(): URL {url} marked as irrelevant (LLM negative).")
-            else:
-                db_handler.write_url_to_db(url_row)
-                logging.info("def parse(): URL %s skipped LLM due to low event signal.", url)
-        else:
-            db_handler.write_url_to_db(url_row)
-            logging.info(f"def parse(): URL {url} marked as irrelevant (no keywords).")
-
-        # 3) Extract all <a href> links (limit to configured maximum)
+        # 2) Pre-extract links/calendars so archetype routing can decide page-level extraction.
         raw_links = response.css('a::attr(href)').getall()
         page_links_all = normalize_http_links(
             response.url,
@@ -700,7 +823,6 @@ class EventSpider(scrapy.Spider):
         page_links = prioritize_links_for_crawl(page_links_all, self.config['crawling']['max_website_urls'])
         logging.info(f"def parse(): Found {len(page_links)} links on {response.url}")
 
-        # 4) Process iframes & extract Google Calendar addresses
         iframe_links = normalize_http_links(response.url, response.css('iframe::attr(src)').getall())
         calendar_emails = re.findall(
             r'"gcal"\s*:\s*"([A-Za-z0-9_.+-]+@group\.calendar\.google\.com)"',
@@ -711,8 +833,87 @@ class EventSpider(scrapy.Spider):
         calendar_ids: set[str] = {
             c for c in calendar_emails if self.is_valid_calendar_id(c, allow_gmail=False)
         }
-        # Only trust high-confidence group calendar IDs from raw page text.
+        # Only trust high-confidence group calendar IDs from page text.
         calendar_ids.update(self.extract_calendar_ids(extracted_text, allow_gmail=False))
+
+        page_archetype = classify_page_archetype(
+            url=url,
+            visible_text=extracted_text,
+            page_links=page_links,
+            calendar_sources=calendar_sources,
+            calendar_ids_count=len(calendar_ids),
+        )
+        archetype_bucket = self._archetype_bucket(page_archetype)
+        archetype_bucket["pages_seen"] += 1
+        extract_parent_page = should_extract_on_parent_page(page_archetype, url)
+        logging.info(
+            "def parse(): page_archetype=%s extract_parent_page=%s url=%s",
+            page_archetype,
+            extract_parent_page,
+            url,
+        )
+
+        # 3) Keyword & LLM logic
+        found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
+        relevant    = False
+        parent_url  = ''
+        crawl_try   = 1
+        time_stamp  = datetime.now()
+        extraction_attempted = False
+        extraction_succeeded = False
+        extraction_skipped = False
+        decision_reason = ""
+        # build the initial record for this URL
+        url_row = [url, parent_url, source, found_keywords, relevant, crawl_try, time_stamp]
+
+        if found_keywords:
+            logging.info(f"def parse(): Found keywords for URL {url}: {found_keywords}")
+            should_run_llm = (
+                extract_parent_page
+                and (
+                    is_whitelisted_origin
+                    or is_calendar_candidate(url, self.calendar_urls_set)
+                    or has_event_signal(extracted_text)
+                )
+            )
+            if should_run_llm:
+                extraction_attempted = True
+                archetype_bucket["parent_extraction_attempted"] += 1
+                # Use URL-specific prompt mapping when available; LLMHandler falls back to default.
+                prompt_type = url
+                llm_status = llm_handler.process_llm_response(url, parent_url, extracted_text, source, keywords, prompt_type)
+                if llm_status:
+                    extraction_succeeded = True
+                    decision_reason = "llm_positive"
+                    archetype_bucket["parent_extraction_succeeded"] += 1
+                    # mark as relevant
+                    url_row[4] = True
+                    db_handler.write_url_to_db(url_row)
+                    logging.info(f"def parse(): URL {url} marked as relevant (LLM positive).")
+                else:
+                    decision_reason = "llm_negative"
+                    archetype_bucket["parent_extraction_failed"] += 1
+                    db_handler.write_url_to_db(url_row)
+                    logging.info(f"def parse(): URL {url} marked as irrelevant (LLM negative).")
+            else:
+                extraction_skipped = True
+                decision_reason = f"skip_parent_extraction_{page_archetype}"
+                archetype_bucket["parent_extraction_skipped"] += 1
+                db_handler.write_url_to_db(url_row)
+                logging.info(
+                    "def parse(): URL %s skipped LLM (archetype=%s, extract_parent_page=%s, low_signal_or_listing_page).",
+                    url,
+                    page_archetype,
+                    extract_parent_page,
+                )
+        else:
+            extraction_skipped = True
+            decision_reason = "no_keywords"
+            archetype_bucket["parent_extraction_skipped"] += 1
+            db_handler.write_url_to_db(url_row)
+            logging.info(f"def parse(): URL {url} marked as irrelevant (no keywords).")
+
+        # 4) Process iframes & extract Google Calendar addresses
 
         for cal_url in calendar_sources:
             # URLs discovered from iframe/embed/calendar links may legitimately reference gmail calendars.
@@ -758,6 +959,7 @@ class EventSpider(scrapy.Spider):
             filtered_links.add(link)
 
         # 6) Follow each remaining link with Playwright rendering
+        links_followed_count = 0
         for link in filtered_links:
 
             # Check urls to see if they should be scraped
@@ -803,6 +1005,8 @@ class EventSpider(scrapy.Spider):
                 self.domain_cooldown_skip_count += 1
                 logging.info("parse(): Skipping link in active domain cooldown: %s", link)
                 continue
+            archetype_bucket["child_links_followed"] += 1
+            links_followed_count += 1
             yield scrapy.Request(
                 url=link,
                 callback=self.parse,
@@ -811,6 +1015,28 @@ class EventSpider(scrapy.Spider):
                 priority=800 if force_follow else 0,
                 meta=self._build_playwright_request_meta(high_priority=force_follow),
             )
+
+        try:
+            db_handler.write_url_scrape_metric(
+                {
+                    "run_id": os.getenv("DS_RUN_ID", "na"),
+                    "step_name": os.getenv("DS_STEP_NAME", "scraper"),
+                    "link": url,
+                    "parent_url": parent_url,
+                    "source": source,
+                    "keywords": found_keywords,
+                    "archetype": page_archetype,
+                    "extraction_attempted": extraction_attempted,
+                    "extraction_succeeded": extraction_succeeded,
+                    "extraction_skipped": extraction_skipped,
+                    "decision_reason": decision_reason or "unknown",
+                    "links_discovered": len(page_links),
+                    "links_followed": links_followed_count,
+                    "time_stamp": time_stamp,
+                }
+            )
+        except Exception as e:
+            logging.warning("def parse(): Failed recording url_scrape_metrics for %s: %s", url, e)
 
 
     def fetch_google_calendar_events(self, calendar_url, url, source, keywords):

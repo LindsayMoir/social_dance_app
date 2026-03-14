@@ -148,6 +148,38 @@ def test_next_week_sunday_to_saturday_window_not_penalized():
     assert all("next week" not in issue.lower() for issue in out["sql_issues"])
 
 
+def test_this_week_forward_only_window_not_penalized():
+    scorer = ChatbotScorer(_DummyLLM())
+
+    test_result = {
+        "question": "Show me salsa events this week",
+        "sql_query": (
+            "SELECT * FROM events WHERE dance_style ILIKE '%salsa%' "
+            "AND start_date >= '2026-03-11' AND start_date <= '2026-03-14' "
+            "AND event_type ILIKE '%social dance%'"
+        ),
+        "current_date_used": "2026-03-11",
+    }
+    eval_result = {
+        "score": 84,
+        "reasoning": (
+            'The date range does not match the expected "this week" definition '
+            "(it should begin on Sunday)."
+        ),
+        "criteria_matched": ["dance_style", "event_type"],
+        "criteria_missed": ["timeframe"],
+        "sql_issues": ['Date range does not match definition of "this week"'],
+    }
+
+    out = scorer._apply_policy_overrides(test_result, eval_result)
+
+    assert out["score"] == 100
+    assert "this_week_window_policy" in out["criteria_matched"]
+    assert "timeframe" in out["criteria_matched"]
+    assert "timeframe" not in [c.lower() for c in out["criteria_missed"]]
+    assert all("this week" not in issue.lower() for issue in out["sql_issues"])
+
+
 def test_weekend_evening_filter_not_penalized_when_friday_to_sunday_window_is_correct():
     scorer = ChatbotScorer(_DummyLLM())
 
@@ -206,6 +238,38 @@ def test_problem_category_does_not_label_weekend_without_weekend_definition_erro
     categories = report.get("problem_categories", [])
     assert categories
     assert categories[0]["name"] != "Weekend Calculation"
+
+
+def test_problem_category_does_not_label_week_calculation_when_this_week_window_is_correct(tmp_path):
+    scored_results = [
+        {
+            "question": "Show me salsa events this week",
+            "category": "static",
+            "execution_success": True,
+            "sql_query": (
+                "SELECT * FROM events WHERE dance_style ILIKE '%salsa%' "
+                "AND start_date >= '2026-03-11' AND start_date <= '2026-03-14' "
+                "AND event_type ILIKE '%social dance%'"
+            ),
+            "results_count": 4,
+            "current_date_used": "2026-03-11",
+            "evaluation": {
+                "score": 82,
+                "reasoning": (
+                    "Time window is good, but event_type might be too restrictive for the user's intent."
+                ),
+                "criteria_matched": ["dance_style", "timeframe"],
+                "criteria_missed": ["event_type"],
+                "sql_issues": ["event_type too restrictive"],
+                "interpretation_evaluation": {"score": 100},
+            },
+        }
+    ]
+
+    report = generate_chatbot_report(scored_results, output_dir=str(tmp_path))
+    categories = report.get("problem_categories", [])
+    assert categories
+    assert categories[0]["name"] != "Week Calculation"
 
 
 def test_problem_category_does_not_label_event_type_defaults_for_valid_class_filter(tmp_path):

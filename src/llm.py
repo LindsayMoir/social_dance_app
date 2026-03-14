@@ -92,6 +92,7 @@ import re
 import requests
 from sqlalchemy.exc import SQLAlchemyError
 import time
+from typing import Optional
 from urllib.parse import urlparse
 import yaml
 
@@ -424,6 +425,11 @@ class LLMHandler:
                     except Exception:
                         detected_date = None
                     events_df = pd.DataFrame(parsed_result)
+                    events_df = self._apply_url_context_to_events_df(
+                        events_df=events_df,
+                        url=url,
+                        parent_url=parent_url,
+                    )
                     if detected_date and not events_df.empty:
                         try:
                             if 'start_date' not in events_df.columns:
@@ -553,6 +559,58 @@ class LLMHandler:
             "timestamp": datetime.now().isoformat(),
         }
         logging.info("llm_extract_attempt_result: %s", json.dumps(payload, ensure_ascii=True))
+
+    @staticmethod
+    def _resolve_effective_event_url(
+        row_url: object,
+        url: object,
+        parent_url: object,
+    ) -> Optional[str]:
+        """
+        Resolve a durable event URL from row/call context.
+
+        Priority:
+        1) Parsed row URL when valid HTTP(S)
+        2) Current page URL
+        3) Parent page URL
+        """
+        def _clean(value: object) -> str:
+            if value is None:
+                return ""
+            text_value = str(value).strip()
+            if not text_value or text_value.lower() in {"nan", "none", "<na>"}:
+                return ""
+            return text_value
+
+        def _is_http(candidate: str) -> bool:
+            low = candidate.lower()
+            return low.startswith("http://") or low.startswith("https://")
+
+        for candidate in (_clean(row_url), _clean(url), _clean(parent_url)):
+            if candidate and _is_http(candidate):
+                return candidate
+        return None
+
+    def _apply_url_context_to_events_df(
+        self,
+        events_df: pd.DataFrame,
+        url: object,
+        parent_url: object,
+    ) -> pd.DataFrame:
+        """
+        Ensure parsed events preserve scrape URL context before DB write.
+        """
+        if events_df is None or events_df.empty:
+            return pd.DataFrame() if events_df is None else events_df
+
+        normalized = events_df.copy()
+        if "url" not in normalized.columns:
+            normalized["url"] = pd.NA
+
+        normalized["url"] = normalized["url"].apply(
+            lambda row_url: self._resolve_effective_event_url(row_url=row_url, url=url, parent_url=parent_url)
+        )
+        return normalized
 
     @staticmethod
     def _trim_extracted_text_for_budget(extracted_text: str, max_chars: int) -> str:

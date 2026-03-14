@@ -37,6 +37,34 @@ from db_config import get_database_config
 
 
 class DatabaseHandler():
+    _VENUE_TOKEN_STOPWORDS = {
+        "the", "and", "of", "in", "at", "on",
+        "victoria", "bc", "canada", "ca",
+        "venue", "club", "dance", "studio", "society", "association", "group",
+        "hall", "center", "centre",
+    }
+    _DANCE_STYLE_TOKENS = {
+        "argentine tango",
+        "tango",
+        "salsa",
+        "bachata",
+        "kizomba",
+        "semba",
+        "urban kiz",
+        "tarraxo",
+        "tarraxa",
+        "tarraxinha",
+        "merengue",
+        "rumba",
+        "swing",
+        "west coast swing",
+        "wcs",
+        "east coast swing",
+        "lindy",
+        "lindy hop",
+        "balboa",
+    }
+
     def __init__(self, config):
         """
         Initializes the DatabaseHandler instance with the provided configuration.
@@ -90,6 +118,7 @@ class DatabaseHandler():
         # Reflect the existing database schema into metadata
         self.metadata.reflect(bind=self.conn)
         self.ensure_urls_decision_reason_column()
+        self.ensure_url_scrape_metrics_table()
 
         # Get google api key
         self.google_api_key = os.getenv("GOOGLE_KEY_PW")
@@ -154,6 +183,42 @@ class DatabaseHandler():
             logging.info("ensure_urls_decision_reason_column: ensured urls.decision_reason exists")
         except Exception as e:
             logging.warning("ensure_urls_decision_reason_column: could not ensure column (continuing): %s", e)
+
+    def ensure_url_scrape_metrics_table(self) -> None:
+        """Ensure per-URL scrape telemetry table exists for run-over-run diagnostics."""
+        query = """
+            CREATE TABLE IF NOT EXISTS url_scrape_metrics (
+                id SERIAL PRIMARY KEY,
+                run_id TEXT,
+                step_name TEXT,
+                link TEXT,
+                parent_url TEXT,
+                source TEXT,
+                keywords TEXT,
+                archetype TEXT,
+                extraction_attempted BOOLEAN,
+                extraction_succeeded BOOLEAN,
+                extraction_skipped BOOLEAN,
+                decision_reason TEXT,
+                links_discovered INTEGER,
+                links_followed INTEGER,
+                time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        try:
+            self.execute_query(query)
+            self.execute_query(
+                "CREATE INDEX IF NOT EXISTS idx_url_scrape_metrics_run_id ON url_scrape_metrics(run_id)"
+            )
+            self.execute_query(
+                "CREATE INDEX IF NOT EXISTS idx_url_scrape_metrics_link ON url_scrape_metrics(link)"
+            )
+            self.execute_query(
+                "CREATE INDEX IF NOT EXISTS idx_url_scrape_metrics_time_stamp ON url_scrape_metrics(time_stamp)"
+            )
+            logging.info("ensure_url_scrape_metrics_table: ensured url_scrape_metrics exists")
+        except Exception as e:
+            logging.warning("ensure_url_scrape_metrics_table: could not ensure table (continuing): %s", e)
         
 
     def load_blacklist_domains(self):
@@ -1132,6 +1197,45 @@ class DatabaseHandler():
             logging.info("write_url_to_db(): appended URL '%s'", link)
         except Exception as e:
             logging.error("write_url_to_db(): failed to append URL '%s': %s", link, e)
+
+    def write_url_scrape_metric(self, metric: Dict[str, Any]) -> None:
+        """
+        Persist per-URL scrape telemetry for post-run diagnostics and trend reporting.
+        """
+        if not isinstance(metric, dict):
+            return
+
+        keywords = metric.get("keywords", "")
+        if not isinstance(keywords, str):
+            if isinstance(keywords, (list, tuple, set)):
+                keywords = ", ".join(str(k).strip() for k in keywords if str(k).strip())
+            else:
+                keywords = str(keywords)
+
+        row = {
+            "run_id": str(metric.get("run_id", "") or "").strip() or None,
+            "step_name": str(metric.get("step_name", "") or "").strip() or None,
+            "link": str(metric.get("link", "") or "").strip() or None,
+            "parent_url": str(metric.get("parent_url", "") or "").strip() or None,
+            "source": str(metric.get("source", "") or "").strip() or None,
+            "keywords": keywords,
+            "archetype": str(metric.get("archetype", "") or "").strip() or None,
+            "extraction_attempted": bool(metric.get("extraction_attempted", False)),
+            "extraction_succeeded": bool(metric.get("extraction_succeeded", False)),
+            "extraction_skipped": bool(metric.get("extraction_skipped", False)),
+            "decision_reason": str(metric.get("decision_reason", "") or "").strip() or None,
+            "links_discovered": int(metric.get("links_discovered", 0) or 0),
+            "links_followed": int(metric.get("links_followed", 0) or 0),
+            "time_stamp": metric.get("time_stamp", datetime.now()),
+        }
+        try:
+            pd.DataFrame([row]).to_sql('url_scrape_metrics', con=self.conn, if_exists='append', index=False)
+        except Exception as e:
+            logging.warning(
+                "write_url_scrape_metric(): failed for link=%s reason=%s",
+                row.get("link"),
+                e,
+            )
     
 
     def create_address_dict(self, full_address, street_number, street_name, street_type, postal_box, city, province_or_state, postal_code, country_id):
@@ -1791,6 +1895,7 @@ class DatabaseHandler():
         source = source if source else (url.split('.')[-2] if url and '.' in url and len(url.split('.')) >= 2 else 'unknown')
         df['source'] = df.get('source', pd.Series([''] * len(df))).replace('', source).fillna(source)
         df['url'] = df.get('url', pd.Series([''] * len(df))).replace('', url).fillna(url)
+        df = self._enforce_event_url_values(df, default_url=url, parent_url=parent_url, source=source)
         df = self._apply_event_overrides(df, url=url, parent_url=parent_url)
 
         try:
@@ -1828,6 +1933,8 @@ class DatabaseHandler():
 
         # Clean day_of_week field to handle compound/invalid values
         df = self._clean_day_of_week_field(df)
+        # Live-music policy: require explicit dance-style evidence in event text.
+        df = self._enforce_live_music_dance_style_policy(df)
 
         # Basic location cleanup
         df = self.clean_up_address_basic(df)
@@ -1877,6 +1984,111 @@ class DatabaseHandler():
         df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
         self.write_url_to_db([url, parent_url, source, keywords, True, 1, datetime.now()])
         logging.info("write_events_to_db: Events data written to the 'events' table.")
+
+    @staticmethod
+    def _looks_like_http_url(value: Any) -> bool:
+        """Return True when value resembles an HTTP(S) URL."""
+        if value is None:
+            return False
+        value_str = str(value).strip().lower()
+        return value_str.startswith("http://") or value_str.startswith("https://")
+
+    @staticmethod
+    def _extract_email(value: Any) -> Optional[str]:
+        """Return normalized email address when present in value; otherwise None."""
+        if value is None:
+            return None
+        value_str = str(value).strip().lower()
+        match = re.search(r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}", value_str)
+        if not match:
+            return None
+        return match.group(0)
+
+    def _enforce_event_url_values(
+        self,
+        df: pd.DataFrame,
+        default_url: str,
+        parent_url: str,
+        source: str,
+    ) -> pd.DataFrame:
+        """
+        Ensure event rows have a durable URL-like identifier before insert.
+
+        Rules:
+        - Prefer row URL when present.
+        - Fallback to call-level `default_url` (the page/event URL being processed).
+        - Fallback to `parent_url` when it is HTTP(S).
+        - For email ingestion rows, allow storing an email address when no HTTP URL exists.
+        - Drop non-email rows that still have no URL after fallback.
+        """
+        if df is None or df.empty:
+            return pd.DataFrame() if df is None else df
+
+        working_df = df.copy()
+        if "url" not in working_df.columns:
+            working_df["url"] = pd.NA
+        if "source" not in working_df.columns:
+            working_df["source"] = source or ""
+
+        default_url_norm = str(default_url or "").strip()
+        parent_url_norm = str(parent_url or "").strip()
+        source_norm = str(source or "").strip().lower()
+
+        fallback_url = ""
+        if self._looks_like_http_url(default_url_norm):
+            fallback_url = default_url_norm
+        elif self._looks_like_http_url(parent_url_norm):
+            fallback_url = parent_url_norm
+
+        default_email = self._extract_email(default_url_norm)
+        source_email = self._extract_email(source_norm)
+
+        dropped_non_email = 0
+        dropped_email = 0
+        keep_rows: List[bool] = []
+        normalized_urls: List[Optional[str]] = []
+
+        for _, row in working_df.iterrows():
+            row_url = "" if pd.isna(row.get("url")) else str(row.get("url", "")).strip()
+            row_source = "" if pd.isna(row.get("source")) else str(row.get("source", "")).strip().lower()
+
+            is_email_context = (
+                "email" in row_source
+                or "email" in source_norm
+                or "email inbox" in str(parent_url_norm).lower()
+            )
+
+            final_url = row_url
+            if not final_url:
+                if fallback_url:
+                    final_url = fallback_url
+                elif is_email_context:
+                    row_email = self._extract_email(row_url) or self._extract_email(row_source)
+                    final_url = row_email or default_email or source_email or ""
+
+            if final_url:
+                keep_rows.append(True)
+                normalized_urls.append(final_url)
+                continue
+
+            if is_email_context:
+                dropped_email += 1
+            else:
+                dropped_non_email += 1
+            keep_rows.append(False)
+            normalized_urls.append(None)
+
+        if dropped_non_email or dropped_email:
+            logging.warning(
+                "_enforce_event_url_values: dropped rows with missing URL (non_email=%d email=%d)",
+                dropped_non_email,
+                dropped_email,
+            )
+
+        filtered_df = working_df.loc[keep_rows].copy().reset_index(drop=True)
+        filtered_urls = [u for u, keep in zip(normalized_urls, keep_rows) if keep]
+        filtered_df["url"] = filtered_urls
+        return filtered_df
 
 
     def _rename_google_calendar_columns(self, df):
@@ -2001,6 +2213,56 @@ class DatabaseHandler():
         logging.info(f"_clean_day_of_week_field: Made {changes_made} changes to day_of_week values")
         return df
 
+    def _enforce_live_music_dance_style_policy(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        For live-music events, keep dance_style only when explicitly evidenced.
+
+        Evidence is limited to event_name and description text. If no dance-style
+        token appears there, dance_style is set to NULL.
+        """
+        if df is None or df.empty:
+            return df
+        if "event_type" not in df.columns or "dance_style" not in df.columns:
+            return df
+
+        normalized = df.copy()
+        nullified = 0
+        explicit = 0
+        for idx, row in normalized.iterrows():
+            event_type = str(row.get("event_type", "") or "").strip().lower()
+            if "live music" not in event_type:
+                continue
+
+            event_name = str(row.get("event_name", "") or "").lower()
+            description = str(row.get("description", "") or "").lower()
+            evidence_text = f"{event_name} {description}".strip()
+
+            matched_styles: list[str] = []
+            for token in sorted(self._DANCE_STYLE_TOKENS, key=len, reverse=True):
+                if token in evidence_text:
+                    matched_styles.append(token)
+            deduped_styles: list[str] = []
+            seen: set[str] = set()
+            for token in matched_styles:
+                if token not in seen:
+                    deduped_styles.append(token)
+                    seen.add(token)
+
+            if deduped_styles:
+                normalized.at[idx, "dance_style"] = ", ".join(deduped_styles)
+                explicit += 1
+            else:
+                normalized.at[idx, "dance_style"] = pd.NA
+                nullified += 1
+
+        if nullified or explicit:
+            logging.info(
+                "_enforce_live_music_dance_style_policy: live-music rows updated (nullified=%d explicit=%d)",
+                nullified,
+                explicit,
+            )
+        return normalized
+
     def _drop_old_events_by_date(self, df: pd.DataFrame, context: str = "default") -> pd.DataFrame:
         """
         Drop events whose end_date is older than the configured cutoff.
@@ -2122,6 +2384,34 @@ class DatabaseHandler():
         """
         score = fuzz.token_sort_ratio(a, b)
         return score >= threshold
+
+    @classmethod
+    def _venue_tokens(cls, name: str) -> set[str]:
+        """
+        Tokenize venue/building names into meaningful comparison tokens.
+        """
+        if not name:
+            return set()
+        tokens = re.findall(r"[a-z0-9]+", str(name).lower())
+        return {
+            token for token in tokens
+            if len(token) >= 3 and token not in cls._VENUE_TOKEN_STOPWORDS
+        }
+
+    @classmethod
+    def _has_meaningful_token_overlap(cls, a: str, b: str) -> bool:
+        """
+        Require overlap on non-generic venue tokens to avoid near-miss false matches.
+
+        Example prevented: "The Loft Victoria" vs "The Lab Victoria"
+        (shared generic token 'victoria' only).
+        """
+        a_tokens = cls._venue_tokens(a)
+        b_tokens = cls._venue_tokens(b)
+        if not a_tokens or not b_tokens:
+            # If either side has no meaningful tokens, do not block fuzzy fallback.
+            return True
+        return len(a_tokens.intersection(b_tokens)) > 0
 
 
         
@@ -2524,6 +2814,8 @@ class DatabaseHandler():
 
             for addr_id, existing_building in building_matches or []:
                 if existing_building and existing_building.strip():
+                    if not self._has_meaningful_token_overlap(building_name, existing_building):
+                        continue
                     # Use partial_ratio which is more lenient for substring matches
                     score = fuzz.partial_ratio(building_name.lower().strip(), existing_building.lower().strip())
 
@@ -2623,6 +2915,8 @@ class DatabaseHandler():
             
             for addr_id, building_name, full_addr in building_matches or []:
                 if building_name and building_name.strip():
+                    if not self._has_meaningful_token_overlap(location, building_name):
+                        continue
                     # Check if location is contained in building name or vice versa
                     score = fuzz.ratio(location.lower().strip(), building_name.lower().strip())
                     partial_score = fuzz.partial_ratio(location.lower().strip(), building_name.lower().strip())

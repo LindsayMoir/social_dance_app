@@ -888,10 +888,17 @@ def generate_interpretation(user_query: str, config: dict, request_id: str | Non
             tz_abbr = current_time.split()[-1]
             include_live = ("live music" in uq_l) or ("music" in uq_l)
             include_classes = any(w in uq_l for w in ["class", "classes", "workshop", "workshops", "lesson", "lessons"])
+            location_match = re.search(r"\b(?:at|in|near)\s+([a-z0-9][a-z0-9 '&\.\-]{1,64})", uq_l, flags=re.IGNORECASE)
+            location_hint = ""
+            if location_match:
+                location_hint = re.split(r"[,\.;\n]", location_match.group(1), maxsplit=1)[0].strip(" '\"")
+                if location_hint.lower().startswith("the "):
+                    location_hint = location_hint[4:].strip()
             temporal = extract_temporal_phrase(uq)
+            area_phrase = f"at {location_hint}" if location_hint else f"in the {default_city} area"
 
             if not temporal:
-                return f"My understanding is that you want to see dance events available in the {default_city} area."
+                return f"My understanding is that you want to see dance events available {area_phrase}."
 
             rng = calculate_date_range(temporal, current_date)
             sd, ed = rng.get("start_date"), rng.get("end_date")
@@ -908,7 +915,7 @@ def generate_interpretation(user_query: str, config: dict, request_id: str | Non
                     parts.append("live music events")
                 event_phrase = " and ".join([", ".join(parts[:-1])] + [parts[-1]]) if len(parts) > 1 else parts[0]
                 return (
-                    f"My understanding is that you want to see all {event_phrase} available in the {default_city} area {when}. "
+                    f"My understanding is that you want to see all {event_phrase} available {area_phrase} {when}. "
                     f"That would be {('today, ' if temporal=='tonight' else '')}{date_txt}{after_txt}."
                 )
 
@@ -926,7 +933,7 @@ def generate_interpretation(user_query: str, config: dict, request_id: str | Non
                     parts.append("live music events")
                 event_phrase = " and ".join([", ".join(parts[:-1])] + [parts[-1]]) if len(parts) > 1 else parts[0]
                 return (
-                    f"My understanding is that you want to see all {event_phrase} available in the {default_city} area {temporal}. "
+                    f"My understanding is that you want to see all {event_phrase} available {area_phrase} {temporal}. "
                     f"That would be {days_txt}."
                 )
 
@@ -938,7 +945,7 @@ def generate_interpretation(user_query: str, config: dict, request_id: str | Non
                     parts.append("live music events")
                 event_phrase = " and ".join([", ".join(parts[:-1])] + [parts[-1]]) if len(parts) > 1 else parts[0]
                 return (
-                    f"My understanding is that you want to see all {event_phrase} available in the {default_city} area {temporal}. "
+                    f"My understanding is that you want to see all {event_phrase} available {area_phrase} {temporal}. "
                     f"That would be from {_format_date(sd)} to {_format_date(ed)}."
                 )
 
@@ -951,7 +958,7 @@ def generate_interpretation(user_query: str, config: dict, request_id: str | Non
                     parts.append("live music events")
                 event_phrase = " and ".join([", ".join(parts[:-1])] + [parts[-1]]) if len(parts) > 1 else parts[0]
                 return (
-                    f"My understanding is that you want to see all {event_phrase} available in the {default_city} area. "
+                    f"My understanding is that you want to see all {event_phrase} available {area_phrase}. "
                     f"That would be from {_format_date(sd)} to {_format_date(ed)}."
                 )
 
@@ -963,7 +970,7 @@ def generate_interpretation(user_query: str, config: dict, request_id: str | Non
                 parts.append("live music events")
             event_phrase = " and ".join([", ".join(parts[:-1])] + [parts[-1]]) if len(parts) > 1 else parts[0]
             return (
-                f"My understanding is that you want to see all {event_phrase} available in the {default_city} area on {_format_date(sd)}."
+                f"My understanding is that you want to see all {event_phrase} available {area_phrase} on {_format_date(sd)}."
             )
         except Exception:
             return f"My understanding is that you want to see dance events available in the {default_city} area."

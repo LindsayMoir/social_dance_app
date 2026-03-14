@@ -57,3 +57,22 @@ def test_clarification_not_just_single_day_does_not_narrow_week_range() -> None:
     )
     assert updated["start_date"] == "2026-04-01"
     assert updated["end_date"] == "2026-04-07"
+
+
+def test_clarification_merges_live_music_and_coda_location() -> None:
+    base = derive_constraints_from_text("Please tell me what is playing at coda tonight", "2026-03-13")
+    updated = derive_constraints_from_text(
+        "Include live music events please at the coda.",
+        "2026-03-13",
+        base_constraints=base,
+        is_clarification=True,
+    )
+    assert updated["start_date"] == "2026-03-13"
+    assert updated["include_event_types"] and "live music" in updated["include_event_types"]
+    assert updated["location_terms"] and any("coda" in t for t in updated["location_terms"])
+
+    sql = build_sql_from_constraints(updated)
+    assert sql is not None
+    sql_l = sql.lower()
+    assert "event_type ilike '%live music%'" in sql_l
+    assert "location ilike '%coda%'" in sql_l or "source ilike '%coda%'" in sql_l

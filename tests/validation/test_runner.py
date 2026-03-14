@@ -21,6 +21,7 @@ import json
 import ast
 from collections import Counter
 import re
+from typing import Any
 
 # Add src to path for imports (calculate path relative to this script)
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -441,6 +442,14 @@ class ValidationTestRunner:
         suspicious_deletes_summary = self._summarize_suspicious_deletes(results.get('timestamp'))
         report_run_id = str(fb_block_summary.get("run_id", "") or "").strip() or self._infer_latest_pipeline_run_id(results.get('timestamp'))
         pipeline_runtime_summary = self._summarize_pipeline_runtime(results.get('timestamp'), report_run_id)
+        openrouter_cost_summary = self._summarize_openrouter_run_cost(
+            report_timestamp=results.get('timestamp'),
+            pipeline_runtime=pipeline_runtime_summary,
+        )
+        openai_cost_summary = self._summarize_openai_run_cost(
+            report_timestamp=results.get('timestamp'),
+            pipeline_runtime=pipeline_runtime_summary,
+        )
         reliability_scorecard = self._summarize_reliability_scorecard(
             results, llm_activity_summary, alias_audit_summary, scraper_network_summary, fb_block_summary
         )
@@ -463,6 +472,8 @@ class ValidationTestRunner:
             scraper_network=scraper_network_summary,
             pipeline_runtime=pipeline_runtime_summary,
             chatbot_performance=chatbot_performance_summary,
+            openrouter_cost=openrouter_cost_summary,
+            openai_cost=openai_cost_summary,
         )
 
         # Build HTML
@@ -593,6 +604,12 @@ class ValidationTestRunner:
         control_panel_path = os.path.join(output_dir, 'run_control_panel.json')
         with open(control_panel_path, 'w', encoding='utf-8') as f:
             json.dump(control_panel_summary, f, indent=2)
+        openrouter_cost_path = os.path.join(output_dir, 'openrouter_run_cost.json')
+        with open(openrouter_cost_path, 'w', encoding='utf-8') as f:
+            json.dump(openrouter_cost_summary, f, indent=2)
+        openai_cost_path = os.path.join(output_dir, 'openai_run_cost.json')
+        with open(openai_cost_path, 'w', encoding='utf-8') as f:
+            json.dump(openai_cost_summary, f, indent=2)
 
         logging.info(f"HTML report saved: {output_path}")
         logging.info(f"Reliability scorecard saved: {scorecard_path}")
@@ -605,6 +622,8 @@ class ValidationTestRunner:
         logging.info(f"Suspicious deletes summary saved: {suspicious_deletes_path}")
         logging.info(f"Chatbot metrics sync summary saved: {chatbot_metrics_sync_path}")
         logging.info(f"Run control panel saved: {control_panel_path}")
+        logging.info(f"OpenRouter run cost summary saved: {openrouter_cost_path}")
+        logging.info(f"OpenAI run cost summary saved: {openai_cost_path}")
 
     @staticmethod
     def _escape_html(value: str) -> str:
@@ -1190,6 +1209,437 @@ class ValidationTestRunner:
         return summary
 
     @staticmethod
+    def _safe_float(value: Any) -> float | None:
+        """Convert numeric-ish values to float safely."""
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _safe_int(value: Any) -> int | None:
+        """Convert numeric-ish values to int safely."""
+        try:
+            if value is None:
+                return None
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+
+    def _extract_openrouter_activity_totals(self, payload: Any) -> dict:
+        """
+        Best-effort parser for OpenRouter activity/usage payload shapes.
+        Returns aggregate spend/requests/tokens if present.
+        """
+        totals = {"cost_usd": None, "requests": None, "tokens": None}
+        if not isinstance(payload, (dict, list)):
+            return totals
+
+        def _sum_rows(rows: list[dict]) -> tuple[float | None, int | None, int | None]:
+            cost_sum = 0.0
+            req_sum = 0
+            tok_sum = 0
+            cost_seen = False
+            req_seen = False
+            tok_seen = False
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                for k in ("cost", "spend", "total_cost", "usd", "usage"):
+                    v = self._safe_float(row.get(k))
+                    if v is not None:
+                        cost_sum += v
+                        cost_seen = True
+                        break
+                for k in ("requests", "request_count", "num_requests"):
+                    v = self._safe_int(row.get(k))
+                    if v is not None:
+                        req_sum += v
+                        req_seen = True
+                        break
+                token_candidates = [
+                    self._safe_int(row.get("tokens")),
+                    self._safe_int(row.get("total_tokens")),
+                    self._safe_int(row.get("input_tokens")),
+                    self._safe_int(row.get("output_tokens")),
+                    self._safe_int(row.get("prompt_tokens")),
+                    self._safe_int(row.get("completion_tokens")),
+                    self._safe_int(row.get("reasoning_tokens")),
+                ]
+                token_values = [v for v in token_candidates if v is not None]
+                if token_values:
+                    tok_sum += sum(token_values)
+                    tok_seen = True
+            return (
+                round(cost_sum, 6) if cost_seen else None,
+                req_sum if req_seen else None,
+                tok_sum if tok_seen else None,
+            )
+
+        if isinstance(payload, dict):
+            for key in ("data", "results", "activity", "usage"):
+                if isinstance(payload.get(key), list):
+                    cost, reqs, toks = _sum_rows(payload.get(key) or [])
+                    if cost is not None or reqs is not None or toks is not None:
+                        totals["cost_usd"] = cost
+                        totals["requests"] = reqs
+                        totals["tokens"] = toks
+                        return totals
+
+            # Fallback direct keys
+            for k in ("cost", "spend", "total_cost", "total_spend", "usd_spend", "usage"):
+                v = self._safe_float(payload.get(k))
+                if v is not None:
+                    totals["cost_usd"] = v
+                    break
+            for k in ("requests", "request_count", "num_requests"):
+                v = self._safe_int(payload.get(k))
+                if v is not None:
+                    totals["requests"] = v
+                    break
+            tokens_parts = [
+                self._safe_int(payload.get("tokens")),
+                self._safe_int(payload.get("total_tokens")),
+                self._safe_int(payload.get("prompt_tokens")),
+                self._safe_int(payload.get("completion_tokens")),
+                self._safe_int(payload.get("reasoning_tokens")),
+            ]
+            token_values = [v for v in tokens_parts if v is not None]
+            if token_values:
+                totals["tokens"] = sum(token_values)
+            return totals
+
+        if isinstance(payload, list):
+            cost, reqs, toks = _sum_rows(payload)
+            totals["cost_usd"] = cost
+            totals["requests"] = reqs
+            totals["tokens"] = toks
+        return totals
+
+    def _summarize_openrouter_run_cost(self, report_timestamp: str | None, pipeline_runtime: dict | None) -> dict:
+        """Fetch best-effort OpenRouter run usage/cost for the report window.
+
+        OpenRouter account-level usage endpoints require a management key. We
+        therefore prefer management-key env vars and fall back to the standard
+        API key only as a best-effort attempt with explicit error reporting.
+        """
+        summary = {
+            "available": False,
+            "source": "openrouter_api",
+            "start_ts": "",
+            "end_ts": "",
+            "cost_usd": None,
+            "requests": None,
+            "tokens": None,
+            "endpoint_used": "",
+            "error": "",
+        }
+        start_ts: datetime | None = None
+        end_ts: datetime | None = None
+        if isinstance(pipeline_runtime, dict):
+            start_ts = self._parse_iso_datetime(pipeline_runtime.get("start_ts"))
+            end_ts = self._parse_iso_datetime(pipeline_runtime.get("end_ts"))
+        if start_ts is None or end_ts is None:
+            end_ts = datetime.now()
+            if report_timestamp:
+                parsed = self._parse_iso_datetime(report_timestamp)
+                if parsed is not None:
+                    end_ts = parsed
+            start_ts = end_ts - timedelta(hours=24)
+        summary["start_ts"] = start_ts.isoformat(sep=" ")
+        summary["end_ts"] = end_ts.isoformat(sep=" ")
+
+        openrouter_key = (
+            os.getenv("OPENROUTER_MANAGEMENT_KEY")
+            or os.getenv("OPENROUTER_ADMIN_KEY")
+            or os.getenv("OPENROUTER_MGMT_KEY")
+            or os.getenv("OPENROUTER_API_KEY")
+            or os.getenv("OPENROUTER_API" + "_KEY")
+        )
+        if not openrouter_key:
+            summary["error"] = (
+                "Missing OpenRouter key. Set OPENROUTER_MANAGEMENT_KEY (preferred) "
+                "or OPENROUTER_API_KEY."
+            )
+            return summary
+
+        try:
+            import requests  # type: ignore
+        except Exception as e:
+            summary["error"] = f"requests import failed: {e}"
+            return summary
+
+        headers = {
+            "Authorization": f"Bearer {openrouter_key}",
+            "Content-Type": "application/json",
+        }
+        start_iso = start_ts.isoformat()
+        end_iso = end_ts.isoformat()
+        start_epoch = int(start_ts.timestamp())
+        end_epoch = int(end_ts.timestamp())
+        endpoint_candidates = [
+            ("https://openrouter.ai/api/v1/activity", {"start_time": start_iso, "end_time": end_iso}),
+            ("https://openrouter.ai/api/v1/activity", {"start_time": start_epoch, "end_time": end_epoch}),
+            ("https://openrouter.ai/api/v1/usage", {"start_time": start_iso, "end_time": end_iso}),
+            ("https://openrouter.ai/api/v1/usage", {"start_time": start_epoch, "end_time": end_epoch}),
+            ("https://openrouter.ai/api/v1/auth/key", {}),
+        ]
+        last_error = ""
+        for endpoint, params in endpoint_candidates:
+            try:
+                resp = requests.get(endpoint, headers=headers, params=params, timeout=15)
+                if resp.status_code >= 400:
+                    error_detail = ""
+                    try:
+                        payload = resp.json()
+                        if isinstance(payload, dict):
+                            error_obj = payload.get("error")
+                            if isinstance(error_obj, dict):
+                                message = str(error_obj.get("message", "")).strip()
+                                if message:
+                                    error_detail = message
+                    except Exception:
+                        error_detail = ""
+                    if resp.status_code == 403 and "management" in error_detail.lower():
+                        last_error = (
+                            "OpenRouter usage endpoint requires a management key. "
+                            "Set OPENROUTER_MANAGEMENT_KEY in src/.env."
+                        )
+                    else:
+                        last_error = (
+                            f"{endpoint} HTTP {resp.status_code}"
+                            + (f": {error_detail}" if error_detail else "")
+                        )
+                    continue
+                payload = resp.json()
+                parsed = self._extract_openrouter_activity_totals(payload)
+                if parsed.get("cost_usd") is None and parsed.get("requests") is None and parsed.get("tokens") is None:
+                    last_error = f"{endpoint} returned no cost/usage fields for requested window"
+                    continue
+                summary.update(
+                    {
+                        "available": True,
+                        "endpoint_used": endpoint,
+                        "cost_usd": parsed.get("cost_usd"),
+                        "requests": parsed.get("requests"),
+                        "tokens": parsed.get("tokens"),
+                        "error": "",
+                    }
+                )
+                return summary
+            except Exception as e:
+                last_error = f"{endpoint} request failed: {e}"
+                continue
+        summary["error"] = last_error or "No OpenRouter usage endpoint returned parseable totals"
+        return summary
+
+    def _extract_openai_cost_totals(self, payload: Any) -> dict:
+        """Best-effort parser for OpenAI usage/cost payload shapes."""
+        totals = {"cost_usd": None, "requests": None, "tokens": None}
+        if not isinstance(payload, (dict, list)):
+            return totals
+
+        def _row_cost(row: dict) -> float | None:
+            for key in ("cost", "spend", "total_cost", "usd", "amount", "value"):
+                raw = row.get(key)
+                if isinstance(raw, dict):
+                    nested = self._safe_float(raw.get("value"))
+                    if nested is not None:
+                        return nested
+                val = self._safe_float(raw)
+                if val is not None:
+                    return val
+            amount_obj = row.get("amount")
+            if isinstance(amount_obj, dict):
+                nested = self._safe_float(amount_obj.get("value"))
+                if nested is not None:
+                    return nested
+            return None
+
+        def _sum_rows(rows: list[dict]) -> tuple[float | None, int | None, int | None]:
+            cost_sum = 0.0
+            req_sum = 0
+            tok_sum = 0
+            cost_seen = False
+            req_seen = False
+            tok_seen = False
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                nested_results = row.get("results")
+                candidate_rows = (
+                    [r for r in nested_results if isinstance(r, dict)]
+                    if isinstance(nested_results, list) and nested_results
+                    else [row]
+                )
+                for candidate in candidate_rows:
+                    c = _row_cost(candidate)
+                    if c is not None:
+                        cost_sum += c
+                        cost_seen = True
+                    for k in ("requests", "request_count", "num_requests", "n_requests", "num_model_requests"):
+                        v = self._safe_int(candidate.get(k))
+                        if v is not None:
+                            req_sum += v
+                            req_seen = True
+                            break
+                    token_candidates = [
+                        self._safe_int(candidate.get("tokens")),
+                        self._safe_int(candidate.get("total_tokens")),
+                        self._safe_int(candidate.get("input_tokens")),
+                        self._safe_int(candidate.get("output_tokens")),
+                        self._safe_int(candidate.get("prompt_tokens")),
+                        self._safe_int(candidate.get("completion_tokens")),
+                        self._safe_int(candidate.get("reasoning_tokens")),
+                        self._safe_int(candidate.get("input_text_tokens")),
+                        self._safe_int(candidate.get("output_text_tokens")),
+                    ]
+                    token_values = [v for v in token_candidates if v is not None]
+                    if token_values:
+                        tok_sum += sum(token_values)
+                        tok_seen = True
+            return (
+                round(cost_sum, 6) if cost_seen else None,
+                req_sum if req_seen else None,
+                tok_sum if tok_seen else None,
+            )
+
+        if isinstance(payload, dict):
+            for key in ("data", "results", "usage", "costs", "buckets"):
+                rows = payload.get(key)
+                if isinstance(rows, list):
+                    cost, reqs, toks = _sum_rows(rows)
+                    if cost is not None or reqs is not None or toks is not None:
+                        totals["cost_usd"] = cost
+                        totals["requests"] = reqs
+                        totals["tokens"] = toks
+                        return totals
+            totals["cost_usd"] = _row_cost(payload)
+            for k in ("requests", "request_count", "num_requests", "n_requests"):
+                v = self._safe_int(payload.get(k))
+                if v is not None:
+                    totals["requests"] = v
+                    break
+            token_candidates = [
+                self._safe_int(payload.get("tokens")),
+                self._safe_int(payload.get("total_tokens")),
+                self._safe_int(payload.get("prompt_tokens")),
+                self._safe_int(payload.get("completion_tokens")),
+                self._safe_int(payload.get("reasoning_tokens")),
+            ]
+            token_values = [v for v in token_candidates if v is not None]
+            if token_values:
+                totals["tokens"] = sum(token_values)
+            return totals
+
+        if isinstance(payload, list):
+            cost, reqs, toks = _sum_rows(payload)
+            totals["cost_usd"] = cost
+            totals["requests"] = reqs
+            totals["tokens"] = toks
+        return totals
+
+    def _summarize_openai_run_cost(self, report_timestamp: str | None, pipeline_runtime: dict | None) -> dict:
+        """Fetch best-effort OpenAI run usage/cost totals using management key endpoints."""
+        summary = {
+            "available": False,
+            "source": "openai_api",
+            "start_ts": "",
+            "end_ts": "",
+            "cost_usd": None,
+            "requests": None,
+            "tokens": None,
+            "endpoint_used": "",
+            "error": "",
+        }
+        start_ts: datetime | None = None
+        end_ts: datetime | None = None
+        if isinstance(pipeline_runtime, dict):
+            start_ts = self._parse_iso_datetime(pipeline_runtime.get("start_ts"))
+            end_ts = self._parse_iso_datetime(pipeline_runtime.get("end_ts"))
+        if start_ts is None or end_ts is None:
+            end_ts = datetime.now()
+            if report_timestamp:
+                parsed = self._parse_iso_datetime(report_timestamp)
+                if parsed is not None:
+                    end_ts = parsed
+            start_ts = end_ts - timedelta(hours=24)
+        summary["start_ts"] = start_ts.isoformat(sep=" ")
+        summary["end_ts"] = end_ts.isoformat(sep=" ")
+
+        openai_key = (
+            os.getenv("OPENAI_MANAGEMENT_KEY")
+            or os.getenv("OPENAI_ADMIN_KEY")
+            or os.getenv("OPENAI_API_KEY")
+        )
+        if not openai_key:
+            summary["error"] = "Missing OPENAI_MANAGEMENT_KEY (preferred) or OPENAI_API_KEY."
+            return summary
+
+        try:
+            import requests  # type: ignore
+        except Exception as e:
+            summary["error"] = f"requests import failed: {e}"
+            return summary
+
+        headers = {
+            "Authorization": f"Bearer {openai_key}",
+            "Content-Type": "application/json",
+        }
+        start_epoch = int(start_ts.timestamp())
+        end_epoch = int(end_ts.timestamp())
+        endpoint_candidates = [
+            ("https://api.openai.com/v1/organization/costs", {"start_time": start_epoch, "end_time": end_epoch}),
+            ("https://api.openai.com/v1/organization/usage/completions", {"start_time": start_epoch, "end_time": end_epoch}),
+            ("https://api.openai.com/v1/organization/usage/responses", {"start_time": start_epoch, "end_time": end_epoch}),
+            ("https://api.openai.com/v1/usage", {"start_time": start_epoch, "end_time": end_epoch}),
+        ]
+        last_error = ""
+        for endpoint, params in endpoint_candidates:
+            try:
+                resp = requests.get(endpoint, headers=headers, params=params, timeout=15)
+                if resp.status_code >= 400:
+                    detail = ""
+                    try:
+                        payload = resp.json()
+                        if isinstance(payload, dict):
+                            err = payload.get("error")
+                            if isinstance(err, dict):
+                                detail = str(err.get("message", "")).strip()
+                            elif isinstance(err, str):
+                                detail = err.strip()
+                    except Exception:
+                        detail = ""
+                    last_error = (
+                        f"{endpoint} HTTP {resp.status_code}"
+                        + (f": {detail}" if detail else "")
+                    )
+                    continue
+                payload = resp.json()
+                parsed = self._extract_openai_cost_totals(payload)
+                if parsed.get("cost_usd") is None and parsed.get("requests") is None and parsed.get("tokens") is None:
+                    last_error = f"{endpoint} returned no parseable cost/usage fields for requested window"
+                    continue
+                summary.update(
+                    {
+                        "available": True,
+                        "endpoint_used": endpoint,
+                        "cost_usd": parsed.get("cost_usd"),
+                        "requests": parsed.get("requests"),
+                        "tokens": parsed.get("tokens"),
+                        "error": "",
+                    }
+                )
+                return summary
+            except Exception as e:
+                last_error = f"{endpoint} request failed: {e}"
+                continue
+        summary["error"] = last_error or "No OpenAI usage endpoint returned parseable totals"
+        return summary
+
+    @staticmethod
     def _status_class(status: str) -> str:
         """Map PASS/WARN/FAIL-like status to CSS class suffix."""
         normalized = str(status or "").strip().upper()
@@ -1279,6 +1729,8 @@ class ValidationTestRunner:
         scraper_network: dict,
         pipeline_runtime: dict,
         chatbot_performance: dict,
+        openrouter_cost: dict | None,
+        openai_cost: dict | None,
     ) -> dict:
         """Build cost/accuracy/runtime control panel focused on operator decisions."""
         reporting_cfg = self.validation_config.get("reporting", {}) if isinstance(self.validation_config, dict) else {}
@@ -1300,8 +1752,80 @@ class ValidationTestRunner:
         max_calls_fail = float(cost_cfg.get("max_llm_calls_per_event_url_fail", 2.5) or 2.5)
         max_short_warn = float(cost_cfg.get("max_too_short_rate_warn", 0.20) or 0.20)
         max_short_fail = float(cost_cfg.get("max_too_short_rate_fail", 0.35) or 0.35)
+        max_cost_warn = float(cost_cfg.get("max_run_cost_usd_warn", 2.0) or 2.0)
+        max_cost_fail = float(cost_cfg.get("max_run_cost_usd_fail", 5.0) or 5.0)
 
         cost_checks: list[dict] = []
+        openrouter_cost_usd = self._safe_float((openrouter_cost or {}).get("cost_usd"))
+        openai_cost_usd = self._safe_float((openai_cost or {}).get("cost_usd"))
+        if openrouter_cost_usd is None:
+            cost_checks.append({
+                "name": "OpenRouter Run Cost (USD)",
+                "actual": "N/A",
+                "target": f"<= ${max_cost_warn:.2f} warn, <= ${max_cost_fail:.2f} fail",
+                "delta": "N/A",
+                "status": "WARN",
+                "details": str((openrouter_cost or {}).get("error", "OpenRouter cost unavailable")),
+            })
+        else:
+            run_cost_status = "PASS"
+            if openrouter_cost_usd > max_cost_fail:
+                run_cost_status = "FAIL"
+            elif openrouter_cost_usd > max_cost_warn:
+                run_cost_status = "WARN"
+            cost_checks.append({
+                "name": "OpenRouter Run Cost (USD)",
+                "actual": f"${openrouter_cost_usd:.4f}",
+                "target": f"<= ${max_cost_warn:.2f} warn, <= ${max_cost_fail:.2f} fail",
+                "delta": f"{openrouter_cost_usd - max_cost_warn:+.4f} vs warn",
+                "status": run_cost_status,
+                "details": (
+                    f"requests={int((openrouter_cost or {}).get('requests', 0) or 0)}, "
+                    f"tokens={int((openrouter_cost or {}).get('tokens', 0) or 0)}, "
+                    f"endpoint={str((openrouter_cost or {}).get('endpoint_used', ''))}"
+                ),
+            })
+
+        if openai_cost_usd is None:
+            cost_checks.append({
+                "name": "OpenAI Run Cost (USD)",
+                "actual": "N/A",
+                "target": "Informational",
+                "delta": "N/A",
+                "status": "WARN",
+                "details": str((openai_cost or {}).get("error", "OpenAI cost unavailable")),
+            })
+        else:
+            cost_checks.append({
+                "name": "OpenAI Run Cost (USD)",
+                "actual": f"${openai_cost_usd:.4f}",
+                "target": "Informational",
+                "delta": "N/A",
+                "status": "PASS",
+                "details": (
+                    f"requests={int((openai_cost or {}).get('requests', 0) or 0)}, "
+                    f"tokens={int((openai_cost or {}).get('tokens', 0) or 0)}, "
+                    f"endpoint={str((openai_cost or {}).get('endpoint_used', ''))}"
+                ),
+            })
+
+        total_run_cost_usd = None
+        if openrouter_cost_usd is not None or openai_cost_usd is not None:
+            total_run_cost_usd = float((openrouter_cost_usd or 0.0) + (openai_cost_usd or 0.0))
+            total_status = "PASS"
+            if total_run_cost_usd > max_cost_fail:
+                total_status = "FAIL"
+            elif total_run_cost_usd > max_cost_warn:
+                total_status = "WARN"
+            cost_checks.append({
+                "name": "Total Run Cost (OpenRouter + OpenAI)",
+                "actual": f"${total_run_cost_usd:.4f}",
+                "target": f"<= ${max_cost_warn:.2f} warn, <= ${max_cost_fail:.2f} fail",
+                "delta": f"{total_run_cost_usd - max_cost_warn:+.4f} vs warn",
+                "status": total_status,
+                "details": "Sum of provider management-usage totals for run window.",
+            })
+
         if llm_calls_per_event_url is None:
             cost_checks.append({
                 "name": "LLM Calls / Event URL",
@@ -1532,14 +2056,31 @@ class ValidationTestRunner:
             "llm_calls_per_event_url": float(llm_calls_per_event_url) if llm_calls_per_event_url is not None else None,
         }
         trend = self._update_and_summarize_run_control_history(output_dir, history_record)
+        simple_summary = {
+            "run_id": str(run_id or ""),
+            "cost_usd": total_run_cost_usd,
+            "openrouter_cost_usd": openrouter_cost_usd,
+            "openai_cost_usd": openai_cost_usd,
+            "accuracy_url_score": round(url_level_score, 1),
+            "accuracy_chatbot_score": round(chatbot_avg_score, 1),
+            "completeness_event_yield_rate": float(event_yield_rate) if event_yield_rate is not None else None,
+            "completeness_urls_with_events": int(fb_ig_funnel.get("urls_with_events", 0) or 0),
+            "completeness_urls_passed_for_scraping": int(fb_ig_funnel.get("urls_passed_for_scraping", 0) or 0),
+            "runtime_hours": runtime_hours,
+            "runtime_start_ts": str((pipeline_runtime or {}).get("start_ts", "")),
+            "runtime_end_ts": str((pipeline_runtime or {}).get("end_ts", "")),
+        }
         return {
             "run_id": str(run_id or ""),
             "overall_status": overall_status,
             "cost": {"status": cost_status, "checks": cost_checks},
             "accuracy": {"status": accuracy_status, "checks": accuracy_checks},
             "runtime": {"status": runtime_status, "checks": runtime_checks},
+            "simple_summary": simple_summary,
             "trend": trend,
             "runtime_summary": pipeline_runtime or {},
+            "openrouter_cost": openrouter_cost or {},
+            "openai_cost": openai_cost or {},
         }
 
     def _build_run_control_panel_html(self, panel_data: dict, action_queue: dict | None = None) -> str:
@@ -1549,6 +2090,7 @@ class ValidationTestRunner:
         cost = panel_data.get("cost", {}) or {}
         accuracy = panel_data.get("accuracy", {}) or {}
         runtime = panel_data.get("runtime", {}) or {}
+        simple_summary = panel_data.get("simple_summary", {}) or {}
         trend = panel_data.get("trend", {}) or {}
         overall_status = str(panel_data.get("overall_status", "WARN") or "WARN")
 
@@ -1561,6 +2103,31 @@ class ValidationTestRunner:
             "</div>"
         )
         html += f"<p><strong>Run ID:</strong> {self._escape_html(str(panel_data.get('run_id', '')))}</p>"
+        cost_usd = simple_summary.get("cost_usd")
+        cost_display = f"${float(cost_usd):.4f}" if cost_usd is not None else "N/A"
+        openrouter_cost_usd = simple_summary.get("openrouter_cost_usd")
+        openai_cost_usd = simple_summary.get("openai_cost_usd")
+        openrouter_display = f"${float(openrouter_cost_usd):.4f}" if openrouter_cost_usd is not None else "N/A"
+        openai_display = f"${float(openai_cost_usd):.4f}" if openai_cost_usd is not None else "N/A"
+        event_yield = simple_summary.get("completeness_event_yield_rate")
+        event_yield_display = f"{float(event_yield):.1%}" if event_yield is not None else "N/A"
+        html += (
+            "<h3>Simple Run Summary</h3>"
+            "<table><tr><th>Metric</th><th>Value</th><th>Formula / Notes</th></tr>"
+            f"<tr><td>Cost</td><td>{self._escape_html(cost_display)}</td>"
+            f"<td>Total = OpenRouter ({self._escape_html(openrouter_display)}) + "
+            f"OpenAI ({self._escape_html(openai_display)}) usage windows aligned to run time</td></tr>"
+            f"<tr><td>Accuracy</td><td>{float(simple_summary.get('accuracy_url_score', 0) or 0):.1f}</td>"
+            f"<td>URL-level reliability score (primary grading metric)</td></tr>"
+            f"<tr><td>Completeness</td><td>{self._escape_html(event_yield_display)}</td>"
+            f"<td>urls_with_events / urls_passed_for_scraping = "
+            f"{int(simple_summary.get('completeness_urls_with_events', 0) or 0)} / "
+            f"{int(simple_summary.get('completeness_urls_passed_for_scraping', 0) or 0)}</td></tr>"
+            f"<tr><td>Time Spent</td><td>{float(simple_summary.get('runtime_hours', 0.0) or 0.0):.2f}h</td>"
+            f"<td>{self._escape_html(str(simple_summary.get('runtime_start_ts', '')))} to "
+            f"{self._escape_html(str(simple_summary.get('runtime_end_ts', '')))}</td></tr>"
+            "</table>"
+        )
 
         def _build_check_table(title: str, checks: list[dict]) -> str:
             block = f"<h3>{self._escape_html(title)}</h3>"

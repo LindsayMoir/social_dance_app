@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+import re
 from typing import Any, Dict, List
 
 from date_calculator import resolve_temporal_from_text
@@ -22,6 +23,9 @@ class QueryConstraints:
     include_styles: List[str] = field(default_factory=list)
     exclude_styles: List[str] = field(default_factory=list)
     all_styles: bool = False
+    include_event_types: List[str] = field(default_factory=list)
+    exclude_event_types: List[str] = field(default_factory=list)
+    location_terms: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -39,7 +43,83 @@ class QueryConstraints:
             include_styles=list(data.get("include_styles") or []),
             exclude_styles=list(data.get("exclude_styles") or []),
             all_styles=bool(data.get("all_styles")),
+            include_event_types=list(data.get("include_event_types") or []),
+            exclude_event_types=list(data.get("exclude_event_types") or []),
+            location_terms=list(data.get("location_terms") or []),
         )
+
+
+_EVENT_TYPE_PATTERNS = {
+    "social dance": [r"\bsocial dance\b", r"\bsocial dances\b", r"\bsocial\b"],
+    "class": [r"\bclass\b", r"\bclasses\b", r"\blesson\b", r"\blessons\b"],
+    "workshop": [r"\bworkshop\b", r"\bworkshops\b"],
+    "live music": [r"\blive music\b", r"\blive band\b", r"\blive bands\b"],
+}
+
+_LOCATION_STOPWORDS = {
+    "the",
+    "a",
+    "an",
+    "events",
+    "event",
+    "dance",
+    "dances",
+    "music",
+    "please",
+    "tonight",
+    "today",
+    "tomorrow",
+    "week",
+    "weekend",
+    "month",
+}
+
+
+def _detect_event_types_from_text(text: str) -> List[str]:
+    found: List[str] = []
+    text_l = str(text or "").lower()
+    for canonical, patterns in _EVENT_TYPE_PATTERNS.items():
+        if any(re.search(p, text_l) for p in patterns):
+            found.append(canonical)
+    return list(dict.fromkeys(found))
+
+
+def _detect_excluded_event_types(text: str) -> List[str]:
+    text_l = str(text or "").lower()
+    excluded: List[str] = []
+    for canonical, patterns in _EVENT_TYPE_PATTERNS.items():
+        for pat in patterns:
+            token_match = re.search(pat, text_l)
+            if not token_match:
+                continue
+            prefix = text_l[max(0, token_match.start() - 24):token_match.start()]
+            if any(neg in prefix for neg in ("no ", "not ", "without ", "exclude ")):
+                excluded.append(canonical)
+                break
+    return list(dict.fromkeys(excluded))
+
+
+def _extract_location_terms_from_text(text: str) -> List[str]:
+    text_l = str(text or "").lower()
+    matches = re.findall(
+        r"\b(?:at|in|near)\s+([a-z0-9][a-z0-9 '&\.\-]{1,64})",
+        text_l,
+        flags=re.IGNORECASE,
+    )
+    cleaned: List[str] = []
+    for raw in matches:
+        term = re.split(r"[,\.;\n]", raw, maxsplit=1)[0].strip(" '\"")
+        term = re.sub(r"\s+", " ", term).strip()
+        if term.startswith("the "):
+            term = term[4:].strip()
+        if not term:
+            continue
+        if term in _LOCATION_STOPWORDS:
+            continue
+        if len(term) < 3:
+            continue
+        cleaned.append(term)
+    return list(dict.fromkeys(cleaned))
 
 
 def _date_span_days(start_date: str, end_date: str) -> int:
@@ -88,6 +168,9 @@ def derive_constraints_from_text(
 
     include_styles = [str(s) for s in detect_styles_in_text(user_text)]
     exclude_styles = [str(s) for s in detect_excluded_styles_in_text(user_text)]
+    include_event_types = _detect_event_types_from_text(user_text)
+    exclude_event_types = _detect_excluded_event_types(user_text)
+    location_terms = _extract_location_terms_from_text(user_text)
 
     replace_terms = ("instead", "not just", "not only", "any style", "all styles", "all dance")
     should_replace_styles = explicit_all_styles or any(t in user_text_l for t in replace_terms)
@@ -107,6 +190,25 @@ def derive_constraints_from_text(
     if constraints.exclude_styles:
         constraints.include_styles = [s for s in constraints.include_styles if s not in constraints.exclude_styles]
 
+    if include_event_types:
+        merged_event_types = list(dict.fromkeys([*constraints.include_event_types, *include_event_types]))
+        constraints.include_event_types = merged_event_types
+
+    if exclude_event_types:
+        merged_excluded_event_types = list(
+            dict.fromkeys([*constraints.exclude_event_types, *exclude_event_types])
+        )
+        constraints.exclude_event_types = merged_excluded_event_types
+
+    if constraints.exclude_event_types:
+        constraints.include_event_types = [
+            t for t in constraints.include_event_types if t not in constraints.exclude_event_types
+        ]
+
+    if location_terms:
+        merged_location_terms = list(dict.fromkeys([*constraints.location_terms, *location_terms]))
+        constraints.location_terms = merged_location_terms
+
     return constraints.to_dict()
 
 
@@ -125,6 +227,15 @@ def constraints_to_query_text(constraints_dict: Dict[str, Any], fallback_text: s
     if constraints.exclude_styles:
         excluded = ", ".join(constraints.exclude_styles)
         parts.append(f"excluding {excluded}")
+
+    if constraints.include_event_types:
+        parts.append("including " + ", ".join(constraints.include_event_types))
+
+    if constraints.exclude_event_types:
+        parts.append("excluding event types " + ", ".join(constraints.exclude_event_types))
+
+    if constraints.location_terms:
+        parts.append("at " + " or ".join(constraints.location_terms))
 
     if constraints.start_date and constraints.end_date:
         if constraints.start_date == constraints.end_date:
@@ -159,6 +270,29 @@ def build_sql_from_constraints(constraints_dict: Dict[str, Any], limit: int = DE
     for style in constraints.exclude_styles:
         safe_style = style.replace("'", "")
         filters.append(f"dance_style NOT ILIKE '%{safe_style}%'")
+
+    if constraints.include_event_types:
+        event_type_filters = []
+        for event_type in constraints.include_event_types:
+            safe_type = event_type.replace("'", "")
+            event_type_filters.append(f"event_type ILIKE '%{safe_type}%'")
+        filters.append("( " + " OR ".join(event_type_filters) + " )")
+
+    for event_type in constraints.exclude_event_types:
+        safe_type = event_type.replace("'", "")
+        filters.append(f"event_type NOT ILIKE '%{safe_type}%'")
+
+    if constraints.location_terms:
+        location_filters = []
+        for term in constraints.location_terms:
+            safe_term = term.replace("'", "")
+            location_filters.append(
+                "("
+                f"location ILIKE '%{safe_term}%' OR "
+                f"source ILIKE '%{safe_term}%'"
+                ")"
+            )
+        filters.append("( " + " OR ".join(location_filters) + " )")
 
     if not filters:
         return None

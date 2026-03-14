@@ -1149,6 +1149,7 @@ Score guidelines:
                     context["sql_issues"] = [str(x) for x in eval_result.get("sql_issues", [])]
 
         eval_result = self._apply_weekend_date_window_override(test_result, eval_result)
+        eval_result = self._apply_this_week_date_window_override(test_result, eval_result)
         eval_result = self._apply_next_week_date_window_override(test_result, eval_result)
         eval_result = self._apply_weekend_evening_filter_override(test_result, eval_result)
         return eval_result
@@ -1289,6 +1290,90 @@ Score guidelines:
         next_sunday = this_sunday + timedelta(days=7)
         next_saturday = next_sunday + timedelta(days=6)
         return next_sunday.isoformat(), next_saturday.isoformat()
+
+    @staticmethod
+    def _expected_this_week_bounds(current_date_str: str) -> Optional[tuple]:
+        """
+        Compute expected this-week bounds using repository policy.
+
+        Policy: this week = today through Saturday of the current Sunday-Saturday week.
+        """
+        try:
+            current = datetime.strptime(current_date_str, "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+        days_since_sunday = (current.weekday() + 1) % 7
+        this_sunday = current - timedelta(days=days_since_sunday)
+        this_saturday = this_sunday + timedelta(days=6)
+        return current.isoformat(), this_saturday.isoformat()
+
+    def _apply_this_week_date_window_override(self, test_result: dict, eval_result: dict) -> dict:
+        """
+        Remove false-positive penalties when this-week SQL matches forward-only project policy.
+        """
+        question = (test_result.get("question") or "").lower()
+        if "this week" not in question or "weekend" in question:
+            return eval_result
+
+        sql_query = (test_result.get("sql_query") or "")
+        actual_bounds = self._extract_sql_date_bounds(sql_query)
+        if not actual_bounds:
+            return eval_result
+
+        current_date_used = test_result.get("current_date_used") or datetime.now().strftime("%Y-%m-%d")
+        expected_bounds = self._expected_this_week_bounds(str(current_date_used))
+        if not expected_bounds or actual_bounds != expected_bounds:
+            return eval_result
+
+        reasoning = str(eval_result.get("reasoning", "")).lower()
+        sql_issues = [str(x) for x in eval_result.get("sql_issues", [])]
+        week_terms = [
+            "this week",
+            "week calculation",
+            "week definition",
+            "date range",
+            "timeframe",
+            "calendar week",
+            "sunday",
+            "monday",
+        ]
+        has_week_penalty_signal = any(term in reasoning for term in week_terms) or any(
+            any(term in issue.lower() for term in week_terms) for issue in sql_issues
+        )
+        if not has_week_penalty_signal:
+            return eval_result
+
+        non_week_issues = [
+            issue for issue in sql_issues
+            if not any(term in issue.lower() for term in week_terms)
+        ]
+        if non_week_issues:
+            return eval_result
+
+        criteria_missed = self._remove_items_containing(
+            [str(x) for x in eval_result.get("criteria_missed", [])],
+            ["timeframe", "date range", "this week", "week"],
+        )
+        cleaned_issues = self._remove_items_containing(
+            sql_issues,
+            ["this week", "date range", "week calculation", "week definition", "calendar week"],
+        )
+        criteria_matched = [str(x) for x in eval_result.get("criteria_matched", [])]
+        if "this_week_window_policy" not in criteria_matched:
+            criteria_matched.append("this_week_window_policy")
+        if "timeframe" not in criteria_matched:
+            criteria_matched.append("timeframe")
+
+        eval_result["score"] = 100
+        eval_result["reasoning"] = (
+            "This-week date range matches repository policy "
+            "(today through Saturday of the current week); no penalty applied."
+        )
+        eval_result["criteria_missed"] = criteria_missed
+        eval_result["sql_issues"] = cleaned_issues
+        eval_result["criteria_matched"] = criteria_matched
+        return eval_result
 
     def _apply_next_week_date_window_override(self, test_result: dict, eval_result: dict) -> dict:
         """
@@ -1588,6 +1673,16 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'outpu
             sunday += timedelta(days=7)
         return friday.isoformat(), sunday.isoformat()
 
+    def _expected_this_week_bounds_for_row(current_date_str: str) -> Optional[tuple]:
+        try:
+            current = datetime.strptime(current_date_str, "%Y-%m-%d").date()
+        except Exception:
+            return None
+        days_since_sunday = (current.weekday() + 1) % 7
+        this_sunday = current - timedelta(days=days_since_sunday)
+        this_saturday = this_sunday + timedelta(days=6)
+        return current.isoformat(), this_saturday.isoformat()
+
     def _is_weekend_window_mismatch(row: dict) -> bool:
         q = str(row.get('question', '')).lower()
         if 'weekend' not in q:
@@ -1603,6 +1698,22 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'outpu
         if not expected_bounds:
             return False
         return sql_bounds != expected_bounds
+
+    def _is_week_window_mismatch(row: dict) -> bool:
+        q = str(row.get('question', '')).lower()
+        if 'weekend' in q:
+            return False
+        sql_bounds = _extract_date_bounds(str(row.get('sql_query', '') or ''))
+        if not sql_bounds:
+            return False
+        current_date_used = str(row.get('current_date_used') or datetime.now().strftime('%Y-%m-%d'))
+        if 'this week' in q:
+            expected = _expected_this_week_bounds_for_row(current_date_used)
+            return bool(expected and sql_bounds != expected)
+        if 'next week' in q:
+            expected = ChatbotScorer._expected_next_week_bounds(current_date_used)
+            return bool(expected and sql_bounds != expected)
+        return False
 
     def _categorize_issue(row: dict) -> str:
         q = row.get('question', '').lower()
@@ -1631,7 +1742,11 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'outpu
         reason_has_this_week = re.search(r"\bthis week\b", reason) is not None
         reason_has_next_week = re.search(r"\bnext week\b", reason) is not None
         reason_signals_week = reason_has_this_week or reason_has_next_week or any(t in reason for t in week_terms)
-        if q_is_week_query or reason_signals_week:
+        week_error_terms = ["calendar week", "monday", "sunday", "week calculation", "week definition", "date range"]
+        has_week_error_signal = any(
+            term in reason or term in sql_issues_text for term in week_error_terms
+        )
+        if (q_is_week_query or reason_signals_week) and _is_week_window_mismatch(row) and has_week_error_signal:
             return "Week Calculation"
 
         if any(k in q for k in ["tonight", "tomorrow night"]) or ("tonight" in reason):
