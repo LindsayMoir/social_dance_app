@@ -201,6 +201,9 @@ class EventbriteScraper:
                     route.routing_reason,
                     event_url,
                 )
+                self.db_handler.write_url_to_db(
+                    [event_url, query, source, keywords_list, False, 1, datetime.now(), route.routing_reason]
+                )
                 continue
 
             if event_url in self.visited_urls:
