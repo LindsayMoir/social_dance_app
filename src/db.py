@@ -1768,6 +1768,8 @@ class DatabaseHandler():
 
             for addr_id, b_name, s_num, s_name, p_code in postal_matches or []:
                 if building_name and b_name:
+                    if not self._has_meaningful_token_overlap(building_name, b_name):
+                        continue
                     # Use multiple fuzzy matching algorithms
                     ratio_score = ratio(building_name, b_name)
                     partial_score = fuzz.partial_ratio(building_name, b_name)
@@ -1807,6 +1809,8 @@ class DatabaseHandler():
 
             for addr_id, b_name, s_num, s_name, p_code in street_matches or []:
                 if building_name and b_name:
+                    if not self._has_meaningful_token_overlap(building_name, b_name):
+                        continue
                     # Multiple fuzzy algorithms
                     ratio_score = ratio(building_name, b_name)
                     partial_score = fuzz.partial_ratio(building_name, b_name)
@@ -1837,6 +1841,8 @@ class DatabaseHandler():
 
             for addr_id, b_name, addr_city, p_code in city_matches or []:
                 if b_name:
+                    if not self._has_meaningful_token_overlap(building_name, b_name):
+                        continue
                     ratio_score = ratio(building_name, b_name)
                     partial_score = fuzz.partial_ratio(building_name, b_name)
                     token_set_score = fuzz.token_set_ratio(building_name, b_name)
@@ -1855,6 +1861,8 @@ class DatabaseHandler():
 
             for addr_id, existing_name in candidates or []:
                 if existing_name:
+                    if not self._has_meaningful_token_overlap(building_name, existing_name):
+                        continue
                     ratio_score = ratio(building_name, existing_name)
                     partial_score = fuzz.partial_ratio(building_name, existing_name)
                     token_set_score = fuzz.token_set_ratio(building_name, existing_name)
@@ -3185,6 +3193,8 @@ class DatabaseHandler():
                     
                     for addr_id, existing_building, full_addr in street_matches:
                         if existing_building and existing_building.strip():
+                            if not self._has_meaningful_token_overlap(location_building, existing_building):
+                                continue
                             score = fuzz.ratio(location_building.lower(), existing_building.lower())
                             if score >= 85 and score > best_score:
                                 best_score = score
@@ -3224,9 +3234,11 @@ class DatabaseHandler():
                 return best_addr_id
         
         # Step 7: Last resort - fuzzy match on full addresses for very similar ones
-        all_addresses = self.execute_query("SELECT address_id, full_address FROM address")
-        for addr_id, full_addr in all_addresses or []:
+        all_addresses = self.execute_query("SELECT address_id, full_address, building_name FROM address")
+        for addr_id, full_addr, building_name in all_addresses or []:
             if full_addr and fuzz.ratio(location.lower(), full_addr.lower()) >= 90:
+                if building_name and not self._has_meaningful_token_overlap(location, building_name):
+                    continue
                 logging.info(f"quick_address_lookup: Fuzzy full address match → address_id={addr_id}")
                 return addr_id
         
@@ -3261,11 +3273,35 @@ class DatabaseHandler():
         """
         try:
             result = self.execute_query(
-                "SELECT address_id FROM raw_locations WHERE raw_location = :raw_location",
+                """
+                SELECT rl.address_id, a.building_name
+                FROM raw_locations rl
+                LEFT JOIN address a ON a.address_id = rl.address_id
+                WHERE rl.raw_location = :raw_location
+                """,
                 {"raw_location": raw_location}
             )
             if result:
-                address_id = result[0][0]
+                address_id, building_name = result[0]
+                if building_name and not self._has_meaningful_token_overlap(raw_location, building_name):
+                    logging.warning(
+                        "lookup_raw_location: Ignoring stale/mismatched cache mapping '%s' -> address_id=%s (%s)",
+                        raw_location,
+                        address_id,
+                        building_name,
+                    )
+                    try:
+                        self.execute_query(
+                            "DELETE FROM raw_locations WHERE raw_location = :raw_location",
+                            {"raw_location": raw_location},
+                        )
+                    except Exception as cleanup_err:
+                        logging.warning(
+                            "lookup_raw_location: Failed to remove stale cache mapping '%s': %s",
+                            raw_location,
+                            cleanup_err,
+                        )
+                    return None
                 logging.info(f"lookup_raw_location: Cache hit for '{raw_location}' → address_id={address_id}")
                 return address_id
             return None
