@@ -14,6 +14,7 @@ import base64
 from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup, Comment
+import html
 import json
 import logging
 import os
@@ -30,6 +31,7 @@ import yaml
 import subprocess
 import csv
 from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import parse_qs, unquote
 
 from credentials import get_credentials
 from config_runtime import get_config_path, load_config
@@ -95,6 +97,25 @@ def normalize_http_links(base_url: str, raw_links: list[str], limit: int | None 
         if limit is not None and len(normalized) >= limit:
             break
     return normalized
+
+
+def extract_hycal_proxy_links(base_url: str, html_text: str) -> list[str]:
+    """
+    Extract Hydrogen Calendar Embed proxy URLs from rendered HTML.
+
+    HyCal renders calendars via WordPress REST URLs like:
+    /wp-json/hycal/v1/ics-proxy?url=<encoded_google_ics_url>
+    """
+    if not html_text:
+        return []
+    text = html.unescape(str(html_text))
+    candidates: list[str] = []
+    # Match both absolute and relative proxy URLs.
+    for match in re.findall(r"(?:https?://[^\s\"'<>]+/wp-json/hycal/v1/ics-proxy\?[^\s\"'<>]+)", text, flags=re.IGNORECASE):
+        candidates.append(match)
+    for match in re.findall(r"(/wp-json/hycal/v1/ics-proxy\?[^\s\"'<>]+)", text, flags=re.IGNORECASE):
+        candidates.append(match)
+    return normalize_http_links(base_url, candidates)
 
 
 def is_facebook_url(url: str) -> bool:
@@ -819,7 +840,8 @@ class EventSpider(scrapy.Spider):
             response.text
         )
         calendar_anchor_links = [link for link in page_links if is_calendar_candidate(link, self.calendar_urls_set)]
-        calendar_sources = iframe_links + calendar_anchor_links
+        hycal_proxy_links = extract_hycal_proxy_links(response.url, response.text)
+        calendar_sources = iframe_links + calendar_anchor_links + hycal_proxy_links
         calendar_ids: set[str] = {
             c for c in calendar_emails if self.is_valid_calendar_id(c, allow_gmail=False)
         }
@@ -1034,25 +1056,31 @@ class EventSpider(scrapy.Spider):
         Fetch and process events from a Google Calendar.
         """
         logging.info(f"def fetch_google_calendar_events(): Inputs - calendar_url: {calendar_url}, URL: {url}, source: {source}, keywords: {keywords}")
-        if not self._is_google_calendar_like_url(calendar_url):
+        candidate_urls = self._expand_calendar_url_candidates(calendar_url)
+        if not candidate_urls:
             logging.info(
                 "def fetch_google_calendar_events(): Skipping non-calendar-like URL: %s",
                 calendar_url,
             )
             return
-        calendar_ids = self.extract_calendar_ids(calendar_url, allow_gmail=True)
-        if not calendar_ids:
-            if self.is_valid_calendar_id(calendar_url, allow_gmail=True):
-                calendar_ids = [calendar_url]
-            else:
-                decoded_calendar_id = self.decode_calendar_id(calendar_url)
-                if decoded_calendar_id:
-                    calendar_ids = [decoded_calendar_id]
+        for candidate_url in candidate_urls:
+            calendar_ids = self.extract_calendar_ids(candidate_url, allow_gmail=True)
+            if not calendar_ids:
+                if self.is_valid_calendar_id(candidate_url, allow_gmail=True):
+                    calendar_ids = [candidate_url]
                 else:
-                    logging.warning(f"def fetch_google_calendar_events(): Failed to extract valid Calendar ID from {calendar_url}")
-                    return
-        for calendar_id in calendar_ids:
-            self.process_calendar_id(calendar_id, calendar_url, url, source, keywords)
+                    decoded_calendar_id = self.decode_calendar_id(candidate_url)
+                    if decoded_calendar_id:
+                        calendar_ids = [decoded_calendar_id]
+                    else:
+                        logging.warning(
+                            "def fetch_google_calendar_events(): Failed to extract valid Calendar ID from %s (source=%s)",
+                            candidate_url,
+                            calendar_url,
+                        )
+                        continue
+            for calendar_id in calendar_ids:
+                self.process_calendar_id(calendar_id, candidate_url, url, source, keywords)
 
 
     @staticmethod
@@ -1070,8 +1098,60 @@ class EventSpider(scrapy.Spider):
                 "@gmail.com",
                 "%40gmail.com",
                 "src=",
+                "/wp-json/hycal/v1/ics-proxy",
+                ".ics",
             )
         )
+
+    @staticmethod
+    def _extract_hycal_embedded_urls(candidate_url: str) -> list[str]:
+        """
+        Extract embedded calendar URLs from HyCal proxy endpoint query params.
+        """
+        raw = str(candidate_url or "").strip()
+        if not raw:
+            return []
+        try:
+            parsed = urlparse(raw)
+            low_path = (parsed.path or "").lower()
+            if "/wp-json/hycal/v1/ics-proxy" not in low_path:
+                return []
+            query_map = parse_qs(parsed.query)
+            embedded_values = query_map.get("url", [])
+            decoded: list[str] = []
+            for value in embedded_values:
+                text = unquote(str(value or "").strip())
+                if text:
+                    decoded.append(text)
+            return decoded
+        except Exception:
+            return []
+
+    def _expand_calendar_url_candidates(self, calendar_url: str) -> list[str]:
+        """
+        Expand one calendar URL into candidate URLs for ID extraction.
+
+        Includes HyCal proxy unwrapping where needed.
+        """
+        base = str(calendar_url or "").strip()
+        if not base:
+            return []
+        candidates: list[str] = []
+        if self._is_google_calendar_like_url(base):
+            candidates.append(base)
+        for embedded in self._extract_hycal_embedded_urls(base):
+            if self._is_google_calendar_like_url(embedded):
+                candidates.append(embedded)
+
+        unique: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            key = candidate.strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            unique.append(key)
+        return unique
 
 
     def extract_calendar_ids(self, calendar_url, allow_gmail: bool = False):
@@ -1081,6 +1161,12 @@ class EventSpider(scrapy.Spider):
         text = str(calendar_url)
         # Handle escaped JS strings like "https:\/\/calendar.google.com\/calendar\/ical\/..."
         text = text.replace("\\/", "/")
+        # Unquote URL-encoded values (including nested query-parameter URLs).
+        for _ in range(2):
+            decoded = unquote(text)
+            if decoded == text:
+                break
+            text = decoded
 
         patterns = [
             # Standard Google Calendar embed src parameter
