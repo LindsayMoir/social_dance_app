@@ -110,11 +110,16 @@ def extract_hycal_proxy_links(base_url: str, html_text: str) -> list[str]:
         return []
     text = html.unescape(str(html_text))
     candidates: list[str] = []
-    # Match both absolute and relative proxy URLs.
-    for match in re.findall(r"(?:https?://[^\s\"'<>]+/wp-json/hycal/v1/ics-proxy\?[^\s\"'<>]+)", text, flags=re.IGNORECASE):
-        candidates.append(match)
-    for match in re.findall(r"(/wp-json/hycal/v1/ics-proxy\?[^\s\"'<>]+)", text, flags=re.IGNORECASE):
-        candidates.append(match)
+    # Match both absolute and relative proxy URLs across possible HyCal versions/routes.
+    patterns = [
+        r"(?:https?://[^\s\"'<>]+/wp-json/[^\s\"'<>]*ics-proxy[^\s\"'<>]*)",
+        r"(/wp-json/[^\s\"'<>]*ics-proxy[^\s\"'<>]*)",
+        r"(?:https?://[^\s\"'<>]+\?[^\s\"'<>]*rest_route=[^\s\"'<>]*ics-proxy[^\s\"'<>]*)",
+        r"(/[^\s\"'<>]*\?[^\s\"'<>]*rest_route=[^\s\"'<>]*ics-proxy[^\s\"'<>]*)",
+    ]
+    for pattern in patterns:
+        for match in re.findall(pattern, text, flags=re.IGNORECASE):
+            candidates.append(match)
     return normalize_http_links(base_url, candidates)
 
 
@@ -1087,6 +1092,17 @@ class EventSpider(scrapy.Spider):
     def _is_google_calendar_like_url(candidate_url: str) -> bool:
         """Return True only for URLs that plausibly contain Google Calendar data/IDs."""
         low = (candidate_url or "").lower()
+        try:
+            parsed = urlparse(str(candidate_url or "").strip())
+            path_low = (parsed.path or "").lower()
+            query_low = (parsed.query or "").lower()
+            # Route-agnostic HyCal proxy detection (covers /wp-json/.../ics-proxy and rest_route forms).
+            if "/wp-json/" in path_low and "ics-proxy" in path_low:
+                return True
+            if "rest_route=" in query_low and "ics-proxy" in query_low:
+                return True
+        except Exception:
+            pass
         return any(
             token in low
             for token in (
@@ -1098,7 +1114,6 @@ class EventSpider(scrapy.Spider):
                 "@gmail.com",
                 "%40gmail.com",
                 "src=",
-                "/wp-json/hycal/v1/ics-proxy",
                 ".ics",
             )
         )
@@ -1114,10 +1129,15 @@ class EventSpider(scrapy.Spider):
         try:
             parsed = urlparse(raw)
             low_path = (parsed.path or "").lower()
-            if "/wp-json/hycal/v1/ics-proxy" not in low_path:
-                return []
             query_map = parse_qs(parsed.query)
+            rest_route_values = [str(v).lower() for v in query_map.get("rest_route", []) if str(v)]
+            has_proxy_path = ("/wp-json/" in low_path and "ics-proxy" in low_path)
+            has_proxy_rest_route = any("ics-proxy" in value for value in rest_route_values)
+            if not (has_proxy_path or has_proxy_rest_route):
+                return []
             embedded_values = query_map.get("url", [])
+            for alias_key in ("ics", "feed", "calendar_url", "calendar", "src"):
+                embedded_values.extend(query_map.get(alias_key, []))
             decoded: list[str] = []
             for value in embedded_values:
                 text = unquote(str(value or "").strip())
