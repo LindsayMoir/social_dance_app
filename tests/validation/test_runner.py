@@ -56,6 +56,7 @@ from db import DatabaseHandler
 from llm import LLMHandler
 from logging_config import setup_logging
 from email_notifier import send_report_email
+from page_classifier import is_google_calendar_like_url, is_social_url, resolve_prompt_type
 
 
 class ValidationTestRunner:
@@ -590,13 +591,7 @@ class ValidationTestRunner:
 
     @staticmethod
     def _is_calendar_event_url(url: str) -> bool:
-        low = str(url or "").lower()
-        return (
-            "calendar.google.com" in low
-            or "@group.calendar.google.com" in low
-            or "%40group.calendar.google.com" in low
-            or ("google.com/calendar/event" in low and "eid=" in low)
-        )
+        return is_google_calendar_like_url(url)
 
     @staticmethod
     def _normalize_url_value(value: Any) -> str:
@@ -659,8 +654,7 @@ class ValidationTestRunner:
 
     @staticmethod
     def _is_social_platform_url(url: str) -> bool:
-        low = str(url or "").lower()
-        return ("facebook.com" in low) or ("instagram.com" in low)
+        return is_social_url(url)
 
     def _extract_visible_text_for_replay(self, html: str) -> str:
         if not html:
@@ -757,7 +751,8 @@ class ValidationTestRunner:
                 except Exception:
                     pass
 
-            prompt, schema_type = self.llm_handler.generate_prompt(url, extracted_text, "fb")
+            prompt_type = resolve_prompt_type(url, fallback_prompt_type="fb")
+            prompt, schema_type = self.llm_handler.generate_prompt(url, extracted_text, prompt_type)
             if schema_type is None:
                 prompt, schema_type = self.llm_handler.generate_prompt(url, extracted_text, "default")
             if schema_type is None:

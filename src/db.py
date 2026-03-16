@@ -35,6 +35,7 @@ import warnings
 from config_runtime import load_config
 # Import database configuration utility
 from db_config import get_database_config
+from page_classifier import classify_page
 
 
 class DatabaseHandler():
@@ -4289,20 +4290,23 @@ class DatabaseHandler():
         path = parsed.path or ""
         candidates: List[str] = []
 
+        classification = classify_page(url=normalized_url)
+        subtype = classification.subtype
+
         fb_event_id = self._facebook_event_id_from_url(normalized_url)
-        if fb_event_id:
+        if subtype == "facebook_event_detail" and fb_event_id:
             canonical = f"{scheme}://www.facebook.com/events/{fb_event_id}/"
             candidates.extend([normalized_url, canonical, canonical.rstrip("/")])
             return "facebook_event_detail", list(dict.fromkeys(candidates))
 
         eb_ticket_id = self._eventbrite_ticket_id_from_url(normalized_url)
-        if eb_ticket_id and "eventbrite." in host:
+        if subtype == "eventbrite_event_detail" and eb_ticket_id and "eventbrite." in host:
             no_query = urlunparse((scheme, parsed.netloc, path, "", "", ""))
             candidates.extend([normalized_url, no_query, no_query.rstrip("/")])
             return "eventbrite_event_detail", list(dict.fromkeys(candidates))
 
         ig_post = self._instagram_post_id_from_url(normalized_url)
-        if ig_post:
+        if subtype == "instagram_post_detail" and ig_post:
             ig_kind, ig_id = ig_post
             no_query = urlunparse((scheme, parsed.netloc, path, "", "", ""))
             canonical = f"{scheme}://www.instagram.com/{ig_kind}/{ig_id}/"

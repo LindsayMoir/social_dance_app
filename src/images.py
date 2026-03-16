@@ -27,6 +27,7 @@ from config_runtime import get_config_path, load_config
 
 from db import DatabaseHandler
 from llm import LLMHandler
+from page_classifier import is_instagram_url, resolve_prompt_type
 from rd_ext import ReadExtract
 from secret_paths import get_auth_file
 
@@ -715,7 +716,7 @@ class ImageScraper:
         self.logger.info(f"process_webpage_url(): Extracted text is:\n{text}")
 
         # Fallback to Playwright for JS‑heavy or too‑short scrapes
-        if not text or len(text) < 200 or "instagram.com" in page_url:
+        if not text or len(text) < 200 or is_instagram_url(page_url):
             self.logger.info(f"process_webpage_url(): Falling back to Playwright for {page_url}")
             pw_text = self._extract_dynamic_page_text(page_url)
             if not pw_text:
@@ -740,9 +741,10 @@ class ImageScraper:
         self.logger.info(f"process_webpage_url(): Keywords {found} found in {page_url}")
 
         # LLM processing
-        prompt_text, schema_type = self.llm_handler.generate_prompt(page_url, text, 'default')
+        prompt_type = resolve_prompt_type(page_url, fallback_prompt_type='default')
+        prompt_text, schema_type = self.llm_handler.generate_prompt(page_url, text, prompt_type)
         status = self.llm_handler.process_llm_response(
-            page_url, parent_url, text, source, found, 'default'
+            page_url, parent_url, text, source, found, prompt_type
         )
         if status:
             self.logger.info(f"process_webpage_url(): LLM succeeded for {page_url}")
@@ -886,14 +888,15 @@ class ImageScraper:
         self.logger.info(f"process_image_url(): Found keywords {found} in image {image_url}")
 
         # LLM prompt & response
-        prompt_text, schema_type = self.llm_handler.generate_prompt(image_url, text, 'default')
+        prompt_type = resolve_prompt_type(image_url, fallback_prompt_type='default')
+        prompt_text, schema_type = self.llm_handler.generate_prompt(image_url, text, prompt_type)
         if len(prompt_text) > config['crawling']['prompt_max_length']:
             logging.warning(f"def process_image_url(): Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
             return 
         
         self.logger.info(f"process_image_url(): Generated default prompt for image_url: {image_url}")
         status = self.llm_handler.process_llm_response(
-            image_url, parent_url, text, source, found, 'default'
+            image_url, parent_url, text, source, found, prompt_type
         )
         if status:
             self.logger.info(f"process_image_url(): LLM processing succeeded for {image_url}")

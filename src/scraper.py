@@ -36,6 +36,14 @@ from config_runtime import get_config_path, load_config
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_config import setup_logging
+from page_classifier import (
+    classify_page,
+    has_event_signal as classifier_has_event_signal,
+    is_facebook_url as classifier_is_facebook_url,
+    is_google_calendar_like_url,
+    is_instagram_url as classifier_is_instagram_url,
+    resolve_prompt_type,
+)
 
 # --------------------------------------------------
 # Global objects initialization.
@@ -95,19 +103,14 @@ def is_facebook_url(url: str) -> bool:
 
     scraper.py must not crawl Facebook directly; fb.py owns Facebook crawling.
     """
-    try:
-        host = (urlparse(url).netloc or "").lower()
-    except Exception:
-        return False
-    return host == "facebook.com" or host.endswith(".facebook.com")
+    return classifier_is_facebook_url(url)
 
 
 def is_calendar_candidate(url: str, calendar_roots: set[str]) -> bool:
     """
     Returns True when URL is a known calendar seed/root or a Google Calendar link.
     """
-    low = (url or "").lower()
-    if "calendar.google.com" in low or "@group.calendar.google.com" in low or "%40group.calendar.google.com" in low:
+    if is_google_calendar_like_url(url):
         return True
     norm_url = normalize_url_for_compare(url)
     return any(norm_url.startswith(root) for root in calendar_roots)
@@ -190,13 +193,7 @@ def has_event_signal(text: str) -> bool:
     """
     Fast lexical gate to avoid expensive LLM calls on low-signal pages.
     """
-    low = (text or "").lower()
-    event_tokens = (
-        "event", "events", "calendar", "schedule", "social", "dance",
-        "workshop", "class", "lesson", "friday", "saturday", "sunday",
-        "monday", "tuesday", "wednesday", "thursday",
-    )
-    return any(token in low for token in event_tokens)
+    return classifier_has_event_signal(text)
 
 
 def extract_visible_text_from_html(html: str, max_chars: int = 20000) -> str:
@@ -252,33 +249,18 @@ def classify_page_archetype(
     """
     Classify page into extraction archetypes to guide scrape strategy.
     """
-    low_url = (url or "").lower()
-    low_text = (visible_text or "").lower()
-    if is_calendar_candidate(url, set()) or calendar_sources or calendar_ids_count > 0:
-        return "google_calendar"
-    if "facebook.com" in low_url or "instagram.com" in low_url:
-        return "complicated_page"
-
     event_like_links = [
         l for l in page_links
         if any(token in l.lower() for token in ("/event/", "/events/", "/show/", "ticket", "rsvp"))
     ]
-    listing_signals = (
-        "view all",
-        "load more",
-        "more events",
-        "upcoming events",
-        "read more",
-        "learn more",
-        "tickets",
+    classification = classify_page(
+        url=url,
+        visible_text=visible_text,
+        page_links_count=len(event_like_links),
+        calendar_sources_count=len(calendar_sources),
+        calendar_ids_count=calendar_ids_count,
     )
-    has_listing_signal = any(sig in low_text for sig in listing_signals)
-
-    if not _is_event_detail_url(url) and (len(event_like_links) >= 3 or (has_listing_signal and len(page_links) >= 6)):
-        return "incomplete_event"
-    if has_event_signal(low_text):
-        return "simple_page"
-    return "other"
+    return classification.archetype
 
 
 def should_extract_on_parent_page(archetype: str, url: str) -> bool:
@@ -783,7 +765,7 @@ class EventSpider(scrapy.Spider):
                 logging.info("def parse(): Skipping Facebook URL (owned by fb.py): %s", url)
                 return
 
-        if 'instagram' in url.lower() and not is_whitelisted_origin:
+        if classifier_is_instagram_url(url) and not is_whitelisted_origin:
             # record it as unwanted and stop processing immediately
             child_row = [url, '', source, [], False, 1, datetime.now()]
             db_handler.write_url_to_db(child_row)
@@ -879,8 +861,8 @@ class EventSpider(scrapy.Spider):
             if should_run_llm:
                 extraction_attempted = True
                 archetype_bucket["parent_extraction_attempted"] += 1
-                # Use URL-specific prompt mapping when available; LLMHandler falls back to default.
-                prompt_type = url
+                # Use centralized prompt resolution for consistency across scrapers.
+                prompt_type = resolve_prompt_type(url, fallback_prompt_type="default")
                 llm_status = llm_handler.process_llm_response(url, parent_url, extracted_text, source, keywords, prompt_type)
                 if llm_status:
                     extraction_succeeded = True
@@ -947,7 +929,7 @@ class EventSpider(scrapy.Spider):
                 logging.info("def parse(): Recorded Facebook URL for fb.py ownership: %s", link)
                 continue
 
-            if 'instagram' in low:
+            if classifier_is_instagram_url(link):
                 if wl:
                     logging.info(f"def parse(): Whitelisted social URL kept for crawl: {link}")
                     filtered_links.add(link)

@@ -63,6 +63,7 @@ from config_runtime import get_config_path, load_config
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_config import setup_logging
+from page_classifier import resolve_prompt_type
 from rd_ext import ReadExtract
 
 
@@ -391,7 +392,7 @@ class EventbriteScraper:
 
                 # Process the extracted text with the LLM for event extraction (not relevance checking)
                 # Use 'default' prompt for event extraction, regardless of what prompt_type was used for relevance
-                event_extraction_prompt_type = 'default'
+                event_extraction_prompt_type = resolve_prompt_type(event_url, fallback_prompt_type='default')
                 response = self.llm_handler.process_llm_response(event_url, parent_url, extracted_text, source, found_keywords, event_extraction_prompt_type)
 
                 if response:

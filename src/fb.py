@@ -86,6 +86,10 @@ from config_runtime import get_config_path, load_config
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_utils import log_extracted_text
+from page_classifier import (
+    is_facebook_event_detail_url as classifier_is_facebook_event_detail_url,
+    resolve_prompt_type,
+)
 from secret_paths import get_auth_file
 
 # Get config
@@ -225,6 +229,46 @@ def sanitize_facebook_event_text_for_extraction(raw_text: str) -> str:
     # Normalize whitespace first for stable marker matching.
     cleaned = re.sub(r"\s+", " ", text)
 
+    # Extract likely event title from header page-title prefix.
+    title = ""
+    title_match = re.search(r"^\(\d+\+\)\s*(.*?)\s+\|\s*Facebook", cleaned, flags=re.IGNORECASE)
+    if not title_match:
+        title_match = re.search(r"^(.*?)\s+\|\s*Facebook", cleaned, flags=re.IGNORECASE)
+    if title_match:
+        title = (title_match.group(1) or "").strip()
+
+    # When the title appears multiple times, sidebar/feed noise usually appears before
+    # the final title occurrence where the actual event details are rendered.
+    if title:
+        lower_cleaned = cleaned.lower()
+        lower_title = title.lower()
+        title_positions: list[int] = []
+        cursor = 0
+        while True:
+            idx = lower_cleaned.find(lower_title, cursor)
+            if idx < 0:
+                break
+            title_positions.append(idx)
+            cursor = idx + max(1, len(lower_title))
+        if len(title_positions) >= 2:
+            last_title_idx = title_positions[-1]
+            # Prefer date token nearest to the final title occurrence.
+            date_pattern = re.compile(
+                r"(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+\d{1,2}\s+[A-Za-z]+\s+\d{4}\s+from\s+\d{1,2}:\d{2}(?:-\d{1,2}:\d{2})?",
+                re.IGNORECASE,
+            )
+            nearest_date_start = None
+            nearest_distance = None
+            for match in date_pattern.finditer(cleaned):
+                if match.start() <= last_title_idx:
+                    distance = last_title_idx - match.start()
+                    if nearest_distance is None or distance < nearest_distance:
+                        nearest_distance = distance
+                        nearest_date_start = match.start()
+            window_start = max(0, nearest_date_start if nearest_date_start is not None else (last_title_idx - 180))
+            window_end = min(len(cleaned), last_title_idx + 2200)
+            cleaned = cleaned[window_start:window_end].strip()
+
     # Drop everything after common non-primary event sections.
     trailing_markers = (
         "Suggested events",
@@ -293,11 +337,7 @@ def is_facebook_event_detail_url(url: str) -> bool:
     """
     Return True when URL points to a concrete Facebook event detail page (/events/<id>/...).
     """
-    parsed = urlparse(url or "")
-    host = (parsed.netloc or "").lower()
-    if "facebook.com" not in host:
-        return False
-    return _FACEBOOK_EVENT_ID_RE.search(parsed.path or "") is not None
+    return classifier_is_facebook_event_detail_url(url)
 
 
 def diagnose_facebook_access(current_url: str, page_content: str) -> tuple[str, str]:
@@ -1527,7 +1567,7 @@ class FacebookEventScraper():
         self.total_url_attempts += 1
 
         # 1) Extract text: full event page vs relevant snippet
-        if "event" in url:
+        if classifier_is_facebook_event_detail_url(url):
             extracted_text = self.extract_event_text(url, assume_navigated=True)
         else:
             full_text = self.extract_event_text(url, assume_navigated=True)
@@ -1549,7 +1589,8 @@ class FacebookEventScraper():
         self.urls_with_found_keywords += 1
 
         # 4) Query LLM for structured event data
-        prompt, schema_type = llm_handler.generate_prompt(url, extracted_text, 'fb')
+        prompt_type = resolve_prompt_type(url, fallback_prompt_type="fb")
+        prompt, schema_type = llm_handler.generate_prompt(url, extracted_text, prompt_type)
         if len(prompt) > config['crawling']['prompt_max_length']:
             logging.warning(f"def process_fb_url(): Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
             return
@@ -1633,7 +1674,7 @@ class FacebookEventScraper():
                     logging.info(f"def driver_fb_search(): Keywords found in text for {url}.")
 
                     # Set prompt and process LLM response immediately
-                    prompt_type = 'fb'
+                    prompt_type = resolve_prompt_type(url, fallback_prompt_type='fb')
                     llm_response = llm_handler.process_llm_response(url, parent_url, extracted_text, source, found_keywords, prompt_type)
 
                     # If events were successfully extracted and written to the DB
@@ -2193,7 +2234,8 @@ class FacebookEventScraper():
             ]
 
             # 4) Query the LLM
-            prompt, schema_type = llm_handler.generate_prompt(url, relevant_text, 'fb')
+            prompt_type = resolve_prompt_type(url, fallback_prompt_type='fb')
+            prompt, schema_type = llm_handler.generate_prompt(url, relevant_text, prompt_type)
             llm_response = llm_handler.query_llm(url, prompt, schema_type)
             if not llm_response or "No events found" in llm_response:
                 logging.info(f"checkpoint_events(): LLM returned no events for {url}")

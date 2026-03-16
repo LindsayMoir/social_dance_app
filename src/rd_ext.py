@@ -36,6 +36,7 @@ import yaml
 from config_runtime import get_config_path, load_config
 from llm import LLMHandler
 from credentials import get_credentials  # Import the utility function
+from page_classifier import is_social_url, resolve_prompt_type
 from secret_paths import get_auth_file
 
 # Module-level handler that will be initialized when needed
@@ -46,18 +47,7 @@ def is_social_media_url(url: str) -> bool:
     """
     Return True for Facebook/Instagram URLs that rd_ext must never crawl.
     """
-    if not url:
-        return False
-    try:
-        host = (urlparse(str(url)).netloc or "").lower()
-    except Exception:
-        host = str(url).lower()
-    return (
-        "facebook.com" in host
-        or host.endswith(".fb.com")
-        or host == "fb.com"
-        or "instagram.com" in host
-    )
+    return is_social_url(url)
 
 def get_db_handler():
     """Get or create the global db_handler instance."""
@@ -902,10 +892,26 @@ if __name__ == "__main__":
             if isinstance(extracted, dict):
                 for event_url, text in extracted.items():
                     parent_url = url # Use the original URL as parent
-                    llm_status = llm_handler.process_llm_response(event_url, parent_url, text, source, keywords, prompt_type=url)
+                    prompt_type = resolve_prompt_type(event_url, fallback_prompt_type=url)
+                    llm_status = llm_handler.process_llm_response(
+                        event_url,
+                        parent_url,
+                        text,
+                        source,
+                        keywords,
+                        prompt_type=prompt_type,
+                    )
             else:
                 parent_url = ''  # No parent URL for single events
-                llm_status = llm_handler.process_llm_response(url, parent_url, extracted, source, keywords, prompt_type=url)
+                prompt_type = resolve_prompt_type(url, fallback_prompt_type=url)
+                llm_status = llm_handler.process_llm_response(
+                    url,
+                    parent_url,
+                    extracted,
+                    source,
+                    keywords,
+                    prompt_type=prompt_type,
+                )
 
         # Close browser once after all URLs processed
         await read_extract.close()
