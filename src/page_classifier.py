@@ -25,6 +25,16 @@ class PageClassification:
     subtype: str
 
 
+@dataclass(frozen=True)
+class RoutingDecision:
+    url: str
+    current_step: str
+    owner_step: str
+    allow: bool
+    routing_reason: str
+    classification: PageClassification
+
+
 def _safe_url(url: str) -> str:
     return str(url or "").strip()
 
@@ -288,3 +298,49 @@ def resolve_prompt_type(url: str, fallback_prompt_type: str = "default") -> str:
     if c.prompt_type:
         return c.prompt_type
     return str(fallback_prompt_type or "default")
+
+
+def evaluate_step_ownership(url: str, current_step: str, explicit_edge_case: bool = False) -> RoutingDecision:
+    """
+    Central routing decision for scraper ownership boundaries.
+
+    Args:
+        url: URL being processed.
+        current_step: Expected step name (e.g., "scraper.py", "fb.py").
+        explicit_edge_case: True only for rd_ext.py edge-case execution.
+    """
+    classification = classify_page(url=url)
+    owner_step = classification.owner_step or "scraper.py"
+    step_name = str(current_step or "").strip() or "unknown"
+
+    if step_name == owner_step:
+        return RoutingDecision(
+            url=url,
+            current_step=step_name,
+            owner_step=owner_step,
+            allow=True,
+            routing_reason="owner_match",
+            classification=classification,
+        )
+
+    if step_name == "rd_ext.py":
+        # rd_ext can provide explicit edge-case extraction only for scraper-owned URLs.
+        allowed = bool(explicit_edge_case and owner_step == "scraper.py")
+        reason = "edge_case_delegate_allowed" if allowed else f"owned_by_{owner_step}"
+        return RoutingDecision(
+            url=url,
+            current_step=step_name,
+            owner_step=owner_step,
+            allow=allowed,
+            routing_reason=reason,
+            classification=classification,
+        )
+
+    return RoutingDecision(
+        url=url,
+        current_step=step_name,
+        owner_step=owner_step,
+        allow=False,
+        routing_reason=f"owned_by_{owner_step}",
+        classification=classification,
+    )

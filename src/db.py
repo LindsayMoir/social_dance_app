@@ -217,6 +217,8 @@ class DatabaseHandler():
                 extraction_succeeded BOOLEAN,
                 extraction_skipped BOOLEAN,
                 decision_reason TEXT,
+                handled_by TEXT,
+                routing_reason TEXT,
                 links_discovered INTEGER,
                 links_followed INTEGER,
                 time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -224,6 +226,8 @@ class DatabaseHandler():
         """
         try:
             self.execute_query(query)
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS handled_by TEXT")
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS routing_reason TEXT")
             self.execute_query(
                 "CREATE INDEX IF NOT EXISTS idx_url_scrape_metrics_run_id ON url_scrape_metrics(run_id)"
             )
@@ -1307,6 +1311,8 @@ class DatabaseHandler():
             "extraction_succeeded": bool(metric.get("extraction_succeeded", False)),
             "extraction_skipped": bool(metric.get("extraction_skipped", False)),
             "decision_reason": str(metric.get("decision_reason", "") or "").strip() or None,
+            "handled_by": str(metric.get("handled_by", "") or "").strip() or None,
+            "routing_reason": str(metric.get("routing_reason", "") or "").strip() or None,
             "links_discovered": int(metric.get("links_discovered", 0) or 0),
             "links_followed": int(metric.get("links_followed", 0) or 0),
             "time_stamp": metric.get("time_stamp", datetime.now()),

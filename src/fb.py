@@ -87,6 +87,7 @@ from db import DatabaseHandler
 from llm import LLMHandler
 from logging_utils import log_extracted_text
 from page_classifier import (
+    evaluate_step_ownership,
     is_facebook_event_detail_url as classifier_is_facebook_event_detail_url,
     resolve_prompt_type,
 )
@@ -1545,6 +1546,18 @@ class FacebookEventScraper():
         """
         # Canonicalize URL first to avoid persisting login redirect wrappers.
         url = self.normalize_facebook_url(url)
+        route = evaluate_step_ownership(url, current_step="fb.py")
+        if not route.allow:
+            logging.info(
+                "process_fb_url: skipping URL owned by %s (%s): %s",
+                route.owner_step,
+                route.routing_reason,
+                url,
+            )
+            db_handler.write_url_to_db(
+                [url, parent_url, source, keywords, False, 1, datetime.now(), route.routing_reason]
+            )
+            return
         if getattr(self, "fb_run_abort_requested", False):
             logging.warning(
                 "process_fb_url: skipping %s due to temp block policy (reason=%s).",

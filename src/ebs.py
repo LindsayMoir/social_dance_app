@@ -63,7 +63,7 @@ from config_runtime import get_config_path, load_config
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_config import setup_logging
-from page_classifier import resolve_prompt_type
+from page_classifier import evaluate_step_ownership, resolve_prompt_type
 from rd_ext import ReadExtract
 
 
@@ -193,6 +193,16 @@ class EventbriteScraper:
         # Process each event URL
         counter = 0
         for event_url in event_urls:
+            route = evaluate_step_ownership(event_url, current_step="ebs.py")
+            if not route.allow:
+                logging.info(
+                    "def eventbrite_search(): Skipping URL owned by %s (%s): %s",
+                    route.owner_step,
+                    route.routing_reason,
+                    event_url,
+                )
+                continue
+
             if event_url in self.visited_urls:
                 logging.info(f"def eventbrite_search(): Already visited: {event_url}")
                 continue

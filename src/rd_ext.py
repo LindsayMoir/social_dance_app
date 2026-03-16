@@ -36,7 +36,7 @@ import yaml
 from config_runtime import get_config_path, load_config
 from llm import LLMHandler
 from credentials import get_credentials  # Import the utility function
-from page_classifier import is_social_url, resolve_prompt_type
+from page_classifier import evaluate_step_ownership, is_social_url, resolve_prompt_type
 from secret_paths import get_auth_file
 
 # Module-level handler that will be initialized when needed
@@ -886,11 +886,37 @@ if __name__ == "__main__":
                 logging.info("__main__: Skipping social media URL (fb/ig) in edge_cases: %s", url)
                 db_handler.write_url_to_db([url, '', source, [], False, 1, datetime.now()])
                 continue
+            route = evaluate_step_ownership(url, current_step="rd_ext.py", explicit_edge_case=True)
+            if not route.allow:
+                logging.info(
+                    "__main__: Skipping URL owned by %s (%s): %s",
+                    route.owner_step,
+                    route.routing_reason,
+                    url,
+                )
+                db_handler.write_url_to_db([url, '', source, [], False, 1, datetime.now(), route.routing_reason])
+                continue
             extracted = await read_extract.extract_from_url(url, multiple_flag)
 
             # If multiple events were found (i.e. extracted is a dict), process each event separately
             if isinstance(extracted, dict):
                 for event_url, text in extracted.items():
+                    event_route = evaluate_step_ownership(
+                        event_url,
+                        current_step="rd_ext.py",
+                        explicit_edge_case=True,
+                    )
+                    if not event_route.allow:
+                        logging.info(
+                            "__main__: Skipping extracted event URL owned by %s (%s): %s",
+                            event_route.owner_step,
+                            event_route.routing_reason,
+                            event_url,
+                        )
+                        db_handler.write_url_to_db(
+                            [event_url, url, source, [], False, 1, datetime.now(), event_route.routing_reason]
+                        )
+                        continue
                     parent_url = url # Use the original URL as parent
                     prompt_type = resolve_prompt_type(event_url, fallback_prompt_type=url)
                     llm_status = llm_handler.process_llm_response(

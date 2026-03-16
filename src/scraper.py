@@ -40,6 +40,7 @@ from llm import LLMHandler
 from logging_config import setup_logging
 from page_classifier import (
     classify_page,
+    evaluate_step_ownership,
     has_event_signal as classifier_has_event_signal,
     is_facebook_url as classifier_is_facebook_url,
     is_google_calendar_like_url,
@@ -749,6 +750,7 @@ class EventSpider(scrapy.Spider):
         """
         # Track whitelist attempt immediately when parse starts.
         matched_whitelist_root = self._mark_whitelist_status(url, "attempted")
+        routing_decision = evaluate_step_ownership(url, current_step="scraper.py")
 
         # Skip non-text responses (e.g., images, PDFs, etc.)
         if not isinstance(response, TextResponse):
@@ -773,6 +775,8 @@ class EventSpider(scrapy.Spider):
                         "extraction_succeeded": False,
                         "extraction_skipped": True,
                         "decision_reason": "non_text_response",
+                        "handled_by": "scraper.py",
+                        "routing_reason": "non_text_response",
                         "links_discovered": 0,
                         "links_followed": 0,
                         "time_stamp": datetime.now(),
@@ -791,19 +795,26 @@ class EventSpider(scrapy.Spider):
         if is_whitelisted_origin and matched_whitelist_root is None:
             # Backstop for URLs considered whitelisted via DB lookup only.
             self._mark_whitelist_status(url, "attempted")
-
-            if is_facebook_url(url):
+        if not routing_decision.allow:
+            if routing_decision.owner_step == "fb.py" and matched_whitelist_root:
                 self._mark_whitelist_status(url, "transferred_fb")
-                child_row = [url, '', source, [], False, 1, datetime.now()]
-                db_handler.write_url_to_db(child_row)
-                logging.info("def parse(): Skipping Facebook URL (owned by fb.py): %s", url)
-                return
-
-        if classifier_is_instagram_url(url) and not is_whitelisted_origin:
-            # record it as unwanted and stop processing immediately
-            child_row = [url, '', source, [], False, 1, datetime.now()]
+            child_row = [
+                url,
+                "",
+                source,
+                [],
+                False,
+                1,
+                datetime.now(),
+                routing_decision.routing_reason,
+            ]
             db_handler.write_url_to_db(child_row)
-            logging.info(f"def parse(): Skipping and recording unwanted original URL: {url}")
+            logging.info(
+                "def parse(): Skipping URL owned by %s (%s): %s",
+                routing_decision.owner_step,
+                routing_decision.routing_reason,
+                url,
+            )
             try:
                 db_handler.write_url_scrape_metric(
                     {
@@ -813,11 +824,13 @@ class EventSpider(scrapy.Spider):
                         "parent_url": "",
                         "source": source,
                         "keywords": [],
-                        "archetype": "complicated_page",
+                        "archetype": routing_decision.classification.archetype,
                         "extraction_attempted": False,
                         "extraction_succeeded": False,
                         "extraction_skipped": True,
-                        "decision_reason": "instagram_non_whitelist_skip",
+                        "decision_reason": routing_decision.routing_reason,
+                        "handled_by": routing_decision.owner_step,
+                        "routing_reason": routing_decision.routing_reason,
                         "links_discovered": 0,
                         "links_followed": 0,
                         "time_stamp": datetime.now(),
@@ -1047,6 +1060,8 @@ class EventSpider(scrapy.Spider):
                     "extraction_succeeded": extraction_succeeded,
                     "extraction_skipped": extraction_skipped,
                     "decision_reason": decision_reason or "unknown",
+                    "handled_by": "scraper.py",
+                    "routing_reason": decision_reason or "unknown",
                     "links_discovered": len(page_links),
                     "links_followed": links_followed_count,
                     "time_stamp": time_stamp,

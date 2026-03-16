@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from page_classifier import classify_page, resolve_prompt_type, is_event_detail_url
+from page_classifier import classify_page, evaluate_step_ownership, resolve_prompt_type, is_event_detail_url
 
 
 def test_classify_facebook_event_detail_owned_by_fb() -> None:
@@ -50,3 +50,37 @@ def test_livevictoria_show_is_detail_simple_page() -> None:
     c = classify_page(url="https://livevictoria.com/show/732324/view")
     assert c.archetype == "simple_page"
     assert c.is_event_detail is True
+
+
+def test_routing_contract_scraper_rejects_facebook_event_detail() -> None:
+    d = evaluate_step_ownership("https://www.facebook.com/events/1482463219409922/", current_step="scraper.py")
+    assert d.allow is False
+    assert d.owner_step == "fb.py"
+    assert d.routing_reason == "owned_by_fb.py"
+
+
+def test_routing_contract_ebs_accepts_eventbrite_detail() -> None:
+    d = evaluate_step_ownership(
+        "https://www.eventbrite.ca/e/example-tickets-1984648436900",
+        current_step="ebs.py",
+    )
+    assert d.allow is True
+    assert d.owner_step == "ebs.py"
+    assert d.routing_reason == "owner_match"
+
+
+def test_routing_contract_rd_ext_only_explicit_scraper_owned() -> None:
+    allowed = evaluate_step_ownership(
+        "https://livevictoria.com/show/732324/view",
+        current_step="rd_ext.py",
+        explicit_edge_case=True,
+    )
+    denied = evaluate_step_ownership(
+        "https://www.facebook.com/events/1482463219409922/",
+        current_step="rd_ext.py",
+        explicit_edge_case=True,
+    )
+    assert allowed.allow is True
+    assert allowed.routing_reason == "edge_case_delegate_allowed"
+    assert denied.allow is False
+    assert denied.owner_step == "fb.py"
