@@ -210,6 +210,51 @@ def extract_facebook_event_links_from_html(html: str) -> set[str]:
     return links
 
 
+def sanitize_facebook_event_text_for_extraction(raw_text: str) -> str:
+    """
+    Remove high-noise Facebook UI sections that often contain unrelated event dates.
+
+    The extractor receives flattened page text; this helper trims common sidebar/feed
+    segments (e.g., Suggested events, Popular with friends) so LLM parsing is anchored
+    to the primary event content block.
+    """
+    text = str(raw_text or "").strip()
+    if not text:
+        return ""
+
+    # Normalize whitespace first for stable marker matching.
+    cleaned = re.sub(r"\s+", " ", text)
+
+    # Drop everything after common non-primary event sections.
+    trailing_markers = (
+        "Suggested events",
+        "Popular with friends",
+        "Recommended events",
+        "You might also like",
+        "More events",
+        "Similar events",
+    )
+    lower_cleaned = cleaned.lower()
+    cut_positions: list[int] = []
+    for marker in trailing_markers:
+        idx = lower_cleaned.find(marker.lower())
+        if idx > 0:
+            cut_positions.append(idx)
+    if cut_positions:
+        cleaned = cleaned[:min(cut_positions)].strip()
+
+    # Remove obvious left-nav noise chunks if present.
+    cleaned = re.sub(
+        r"\bEvents Home Your events Notifications Recommended events Categories\b.*?$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    # Cap to keep prompt focused and avoid pulling in long noisy tails.
+    return cleaned[:12000].strip()
+
+
 def is_facebook_login_redirect(url: str) -> bool:
     """
     Return True if URL points to a Facebook login endpoint.
@@ -1260,6 +1305,8 @@ class FacebookEventScraper():
         html = page.content()
         soup = BeautifulSoup(html, 'html.parser')
         full_text = ' '.join(soup.stripped_strings)
+        if is_facebook_event_detail_url(link):
+            full_text = sanitize_facebook_event_text_for_extraction(full_text)
         if not full_text:
             logging.warning(f"extract_event_text: no text from {link}")
             return None

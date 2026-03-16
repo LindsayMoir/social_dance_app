@@ -53,6 +53,7 @@ def test_run_control_panel_includes_completeness_from_source_distribution(tmp_pa
         chatbot_performance={"query_latency_ms": {"p95": 10000.0}},
         openrouter_cost={"cost_usd": 1.0, "requests": 10, "tokens": 1000},
         openai_cost={"cost_usd": 0.0, "requests": 0, "tokens": 0},
+        accuracy_replay={"coverage_accuracy_pct": 92.0, "true_count": 12, "total_rows": 13},
     )
 
     assert "completeness" in panel

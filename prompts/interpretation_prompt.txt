@@ -15,6 +15,7 @@ CONTEXT INFORMATION:
 - Current day of week: {current_day_of_week}
 - Default city: {default_city}
 - Current time: {current_time}
+- Timezone for all date/time interpretation: America/Los_Angeles (Pacific, PST/PDT)
 
 DATE CALCULATION RULES:
 - Today = {current_date} ({current_day_of_week})

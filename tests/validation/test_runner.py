@@ -22,6 +22,8 @@ import ast
 from collections import Counter
 import re
 from typing import Any
+from urllib.parse import urlparse, urlunparse
+from difflib import SequenceMatcher
 
 # Add src to path for imports (calculate path relative to this script)
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +39,8 @@ from datetime import datetime, timedelta
 import logging
 import yaml
 import random
+import requests
+from bs4 import BeautifulSoup, Comment
 
 # Import validation modules
 from scraping_validator import ScrapingValidator
@@ -77,10 +81,13 @@ class ValidationTestRunner:
         # Load configuration
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
+        self.config_path = config_path
 
         # Initialize database and LLM handlers
         self.db_handler = DatabaseHandler(self.config)
         self.llm_handler = LLMHandler(config_path=config_path)
+        self._replay_fb_scraper = None
+        self._replay_fb_module = None
 
         # Get validation configuration
         self.validation_config = self.config.get('testing', {}).get('validation', {})
@@ -178,6 +185,7 @@ class ValidationTestRunner:
             'timestamp': datetime.now().isoformat(),
             'scraping_validation': None,
             'chatbot_testing': None,
+            'accuracy_replay': None,
             'chatbot_problem_category_gate': None,
             'overall_status': 'PASS',
             'reliability_gates': None,
@@ -330,6 +338,16 @@ class ValidationTestRunner:
             results['chatbot_testing'] = {'error': str(e)}
             results['overall_status'] = 'FAIL'
 
+        # 2.5 REPLAY ACCURACY (query -> re-scrape -> row-level compare)
+        try:
+            replay_summary = self._run_accuracy_replay_assessment(results)
+            results["accuracy_replay"] = replay_summary
+        except Exception as e:
+            logging.error("Replay accuracy assessment failed: %s", e, exc_info=True)
+            results["accuracy_replay"] = {"error": str(e), "status": "ERROR"}
+            if results['overall_status'] == 'PASS':
+                results['overall_status'] = 'WARNING'
+
         # 3. RELIABILITY GATE EVALUATION (PHASE 2)
         try:
             alias_audit_summary = self._summarize_address_alias_audit()
@@ -381,6 +399,7 @@ class ValidationTestRunner:
         logging.info("\n" + "=" * 80)
         logging.info(f"VALIDATION COMPLETE - STATUS: {results['overall_status']}")
         logging.info("=" * 80)
+        self._close_replay_fb_scraper()
 
         return results
 
@@ -539,6 +558,804 @@ class ValidationTestRunner:
             len(test_results),
         )
 
+    @staticmethod
+    def _normalize_text_value(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if text in {"", "none", "null", "nan", "<na>"}:
+            return ""
+        return re.sub(r"\s+", " ", text)
+
+    @staticmethod
+    def _name_similarity(a: str, b: str) -> float:
+        return SequenceMatcher(None, str(a or ""), str(b or "")).ratio()
+
+    @staticmethod
+    def _name_contains_variant(a: str, b: str) -> bool:
+        aa = re.sub(r"\s+", " ", str(a or "").strip().lower())
+        bb = re.sub(r"\s+", " ", str(b or "").strip().lower())
+        if not aa or not bb:
+            return False
+        if aa in bb or bb in aa:
+            return True
+        aa_base = aa.split("@", 1)[0].strip()
+        bb_base = bb.split("@", 1)[0].strip()
+        if aa_base and bb_base and (aa_base in bb_base or bb_base in aa_base):
+            return True
+        return False
+
+    @staticmethod
+    def _is_placeholder_source(value: str) -> bool:
+        normalized = str(value or "").strip().lower()
+        return normalized in {"", "unknown", "none", "null", "extracted_text", "extracted text", "text extracted"}
+
+    @staticmethod
+    def _is_calendar_event_url(url: str) -> bool:
+        low = str(url or "").lower()
+        return (
+            "calendar.google.com" in low
+            or "@group.calendar.google.com" in low
+            or "%40group.calendar.google.com" in low
+            or ("google.com/calendar/event" in low and "eid=" in low)
+        )
+
+    @staticmethod
+    def _normalize_url_value(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            parsed = urlparse(text)
+            scheme = (parsed.scheme or "https").lower()
+            netloc = (parsed.netloc or "").lower()
+            path = (parsed.path or "").rstrip("/")
+            return urlunparse((scheme, netloc, path, "", parsed.query, ""))
+        except Exception:
+            return text.lower().rstrip("/")
+
+    @staticmethod
+    def _normalize_date_value(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            return datetime.fromisoformat(text).date().isoformat()
+        except Exception:
+            return text[:10]
+
+    @staticmethod
+    def _normalize_time_value(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        # Handle explicit 12-hour clock representations first.
+        for fmt in ("%I:%M:%S %p", "%I:%M %p"):
+            try:
+                parsed = datetime.strptime(text[:11] if fmt == "%I:%M:%S %p" else text[:8], fmt)
+                return parsed.strftime("%H:%M:%S")
+            except Exception:
+                continue
+        for fmt in ("%H:%M:%S", "%H:%M"):
+            try:
+                parsed = datetime.strptime(text[:8], fmt) if fmt == "%H:%M:%S" else datetime.strptime(text[:5], fmt)
+                return parsed.strftime("%H:%M:%S")
+            except Exception:
+                continue
+        return text
+
+    @staticmethod
+    def _times_equivalent_with_12h_guard(left: str, right: str) -> bool:
+        if not left or not right:
+            return left == right
+        if left == right:
+            return True
+        try:
+            lt = datetime.strptime(left[:8], "%H:%M:%S")
+            rt = datetime.strptime(right[:8], "%H:%M:%S")
+            diff = abs((lt - rt).total_seconds())
+            # Catch common 12h-vs-24h normalization drift (e.g., 02:00 vs 14:00).
+            return diff in {12 * 3600}
+        except Exception:
+            return False
+
+    @staticmethod
+    def _is_social_platform_url(url: str) -> bool:
+        low = str(url or "").lower()
+        return ("facebook.com" in low) or ("instagram.com" in low)
+
+    def _extract_visible_text_for_replay(self, html: str) -> str:
+        if not html:
+            return ""
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            for tag in soup(["script", "style", "noscript", "template", "svg"]):
+                tag.decompose()
+            for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
+                comment.extract()
+            main_node = soup.select_one("main, article, [role='main'], .event, .event-content")
+            text_chunks: list[str] = []
+            if main_node is not None:
+                text_chunks.append(" ".join(main_node.stripped_strings))
+            text_chunks.append(" ".join(soup.stripped_strings))
+            visible = " ".join(chunk for chunk in text_chunks if chunk).strip()
+            return visible[:20000]
+        except Exception:
+            return str(html or "")[:20000]
+
+    def _get_replay_fb_scraper(self):
+        """
+        Lazily initialize fb.py scraper for replay of Facebook/Instagram URLs.
+        Reuses one authenticated browser session across replay rows.
+        """
+        if self._replay_fb_scraper is not None:
+            return self._replay_fb_scraper
+        try:
+            import fb as fb_module
+
+            self._replay_fb_module = fb_module
+            fb_module.llm_handler = self.llm_handler
+            fb_module.db_handler = self.db_handler
+            self._replay_fb_scraper = fb_module.FacebookEventScraper(config_path=self.config_path)
+            return self._replay_fb_scraper
+        except Exception as e:
+            logging.warning("Replay fb.py initialization failed: %s", e)
+            self._replay_fb_scraper = None
+            return None
+
+    def _close_replay_fb_scraper(self) -> None:
+        scraper = self._replay_fb_scraper
+        self._replay_fb_scraper = None
+        if scraper is None:
+            return
+        try:
+            if hasattr(scraper, "_safe_shutdown_browser"):
+                scraper._safe_shutdown_browser()
+        except Exception as e:
+            logging.warning("Replay fb.py shutdown failed: %s", e)
+
+    def _fetch_replay_events_for_social_url(self, url: str) -> dict:
+        """
+        Replay fetch for Facebook/Instagram URLs via fb.py methods.
+        """
+        fb_scraper = self._get_replay_fb_scraper()
+        if fb_scraper is None:
+            return {
+                "ok": False,
+                "category": "social_platform_scraper_init_failed",
+                "details": "fb.py scraper unavailable for replay",
+                "events": [],
+            }
+
+        try:
+            if not fb_scraper.navigate_and_maybe_login(url):
+                reason = "navigation_failed"
+                try:
+                    reason = str(fb_scraper._get_last_access_reason(url))
+                except Exception:
+                    pass
+                return {
+                    "ok": False,
+                    "category": "url_unreachable_replay",
+                    "details": f"social_access_failed:{reason}",
+                    "events": [],
+                }
+
+            extracted_text = fb_scraper.extract_event_text(url, assume_navigated=True)
+            if not extracted_text:
+                return {
+                    "ok": False,
+                    "category": "no_event_extracted_replay",
+                    "details": "social_no_text",
+                    "events": [],
+                }
+
+            # For non-event Facebook pages, try fb.py's relevance slicer first.
+            if "facebook.com" in str(url).lower() and "/events/" not in str(url).lower():
+                try:
+                    relevant = fb_scraper.extract_relevant_text(extracted_text, url)
+                    if relevant:
+                        extracted_text = relevant
+                except Exception:
+                    pass
+
+            prompt, schema_type = self.llm_handler.generate_prompt(url, extracted_text, "fb")
+            if schema_type is None:
+                prompt, schema_type = self.llm_handler.generate_prompt(url, extracted_text, "default")
+            if schema_type is None:
+                return {"ok": False, "category": "parser_or_llm_failure", "details": "missing_schema_type", "events": []}
+
+            parsed = None
+            last_llm_error = ""
+            for _attempt in range(1, 3):
+                llm_response = self.llm_handler.query_llm(url, prompt, schema_type)
+                if not llm_response:
+                    last_llm_error = "empty_llm_response"
+                    continue
+                parsed = self.llm_handler.extract_and_parse_json(llm_response, url, schema_type)
+                if parsed:
+                    break
+                last_llm_error = "parsed_empty"
+
+            if not parsed:
+                category = "no_event_extracted_replay" if last_llm_error == "parsed_empty" else "parser_or_llm_failure"
+                return {"ok": False, "category": category, "details": last_llm_error or "llm_failed", "events": []}
+
+            normalized_events: list[dict] = []
+            for event in parsed:
+                if not isinstance(event, dict):
+                    continue
+                normalized_events.append(
+                    {
+                        "event_name": str(event.get("event_name") or "").strip(),
+                        "start_date": self._normalize_date_value(event.get("start_date")),
+                        "start_time": self._normalize_time_value(event.get("start_time")),
+                        "source": str(event.get("source") or "").strip(),
+                        "location": str(event.get("location") or "").strip(),
+                        "url": self._normalize_url_value(event.get("url") or url),
+                        "raw": event,
+                    }
+                )
+            if not normalized_events:
+                return {"ok": False, "category": "no_event_extracted_replay", "details": "no_normalized_events", "events": []}
+            return {"ok": True, "category": "", "details": "", "events": normalized_events}
+        except Exception as e:
+            return {
+                "ok": False,
+                "category": "parser_or_llm_failure",
+                "details": f"social_replay_exception:{e}",
+                "events": [],
+            }
+
+    def _fetch_replay_events_for_url(self, url: str) -> dict:
+        if self._is_social_platform_url(url):
+            return self._fetch_replay_events_for_social_url(url)
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            )
+        }
+        response = None
+        last_request_error = ""
+        for _attempt in range(1, 4):
+            try:
+                candidate = requests.get(url, timeout=25, headers=headers)
+                if candidate.status_code < 400:
+                    response = candidate
+                    break
+                last_request_error = f"http_status={candidate.status_code}"
+            except Exception as e:
+                last_request_error = str(e)
+        if response is None:
+            return {
+                "ok": False,
+                "category": "url_unreachable_replay",
+                "details": last_request_error or "request_failed",
+                "events": [],
+            }
+
+        extracted_text = self._extract_visible_text_for_replay(response.text)
+        if not extracted_text:
+            return {"ok": False, "category": "no_event_extracted_replay", "details": "no_visible_text", "events": []}
+
+        prompt, schema_type = self.llm_handler.generate_prompt(url, extracted_text, url)
+        if schema_type is None:
+            prompt, schema_type = self.llm_handler.generate_prompt(url, extracted_text, "default")
+        if schema_type is None:
+            return {"ok": False, "category": "parser_or_llm_failure", "details": "missing_schema_type", "events": []}
+
+        parsed = None
+        last_llm_error = ""
+        for _attempt in range(1, 3):
+            llm_response = self.llm_handler.query_llm(url, prompt, schema_type)
+            if not llm_response:
+                last_llm_error = "empty_llm_response"
+                continue
+            parsed = self.llm_handler.extract_and_parse_json(llm_response, url, schema_type)
+            if parsed:
+                break
+            last_llm_error = "parsed_empty"
+        if not parsed:
+            category = "no_event_extracted_replay" if last_llm_error == "parsed_empty" else "parser_or_llm_failure"
+            return {"ok": False, "category": category, "details": last_llm_error or "llm_failed", "events": []}
+
+        normalized_events: list[dict] = []
+        for event in parsed:
+            if not isinstance(event, dict):
+                continue
+            normalized_events.append(
+                {
+                    "event_name": str(event.get("event_name") or "").strip(),
+                    "start_date": self._normalize_date_value(event.get("start_date")),
+                    "start_time": self._normalize_time_value(event.get("start_time")),
+                    "source": str(event.get("source") or "").strip(),
+                    "location": str(event.get("location") or "").strip(),
+                    "url": self._normalize_url_value(event.get("url") or url),
+                    "raw": event,
+                }
+            )
+        if not normalized_events:
+            return {"ok": False, "category": "no_event_extracted_replay", "details": "no_normalized_events", "events": []}
+        return {"ok": True, "category": "", "details": "", "events": normalized_events}
+
+    def _llm_adjudicate_event_match(self, baseline: dict, replay: dict) -> tuple[bool, str]:
+        """
+        Ask LLM to judge if baseline/replay represent the same event.
+        """
+        prompt = (
+            "Determine if these two rows are the same real-world event despite metadata differences.\n"
+            "Return ONLY JSON: {\"same_event\": true|false, \"reason\": \"...\"}\n\n"
+            f"Baseline: {json.dumps(baseline, ensure_ascii=True)}\n"
+            f"Replay: {json.dumps(replay, ensure_ascii=True)}\n"
+            "Use practical tolerance for source/location wording differences."
+        )
+        try:
+            response = self.llm_handler.query_llm("", prompt)
+            if not response:
+                return False, "llm_empty"
+            text = str(response).strip()
+            start = text.find("{")
+            end = text.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                return False, "llm_non_json"
+            payload = json.loads(text[start:end + 1])
+            same_event = bool(payload.get("same_event"))
+            reason = str(payload.get("reason") or "")
+            return same_event, reason
+        except Exception as e:
+            return False, f"llm_error:{e}"
+
+    def _resolve_baseline_event_id(self, baseline: dict) -> int | None:
+        try:
+            rows = self.db_handler.execute_query(
+                """
+                SELECT event_id
+                FROM events
+                WHERE
+                    LOWER(COALESCE(url, '')) = :url
+                    AND LOWER(COALESCE(event_name, '')) = :event_name
+                    AND start_date::text = :start_date
+                    AND COALESCE(start_time::text, '') = :start_time
+                ORDER BY event_id DESC
+                LIMIT 1
+                """,
+                {
+                    "url": str(baseline.get("url", "")).lower(),
+                    "event_name": str(baseline.get("event_name", "")).lower(),
+                    "start_date": str(baseline.get("start_date", "")),
+                    "start_time": str(baseline.get("start_time", "")),
+                },
+            )
+            if rows:
+                return int(rows[0][0])
+        except Exception:
+            return None
+        return None
+
+    def _compare_replay_row(self, baseline_row: dict, replay_payload: dict, strict_time_match: bool) -> dict:
+        baseline = {
+            "event_name": self._normalize_text_value(baseline_row.get("event_name")),
+            "start_date": self._normalize_date_value(baseline_row.get("start_date")),
+            "start_time": self._normalize_time_value(baseline_row.get("start_time")),
+            "source": self._normalize_text_value(baseline_row.get("source")),
+            "location": self._normalize_text_value(baseline_row.get("location")),
+            "url": self._normalize_url_value(baseline_row.get("url")),
+        }
+
+        if not baseline["url"]:
+            return {
+                "is_match": False,
+                "category": "missing_url_baseline",
+                "details": "baseline row has empty URL",
+                "baseline": baseline,
+                "replay": {},
+            }
+
+        if self._is_calendar_event_url(baseline["url"]):
+            return {
+                "is_match": True,
+                "category": "",
+                "details": "calendar_event_auto_true",
+                "baseline": baseline,
+                "replay": {},
+            }
+
+        if not replay_payload.get("ok"):
+            return {
+                "is_match": False,
+                "category": str(replay_payload.get("category") or "parser_or_llm_failure"),
+                "details": str(replay_payload.get("details") or "replay failed"),
+                "baseline": baseline,
+                "replay": {},
+            }
+
+        events = replay_payload.get("events", []) or []
+        if not events:
+            return {
+                "is_match": False,
+                "category": "no_event_extracted_replay",
+                "details": "replay returned zero events",
+                "baseline": baseline,
+                "replay": {},
+            }
+
+        def score_candidate(candidate: dict) -> int:
+            score = 0
+            if self._normalize_text_value(candidate.get("event_name")) == baseline["event_name"]:
+                score += 4
+            if self._normalize_date_value(candidate.get("start_date")) == baseline["start_date"]:
+                score += 4
+            if self._normalize_url_value(candidate.get("url")) == baseline["url"]:
+                score += 3
+            if self._normalize_text_value(candidate.get("source")) == baseline["source"]:
+                score += 2
+            cand_time = self._normalize_time_value(candidate.get("start_time"))
+            if cand_time and baseline["start_time"] and cand_time == baseline["start_time"]:
+                score += 2
+            return score
+
+        ranked = sorted(events, key=score_candidate, reverse=True)
+        best = ranked[0]
+        replay = {
+            "event_name": self._normalize_text_value(best.get("event_name")),
+            "start_date": self._normalize_date_value(best.get("start_date")),
+            "start_time": self._normalize_time_value(best.get("start_time")),
+            "source": self._normalize_text_value(best.get("source")),
+            "location": self._normalize_text_value(best.get("location")),
+            "url": self._normalize_url_value(best.get("url")),
+        }
+
+        duplicate_identity_count = sum(
+            1
+            for candidate in events
+            if (
+                self._normalize_text_value(candidate.get("event_name")) == baseline["event_name"]
+                and self._normalize_date_value(candidate.get("start_date")) == baseline["start_date"]
+                and self._normalize_time_value(candidate.get("start_time")) == baseline["start_time"]
+            )
+        )
+        if duplicate_identity_count > 1:
+            return {
+                "is_match": False,
+                "category": "duplicate_event_identity",
+                "details": f"replay produced {duplicate_identity_count} duplicates for identity keys",
+                "baseline": baseline,
+                "replay": replay,
+            }
+
+        name_similarity = self._name_similarity(baseline["event_name"], replay["event_name"])
+        name_contains_variant = self._name_contains_variant(baseline["event_name"], replay["event_name"])
+        same_date = replay["start_date"] == baseline["start_date"]
+        same_time = self._times_equivalent_with_12h_guard(replay["start_time"], baseline["start_time"])
+        core_match = (
+            replay["url"] == baseline["url"]
+            and same_date
+            and (name_similarity >= 0.90 or name_contains_variant)
+        )
+        if strict_time_match:
+            core_match = core_match and same_time
+
+        if core_match:
+            return {
+                "is_match": True,
+                "category": "",
+                "details": "baseline and replay match on strict core fields",
+                "baseline": baseline,
+                "replay": replay,
+            }
+
+        # Ambiguous differences: ask LLM to adjudicate.
+        # This intentionally allows URL/source drift if event identity is otherwise strong.
+        if (
+            same_date
+            and ((not strict_time_match) or same_time)
+            and (name_similarity >= 0.75 or name_contains_variant)
+        ):
+            llm_same, llm_reason = self._llm_adjudicate_event_match(baseline, replay)
+            if llm_same:
+                return {
+                    "is_match": True,
+                    "category": "",
+                    "details": f"llm_adjudicated_match:{llm_reason}",
+                    "baseline": baseline,
+                    "replay": replay,
+                }
+
+        if replay["start_date"] != baseline["start_date"]:
+            category = "wrong_date"
+        elif strict_time_match and replay["start_time"] != baseline["start_time"]:
+            category = "wrong_time"
+        elif baseline["location"] and replay["location"] and replay["location"] != baseline["location"]:
+            category = "wrong_location_or_address"
+        elif (
+            replay["source"] != baseline["source"]
+            and not self._is_placeholder_source(replay["source"])
+            and not self._is_placeholder_source(baseline["source"])
+        ):
+            category = "wrong_source"
+        elif name_similarity < 0.60:
+            category = "content_drift_major"
+        else:
+            category = "other_mismatch"
+
+        return {
+            "is_match": False,
+            "category": category,
+            "details": "core field mismatch",
+            "baseline": baseline,
+            "replay": replay,
+        }
+
+    def _load_metric_history(self, metric_key: str, days: int = 90) -> list[dict]:
+        cutoff = datetime.now() - timedelta(days=max(1, int(days or 90)))
+        try:
+            rows = self.db_handler.execute_query(
+                """
+                SELECT mo.created_at, mo.metric_value_numeric
+                FROM metric_observations mo
+                JOIN metric_definitions md ON md.metric_id = mo.metric_id
+                WHERE md.metric_key = :metric_key
+                  AND mo.created_at >= :cutoff
+                ORDER BY mo.created_at
+                """,
+                {"metric_key": metric_key, "cutoff": cutoff},
+            )
+        except Exception:
+            rows = []
+        history: list[dict] = []
+        for row in rows or []:
+            ts = row[0]
+            val = row[1]
+            try:
+                history.append(
+                    {
+                        "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                        "value": float(val),
+                    }
+                )
+            except Exception:
+                continue
+        return history
+
+    def _should_auto_delete_replay_mismatch(self, comparison: dict) -> bool:
+        """
+        High-confidence delete condition: baseline row appears unrelated to URL content.
+        """
+        if bool(comparison.get("is_match")):
+            return False
+        category = str(comparison.get("category") or "")
+        if category not in {"wrong_date", "content_drift_major"}:
+            return False
+        baseline = comparison.get("baseline", {}) if isinstance(comparison.get("baseline"), dict) else {}
+        replay = comparison.get("replay", {}) if isinstance(comparison.get("replay"), dict) else {}
+        if not baseline or not replay:
+            return False
+        if self._is_calendar_event_url(str(baseline.get("url", ""))):
+            return False
+        name_similarity = self._name_similarity(
+            str(baseline.get("event_name", "")),
+            str(replay.get("event_name", "")),
+        )
+        same_date = str(baseline.get("start_date", "")) == str(replay.get("start_date", ""))
+        return (name_similarity < 0.55) and (not same_date)
+
+    def _run_accuracy_replay_assessment(self, results: dict) -> dict:
+        replay_cfg = (
+            self.config.get("testing", {})
+            .get("validation", {})
+            .get("accuracy_replay", {})
+        )
+        if not bool(replay_cfg.get("enabled", True)):
+            return {"status": "DISABLED", "enabled": False}
+
+        query_text = str(
+            replay_cfg.get("query_text", "Where can I dance next week. Please include live music events.")
+        ).strip()
+        max_events = int(replay_cfg.get("max_events", 20) or 20)
+        strict_time_match = bool(replay_cfg.get("strict_time_match", True))
+        trend_days = int(replay_cfg.get("trend_days", 90) or 90)
+
+        run_id = str(os.getenv("DS_RUN_ID", "")).strip() or self._infer_latest_pipeline_run_id(results.get("timestamp"))
+        if not run_id:
+            run_id = f"validation-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+        executor = ChatbotTestExecutor(self.config, self.db_handler)
+        question_dict = {
+            "question": query_text,
+            "category": "accuracy_replay",
+            "parameters": {},
+            "expected_criteria": {},
+        }
+        query_result = executor.execute_test_question(question_dict)
+        sql_query = str(query_result.get("sql_query") or "").strip()
+        if not bool(query_result.get("execution_success")) or not sql_query or sql_query.startswith("CLARIFICATION:"):
+            return {
+                "status": "ERROR",
+                "query_text": query_text,
+                "run_id": run_id,
+                "error": "baseline query did not execute successfully",
+                "sql_query": sql_query,
+                "coverage_accuracy_pct": 0.0,
+                "replay_accuracy_pct": 0.0,
+                "total_rows": 0,
+                "true_count": 0,
+                "false_count": 0,
+                "category_counts": {},
+                "rows": [],
+                "trend": self._load_metric_history("validation_replay_accuracy_pct", trend_days),
+                "remediation_actions": [],
+            }
+
+        rows = self.db_handler.execute_query(sql_query) or []
+        baseline_rows = [dict(row._mapping) for row in rows[:max_events]]
+        if not baseline_rows:
+            return {
+                "status": "WARN",
+                "query_text": query_text,
+                "run_id": run_id,
+                "error": "baseline query returned no rows",
+                "sql_query": sql_query,
+                "coverage_accuracy_pct": 0.0,
+                "replay_accuracy_pct": 0.0,
+                "total_rows": 0,
+                "true_count": 0,
+                "false_count": 0,
+                "category_counts": {},
+                "rows": [],
+                "trend": self._load_metric_history("validation_replay_accuracy_pct", trend_days),
+                "remediation_actions": [],
+            }
+
+        url_replay_cache: dict[str, dict] = {}
+        scored_rows: list[dict] = []
+        category_counter: Counter = Counter()
+        true_count = 0
+        url_present_count = 0
+        deleted_event_ids: set[int] = set()
+
+        for baseline_row in baseline_rows:
+            baseline_url = self._normalize_url_value(baseline_row.get("url"))
+            if baseline_url:
+                url_present_count += 1
+                if baseline_url not in url_replay_cache:
+                    url_replay_cache[baseline_url] = self._fetch_replay_events_for_url(baseline_url)
+            replay_payload = url_replay_cache.get(baseline_url, {"ok": False, "category": "missing_url_baseline", "details": ""})
+            comparison = self._compare_replay_row(
+                baseline_row=baseline_row,
+                replay_payload=replay_payload,
+                strict_time_match=strict_time_match,
+            )
+            is_match = bool(comparison.get("is_match"))
+            if is_match:
+                true_count += 1
+            category = str(comparison.get("category") or "match")
+            if not is_match:
+                category_counter.update([category])
+
+            event_id = self._resolve_baseline_event_id(comparison.get("baseline") or {})
+            action_taken = ""
+            if (
+                event_id is not None
+                and event_id not in deleted_event_ids
+                and self._should_auto_delete_replay_mismatch(comparison)
+            ):
+                try:
+                    self.db_handler.delete_event_with_event_id(
+                        int(event_id),
+                        deletion_source="validation.replay_accuracy",
+                        deletion_reason="replay_high_confidence_wrong_url_mismatch",
+                        extra_context={
+                            "query_text": query_text,
+                            "mismatch_category": str(comparison.get("category", "")),
+                            "baseline": comparison.get("baseline", {}),
+                            "replay": comparison.get("replay", {}),
+                        },
+                    )
+                    deleted_event_ids.add(int(event_id))
+                    action_taken = "deleted"
+                except Exception as delete_error:
+                    action_taken = f"delete_failed:{delete_error}"
+            self.db_handler.record_accuracy_replay_result(
+                run_id=run_id,
+                query_text=query_text,
+                baseline_event_id=event_id,
+                baseline_url=baseline_url,
+                baseline_snapshot=comparison.get("baseline") or {},
+                replay_snapshot=comparison.get("replay") or {},
+                is_match=is_match,
+                mismatch_category=category if not is_match else "",
+                mismatch_details=str(comparison.get("details") or ""),
+            )
+            scored_rows.append(
+                {
+                    "is_match": is_match,
+                    "mismatch_category": category if not is_match else "",
+                    "mismatch_details": str(comparison.get("details") or ""),
+                    "baseline": comparison.get("baseline") or {},
+                    "replay": comparison.get("replay") or {},
+                    "baseline_event_id": event_id,
+                    "action_taken": action_taken,
+                }
+            )
+
+        total_rows = len(scored_rows)
+        false_count = max(0, total_rows - true_count)
+        coverage_accuracy_pct = (true_count / total_rows * 100.0) if total_rows else 0.0
+        replay_accuracy_pct = (true_count / url_present_count * 100.0) if url_present_count else 0.0
+
+        remediation_actions: list[str] = []
+        for category, _count in category_counter.most_common():
+            if category == "missing_url_baseline":
+                remediation_actions.append("Persist source URL for every non-email event row before DB write; enforce non-empty URL guard.")
+            elif category == "wrong_date":
+                remediation_actions.append("Tighten date extraction precedence and reject thumbnail/subsidiary dates when primary event block disagrees.")
+            elif category == "wrong_time":
+                remediation_actions.append("Enforce strict Pacific-time parsing in extraction and remove heuristic time fallbacks.")
+            elif category == "wrong_location_or_address":
+                remediation_actions.append("Harden venue/address resolver to prioritize explicit venue tokens over fuzzy nearest-name matches.")
+            elif category == "wrong_source":
+                remediation_actions.append("Improve source attribution from URL/domain and page ownership signals before write.")
+            elif category == "duplicate_event_identity":
+                remediation_actions.append("Strengthen dedup identity keys on URL+event_name+start_date+start_time before insert.")
+            elif category == "no_event_extracted_replay":
+                remediation_actions.append("Add site-template fallback extraction for low-text pages and enforce second-pass link follow for incomplete pages.")
+            elif category == "url_unreachable_replay":
+                remediation_actions.append("Add retry/backoff and classify persistent unreachable domains for manual review.")
+            elif category == "social_platform_scraper_init_failed":
+                remediation_actions.append("Repair fb.py replay initialization (credentials/session/bootstrap) so social URLs are replay-scraped.")
+            else:
+                remediation_actions.append("Review mismatch samples and add deterministic parser guardrails for recurring patterns.")
+
+        self.db_handler.record_metric_observation(
+            run_id=run_id,
+            metric_key="validation_replay_accuracy_pct",
+            metric_value_numeric=coverage_accuracy_pct,
+            metric_unit="percent",
+            description="Replay validation accuracy: strict row match / total baseline rows",
+            higher_is_better=True,
+            notes={
+                "query_text": query_text,
+                "total_rows": total_rows,
+                "true_count": true_count,
+                "false_count": false_count,
+                "category_counts": dict(category_counter),
+                "strict_time_match": strict_time_match,
+                "auto_deleted_count": len(deleted_event_ids),
+            },
+        )
+        self.db_handler.record_metric_observation(
+            run_id=run_id,
+            metric_key="validation_replay_accuracy_pct_url_present",
+            metric_value_numeric=replay_accuracy_pct,
+            metric_unit="percent",
+            description="Replay validation accuracy: strict row match / baseline rows with URL",
+            higher_is_better=True,
+            notes={
+                "query_text": query_text,
+                "url_present_count": url_present_count,
+                "true_count": true_count,
+            },
+        )
+
+        return {
+            "status": "PASS" if false_count == 0 else "WARN",
+            "query_text": query_text,
+            "sql_query": sql_query,
+            "run_id": run_id,
+            "strict_time_match": strict_time_match,
+            "coverage_accuracy_pct": round(coverage_accuracy_pct, 2),
+            "replay_accuracy_pct": round(replay_accuracy_pct, 2),
+            "total_rows": total_rows,
+            "url_present_count": url_present_count,
+            "true_count": true_count,
+            "false_count": false_count,
+            "category_counts": dict(category_counter),
+            "rows": scored_rows,
+            "auto_deleted_count": len(deleted_event_ids),
+            "remediation_actions": remediation_actions[:10],
+            "trend": self._load_metric_history("validation_replay_accuracy_pct", trend_days),
+        }
+
     def _evaluate_chatbot_problem_category_gate(self, chatbot_report: dict, chatbot_config: dict) -> dict:
         """Evaluate category-level chatbot quality gate from problem-category buckets."""
         categories = chatbot_report.get("problem_categories", []) if isinstance(chatbot_report, dict) else []
@@ -592,6 +1409,7 @@ class ValidationTestRunner:
         llm_extraction_quality = self._summarize_llm_extraction_quality(results.get('timestamp'))
         chatbot_performance_summary = self._summarize_chatbot_performance(results.get('timestamp'))
         chatbot_metrics_sync_summary = self._summarize_chatbot_metrics_sync(results.get('timestamp'))
+        accuracy_replay_summary = results.get("accuracy_replay") if isinstance(results, dict) else {}
         scraper_network_summary = self._summarize_scraper_network_health(results.get('timestamp'))
         fb_block_summary = self._summarize_fb_block_health(results.get('timestamp'))
         fb_ig_funnel_summary = self._summarize_fb_ig_url_funnel(results.get('timestamp'), fb_block_summary)
@@ -632,6 +1450,7 @@ class ValidationTestRunner:
             chatbot_performance=chatbot_performance_summary,
             openrouter_cost=openrouter_cost_summary,
             openai_cost=openai_cost_summary,
+            accuracy_replay=accuracy_replay_summary,
         )
 
         # Build HTML
@@ -674,49 +1493,52 @@ class ValidationTestRunner:
             <span class="status-{results['overall_status'].lower()}">{results['overall_status']}</span>
         </p>
 
-        <h2>0. Run Control Panel (Cost / Accuracy / Completeness / Runtime)</h2>
+        <h2>0. Replay Accuracy</h2>
+        {self._build_accuracy_replay_html(accuracy_replay_summary)}
+
+        <h2>1. Run Control Panel (Cost / Accuracy / Completeness / Runtime)</h2>
         {self._build_run_control_panel_html(control_panel_summary, action_queue)}
 
-        <h2>1. Reliability Scorecard</h2>
+        <h2>2. Reliability Scorecard</h2>
         {self._build_reliability_scorecard_html(reliability_scorecard, reliability_issues, reliability_gates, trend_summary, registry_summary)}
 
-        <h2>2. Scraping Validation</h2>
+        <h2>3. Scraping Validation</h2>
         {self._build_scraping_html(results.get('scraping_validation'))}
 
-        <h2>3. Chatbot Testing</h2>
+        <h2>4. Chatbot Testing</h2>
         {self._build_chatbot_html(results.get('chatbot_testing'))}
 
-        <h2>4. Chatbot Performance</h2>
+        <h2>5. Chatbot Performance</h2>
         {self._build_chatbot_performance_html(chatbot_performance_summary)}
 
-        <h2>5. Scraper Network Reliability</h2>
+        <h2>6. Scraper Network Reliability</h2>
         {self._build_scraper_network_html(scraper_network_summary, results.get('scraping_validation'))}
 
-        <h2>6. Facebook Block Health</h2>
+        <h2>7. Facebook Block Health</h2>
         {self._build_fb_block_health_html(fb_block_summary)}
 
-        <h2>7. Address Alias Audit</h2>
+        <h2>8. Address Alias Audit</h2>
         {self._build_address_alias_audit_html(alias_audit_summary)}
 
-        <h2>8. LLM Provider Activity (All-Log Access Denominator: {llm_total_access_denominator})</h2>
+        <h2>9. LLM Provider Activity (All-Log Access Denominator: {llm_total_access_denominator})</h2>
         {self._build_llm_provider_activity_html(llm_activity_summary)}
 
-        <h2>9. LLM Extraction Quality Scorecard</h2>
+        <h2>10. LLM Extraction Quality Scorecard</h2>
         {self._build_llm_extraction_quality_html(llm_extraction_quality)}
 
-        <h2>10. Optimization Recommendations</h2>
+        <h2>11. Optimization Recommendations</h2>
         {self._build_optimization_html(optimization_plan)}
 
-        <h2>11. Reliability Action Queue</h2>
+        <h2>12. Reliability Action Queue</h2>
         {self._build_action_queue_html(action_queue)}
 
-        <h2>12. FB/IG URL Funnel</h2>
+        <h2>13. FB/IG URL Funnel</h2>
         {self._build_fb_ig_url_funnel_html(fb_ig_funnel_summary)}
 
-        <h2>13. Likely Incorrect Deletes</h2>
+        <h2>14. Likely Incorrect Deletes</h2>
         {self._build_suspicious_deletes_html(suspicious_deletes_summary)}
 
-        <h2>14. Chatbot Metrics Sync</h2>
+        <h2>15. Chatbot Metrics Sync</h2>
         {self._build_chatbot_metrics_sync_html(chatbot_metrics_sync_summary)}
 
         <hr style="margin: 40px 0;">
@@ -762,6 +1584,9 @@ class ValidationTestRunner:
         control_panel_path = os.path.join(output_dir, 'run_control_panel.json')
         with open(control_panel_path, 'w', encoding='utf-8') as f:
             json.dump(control_panel_summary, f, indent=2)
+        accuracy_replay_path = os.path.join(output_dir, 'accuracy_replay_summary.json')
+        with open(accuracy_replay_path, 'w', encoding='utf-8') as f:
+            json.dump(accuracy_replay_summary, f, indent=2)
         openrouter_cost_path = os.path.join(output_dir, 'openrouter_run_cost.json')
         with open(openrouter_cost_path, 'w', encoding='utf-8') as f:
             json.dump(openrouter_cost_summary, f, indent=2)
@@ -780,6 +1605,7 @@ class ValidationTestRunner:
         logging.info(f"Suspicious deletes summary saved: {suspicious_deletes_path}")
         logging.info(f"Chatbot metrics sync summary saved: {chatbot_metrics_sync_path}")
         logging.info(f"Run control panel saved: {control_panel_path}")
+        logging.info(f"Accuracy replay summary saved: {accuracy_replay_path}")
         logging.info(f"OpenRouter run cost summary saved: {openrouter_cost_path}")
         logging.info(f"OpenAI run cost summary saved: {openai_cost_path}")
 
@@ -2013,6 +2839,7 @@ class ValidationTestRunner:
         chatbot_performance: dict,
         openrouter_cost: dict | None,
         openai_cost: dict | None,
+        accuracy_replay: dict | None,
     ) -> dict:
         """Build cost/accuracy/completeness/runtime control panel focused on operator decisions."""
         reporting_cfg = self.validation_config.get("reporting", {}) if isinstance(self.validation_config, dict) else {}
@@ -2178,8 +3005,37 @@ class ValidationTestRunner:
         min_chatbot_fail = float(accuracy_cfg.get("min_chatbot_average_score_fail", 70.0) or 70.0)
         max_hard_fail_warn = float(accuracy_cfg.get("max_llm_hard_failure_rate_warn", 0.08) or 0.08)
         max_hard_fail_fail = float(accuracy_cfg.get("max_llm_hard_failure_rate_fail", 0.15) or 0.15)
+        min_replay_warn = float(accuracy_cfg.get("min_replay_coverage_accuracy_warn", 85.0) or 85.0)
+        min_replay_fail = float(accuracy_cfg.get("min_replay_coverage_accuracy_fail", 75.0) or 75.0)
 
         accuracy_checks: list[dict] = []
+        replay_coverage_pct = self._safe_float((accuracy_replay or {}).get("coverage_accuracy_pct"))
+        if replay_coverage_pct is None:
+            accuracy_checks.append({
+                "name": "Replay Coverage Accuracy (%)",
+                "actual": "N/A",
+                "target": f">= {min_replay_warn:.1f} warn, >= {min_replay_fail:.1f} fail",
+                "delta": "N/A",
+                "status": "WARN",
+                "details": str((accuracy_replay or {}).get("error", "Replay accuracy unavailable")),
+            })
+        else:
+            replay_status = "PASS"
+            if replay_coverage_pct < min_replay_fail:
+                replay_status = "FAIL"
+            elif replay_coverage_pct < min_replay_warn:
+                replay_status = "WARN"
+            accuracy_checks.append({
+                "name": "Replay Coverage Accuracy (%)",
+                "actual": f"{replay_coverage_pct:.2f}",
+                "target": f">= {min_replay_warn:.1f} warn, >= {min_replay_fail:.1f} fail",
+                "delta": f"{replay_coverage_pct - min_replay_warn:+.2f} vs warn",
+                "status": replay_status,
+                "details": (
+                    f"true={int((accuracy_replay or {}).get('true_count', 0) or 0)} / "
+                    f"total={int((accuracy_replay or {}).get('total_rows', 0) or 0)}"
+                ),
+            })
         url_score_status = "PASS"
         if url_level_score < min_url_score_fail:
             url_score_status = "FAIL"
@@ -2441,6 +3297,7 @@ class ValidationTestRunner:
             "cost_usd": total_run_cost_usd,
             "openrouter_cost_usd": openrouter_cost_usd,
             "openai_cost_usd": openai_cost_usd,
+            "accuracy_replay_coverage_pct": replay_coverage_pct,
             "accuracy_url_score": round(url_level_score, 1),
             "accuracy_chatbot_score": round(chatbot_avg_score, 1),
             "completeness_event_yield_rate": float(event_yield_rate) if event_yield_rate is not None else None,
@@ -2466,6 +3323,157 @@ class ValidationTestRunner:
             "openrouter_cost": openrouter_cost or {},
             "openai_cost": openai_cost or {},
         }
+
+    def _build_accuracy_replay_html(self, replay_data: dict | None) -> str:
+        """Render replay-accuracy KPI, mismatch categories, and trend mini-chart."""
+        if not isinstance(replay_data, dict) or not replay_data:
+            return "<p class='error-box'>❌ Replay accuracy unavailable</p>"
+        if replay_data.get("error"):
+            return f"<p class='error-box'>❌ Replay accuracy failed: {self._escape_html(str(replay_data.get('error')))}</p>"
+
+        coverage_pct = float(replay_data.get("coverage_accuracy_pct", 0.0) or 0.0)
+        replay_pct = float(replay_data.get("replay_accuracy_pct", 0.0) or 0.0)
+        total_rows = int(replay_data.get("total_rows", 0) or 0)
+        true_count = int(replay_data.get("true_count", 0) or 0)
+        false_count = int(replay_data.get("false_count", 0) or 0)
+        auto_deleted_count = int(replay_data.get("auto_deleted_count", 0) or 0)
+        query_text = self._escape_html(str(replay_data.get("query_text", "")))
+        run_id = self._escape_html(str(replay_data.get("run_id", "")))
+        sql_query = self._escape_html(str(replay_data.get("sql_query", "")))
+        strict_time = "Yes" if bool(replay_data.get("strict_time_match", True)) else "No"
+
+        category_counts = replay_data.get("category_counts", {}) if isinstance(replay_data.get("category_counts"), dict) else {}
+        category_rows = ""
+        for category, count in sorted(category_counts.items(), key=lambda item: item[1], reverse=True):
+            category_rows += f"<tr><td>{self._escape_html(str(category))}</td><td>{int(count or 0)}</td></tr>"
+        if not category_rows:
+            category_rows = "<tr><td colspan='2'>No mismatches recorded.</td></tr>"
+
+        actions = replay_data.get("remediation_actions", []) if isinstance(replay_data.get("remediation_actions"), list) else []
+        actions_html = "".join(f"<li>{self._escape_html(str(action))}</li>" for action in actions[:8]) or "<li>No remediation actions generated.</li>"
+
+        comparison_rows = replay_data.get("rows", []) if isinstance(replay_data.get("rows"), list) else []
+        comparison_html = ""
+        for idx, row in enumerate(comparison_rows, start=1):
+            if not isinstance(row, dict):
+                continue
+            is_match = bool(row.get("is_match"))
+            match_text = "True" if is_match else "False"
+            baseline = row.get("baseline", {}) if isinstance(row.get("baseline"), dict) else {}
+            replay = row.get("replay", {}) if isinstance(row.get("replay"), dict) else {}
+            mismatch_category = self._escape_html(str(row.get("mismatch_category", "") or ""))
+            mismatch_details = self._escape_html(str(row.get("mismatch_details", "") or ""))
+            action_taken = self._escape_html(str(row.get("action_taken", "") or ""))
+            row_class = "" if is_match else " class='problematic'"
+
+            def _cell(payload: dict, key: str) -> str:
+                return self._escape_html(str(payload.get(key, "") or ""))
+
+            comparison_html += (
+                f"<tr{row_class}>"
+                f"<td>{idx}</td>"
+                "<td>Original</td>"
+                f"<td>{match_text}</td>"
+                f"<td>{_cell(baseline, 'event_name')}</td>"
+                f"<td>{_cell(baseline, 'start_date')}</td>"
+                f"<td>{_cell(baseline, 'start_time')}</td>"
+                f"<td>{_cell(baseline, 'source')}</td>"
+                f"<td>{_cell(baseline, 'location')}</td>"
+                f"<td>{_cell(baseline, 'url')}</td>"
+                f"<td>{mismatch_category}</td>"
+                f"<td>{mismatch_details}</td>"
+                f"<td>{action_taken}</td>"
+                "</tr>"
+                f"<tr{row_class}>"
+                f"<td>{idx}</td>"
+                "<td>Re-scraped</td>"
+                f"<td>{match_text}</td>"
+                f"<td>{_cell(replay, 'event_name')}</td>"
+                f"<td>{_cell(replay, 'start_date')}</td>"
+                f"<td>{_cell(replay, 'start_time')}</td>"
+                f"<td>{_cell(replay, 'source')}</td>"
+                f"<td>{_cell(replay, 'location')}</td>"
+                f"<td>{_cell(replay, 'url')}</td>"
+                f"<td>{mismatch_category}</td>"
+                f"<td>{mismatch_details}</td>"
+                f"<td>{action_taken}</td>"
+                "</tr>"
+            )
+        if not comparison_html:
+            comparison_html = "<tr><td colspan='12'>No replay row comparisons available.</td></tr>"
+
+        trend = replay_data.get("trend", []) if isinstance(replay_data.get("trend"), list) else []
+        trend_points = []
+        for item in trend:
+            if not isinstance(item, dict):
+                continue
+            ts = str(item.get("timestamp", "")).strip()
+            value = self._safe_float(item.get("value"))
+            if not ts or value is None:
+                continue
+            trend_points.append({"timestamp": ts, "value": float(value)})
+
+        chart_html = "<p>No trend history yet.</p>"
+        if len(trend_points) >= 1:
+            width = 860
+            height = 220
+            pad_left = 48
+            pad_right = 10
+            pad_top = 15
+            pad_bottom = 28
+            inner_w = max(10, width - pad_left - pad_right)
+            inner_h = max(10, height - pad_top - pad_bottom)
+            values = [p["value"] for p in trend_points]
+            min_v = min(values)
+            max_v = max(values)
+            span = (max_v - min_v) if (max_v - min_v) > 1e-9 else 1.0
+            coords: list[tuple[float, float]] = []
+            for idx, point in enumerate(trend_points):
+                x = pad_left + (idx / max(1, len(trend_points) - 1)) * inner_w
+                y = pad_top + (1.0 - ((point["value"] - min_v) / span)) * inner_h
+                coords.append((x, y))
+            polyline = " ".join(f"{x:.2f},{y:.2f}" for x, y in coords)
+            last_label = self._escape_html(str(trend_points[-1]["timestamp"])[:10])
+            first_label = self._escape_html(str(trend_points[0]["timestamp"])[:10])
+            chart_html = (
+                f"<svg width='{width}' height='{height}' viewBox='0 0 {width} {height}' role='img' aria-label='Replay accuracy trend'>"
+                f"<rect x='0' y='0' width='{width}' height='{height}' fill='#ffffff'/>"
+                f"<line x1='{pad_left}' y1='{pad_top}' x2='{pad_left}' y2='{height - pad_bottom}' stroke='#999'/>"
+                f"<line x1='{pad_left}' y1='{height - pad_bottom}' x2='{width - pad_right}' y2='{height - pad_bottom}' stroke='#999'/>"
+                f"<polyline points='{polyline}' fill='none' stroke='#007bff' stroke-width='2.5'/>"
+                f"<text x='6' y='{pad_top + 8}' font-size='11' fill='#666'>{max_v:.1f}%</text>"
+                f"<text x='6' y='{height - pad_bottom}' font-size='11' fill='#666'>{min_v:.1f}%</text>"
+                f"<text x='{pad_left}' y='{height - 6}' font-size='11' fill='#666'>{first_label}</text>"
+                f"<text x='{width - 90}' y='{height - 6}' font-size='11' fill='#666'>{last_label}</text>"
+                "</svg>"
+            )
+
+        return (
+            "<div class='metric-container'>"
+            f"<div class='metric'><div class='metric-value'>{coverage_pct:.2f}%</div><div class='metric-label'>Coverage Accuracy (True / Total)</div></div>"
+            f"<div class='metric'><div class='metric-value'>{replay_pct:.2f}%</div><div class='metric-label'>Replay Accuracy (True / URL Rows)</div></div>"
+            f"<div class='metric'><div class='metric-value'>{true_count}/{total_rows}</div><div class='metric-label'>True Rows / Total Rows</div></div>"
+            f"<div class='metric'><div class='metric-value'>{false_count}</div><div class='metric-label'>False Rows</div></div>"
+            f"<div class='metric'><div class='metric-value'>{auto_deleted_count}</div><div class='metric-label'>Auto-deleted (audited)</div></div>"
+            "</div>"
+            f"<p><strong>Run ID:</strong> {run_id}<br>"
+            f"<strong>Query:</strong> {query_text}<br>"
+            f"<strong>Strict Time Match:</strong> {strict_time}</p>"
+            f"<details><summary>Generated SQL</summary><pre>{sql_query}</pre></details>"
+            "<h3>Mismatch Categories</h3>"
+            "<table><tr><th>Category</th><th>Count</th></tr>"
+            f"{category_rows}</table>"
+            "<h3>Remediation Actions</h3>"
+            f"<ol>{actions_html}</ol>"
+            "<h3>Row-by-Row Original vs Re-scraped</h3>"
+            "<table><tr>"
+            "<th>#</th><th>Row Type</th><th>Match</th><th>Event Name</th><th>Start Date</th><th>Start Time</th>"
+            "<th>Source</th><th>Location</th><th>URL</th><th>Mismatch Category</th><th>Details</th><th>Action</th>"
+            "</tr>"
+            f"{comparison_html}</table>"
+            "<h3>Accuracy Trend (DB persisted metric_observations)</h3>"
+            f"{chart_html}"
+        )
 
     def _build_run_control_panel_html(self, panel_data: dict, action_queue: dict | None = None) -> str:
         """Render operator-first control panel for cost, accuracy, completeness, and runtime."""
@@ -2497,14 +3505,17 @@ class ValidationTestRunner:
         openai_display = f"${float(openai_cost_usd):.4f}" if openai_cost_usd is not None else "N/A"
         event_yield = simple_summary.get("completeness_event_yield_rate")
         event_yield_display = f"{float(event_yield):.1%}" if event_yield is not None else "N/A"
+        replay_accuracy = simple_summary.get("accuracy_replay_coverage_pct")
+        replay_accuracy_display = f"{float(replay_accuracy):.2f}%" if replay_accuracy is not None else "N/A"
         html += (
             "<h3>Simple Run Summary</h3>"
             "<table><tr><th>Metric</th><th>Value</th><th>Formula / Notes</th></tr>"
             f"<tr><td>Cost</td><td>{self._escape_html(cost_display)}</td>"
             f"<td>Total = OpenRouter ({self._escape_html(openrouter_display)}) + "
             f"OpenAI ({self._escape_html(openai_display)}) usage windows aligned to run time</td></tr>"
-            f"<tr><td>Accuracy</td><td>{float(simple_summary.get('accuracy_url_score', 0) or 0):.1f}</td>"
-            f"<td>URL-level reliability score (primary grading metric)</td></tr>"
+            f"<tr><td>Accuracy</td><td>{float(simple_summary.get('accuracy_url_score', 0) or 0):.1f} "
+            f"(replay={self._escape_html(replay_accuracy_display)})</td>"
+            f"<td>URL-level reliability score plus replay coverage accuracy (strict row match / total rows)</td></tr>"
             f"<tr><td>Completeness</td><td>{self._escape_html(event_yield_display)}</td>"
             f"<td>urls_with_events / urls_passed_for_scraping = "
             f"{int(simple_summary.get('completeness_urls_with_events', 0) or 0)} / "

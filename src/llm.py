@@ -801,7 +801,9 @@ class LLMHandler:
             pacific_tz = ZoneInfo("America/Los_Angeles")
             today_date = datetime.now(pacific_tz).strftime("%Y-%m-%d")
             prompt = (
-                f"Today's date is: {today_date}. Use this for all date calculations.\n"
+                f"Today's date is: {today_date}. "
+                "Timezone: America/Los_Angeles (Pacific, PST/PDT). "
+                "Interpret all dates/times in this timezone unless the source explicitly states another timezone.\n"
                 f"{is_relevant_txt}\n"
                 f"{extracted_text}\n"
             )

@@ -133,6 +133,7 @@ class DatabaseHandler():
         self.metadata.reflect(bind=self.conn)
         self.ensure_urls_decision_reason_column()
         self.ensure_url_scrape_metrics_table()
+        self.ensure_validation_metric_tables()
 
         # Get google api key
         self.google_api_key = os.getenv("GOOGLE_KEY_PW")
@@ -233,6 +234,72 @@ class DatabaseHandler():
             logging.info("ensure_url_scrape_metrics_table: ensured url_scrape_metrics exists")
         except Exception as e:
             logging.warning("ensure_url_scrape_metrics_table: could not ensure table (continuing): %s", e)
+
+    def ensure_validation_metric_tables(self) -> None:
+        """
+        Ensure normalized validation metric tables exist.
+
+        Tables:
+            - metric_definitions: stable metric registry (one row per metric key)
+            - metric_observations: numeric observations over time/run windows
+            - accuracy_replay_results: row-level replay audit records
+        """
+        create_metric_definitions = """
+            CREATE TABLE IF NOT EXISTS metric_definitions (
+                metric_id SERIAL PRIMARY KEY,
+                metric_key TEXT UNIQUE NOT NULL,
+                metric_unit TEXT,
+                description TEXT,
+                higher_is_better BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        create_metric_observations = """
+            CREATE TABLE IF NOT EXISTS metric_observations (
+                id SERIAL PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                metric_id INTEGER NOT NULL REFERENCES metric_definitions(metric_id),
+                metric_value_numeric DOUBLE PRECISION NOT NULL,
+                window_start TIMESTAMP,
+                window_end TIMESTAMP,
+                notes_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        create_accuracy_replay_results = """
+            CREATE TABLE IF NOT EXISTS accuracy_replay_results (
+                id SERIAL PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                query_text TEXT NOT NULL,
+                baseline_event_id INTEGER,
+                baseline_url TEXT,
+                baseline_snapshot_json TEXT,
+                replay_snapshot_json TEXT,
+                is_match BOOLEAN NOT NULL,
+                mismatch_category TEXT,
+                mismatch_details TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_metric_observations_run_id ON metric_observations(run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_metric_observations_metric_id ON metric_observations(metric_id)",
+            "CREATE INDEX IF NOT EXISTS idx_metric_observations_created_at ON metric_observations(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_accuracy_replay_results_run_id ON accuracy_replay_results(run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_accuracy_replay_results_is_match ON accuracy_replay_results(is_match)",
+            "CREATE INDEX IF NOT EXISTS idx_accuracy_replay_results_category ON accuracy_replay_results(mismatch_category)",
+            "CREATE INDEX IF NOT EXISTS idx_accuracy_replay_results_event_id ON accuracy_replay_results(baseline_event_id)",
+        ]
+        try:
+            self.execute_query(create_metric_definitions)
+            self.execute_query(create_metric_observations)
+            self.execute_query(create_accuracy_replay_results)
+            for index_sql in indexes:
+                self.execute_query(index_sql)
+            logging.info("ensure_validation_metric_tables: ensured normalized validation metric tables exist")
+        except Exception as e:
+            logging.warning("ensure_validation_metric_tables: could not ensure tables (continuing): %s", e)
         
 
     def load_blacklist_domains(self):
@@ -1248,6 +1315,131 @@ class DatabaseHandler():
             logging.warning(
                 "write_url_scrape_metric(): failed for link=%s reason=%s",
                 row.get("link"),
+                e,
+            )
+
+    def record_metric_observation(
+        self,
+        run_id: str,
+        metric_key: str,
+        metric_value_numeric: float,
+        metric_unit: str = "",
+        description: str = "",
+        higher_is_better: bool = True,
+        window_start: Optional[datetime] = None,
+        window_end: Optional[datetime] = None,
+        notes: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Upsert metric definition and insert one metric observation.
+        """
+        safe_run_id = str(run_id or "").strip()
+        safe_metric_key = str(metric_key or "").strip()
+        if not safe_run_id or not safe_metric_key:
+            return
+        try:
+            self.execute_query(
+                """
+                INSERT INTO metric_definitions (metric_key, metric_unit, description, higher_is_better, updated_at)
+                VALUES (:metric_key, :metric_unit, :description, :higher_is_better, :updated_at)
+                ON CONFLICT (metric_key)
+                DO UPDATE SET
+                    metric_unit = COALESCE(EXCLUDED.metric_unit, metric_definitions.metric_unit),
+                    description = COALESCE(EXCLUDED.description, metric_definitions.description),
+                    higher_is_better = EXCLUDED.higher_is_better,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                {
+                    "metric_key": safe_metric_key,
+                    "metric_unit": str(metric_unit or "").strip() or None,
+                    "description": str(description or "").strip() or None,
+                    "higher_is_better": bool(higher_is_better),
+                    "updated_at": datetime.now(),
+                },
+            )
+            metric_rows = self.execute_query(
+                "SELECT metric_id FROM metric_definitions WHERE metric_key = :metric_key LIMIT 1",
+                {"metric_key": safe_metric_key},
+            )
+            if not metric_rows:
+                return
+            metric_id = int(metric_rows[0][0])
+            self.execute_query(
+                """
+                INSERT INTO metric_observations (
+                    run_id, metric_id, metric_value_numeric, window_start, window_end, notes_json
+                )
+                VALUES (
+                    :run_id, :metric_id, :metric_value_numeric, :window_start, :window_end, :notes_json
+                )
+                """,
+                {
+                    "run_id": safe_run_id,
+                    "metric_id": metric_id,
+                    "metric_value_numeric": float(metric_value_numeric),
+                    "window_start": window_start,
+                    "window_end": window_end,
+                    "notes_json": json.dumps(notes or {}, ensure_ascii=True) if notes else None,
+                },
+            )
+        except Exception as e:
+            logging.warning(
+                "record_metric_observation(): failed for run_id=%s metric_key=%s: %s",
+                safe_run_id,
+                safe_metric_key,
+                e,
+            )
+
+    def record_accuracy_replay_result(
+        self,
+        run_id: str,
+        query_text: str,
+        baseline_event_id: Optional[int],
+        baseline_url: str,
+        baseline_snapshot: Optional[Dict[str, Any]],
+        replay_snapshot: Optional[Dict[str, Any]],
+        is_match: bool,
+        mismatch_category: str,
+        mismatch_details: str,
+    ) -> None:
+        """
+        Insert one row-level replay accuracy record.
+        """
+        safe_run_id = str(run_id or "").strip()
+        safe_query_text = str(query_text or "").strip()
+        if not safe_run_id or not safe_query_text:
+            return
+        try:
+            event_id_value = None
+            if baseline_event_id is not None:
+                event_id_value = int(baseline_event_id)
+            self.execute_query(
+                """
+                INSERT INTO accuracy_replay_results (
+                    run_id, query_text, baseline_event_id, baseline_url, baseline_snapshot_json,
+                    replay_snapshot_json, is_match, mismatch_category, mismatch_details
+                ) VALUES (
+                    :run_id, :query_text, :baseline_event_id, :baseline_url, :baseline_snapshot_json,
+                    :replay_snapshot_json, :is_match, :mismatch_category, :mismatch_details
+                )
+                """,
+                {
+                    "run_id": safe_run_id,
+                    "query_text": safe_query_text,
+                    "baseline_event_id": event_id_value,
+                    "baseline_url": str(baseline_url or "").strip() or None,
+                    "baseline_snapshot_json": json.dumps(baseline_snapshot or {}, ensure_ascii=True),
+                    "replay_snapshot_json": json.dumps(replay_snapshot or {}, ensure_ascii=True),
+                    "is_match": bool(is_match),
+                    "mismatch_category": str(mismatch_category or "").strip() or None,
+                    "mismatch_details": str(mismatch_details or "").strip() or None,
+                },
+            )
+        except Exception as e:
+            logging.warning(
+                "record_accuracy_replay_result(): failed for run_id=%s baseline_event_id=%s: %s",
+                safe_run_id,
+                baseline_event_id,
                 e,
             )
     

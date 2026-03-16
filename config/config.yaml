@@ -347,6 +347,12 @@ testing:
   sql: true
   status: true
   validation:
+    accuracy_replay:
+      enabled: true
+      max_events: 20
+      query_text: Where can I dance next week. Please include live music events.
+      strict_time_match: true
+      trend_days: 90
     chatbot:
       clarification_sample_ratio: 0.5
       clarification_min_depth: 1

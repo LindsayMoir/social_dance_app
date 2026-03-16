@@ -141,6 +141,7 @@ def assess_sections(output_dir: str, report_sections: List[str]) -> List[dict]:
     llm_quality = load_json(os.path.join(output_dir, "llm_extraction_quality.json"))
     chatbot_performance = load_json(os.path.join(output_dir, "chatbot_performance.json"))
     suspicious_deletes = load_json(os.path.join(output_dir, "suspicious_deletes.json"))
+    accuracy_replay = load_json(os.path.join(output_dir, "accuracy_replay_summary.json"))
 
     issue_rows = issues.get("issues", []) if isinstance(issues.get("issues"), list) else []
     section_issue_trends = _compute_section_issue_trends(issue_rows)
@@ -182,6 +183,40 @@ def assess_sections(output_dir: str, report_sections: List[str]) -> List[dict]:
                         f"score={scorecard.get('score', 0)}",
                         f"status={scorecard.get('status', 'UNKNOWN')}",
                         f"failed_gates={len(failed_gates)}",
+                    ],
+                )
+            )
+            assessments[-1]["trend"] = section_issue_trends.get(section_name, {})
+            continue
+
+        if key == "replay accuracy":
+            coverage = float(accuracy_replay.get("coverage_accuracy_pct", 0.0) or 0.0)
+            total_rows = int(accuracy_replay.get("total_rows", 0) or 0)
+            false_count = int(accuracy_replay.get("false_count", 0) or 0)
+            category_counts = accuracy_replay.get("category_counts", {}) if isinstance(accuracy_replay.get("category_counts"), dict) else {}
+            dominant = sorted(category_counts.items(), key=lambda item: item[1], reverse=True)[:3]
+            dominant_text = ", ".join(f"{k}={v}" for k, v in dominant) if dominant else "none"
+            needs = total_rows > 0 and false_count > 0
+            assessments.append(
+                make_section_assessment(
+                    name=section_name,
+                    needs_remediation=needs,
+                    priority="P0",
+                    issue_understanding=(
+                        f"Replay coverage accuracy is {coverage:.2f}% with {false_count}/{total_rows} false rows. "
+                        f"Top mismatch categories: {dominant_text}."
+                    ),
+                    fix_plan=[
+                        "Triage dominant mismatch categories first (wrong_date/wrong_time/wrong_location/source).",
+                        "Add deterministic parser gates for recurring false categories before LLM extraction writes.",
+                        "Re-run replay validation on the same fixed query and verify accuracy trend improves run-over-run.",
+                    ],
+                    validation="`accuracy_replay_summary.coverage_accuracy_pct` increases and false-row categories trend down.",
+                    evidence=[
+                        f"coverage_accuracy_pct={coverage:.2f}",
+                        f"false_count={false_count}",
+                        f"total_rows={total_rows}",
+                        f"mismatch_categories={len(category_counts)}",
                     ],
                 )
             )

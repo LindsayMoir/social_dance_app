@@ -75,6 +75,8 @@ QUERY INTENT: {intent}
 EXTRACTED ENTITIES: {entities}
 TODAY: {current_date}
 DAY OF WEEK: {current_day_of_week}
+TIMEZONE: America/Los_Angeles (Pacific, PST/PDT)
+Interpret all event dates/times in Pacific local time unless the user explicitly asks for another timezone.
 Note: In PostgreSQL, EXTRACT(DOW FROM date) returns 0=Sunday .. 6=Saturday.
 For weekend filters, use IN (5,6,0).
 CRITICAL REMINDER: Friday=5, Saturday=6, Sunday=0. Do NOT use 5 for Saturday.
