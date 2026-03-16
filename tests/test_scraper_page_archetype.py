@@ -57,3 +57,20 @@ def test_should_extract_on_parent_page_allows_event_detail_in_incomplete_event()
         )
         is True
     )
+
+
+def test_classify_page_archetype_handles_query_event_and_nm_event_links() -> None:
+    links = [
+        "https://www.visitpenticton.com/event?external=true",
+        "https://www.visitpenticton.com/nm_event/live-music-cold-fame-x-freeze-the-fall-at-the-hub-on-martin/?external=true",
+        "https://www.visitpenticton.com/nm_event/pentictons-sunday-open-mic-jams-at-the-hub-on-martin/?external=true",
+        "https://www.visitpenticton.com/about",
+    ]
+    archetype = classify_page_archetype(
+        url="https://www.visitpenticton.com/events/",
+        visible_text="Upcoming events. View all. Read more.",
+        page_links=links,
+        calendar_sources=[],
+        calendar_ids_count=0,
+    )
+    assert archetype == "incomplete_event"

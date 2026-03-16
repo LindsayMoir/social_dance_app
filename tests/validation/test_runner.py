@@ -1488,52 +1488,55 @@ class ValidationTestRunner:
             <span class="status-{results['overall_status'].lower()}">{results['overall_status']}</span>
         </p>
 
-        <h2>0. Replay Accuracy</h2>
+        <h2>0. Trend Dashboard</h2>
+        {self._build_top_trend_dashboard_html()}
+
+        <h2>1. Replay Accuracy</h2>
         {self._build_accuracy_replay_html(accuracy_replay_summary)}
 
-        <h2>1. Run Control Panel (Cost / Accuracy / Completeness / Runtime)</h2>
+        <h2>2. Run Control Panel (Cost / Accuracy / Completeness / Runtime)</h2>
         {self._build_run_control_panel_html(control_panel_summary, action_queue)}
 
-        <h2>2. Reliability Scorecard</h2>
+        <h2>3. Reliability Scorecard</h2>
         {self._build_reliability_scorecard_html(reliability_scorecard, reliability_issues, reliability_gates, trend_summary, registry_summary)}
 
-        <h2>3. Scraping Validation</h2>
+        <h2>4. Scraping Validation</h2>
         {self._build_scraping_html(results.get('scraping_validation'))}
 
-        <h2>4. Chatbot Testing</h2>
+        <h2>5. Chatbot Testing</h2>
         {self._build_chatbot_html(results.get('chatbot_testing'))}
 
-        <h2>5. Chatbot Performance</h2>
+        <h2>6. Chatbot Performance</h2>
         {self._build_chatbot_performance_html(chatbot_performance_summary)}
 
-        <h2>6. Scraper Network Reliability</h2>
+        <h2>7. Scraper Network Reliability</h2>
         {self._build_scraper_network_html(scraper_network_summary, results.get('scraping_validation'))}
 
-        <h2>7. Facebook Block Health</h2>
+        <h2>8. Facebook Block Health</h2>
         {self._build_fb_block_health_html(fb_block_summary)}
 
-        <h2>8. Address Alias Audit</h2>
+        <h2>9. Address Alias Audit</h2>
         {self._build_address_alias_audit_html(alias_audit_summary)}
 
-        <h2>9. LLM Provider Activity (All-Log Access Denominator: {llm_total_access_denominator})</h2>
+        <h2>10. LLM Provider Activity (All-Log Access Denominator: {llm_total_access_denominator})</h2>
         {self._build_llm_provider_activity_html(llm_activity_summary)}
 
-        <h2>10. LLM Extraction Quality Scorecard</h2>
+        <h2>11. LLM Extraction Quality Scorecard</h2>
         {self._build_llm_extraction_quality_html(llm_extraction_quality)}
 
-        <h2>11. Optimization Recommendations</h2>
+        <h2>12. Optimization Recommendations</h2>
         {self._build_optimization_html(optimization_plan)}
 
-        <h2>12. Reliability Action Queue</h2>
+        <h2>13. Reliability Action Queue</h2>
         {self._build_action_queue_html(action_queue)}
 
-        <h2>13. FB/IG URL Funnel</h2>
+        <h2>14. FB/IG URL Funnel</h2>
         {self._build_fb_ig_url_funnel_html(fb_ig_funnel_summary)}
 
-        <h2>14. Likely Incorrect Deletes</h2>
+        <h2>15. Likely Incorrect Deletes</h2>
         {self._build_suspicious_deletes_html(suspicious_deletes_summary)}
 
-        <h2>15. Chatbot Metrics Sync</h2>
+        <h2>16. Chatbot Metrics Sync</h2>
         {self._build_chatbot_metrics_sync_html(chatbot_metrics_sync_summary)}
 
         <hr style="margin: 40px 0;">
@@ -2303,10 +2306,6 @@ class ValidationTestRunner:
 
         If no previous snapshot exists, keep raw totals and mark basis accordingly.
         """
-        if not output_dir:
-            summary["cost_basis"] = summary.get("cost_basis") or "window_total_api"
-            return summary
-
         provider_norm = str(provider or "").strip().lower()
         if provider_norm not in {"openrouter", "openai"}:
             return summary
@@ -2323,10 +2322,219 @@ class ValidationTestRunner:
             summary["cost_basis"] = "unavailable"
             return summary
 
+        run_start_ts = self._parse_iso_datetime(str(summary.get("start_ts", "") or ""))
+        run_end_ts = self._parse_iso_datetime(str(summary.get("end_ts", "") or ""))
+        run_id = str(os.getenv("DS_RUN_ID", "")).strip() or "validation-report"
+
+        # Preferred path: normalized DB metrics (metric_definitions + metric_observations).
+        db_supported = bool(
+            getattr(self, "db_handler", None)
+            and hasattr(self.db_handler, "execute_query")
+            and hasattr(self.db_handler, "record_metric_observation")
+        )
+        if db_supported:
+            metric_keys = {
+                "raw_cost": f"{provider_norm}_cumulative_cost_usd",
+                "raw_requests": f"{provider_norm}_cumulative_requests",
+                "raw_tokens": f"{provider_norm}_cumulative_tokens",
+                "run_cost": f"{provider_norm}_run_cost_usd",
+                "run_requests": f"{provider_norm}_run_requests",
+                "run_tokens": f"{provider_norm}_run_tokens",
+            }
+            prev_cost = None
+            prev_requests = None
+            prev_tokens = None
+            prev_ts_text = ""
+
+            if run_start_ts is not None:
+                try:
+                    prev_rows = self.db_handler.execute_query(
+                        """
+                        SELECT mo.window_start, mo.metric_value_numeric
+                        FROM metric_observations mo
+                        JOIN metric_definitions md ON md.metric_id = mo.metric_id
+                        WHERE md.metric_key = :metric_key
+                          AND mo.window_start IS NOT NULL
+                          AND mo.window_start < :run_start_ts
+                        ORDER BY mo.window_start DESC, mo.created_at DESC
+                        LIMIT 1
+                        """,
+                        {
+                            "metric_key": metric_keys["raw_cost"],
+                            "run_start_ts": run_start_ts,
+                        },
+                    ) or []
+                    if prev_rows:
+                        prev_ts = prev_rows[0][0]
+                        prev_ts_text = prev_ts.isoformat() if hasattr(prev_ts, "isoformat") else str(prev_ts)
+                        prev_cost = self._safe_float(prev_rows[0][1])
+                except Exception:
+                    prev_cost = None
+                    prev_ts_text = ""
+                try:
+                    prev_rows = self.db_handler.execute_query(
+                        """
+                        SELECT mo.metric_value_numeric
+                        FROM metric_observations mo
+                        JOIN metric_definitions md ON md.metric_id = mo.metric_id
+                        WHERE md.metric_key = :metric_key
+                          AND mo.window_start IS NOT NULL
+                          AND mo.window_start < :run_start_ts
+                        ORDER BY mo.window_start DESC, mo.created_at DESC
+                        LIMIT 1
+                        """,
+                        {
+                            "metric_key": metric_keys["raw_requests"],
+                            "run_start_ts": run_start_ts,
+                        },
+                    ) or []
+                    if prev_rows:
+                        prev_requests = self._safe_int(prev_rows[0][0])
+                except Exception:
+                    prev_requests = None
+                try:
+                    prev_rows = self.db_handler.execute_query(
+                        """
+                        SELECT mo.metric_value_numeric
+                        FROM metric_observations mo
+                        JOIN metric_definitions md ON md.metric_id = mo.metric_id
+                        WHERE md.metric_key = :metric_key
+                          AND mo.window_start IS NOT NULL
+                          AND mo.window_start < :run_start_ts
+                        ORDER BY mo.window_start DESC, mo.created_at DESC
+                        LIMIT 1
+                        """,
+                        {
+                            "metric_key": metric_keys["raw_tokens"],
+                            "run_start_ts": run_start_ts,
+                        },
+                    ) or []
+                    if prev_rows:
+                        prev_tokens = self._safe_int(prev_rows[0][0])
+                except Exception:
+                    prev_tokens = None
+
+            def _delta_float(cur: float | None, prev: float | None) -> float | None:
+                if cur is None or prev is None:
+                    return None
+                return round(cur - prev, 6)
+
+            def _delta_int(cur: int | None, prev: int | None) -> int | None:
+                if cur is None or prev is None:
+                    return None
+                return cur - prev
+
+            if prev_cost is None and prev_requests is None and prev_tokens is None:
+                summary["cost_basis"] = "window_total_api"
+                summary["delta_reference_timestamp"] = ""
+                run_cost = raw_cost
+                run_requests = raw_requests
+                run_tokens = raw_tokens
+            else:
+                run_cost = _delta_float(raw_cost, prev_cost)
+                run_requests = _delta_int(raw_requests, prev_requests)
+                run_tokens = _delta_int(raw_tokens, prev_tokens)
+                negative_delta = any(
+                    v is not None and v < 0
+                    for v in (run_cost, run_requests, run_tokens)
+                )
+                if negative_delta:
+                    summary["cost_basis"] = "window_total_api_reset_detected"
+                    summary["delta_reference_timestamp"] = prev_ts_text
+                    run_cost = raw_cost
+                    run_requests = raw_requests
+                    run_tokens = raw_tokens
+                else:
+                    summary["cost_basis"] = "delta_from_snapshot"
+                    summary["delta_reference_timestamp"] = prev_ts_text
+
+            summary["cost_usd"] = run_cost
+            summary["requests"] = run_requests
+            summary["tokens"] = run_tokens
+            summary["snapshot_history_path"] = "metric_observations"
+
+            # Persist raw cumulative metrics and derived run-window deltas.
+            try:
+                if raw_cost is not None:
+                    self.db_handler.record_metric_observation(
+                        run_id=run_id,
+                        metric_key=metric_keys["raw_cost"],
+                        metric_value_numeric=float(raw_cost),
+                        metric_unit="usd",
+                        description=f"{provider_norm} cumulative cost as reported by provider usage endpoint",
+                        higher_is_better=False,
+                        window_start=run_start_ts,
+                        window_end=run_end_ts,
+                    )
+                if raw_requests is not None:
+                    self.db_handler.record_metric_observation(
+                        run_id=run_id,
+                        metric_key=metric_keys["raw_requests"],
+                        metric_value_numeric=float(raw_requests),
+                        metric_unit="count",
+                        description=f"{provider_norm} cumulative request count from provider usage endpoint",
+                        higher_is_better=False,
+                        window_start=run_start_ts,
+                        window_end=run_end_ts,
+                    )
+                if raw_tokens is not None:
+                    self.db_handler.record_metric_observation(
+                        run_id=run_id,
+                        metric_key=metric_keys["raw_tokens"],
+                        metric_value_numeric=float(raw_tokens),
+                        metric_unit="tokens",
+                        description=f"{provider_norm} cumulative token count from provider usage endpoint",
+                        higher_is_better=False,
+                        window_start=run_start_ts,
+                        window_end=run_end_ts,
+                    )
+                if run_cost is not None:
+                    self.db_handler.record_metric_observation(
+                        run_id=run_id,
+                        metric_key=metric_keys["run_cost"],
+                        metric_value_numeric=float(run_cost),
+                        metric_unit="usd",
+                        description=f"{provider_norm} run-window cost delta used in control panel",
+                        higher_is_better=False,
+                        window_start=run_start_ts,
+                        window_end=run_end_ts,
+                    )
+                if run_requests is not None:
+                    self.db_handler.record_metric_observation(
+                        run_id=run_id,
+                        metric_key=metric_keys["run_requests"],
+                        metric_value_numeric=float(run_requests),
+                        metric_unit="count",
+                        description=f"{provider_norm} run-window request delta used in control panel",
+                        higher_is_better=False,
+                        window_start=run_start_ts,
+                        window_end=run_end_ts,
+                    )
+                if run_tokens is not None:
+                    self.db_handler.record_metric_observation(
+                        run_id=run_id,
+                        metric_key=metric_keys["run_tokens"],
+                        metric_value_numeric=float(run_tokens),
+                        metric_unit="tokens",
+                        description=f"{provider_norm} run-window token delta used in control panel",
+                        higher_is_better=False,
+                        window_start=run_start_ts,
+                        window_end=run_end_ts,
+                    )
+            except Exception as e:
+                summary["db_persist_warning"] = f"metric_observations_persist_failed: {e}"
+            return summary
+
+        # Fallback path when DB metric persistence is unavailable.
+        if not output_dir:
+            summary["cost_basis"] = summary.get("cost_basis") or "window_total_api"
+            return summary
+
         os.makedirs(output_dir, exist_ok=True)
         history_path = os.path.join(output_dir, f"{provider_norm}_cost_snapshots.jsonl")
 
         previous_snapshot: dict | None = None
+        snapshots: list[dict] = []
         try:
             if os.path.exists(history_path):
                 with open(history_path, "r", encoding="utf-8") as f:
@@ -2335,11 +2543,52 @@ class ValidationTestRunner:
                         if not line:
                             continue
                         try:
-                            previous_snapshot = json.loads(line)
+                            record = json.loads(line)
+                            if not isinstance(record, dict):
+                                continue
+                            if str(record.get("provider", "")).strip().lower() != provider_norm:
+                                continue
+                            snapshots.append(record)
                         except Exception:
                             continue
         except Exception:
-            previous_snapshot = None
+            snapshots = []
+
+        run_start_ts = self._parse_iso_datetime(str(summary.get("start_ts", "") or ""))
+        current_window_start = run_start_ts
+        if snapshots:
+            if current_window_start is not None:
+                # Prefer baseline snapshots from an earlier usage window start_ts.
+                # This avoids collapsing deltas to zero when report generation is rerun
+                # for the same run window.
+                pre_window_snapshots: list[tuple[datetime, dict]] = []
+                for snap in snapshots:
+                    snap_start = self._parse_iso_datetime(str(snap.get("start_ts", "") or ""))
+                    if snap_start is None:
+                        continue
+                    if snap_start < current_window_start:
+                        pre_window_snapshots.append((snap_start, snap))
+                if pre_window_snapshots:
+                    pre_window_snapshots.sort(key=lambda item: item[0])
+                    previous_snapshot = pre_window_snapshots[-1][1]
+                else:
+                    # Fallback to wall-clock snapshot timestamp if window start isn't available
+                    # in older history rows.
+                    pre_run_snapshots: list[tuple[datetime, dict]] = []
+                    for snap in snapshots:
+                        snap_ts = self._parse_iso_datetime(str(snap.get("timestamp", "") or ""))
+                        if snap_ts is None:
+                            continue
+                        if snap_ts < run_start_ts:
+                            pre_run_snapshots.append((snap_ts, snap))
+                    if pre_run_snapshots:
+                        pre_run_snapshots.sort(key=lambda item: item[0])
+                        previous_snapshot = pre_run_snapshots[-1][1]
+                    else:
+                        # No baseline prior to run start: treat API totals as window totals.
+                        previous_snapshot = None
+            else:
+                previous_snapshot = snapshots[-1]
 
         snapshot_record = {
             "timestamp": datetime.now().isoformat(),
@@ -2775,6 +3024,90 @@ class ValidationTestRunner:
 
     def _update_and_summarize_run_control_history(self, output_dir: str, record: dict) -> dict:
         """Persist control-panel KPIs and return short trend deltas vs recent history."""
+        run_id = str(record.get("run_id", "") or "").strip() or str(os.getenv("DS_RUN_ID", "")).strip() or "validation-report"
+        run_ts = self._parse_iso_datetime(str(record.get("timestamp", "") or "")) or datetime.now()
+        metric_specs = [
+            (
+                "runtime_hours",
+                "run_control_runtime_hours",
+                "hours",
+                "Run-control panel: end-to-end pipeline runtime in hours",
+                False,
+            ),
+            (
+                "event_yield_rate",
+                "run_control_event_yield_rate",
+                "ratio",
+                "Run-control panel: urls_with_events / urls_passed_for_scraping",
+                True,
+            ),
+            (
+                "llm_calls_per_event_url",
+                "run_control_llm_calls_per_event_url",
+                "ratio",
+                "Run-control panel: LLM extraction attempts per event-producing URL",
+                False,
+            ),
+        ]
+
+        # Preferred path: DB-backed metric history.
+        if getattr(self, "db_handler", None) and hasattr(self.db_handler, "record_metric_observation"):
+            for source_key, metric_key, metric_unit, description, higher_is_better in metric_specs:
+                value = record.get(source_key)
+                if value is None:
+                    continue
+                try:
+                    self.db_handler.record_metric_observation(
+                        run_id=run_id,
+                        metric_key=metric_key,
+                        metric_value_numeric=float(value),
+                        metric_unit=metric_unit,
+                        description=description,
+                        higher_is_better=higher_is_better,
+                        window_start=run_ts,
+                        window_end=run_ts,
+                    )
+                except Exception:
+                    continue
+
+            def _avg_prev(metric_key: str) -> tuple[float | None, int]:
+                try:
+                    rows = self.db_handler.execute_query(
+                        """
+                        SELECT mo.metric_value_numeric
+                        FROM metric_observations mo
+                        JOIN metric_definitions md ON md.metric_id = mo.metric_id
+                        WHERE md.metric_key = :metric_key
+                          AND mo.run_id <> :run_id
+                        ORDER BY mo.created_at DESC
+                        LIMIT 7
+                        """,
+                        {"metric_key": metric_key, "run_id": run_id},
+                    ) or []
+                except Exception:
+                    rows = []
+                values: list[float] = []
+                for row in rows:
+                    try:
+                        values.append(float(row[0]))
+                    except Exception:
+                        continue
+                if not values:
+                    return None, 0
+                return (sum(values) / len(values)), len(values)
+
+            runtime_avg, runtime_n = _avg_prev("run_control_runtime_hours")
+            yield_avg, yield_n = _avg_prev("run_control_event_yield_rate")
+            llm_avg, llm_n = _avg_prev("run_control_llm_calls_per_event_url")
+            return {
+                "path": "metric_observations",
+                "runs_considered": max(runtime_n, yield_n, llm_n),
+                "runtime_hours_avg_prev": runtime_avg,
+                "event_yield_rate_avg_prev": yield_avg,
+                "llm_calls_per_event_url_avg_prev": llm_avg,
+            }
+
+        # Fallback to file history when DB metrics are unavailable.
         os.makedirs(output_dir, exist_ok=True)
         history_path = os.path.join(output_dir, "run_control_history.jsonl")
         with open(history_path, "a", encoding="utf-8") as f:
@@ -2811,14 +3144,13 @@ class ValidationTestRunner:
                 return None
             return sum(vals) / len(vals)
 
-        trends = {
+        return {
             "path": history_path,
             "runs_considered": len(prev),
             "runtime_hours_avg_prev": _avg("runtime_hours"),
             "event_yield_rate_avg_prev": _avg("event_yield_rate"),
             "llm_calls_per_event_url_avg_prev": _avg("llm_calls_per_event_url"),
         }
-        return trends
 
     def _summarize_run_control_panel(
         self,
@@ -3287,6 +3619,42 @@ class ValidationTestRunner:
             "llm_calls_per_event_url": float(llm_calls_per_event_url) if llm_calls_per_event_url is not None else None,
         }
         trend = self._update_and_summarize_run_control_history(output_dir, history_record)
+        runtime_start_dt = self._parse_iso_datetime(str((pipeline_runtime or {}).get("start_ts", "") or ""))
+        runtime_end_dt = self._parse_iso_datetime(str((pipeline_runtime or {}).get("end_ts", "") or ""))
+        events_table_count = None
+        try:
+            rows = self.db_handler.execute_query("SELECT COUNT(*) FROM events") or []
+            events_table_count = int(rows[0][0]) if rows and rows[0] and rows[0][0] is not None else None
+        except Exception:
+            events_table_count = None
+
+        # Persist top-line control metrics for DB-backed trend charts.
+        try:
+            if total_run_cost_usd is not None:
+                self.db_handler.record_metric_observation(
+                    run_id=str(run_id or ""),
+                    metric_key="total_llm_run_cost_usd",
+                    metric_value_numeric=float(total_run_cost_usd),
+                    metric_unit="usd",
+                    description="Total LLM run cost (OpenRouter + OpenAI) for this validation window",
+                    higher_is_better=False,
+                    window_start=runtime_start_dt,
+                    window_end=runtime_end_dt,
+                )
+            if events_table_count is not None:
+                self.db_handler.record_metric_observation(
+                    run_id=str(run_id or ""),
+                    metric_key="run_control_events_table_count",
+                    metric_value_numeric=float(events_table_count),
+                    metric_unit="count",
+                    description="Count of rows in events table at end of run",
+                    higher_is_better=True,
+                    window_start=runtime_end_dt or runtime_start_dt,
+                    window_end=runtime_end_dt or runtime_start_dt,
+                )
+        except Exception:
+            pass
+
         simple_summary = {
             "run_id": str(run_id or ""),
             "cost_usd": total_run_cost_usd,
@@ -3304,6 +3672,7 @@ class ValidationTestRunner:
             "runtime_hours": runtime_hours,
             "runtime_start_ts": str((pipeline_runtime or {}).get("start_ts", "")),
             "runtime_end_ts": str((pipeline_runtime or {}).get("end_ts", "")),
+            "events_table_count": events_table_count,
         }
         return {
             "run_id": str(run_id or ""),
@@ -3469,6 +3838,102 @@ class ValidationTestRunner:
             "<h3>Accuracy Trend (DB persisted metric_observations)</h3>"
             f"{chart_html}"
         )
+
+    def _build_metric_trend_svg(
+        self,
+        metric_key: str,
+        title: str,
+        days: int = 120,
+        value_format: str = "number",
+    ) -> str:
+        """Render one DB-backed metric trend as a compact inline SVG."""
+        trend = self._load_metric_history(metric_key, days=days)
+        points = []
+        for item in trend:
+            ts = str(item.get("timestamp", "")).strip()
+            value = self._safe_float(item.get("value"))
+            if not ts or value is None:
+                continue
+            points.append({"timestamp": ts, "value": float(value)})
+
+        if not points:
+            return f"<h3>{self._escape_html(title)}</h3><p>No DB trend data available for <code>{self._escape_html(metric_key)}</code>.</p>"
+
+        width = 860
+        height = 220
+        pad_left = 52
+        pad_right = 12
+        pad_top = 14
+        pad_bottom = 30
+        inner_w = max(10, width - pad_left - pad_right)
+        inner_h = max(10, height - pad_top - pad_bottom)
+        values = [p["value"] for p in points]
+        min_v = min(values)
+        max_v = max(values)
+        span = (max_v - min_v) if (max_v - min_v) > 1e-9 else 1.0
+        coords: list[tuple[float, float]] = []
+        for idx, point in enumerate(points):
+            x = pad_left + (idx / max(1, len(points) - 1)) * inner_w
+            y = pad_top + (1.0 - ((point["value"] - min_v) / span)) * inner_h
+            coords.append((x, y))
+        polyline = " ".join(f"{x:.2f},{y:.2f}" for x, y in coords)
+        first_label = self._escape_html(str(points[0]["timestamp"])[:10])
+        last_label = self._escape_html(str(points[-1]["timestamp"])[:10])
+
+        def _fmt(value: float) -> str:
+            if value_format == "percent":
+                return f"{value:.1f}%"
+            if value_format == "usd":
+                return f"${value:.2f}"
+            if value_format == "hours":
+                return f"{value:.2f}h"
+            if value_format == "count":
+                return f"{int(round(value))}"
+            return f"{value:.2f}"
+
+        return (
+            f"<h3>{self._escape_html(title)}</h3>"
+            f"<svg width='{width}' height='{height}' viewBox='0 0 {width} {height}' role='img' aria-label='{self._escape_html(title)}'>"
+            f"<rect x='0' y='0' width='{width}' height='{height}' fill='#ffffff'/>"
+            f"<line x1='{pad_left}' y1='{pad_top}' x2='{pad_left}' y2='{height - pad_bottom}' stroke='#999'/>"
+            f"<line x1='{pad_left}' y1='{height - pad_bottom}' x2='{width - pad_right}' y2='{height - pad_bottom}' stroke='#999'/>"
+            f"<polyline points='{polyline}' fill='none' stroke='#007bff' stroke-width='2.5'/>"
+            f"<text x='6' y='{pad_top + 9}' font-size='11' fill='#666'>{self._escape_html(_fmt(max_v))}</text>"
+            f"<text x='6' y='{height - pad_bottom}' font-size='11' fill='#666'>{self._escape_html(_fmt(min_v))}</text>"
+            f"<text x='{pad_left}' y='{height - 7}' font-size='11' fill='#666'>{first_label}</text>"
+            f"<text x='{width - 92}' y='{height - 7}' font-size='11' fill='#666'>{last_label}</text>"
+            "</svg>"
+        )
+
+    def _build_top_trend_dashboard_html(self) -> str:
+        """Build top-of-report trend dashboard from DB-persisted metric_observations."""
+        parts = [
+            self._build_metric_trend_svg(
+                metric_key="validation_replay_accuracy_pct",
+                title="Accuracy Trend (DB persisted metric_observations)",
+                days=180,
+                value_format="percent",
+            ),
+            self._build_metric_trend_svg(
+                metric_key="total_llm_run_cost_usd",
+                title="Cost Trend (Total Cost per Run)",
+                days=180,
+                value_format="usd",
+            ),
+            self._build_metric_trend_svg(
+                metric_key="run_control_runtime_hours",
+                title="Runtime Trend (Total Pipeline Runtime Hours)",
+                days=180,
+                value_format="hours",
+            ),
+            self._build_metric_trend_svg(
+                metric_key="run_control_events_table_count",
+                title="Number of Events Trend (Events Table Count at End of Run)",
+                days=180,
+                value_format="count",
+            ),
+        ]
+        return "".join(parts)
 
     def _build_run_control_panel_html(self, panel_data: dict, action_queue: dict | None = None) -> str:
         """Render operator-first control panel for cost, accuracy, completeness, and runtime."""

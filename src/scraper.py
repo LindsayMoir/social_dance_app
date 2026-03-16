@@ -232,9 +232,13 @@ def _is_event_detail_url(url: str) -> bool:
         path = (urlparse(url).path or "").lower()
     except Exception:
         return False
+    if path.rstrip("/").endswith("/events"):
+        return False
     if any(token in path for token in ("/events/month", "/events/list", "/calendar", "/schedule", "/upcoming")):
         return False
-    if any(token in path for token in ("/event/", "/events/", "/show/")):
+    if any(token in path for token in ("/event/", "/events/", "/show/", "/nm_event/")):
+        return True
+    if re.search(r"/event(?:[/?#]|$)", path):
         return True
     return False
 
@@ -251,7 +255,11 @@ def classify_page_archetype(
     """
     event_like_links = [
         l for l in page_links
-        if any(token in l.lower() for token in ("/event/", "/events/", "/show/", "ticket", "rsvp"))
+        if any(
+            token in l.lower()
+            for token in ("/event/", "/events/", "/show/", "/nm_event/", "ticket", "rsvp")
+        )
+        or re.search(r"/event(?:[/?#]|$)", l.lower())
     ]
     classification = classify_page(
         url=url,

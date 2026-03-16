@@ -102,11 +102,17 @@ def is_event_detail_url(url: str) -> bool:
         path = (urlparse(_safe_url(url)).path or "").lower()
     except Exception:
         path = low
+    path_trimmed = path.rstrip("/")
+    if path_trimmed.endswith("/events"):
+        return False
     if any(token in path for token in ("/events/month", "/events/list", "/calendar", "/schedule", "/upcoming")):
         return False
     if is_facebook_event_detail_url(url) or is_instagram_post_detail_url(url) or is_eventbrite_event_detail_url(url):
         return True
-    return any(token in low for token in ("/event/", "/events/", "/show/", "/tickets/"))
+    if any(token in low for token in ("/event/", "/events/", "/show/", "/tickets/", "/nm_event/")):
+        return True
+    # Accept query-style event pages, e.g. /event?external=true
+    return bool(re.search(r"/event(?:[/?#]|$)", low))
 
 
 def has_event_signal(text: str) -> bool:
@@ -194,9 +200,7 @@ def classify_page(
             subtype="eventbrite_event_detail",
         )
 
-    event_like_links = 0
-    if page_links_count:
-        event_like_links = int(page_links_count)
+    event_like_links = int(page_links_count or 0)
     has_listing_signal = any(
         sig in low_text
         for sig in (
@@ -236,4 +240,3 @@ def resolve_prompt_type(url: str, fallback_prompt_type: str = "default") -> str:
     if c.prompt_type:
         return c.prompt_type
     return str(fallback_prompt_type or "default")
-

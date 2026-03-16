@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from page_classifier import classify_page, resolve_prompt_type
+from page_classifier import classify_page, resolve_prompt_type, is_event_detail_url
 
 
 def test_classify_facebook_event_detail_owned_by_fb() -> None:
@@ -32,3 +32,9 @@ def test_resolve_prompt_type_defaults_to_url_or_fb() -> None:
     assert resolve_prompt_type("https://www.facebook.com/events/123") == "fb"
     assert resolve_prompt_type("https://example.com/events/foo", fallback_prompt_type="default").startswith("https://")
 
+
+def test_is_event_detail_url_supports_query_style_event_paths() -> None:
+    assert is_event_detail_url("https://www.visitpenticton.com/event?external=true") is True
+    assert is_event_detail_url(
+        "https://www.visitpenticton.com/nm_event/pentictons-sunday-open-mic-jams-at-the-hub-on-martin?external=true"
+    ) is True
