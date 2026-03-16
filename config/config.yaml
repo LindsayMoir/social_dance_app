@@ -160,6 +160,10 @@ llm:
   self_healing_enabled: true
   spend_money: true
 location:
+  blacklist_cities:
+  - Penticton
+  - Kelowna
+  - Vernon
   epicentre: Victoria, British Columbia, Canada
 logging:
   extracted_text: output/extracted_text.csv

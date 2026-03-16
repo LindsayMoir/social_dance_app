@@ -4010,6 +4010,11 @@ class DatabaseHandler():
         # Read countries from .csv file
         countries_df = pd.read_csv(self.config['input']['countries'])
         countries_list = countries_df['country_names'].tolist()
+        blocked_cities = [
+            str(city).strip().lower()
+            for city in self.config.get("location", {}).get("blacklist_cities", [])
+            if str(city).strip()
+        ]
 
         # 4. Filtering logic: if the location or description contains a foreign country, mark it as foreign.
         def is_foreign_location(row):
@@ -4017,6 +4022,11 @@ class DatabaseHandler():
             description = row['description'] if row['description'] else ''
             source = row['source'] if row['source'] else ''
             combined_text = f"{location} {description} {source}".lower()
+
+            # Explicitly blocked BC cities are treated as out-of-area.
+            blocked_city_found = any(city in combined_text for city in blocked_cities)
+            if blocked_city_found:
+                return True
             
             # Check if any known foreign country appears in the text.
             country_found = any(country.lower() in combined_text for country in countries_list)
