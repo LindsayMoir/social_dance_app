@@ -79,6 +79,7 @@ class DatabaseHandler():
         "text extracted",
         "extracted_text",
     }
+    _MAX_AUTOFILL_KEYWORD_STYLES = 4
 
     def __init__(self, config):
         """
@@ -2105,7 +2106,16 @@ class DatabaseHandler():
         is_calendar_payload = bool(calendar_style_columns.intersection(set(df.columns)))
         if 'calendar' in url or 'calendar' in parent_url or is_calendar_payload:
             df = self._rename_google_calendar_columns(df)
-            df['dance_style'] = ', '.join(keywords) if isinstance(keywords, list) else keywords
+            # Do not blindly overwrite dance_style from source keyword bundles.
+            # Only backfill missing dance_style when keyword styles are specific and small.
+            keyword_styles = self._keywords_to_specific_dance_styles(keywords)
+            if "dance_style" not in df.columns:
+                df["dance_style"] = pd.NA
+            if keyword_styles:
+                dance_style_series = df["dance_style"].fillna("").astype(str).str.strip()
+                missing_style_mask = dance_style_series.eq("")
+                if missing_style_mask.any():
+                    df.loc[missing_style_mask, "dance_style"] = keyword_styles
 
         source = self._resolve_event_source_label(source=source, url=url, parent_url=parent_url)
         df['source'] = df.get('source', pd.Series([''] * len(df))).replace('', source).fillna(source)
@@ -2200,6 +2210,38 @@ class DatabaseHandler():
         df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
         self.write_url_to_db([url, parent_url, source, keywords, True, 1, datetime.now()])
         logging.info("write_events_to_db: Events data written to the 'events' table.")
+
+    def _keywords_to_specific_dance_styles(self, keywords: Any) -> str:
+        """
+        Convert crawl keywords into a safe dance_style autofill string.
+
+        Returns empty string when keywords are broad/generic (to avoid style pollution).
+        """
+        if keywords is None:
+            return ""
+        if isinstance(keywords, list):
+            raw_parts = [str(item).strip().lower() for item in keywords if str(item).strip()]
+        else:
+            raw_parts = [part.strip().lower() for part in str(keywords).split(",") if part.strip()]
+
+        if not raw_parts:
+            return ""
+
+        matched: list[str] = []
+        for part in raw_parts:
+            if part in self._DANCE_STYLE_TOKENS:
+                matched.append(part)
+
+        deduped: list[str] = []
+        for style in matched:
+            if style not in deduped:
+                deduped.append(style)
+
+        if not deduped:
+            return ""
+        if len(deduped) > self._MAX_AUTOFILL_KEYWORD_STYLES:
+            return ""
+        return ", ".join(deduped)
 
     @classmethod
     def _is_placeholder_source(cls, value: Any) -> bool:

@@ -53,3 +53,15 @@ def test_non_live_music_not_modified() -> None:
     )
     out = handler._enforce_live_music_dance_style_policy(df)
     assert out.loc[0, "dance_style"] == "west coast swing"
+
+
+def test_keywords_to_specific_dance_styles_rejects_broad_bundle() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    keywords = "salsa, bachata, kizomba, merengue, swing, balboa, lindy hop, east coast swing, west coast swing, wcs, cuban salsa, rueda"
+    assert handler._keywords_to_specific_dance_styles(keywords) == ""
+
+
+def test_keywords_to_specific_dance_styles_accepts_small_specific_set() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    keywords = "salsa, bachata"
+    assert handler._keywords_to_specific_dance_styles(keywords) == "salsa, bachata"
