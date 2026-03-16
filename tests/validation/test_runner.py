@@ -1449,10 +1449,6 @@ class ValidationTestRunner:
         )
 
         # Build HTML
-        llm_total_access_denominator = int(
-            (llm_activity_summary or {}).get("total_accesses", (llm_activity_summary or {}).get("total_attempts", 0)) or 0
-        )
-
         html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -1491,53 +1487,11 @@ class ValidationTestRunner:
         <h2>0. Trend Dashboard</h2>
         {self._build_top_trend_dashboard_html()}
 
-        <h2>1. Replay Accuracy</h2>
-        {self._build_accuracy_replay_html(accuracy_replay_summary)}
+        <h2>1. Replay Accuracy Row-by-Row</h2>
+        {self._build_accuracy_replay_rows_html(accuracy_replay_summary)}
 
-        <h2>2. Run Control Panel (Cost / Accuracy / Completeness / Runtime)</h2>
-        {self._build_run_control_panel_html(control_panel_summary, action_queue)}
-
-        <h2>3. Reliability Scorecard</h2>
-        {self._build_reliability_scorecard_html(reliability_scorecard, reliability_issues, reliability_gates, trend_summary, registry_summary)}
-
-        <h2>4. Scraping Validation</h2>
-        {self._build_scraping_html(results.get('scraping_validation'))}
-
-        <h2>5. Chatbot Testing</h2>
-        {self._build_chatbot_html(results.get('chatbot_testing'))}
-
-        <h2>6. Chatbot Performance</h2>
-        {self._build_chatbot_performance_html(chatbot_performance_summary)}
-
-        <h2>7. Scraper Network Reliability</h2>
-        {self._build_scraper_network_html(scraper_network_summary, results.get('scraping_validation'))}
-
-        <h2>8. Facebook Block Health</h2>
-        {self._build_fb_block_health_html(fb_block_summary)}
-
-        <h2>9. Address Alias Audit</h2>
-        {self._build_address_alias_audit_html(alias_audit_summary)}
-
-        <h2>10. LLM Provider Activity (All-Log Access Denominator: {llm_total_access_denominator})</h2>
-        {self._build_llm_provider_activity_html(llm_activity_summary)}
-
-        <h2>11. LLM Extraction Quality Scorecard</h2>
-        {self._build_llm_extraction_quality_html(llm_extraction_quality)}
-
-        <h2>12. Optimization Recommendations</h2>
-        {self._build_optimization_html(optimization_plan)}
-
-        <h2>13. Reliability Action Queue</h2>
-        {self._build_action_queue_html(action_queue)}
-
-        <h2>14. FB/IG URL Funnel</h2>
-        {self._build_fb_ig_url_funnel_html(fb_ig_funnel_summary)}
-
-        <h2>15. Likely Incorrect Deletes</h2>
-        {self._build_suspicious_deletes_html(suspicious_deletes_summary)}
-
-        <h2>16. Chatbot Metrics Sync</h2>
-        {self._build_chatbot_metrics_sync_html(chatbot_metrics_sync_summary)}
+        <h2>2. Completeness KPIs</h2>
+        {self._build_completeness_kpis_only_html(control_panel_summary)}
 
         <hr style="margin: 40px 0;">
         <p style="text-align: center; color: #999; font-size: 0.9em;">
@@ -3839,6 +3793,73 @@ class ValidationTestRunner:
             f"{chart_html}"
         )
 
+    def _build_accuracy_replay_rows_html(self, replay_data: dict | None) -> str:
+        """Render only the row-by-row original vs replay comparison table."""
+        if not isinstance(replay_data, dict) or not replay_data:
+            return "<p class='error-box'>❌ Replay accuracy unavailable</p>"
+        if replay_data.get("error"):
+            return f"<p class='error-box'>❌ Replay accuracy failed: {self._escape_html(str(replay_data.get('error')))}</p>"
+
+        comparison_rows = replay_data.get("rows", []) if isinstance(replay_data.get("rows"), list) else []
+        comparison_html = ""
+        for idx, row in enumerate(comparison_rows, start=1):
+            if not isinstance(row, dict):
+                continue
+            is_match = bool(row.get("is_match"))
+            match_text = "True" if is_match else "False"
+            baseline = row.get("baseline", {}) if isinstance(row.get("baseline"), dict) else {}
+            replay = row.get("replay", {}) if isinstance(row.get("replay"), dict) else {}
+            mismatch_category = self._escape_html(str(row.get("mismatch_category", "") or ""))
+            mismatch_details = self._escape_html(str(row.get("mismatch_details", "") or ""))
+            action_taken = self._escape_html(str(row.get("action_taken", "") or ""))
+            row_class = "" if is_match else " class='problematic'"
+
+            def _cell(payload: dict, key: str) -> str:
+                return self._escape_html(str(payload.get(key, "") or ""))
+
+            comparison_html += (
+                f"<tr{row_class}>"
+                f"<td>{idx}</td>"
+                "<td>Original</td>"
+                f"<td>{match_text}</td>"
+                f"<td>{_cell(baseline, 'event_name')}</td>"
+                f"<td>{_cell(baseline, 'start_date')}</td>"
+                f"<td>{_cell(baseline, 'start_time')}</td>"
+                f"<td>{_cell(baseline, 'source')}</td>"
+                f"<td>{_cell(baseline, 'location')}</td>"
+                f"<td>{_cell(baseline, 'url')}</td>"
+                f"<td>{mismatch_category}</td>"
+                f"<td>{mismatch_details}</td>"
+                f"<td>{action_taken}</td>"
+                "</tr>"
+                f"<tr{row_class}>"
+                f"<td>{idx}</td>"
+                "<td>Re-scraped</td>"
+                f"<td>{match_text}</td>"
+                f"<td>{_cell(replay, 'event_name')}</td>"
+                f"<td>{_cell(replay, 'start_date')}</td>"
+                f"<td>{_cell(replay, 'start_time')}</td>"
+                f"<td>{_cell(replay, 'source')}</td>"
+                f"<td>{_cell(replay, 'location')}</td>"
+                f"<td>{_cell(replay, 'url')}</td>"
+                f"<td>{mismatch_category}</td>"
+                f"<td>{mismatch_details}</td>"
+                f"<td>{action_taken}</td>"
+                "</tr>"
+            )
+
+        if not comparison_html:
+            comparison_html = "<tr><td colspan='12'>No replay row comparisons available.</td></tr>"
+
+        return (
+            "<h3>Row-by-Row Original vs Re-scraped</h3>"
+            "<table><tr>"
+            "<th>#</th><th>Row Type</th><th>Match</th><th>Event Name</th><th>Start Date</th><th>Start Time</th>"
+            "<th>Source</th><th>Location</th><th>URL</th><th>Mismatch Category</th><th>Details</th><th>Action</th>"
+            "</tr>"
+            f"{comparison_html}</table>"
+        )
+
     def _build_metric_trend_svg(
         self,
         metric_key: str,
@@ -4096,6 +4117,30 @@ class ValidationTestRunner:
                         "</tr>"
                     )
                 html += "</table>"
+        return html
+
+    def _build_completeness_kpis_only_html(self, panel_data: dict | None) -> str:
+        """Render only completeness KPI checks for the slim report."""
+        if not panel_data:
+            return "<p class='error-box'>❌ Completeness KPIs unavailable</p>"
+        completeness = (panel_data.get("completeness", {}) or {})
+        checks = completeness.get("checks", []) or []
+        if not checks:
+            return "<p>No completeness KPI checks available.</p>"
+
+        html = "<table><tr><th>KPI</th><th>Actual</th><th>Target</th><th>Delta</th><th>Status</th><th>Details</th></tr>"
+        for row in checks:
+            html += (
+                "<tr>"
+                f"<td>{self._escape_html(str(row.get('name', '')))}</td>"
+                f"<td>{self._escape_html(str(row.get('actual', '')))}</td>"
+                f"<td>{self._escape_html(str(row.get('target', '')))}</td>"
+                f"<td>{self._escape_html(str(row.get('delta', '')))}</td>"
+                f"<td><span class='{self._status_class(str(row.get('status', 'WARN')))}'>{self._escape_html(str(row.get('status', 'WARN')))}</span></td>"
+                f"<td>{self._escape_html(str(row.get('details', '')))}</td>"
+                "</tr>"
+            )
+        html += "</table>"
         return html
 
     def _summarize_llm_provider_activity(self, report_timestamp: str | None) -> dict:
