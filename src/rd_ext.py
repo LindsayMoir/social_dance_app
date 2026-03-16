@@ -832,73 +832,42 @@ class ReadExtract:
             await self.playwright.stop()
 
 
-if __name__ == "__main__":
-
-    # Setup centralized logging
-    from logging_config import setup_logging
-    setup_logging('rd_ext')
-
-    # Get config
-    config = load_config()
-    runtime_config_path = get_config_path()
-
-    logging.info("\n\nrd_ext.py starting...")
-
-    # Get the start time
-    start_time = datetime.now()
-    logging.info(f"\n\n__main__: Starting the crawler process at {start_time}")
-
-    # Instantiate the classes
-    read_extract = ReadExtract(runtime_config_path)
-    llm_handler = LLMHandler(runtime_config_path)
-    
-    # Set the module-level db_handler
-    db_handler = llm_handler.db_handler
-    
-    # Get the file name of the code that is running
-    file_name = os.path.basename(__file__)
-
-    # Count events and urls before rd_ext.py
-    start_df = db_handler.count_events_urls_start(file_name)
-
-    # Read .csv file to deal with oddities
-    df = pd.read_csv(config['input']['edge_cases'])
-    disallowed_social = validate_edge_case_social_url_ownership(df)
-    if disallowed_social > 0:
-        msg = (
-            f"edge_cases.csv contains {disallowed_social} social URL(s) (fb/ig), "
-            "which are owned by fb.py/images.py and must not be processed by rd_ext.py."
-        )
-        logging.error("__main__: %s", msg)
-        raise ValueError(msg)
-
-    # Define async function to process all URLs with single browser instance
-    async def process_all_urls():
-        # Initialize browser once
-        await read_extract.init_browser()
-        logging.info("__main__: Browser initialized once for all URLs")
-
-        # Expecting columns in order: source, keywords, url, multiple
+async def _process_edge_case_urls(
+    read_extract: ReadExtract,
+    llm_handler: LLMHandler,
+    db_handler: DatabaseHandler,
+    df: pd.DataFrame,
+) -> None:
+    """Process edge-case URLs with a single shared browser session."""
+    await read_extract.init_browser()
+    logging.info("run_rd_ext_edge_cases(): Browser initialized once for all URLs")
+    try:
         for source, keywords, url, multiple in df.itertuples(index=False, name=None):
-            multiple_flag = str(multiple).strip().lower() == 'yes'
-            logging.info(f"__main__: url={url}, source={source}, keywords={keywords}, multiple={multiple_flag}")
+            multiple_flag = str(multiple).strip().lower() == "yes"
+            logging.info(
+                "run_rd_ext_edge_cases(): url=%s source=%s keywords=%s multiple=%s",
+                url,
+                source,
+                keywords,
+                multiple_flag,
+            )
             if is_social_media_url(url):
-                logging.info("__main__: Skipping social media URL (fb/ig) in edge_cases: %s", url)
-                db_handler.write_url_to_db([url, '', source, [], False, 1, datetime.now()])
+                logging.info("run_rd_ext_edge_cases(): Skipping social media URL (fb/ig): %s", url)
+                db_handler.write_url_to_db([url, "", source, [], False, 1, datetime.now()])
                 continue
             route = evaluate_step_ownership(url, current_step="rd_ext.py", explicit_edge_case=True)
             if not route.allow:
                 logging.info(
-                    "__main__: Skipping URL owned by %s (%s): %s",
+                    "run_rd_ext_edge_cases(): Skipping URL owned by %s (%s): %s",
                     route.owner_step,
                     route.routing_reason,
                     url,
                 )
-                db_handler.write_url_to_db([url, '', source, [], False, 1, datetime.now(), route.routing_reason])
+                db_handler.write_url_to_db([url, "", source, [], False, 1, datetime.now(), route.routing_reason])
                 continue
             extracted = await read_extract.extract_from_url(url, multiple_flag)
 
-            # If multiple events were found (i.e. extracted is a dict), process each event separately
+            # If multiple events were found (i.e. extracted is a dict), process each event separately.
             if isinstance(extracted, dict):
                 for event_url, text in extracted.items():
                     event_route = evaluate_step_ownership(
@@ -908,7 +877,7 @@ if __name__ == "__main__":
                     )
                     if not event_route.allow:
                         logging.info(
-                            "__main__: Skipping extracted event URL owned by %s (%s): %s",
+                            "run_rd_ext_edge_cases(): Skipping extracted event URL owned by %s (%s): %s",
                             event_route.owner_step,
                             event_route.routing_reason,
                             event_url,
@@ -917,9 +886,9 @@ if __name__ == "__main__":
                             [event_url, url, source, [], False, 1, datetime.now(), event_route.routing_reason]
                         )
                         continue
-                    parent_url = url # Use the original URL as parent
+                    parent_url = url
                     prompt_type = resolve_prompt_type(event_url, fallback_prompt_type=url)
-                    llm_status = llm_handler.process_llm_response(
+                    llm_handler.process_llm_response(
                         event_url,
                         parent_url,
                         text,
@@ -928,9 +897,9 @@ if __name__ == "__main__":
                         prompt_type=prompt_type,
                     )
             else:
-                parent_url = ''  # No parent URL for single events
+                parent_url = ""
                 prompt_type = resolve_prompt_type(url, fallback_prompt_type=url)
-                llm_status = llm_handler.process_llm_response(
+                llm_handler.process_llm_response(
                     url,
                     parent_url,
                     extracted,
@@ -938,24 +907,52 @@ if __name__ == "__main__":
                     keywords,
                     prompt_type=prompt_type,
                 )
-
-        # Close browser once after all URLs processed
+    finally:
         await read_extract.close()
-        logging.info("__main__: Browser closed after processing all URLs")
+        logging.info("run_rd_ext_edge_cases(): Browser closed")
 
-    # Run the async function
-    asyncio.run(process_all_urls())
 
-    # Add configured synthetic events that are intentionally injected by policy.
+def run_rd_ext_edge_cases() -> None:
+    """Thin script runner for rd_ext edge-case processing."""
+    from logging_config import setup_logging
+
+    setup_logging("rd_ext")
+    config = load_config()
+    runtime_config_path = get_config_path()
+
+    logging.info("\n\nrd_ext.py starting...")
+    start_time = datetime.now()
+    logging.info("run_rd_ext_edge_cases(): starting at %s", start_time)
+
+    read_extract = ReadExtract(runtime_config_path)
+    llm_handler = LLMHandler(runtime_config_path)
+    local_db_handler = llm_handler.db_handler
+
+    # Set module-level handler for helper functions using get_db_handler().
+    global db_handler
+    db_handler = local_db_handler
+
+    file_name = os.path.basename(__file__)
+    start_df = local_db_handler.count_events_urls_start(file_name)
+
+    df = pd.read_csv(config["input"]["edge_cases"])
+    disallowed_social = validate_edge_case_social_url_ownership(df)
+    if disallowed_social > 0:
+        msg = (
+            f"edge_cases.csv contains {disallowed_social} social URL(s) (fb/ig), "
+            "which are owned by fb.py/images.py and must not be processed by rd_ext.py."
+        )
+        logging.error("run_rd_ext_edge_cases(): %s", msg)
+        raise ValueError(msg)
+
+    asyncio.run(_process_edge_case_urls(read_extract, llm_handler, local_db_handler, df))
     read_extract.add_configured_synthetic_events()
+    local_db_handler.count_events_urls_end(start_df, file_name)
 
-    # Count events and urls after rd_ext.py
-    db_handler.count_events_urls_end(start_df, file_name)
-
-    # Get the end time
     end_time = datetime.now()
-    logging.info(f"__main__: Finished the crawler process at {end_time}")
+    logging.info("run_rd_ext_edge_cases(): finished at %s", end_time)
+    logging.info("run_rd_ext_edge_cases(): total time=%s", end_time - start_time)
 
-    # Calculate the total time taken
-    total_time = end_time - start_time
-    logging.info(f"__main__: Total time taken: {total_time}\n\n")
+
+if __name__ == "__main__":
+    run_rd_ext_edge_cases()
