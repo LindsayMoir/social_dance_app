@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+from typing import Any, Dict
 from urllib.parse import urlparse
 
 
@@ -33,6 +34,14 @@ class RoutingDecision:
     allow: bool
     routing_reason: str
     classification: PageClassification
+
+
+@dataclass(frozen=True)
+class ClassificationDecision:
+    classification: PageClassification
+    confidence: float
+    stage: str
+    features: Dict[str, Any]
 
 
 def _safe_url(url: str) -> str:
@@ -287,6 +296,131 @@ def classify_page(
         is_calendar=False,
         is_event_detail=is_event_detail_url(url),
         subtype=archetype,
+    )
+
+
+def classify_page_with_confidence(
+    *,
+    url: str,
+    visible_text: str = "",
+    page_links_count: int = 0,
+    calendar_sources_count: int = 0,
+    calendar_ids_count: int = 0,
+) -> ClassificationDecision:
+    """
+    Two-stage page classification:
+    - Stage A: deterministic routing rules
+    - Stage B: structural scoring with confidence
+    """
+    base = classify_page(
+        url=url,
+        visible_text=visible_text,
+        page_links_count=page_links_count,
+        calendar_sources_count=calendar_sources_count,
+        calendar_ids_count=calendar_ids_count,
+    )
+
+    # Stage A: deterministic classes are already reliable.
+    deterministic_subtypes = {
+        "google_calendar",
+        "facebook_event_detail",
+        "instagram_post_detail",
+        "social_listing_or_profile",
+        "eventbrite_event_detail",
+        "event_detail",
+    }
+    if base.subtype in deterministic_subtypes:
+        return ClassificationDecision(
+            classification=base,
+            confidence=0.99,
+            stage="rule",
+            features={
+                "event_like_links": int(page_links_count or 0),
+                "calendar_sources_count": int(calendar_sources_count or 0),
+                "calendar_ids_count": int(calendar_ids_count or 0),
+                "deterministic_subtype": base.subtype,
+            },
+        )
+
+    # Stage B: structural scoring for generic websites.
+    low_text = str(visible_text or "").lower()
+    event_like_links = int(page_links_count or 0)
+    listing_signal = any(
+        token in low_text
+        for token in (
+            "view all",
+            "load more",
+            "more events",
+            "upcoming events",
+            "calendar",
+            "list view",
+            "month view",
+        )
+    )
+    repeated_date_tokens = sum(low_text.count(token) for token in ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))
+    listing_score = 0
+    if is_listing_page_url(url):
+        listing_score += 3
+    if event_like_links >= 3:
+        listing_score += 2
+    if listing_signal:
+        listing_score += 1
+    if repeated_date_tokens >= 4:
+        listing_score += 1
+
+    event_signal = has_event_signal(low_text)
+    feature_payload: Dict[str, Any] = {
+        "event_like_links": event_like_links,
+        "listing_signal": bool(listing_signal),
+        "repeated_date_tokens": int(repeated_date_tokens),
+        "listing_score": int(listing_score),
+        "event_signal": bool(event_signal),
+    }
+
+    if listing_score >= 3:
+        classification = PageClassification(
+            url=base.url,
+            archetype="incomplete_event",
+            owner_step=base.owner_step,
+            prompt_type=base.prompt_type,
+            is_social=base.is_social,
+            is_calendar=base.is_calendar,
+            is_event_detail=False,
+            subtype="incomplete_event",
+        )
+        confidence = min(0.70 + 0.05 * min(listing_score, 4), 0.90)
+        return ClassificationDecision(
+            classification=classification,
+            confidence=confidence,
+            stage="structural",
+            features=feature_payload,
+        )
+
+    if event_signal:
+        confidence = 0.68 if event_like_links <= 2 else 0.60
+        return ClassificationDecision(
+            classification=base,
+            confidence=confidence,
+            stage="structural",
+            features=feature_payload,
+        )
+
+    # Unknown/low signal: default to safer listing strategy, avoid parent extraction.
+    fallback = PageClassification(
+        url=base.url,
+        archetype="incomplete_event",
+        owner_step=base.owner_step,
+        prompt_type=base.prompt_type,
+        is_social=base.is_social,
+        is_calendar=base.is_calendar,
+        is_event_detail=False,
+        subtype="low_confidence_fallback",
+    )
+    return ClassificationDecision(
+        classification=fallback,
+        confidence=0.52,
+        stage="structural",
+        features=feature_payload,
     )
 
 

@@ -40,6 +40,7 @@ from llm import LLMHandler
 from logging_config import setup_logging
 from page_classifier import (
     classify_page,
+    classify_page_with_confidence,
     evaluate_step_ownership,
     has_event_signal as classifier_has_event_signal,
     is_facebook_url as classifier_is_facebook_url,
@@ -298,11 +299,13 @@ def classify_page_archetype(
     return classification.archetype
 
 
-def should_extract_on_parent_page(archetype: str, url: str) -> bool:
+def should_extract_on_parent_page(archetype: str, url: str, confidence: float = 1.0) -> bool:
     """
     Decide if this page should go through event extraction directly.
     """
     if archetype in {"simple_page", "google_calendar"}:
+        if archetype == "simple_page" and confidence < 0.70 and not _is_event_detail_url(url):
+            return False
         return True
     if archetype == "incomplete_event":
         # Still extract when URL itself appears to be a concrete event-detail page.
@@ -777,6 +780,9 @@ class EventSpider(scrapy.Spider):
                         "decision_reason": "non_text_response",
                         "handled_by": "scraper.py",
                         "routing_reason": "non_text_response",
+                        "classification_confidence": None,
+                        "classification_stage": "non_text",
+                        "classification_features_json": None,
                         "links_discovered": 0,
                         "links_followed": 0,
                         "time_stamp": datetime.now(),
@@ -831,6 +837,9 @@ class EventSpider(scrapy.Spider):
                         "decision_reason": routing_decision.routing_reason,
                         "handled_by": routing_decision.owner_step,
                         "routing_reason": routing_decision.routing_reason,
+                        "classification_confidence": None,
+                        "classification_stage": "routing_skip",
+                        "classification_features_json": None,
                         "links_discovered": 0,
                         "links_followed": 0,
                         "time_stamp": datetime.now(),
@@ -866,19 +875,34 @@ class EventSpider(scrapy.Spider):
         # Only trust high-confidence group calendar IDs from page text.
         calendar_ids.update(self.extract_calendar_ids(extracted_text, allow_gmail=False))
 
-        page_archetype = classify_page_archetype(
+        event_like_links = [
+            l for l in page_links
+            if any(
+                token in l.lower()
+                for token in ("/event/", "/events/", "/show/", "/nm_event/", "ticket", "rsvp")
+            )
+            or re.search(r"/event(?:[/?#]|$)", l.lower())
+        ]
+        class_decision = classify_page_with_confidence(
             url=url,
             visible_text=extracted_text,
-            page_links=page_links,
-            calendar_sources=calendar_sources,
+            page_links_count=len(event_like_links),
+            calendar_sources_count=len(calendar_sources),
             calendar_ids_count=len(calendar_ids),
         )
+        page_archetype = class_decision.classification.archetype
         archetype_bucket = self._archetype_bucket(page_archetype)
         archetype_bucket["pages_seen"] += 1
-        extract_parent_page = should_extract_on_parent_page(page_archetype, url)
-        logging.info(
-            "def parse(): page_archetype=%s extract_parent_page=%s url=%s",
+        extract_parent_page = should_extract_on_parent_page(
             page_archetype,
+            url,
+            confidence=class_decision.confidence,
+        )
+        logging.info(
+            "def parse(): page_archetype=%s confidence=%.2f stage=%s extract_parent_page=%s url=%s",
+            page_archetype,
+            class_decision.confidence,
+            class_decision.stage,
             extract_parent_page,
             url,
         )
@@ -1062,6 +1086,9 @@ class EventSpider(scrapy.Spider):
                     "decision_reason": decision_reason or "unknown",
                     "handled_by": "scraper.py",
                     "routing_reason": decision_reason or "unknown",
+                    "classification_confidence": class_decision.confidence,
+                    "classification_stage": class_decision.stage,
+                    "classification_features_json": json.dumps(class_decision.features),
                     "links_discovered": len(page_links),
                     "links_followed": links_followed_count,
                     "time_stamp": time_stamp,

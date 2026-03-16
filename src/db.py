@@ -219,6 +219,9 @@ class DatabaseHandler():
                 decision_reason TEXT,
                 handled_by TEXT,
                 routing_reason TEXT,
+                classification_confidence DOUBLE PRECISION,
+                classification_stage TEXT,
+                classification_features_json TEXT,
                 links_discovered INTEGER,
                 links_followed INTEGER,
                 time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -228,6 +231,13 @@ class DatabaseHandler():
             self.execute_query(query)
             self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS handled_by TEXT")
             self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS routing_reason TEXT")
+            self.execute_query(
+                "ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS classification_confidence DOUBLE PRECISION"
+            )
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS classification_stage TEXT")
+            self.execute_query(
+                "ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS classification_features_json TEXT"
+            )
             self.execute_query(
                 "CREATE INDEX IF NOT EXISTS idx_url_scrape_metrics_run_id ON url_scrape_metrics(run_id)"
             )
@@ -1313,6 +1323,15 @@ class DatabaseHandler():
             "decision_reason": str(metric.get("decision_reason", "") or "").strip() or None,
             "handled_by": str(metric.get("handled_by", "") or "").strip() or None,
             "routing_reason": str(metric.get("routing_reason", "") or "").strip() or None,
+            "classification_confidence": (
+                float(metric.get("classification_confidence"))
+                if metric.get("classification_confidence") is not None
+                else None
+            ),
+            "classification_stage": str(metric.get("classification_stage", "") or "").strip() or None,
+            "classification_features_json": (
+                str(metric.get("classification_features_json", "") or "").strip() or None
+            ),
             "links_discovered": int(metric.get("links_discovered", 0) or 0),
             "links_followed": int(metric.get("links_followed", 0) or 0),
             "time_stamp": metric.get("time_stamp", datetime.now()),

@@ -3,7 +3,13 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from page_classifier import classify_page, evaluate_step_ownership, resolve_prompt_type, is_event_detail_url
+from page_classifier import (
+    classify_page,
+    classify_page_with_confidence,
+    evaluate_step_ownership,
+    is_event_detail_url,
+    resolve_prompt_type,
+)
 
 
 def test_classify_facebook_event_detail_owned_by_fb() -> None:
@@ -84,3 +90,25 @@ def test_routing_contract_rd_ext_only_explicit_scraper_owned() -> None:
     assert allowed.routing_reason == "edge_case_delegate_allowed"
     assert denied.allow is False
     assert denied.owner_step == "fb.py"
+
+
+def test_classify_with_confidence_listing_structural() -> None:
+    d = classify_page_with_confidence(
+        url="https://example.org/calendar/music?month_limit=4&year_limit=2026",
+        visible_text="Upcoming events view all more events",
+        page_links_count=8,
+    )
+    assert d.classification.archetype == "incomplete_event"
+    assert d.stage in {"rule", "structural"}
+    assert d.confidence >= 0.70
+
+
+def test_classify_with_confidence_low_signal_fallback_to_incomplete() -> None:
+    d = classify_page_with_confidence(
+        url="https://example.org/about",
+        visible_text="welcome to our organization",
+        page_links_count=1,
+    )
+    assert d.classification.archetype == "incomplete_event"
+    assert d.stage == "structural"
+    assert d.confidence < 0.70
