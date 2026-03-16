@@ -115,6 +115,40 @@ def is_event_detail_url(url: str) -> bool:
     return bool(re.search(r"/event(?:[/?#]|$)", low))
 
 
+def is_listing_page_url(url: str) -> bool:
+    """
+    Return True when URL strongly indicates a multi-event listing page.
+    """
+    low = _safe_url(url).lower()
+    try:
+        parsed = urlparse(_safe_url(url))
+        path = (parsed.path or "").lower()
+        query = (parsed.query or "").lower()
+    except Exception:
+        path = low
+        query = ""
+
+    if is_event_detail_url(url):
+        return False
+
+    path_tokens = (
+        "/calendar",
+        "/events",
+        "/upcoming",
+        "/schedule",
+        "/list",
+        "/month",
+    )
+    query_tokens = (
+        "month_limit=",
+        "year_limit=",
+        "view=list",
+        "view=month",
+        "calendar",
+    )
+    return any(token in path for token in path_tokens) or any(token in query for token in query_tokens)
+
+
 def has_event_signal(text: str) -> bool:
     low = str(text or "").lower()
     tokens = (
@@ -200,6 +234,18 @@ def classify_page(
             subtype="eventbrite_event_detail",
         )
 
+    if is_event_detail_url(url):
+        return PageClassification(
+            url=url,
+            archetype="simple_page",
+            owner_step="scraper.py",
+            prompt_type=url,
+            is_social=False,
+            is_calendar=False,
+            is_event_detail=True,
+            subtype="event_detail",
+        )
+
     event_like_links = int(page_links_count or 0)
     has_listing_signal = any(
         sig in low_text
@@ -213,7 +259,9 @@ def classify_page(
             "tickets",
         )
     )
-    if not is_event_detail_url(url) and (event_like_links >= 3 or (has_listing_signal and page_links_count >= 6)):
+    if is_listing_page_url(url):
+        archetype = "incomplete_event"
+    elif not is_event_detail_url(url) and (event_like_links >= 3 or (has_listing_signal and page_links_count >= 6)):
         archetype = "incomplete_event"
     elif has_event_signal(low_text):
         archetype = "simple_page"

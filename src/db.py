@@ -4662,26 +4662,28 @@ class DatabaseHandler():
         return False
 
 
-    def update_dow_date(self, event_id: int, corrected_date) -> bool:
+    def update_day_of_week(self, event_id: int, corrected_day: str) -> bool:
         """
-        Updates the start_date and end_date fields of the event with the specified event_id to the given corrected_date.
+        Updates only the day_of_week field for a single event.
+
+        This is intentionally safer than mutating dates: start_date/end_date are
+        treated as the source of truth once parsed from source content.
 
         Args:
-            event_id (int): The unique identifier of the event to update.
-            corrected_date: The new date to set for both start_date and end_date. The expected type should match the database schema (e.g., str or datetime).
+            event_id (int): Unique event identifier.
+            corrected_day (str): Canonical weekday name (e.g., "Wednesday").
 
         Returns:
-            bool: True if the update operation was executed (does not guarantee that a row was actually updated).
+            bool: True if update executed.
         """
         update_query = """
             UPDATE events
-               SET start_date = :corrected_date,
-                   end_date   = :corrected_date
-             WHERE event_id  = :event_id
+               SET day_of_week = :corrected_day
+             WHERE event_id    = :event_id
         """
         params = {
-            'corrected_date': corrected_date,
-            'event_id':        event_id
+            "corrected_day": corrected_day,
+            "event_id": event_id,
         }
         self.execute_query(update_query, params)
         return True
@@ -4689,15 +4691,13 @@ class DatabaseHandler():
 
     def check_dow_date_consistent(self) -> None:
         """
-        Ensures that the start_date of each event in the database matches its specified day_of_week.
+        Ensures day_of_week matches start_date without mutating event dates.
 
         This method performs the following steps:
             1. Retrieves all events' event_id, start_date, and day_of_week from the database.
-            2. For each event, checks if the start_date's weekday matches the stored day_of_week.
-            3. If there is a mismatch, computes the minimal shift (within ±3 days) required to align the start_date
-               with the correct weekday.
-            4. Calls update_dow_date(...) to update both start_date and end_date when a shift is needed.
-            5. Logs every adjustment, including warnings for unrecognized day_of_week values and errors if updates fail.
+            2. Derives canonical weekday from start_date.
+            3. If stored day_of_week is missing, invalid, or inconsistent, updates day_of_week.
+            4. Never shifts start_date/end_date, preventing recurrence-text induced date drift.
 
         Returns:
             None
@@ -4709,63 +4709,54 @@ class DatabaseHandler():
         rows = self.execute_query(select_query)
         # rows is a list of tuples: (event_id, start_date, day_of_week)
 
-        name_to_wd = {
-            'monday':    0,
-            'tuesday':   1,
-            'wednesday': 2,
-            'thursday':  3,
-            'friday':    4,
-            'saturday':  5,
-            'sunday':    6
+        valid_days = {
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
         }
 
         for row in rows:
-            event_id  = row[0]
+            event_id = row[0]
             orig_date = row[1]  # DATE
-            dow_text  = row[2]  # TEXT
+            dow_text = row[2]  # TEXT
 
-            if orig_date is None or not dow_text:
+            if orig_date is None:
                 continue
 
-            key = dow_text.strip().lower()
-            if key not in name_to_wd:
+            canonical_day = orig_date.strftime("%A")
+            key = str(dow_text or "").strip().lower()
+            current_day_valid = key in valid_days
+            current_day_canonical = key.capitalize() if current_day_valid else ""
+
+            if current_day_canonical == canonical_day:
+                continue
+
+            if not current_day_valid and key:
                 logging.warning(
-                    "check_dow_date_consistent: event_id %s has unrecognized day_of_week '%s'; skipping.",
-                    event_id, dow_text
+                    "check_dow_date_consistent: event_id %s has unrecognized day_of_week '%s'; replacing with '%s'.",
+                    event_id,
+                    dow_text,
+                    canonical_day,
                 )
-                continue
 
-            target_wd  = name_to_wd[key]
-            current_wd = orig_date.weekday()
-
-            if current_wd == target_wd:
-                continue  # no change needed
-
-            # Compute minimal shift in [-3..+3] so that (orig_date + shift).weekday() == target_wd
-            diff_mod_7 = (target_wd - current_wd + 7) % 7
-            if diff_mod_7 <= 3:
-                shift = diff_mod_7
+            success = self.update_day_of_week(event_id, canonical_day)
+            if success:
+                logging.info(
+                    "check_dow_date_consistent: event_id %d day_of_week changed from '%s' to '%s' (start_date=%s).",
+                    event_id,
+                    str(dow_text or ""),
+                    canonical_day,
+                    orig_date.isoformat(),
+                )
             else:
-                shift = diff_mod_7 - 7
-
-            corrected_date = orig_date + timedelta(days=shift)
-
-            if corrected_date != orig_date:
-                success = self.update_dow_date(event_id, corrected_date)
-                if success:
-                    logging.info(
-                        "check_dow_date_consistent: event_id %d: "
-                        "start_date (and end_date) changed from %s to %s "
-                        "(day_of_week was '%s').",
-                        event_id,
-                        orig_date.isoformat(),
-                        corrected_date.isoformat(),
-                        dow_text
-                    )
-                else:
-                    logging.error(
-                        "check_dow_date_consistent: failed to update event_id %d", event_id
-                    )
+                logging.error(
+                    "check_dow_date_consistent: failed to update day_of_week for event_id %d",
+                    event_id,
+                )
 
 
     def check_image_events_exist(self, image_url: str) -> bool:

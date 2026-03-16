@@ -38,3 +38,15 @@ def test_is_event_detail_url_supports_query_style_event_paths() -> None:
     assert is_event_detail_url(
         "https://www.visitpenticton.com/nm_event/pentictons-sunday-open-mic-jams-at-the-hub-on-martin?external=true"
     ) is True
+
+
+def test_livevictoria_calendar_is_listing_not_simple_page() -> None:
+    c = classify_page(url="https://livevictoria.com/calendar/music&month_limit=4&year_limit=2026")
+    assert c.archetype == "incomplete_event"
+    assert c.is_event_detail is False
+
+
+def test_livevictoria_show_is_detail_simple_page() -> None:
+    c = classify_page(url="https://livevictoria.com/show/732324/view")
+    assert c.archetype == "simple_page"
+    assert c.is_event_detail is True
