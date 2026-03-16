@@ -168,3 +168,4 @@ def test_enforce_default_event_type_without_social_dance():
     out = app_main._enforce_default_event_type(sql_in, "events today without social dance")
     low = out.lower()
     assert "event_type ilike '%social dance%'" not in low
+

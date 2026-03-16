@@ -75,6 +75,44 @@ _LOCATION_STOPWORDS = {
 }
 
 
+def _looks_temporal_term(term: str, current_date: str) -> bool:
+    """Return True when a candidate location term is actually temporal language."""
+    phrase = str(term or "").strip().lower()
+    if not phrase:
+        return False
+    if resolve_temporal_from_text(phrase, current_date):
+        return True
+    temporal_tokens = (
+        "week",
+        "weekend",
+        "month",
+        "today",
+        "tomorrow",
+        "tonight",
+        "yesterday",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    )
+    return any(tok in phrase for tok in temporal_tokens)
+
+
 def _detect_event_types_from_text(text: str) -> List[str]:
     found: List[str] = []
     text_l = str(text or "").lower()
@@ -99,7 +137,7 @@ def _detect_excluded_event_types(text: str) -> List[str]:
     return list(dict.fromkeys(excluded))
 
 
-def _extract_location_terms_from_text(text: str) -> List[str]:
+def _extract_location_terms_from_text(text: str, current_date: str) -> List[str]:
     text_l = str(text or "").lower()
     matches = re.findall(
         r"\b(?:at|in|near)\s+([a-z0-9][a-z0-9 '&\.\-]{1,64})",
@@ -117,6 +155,8 @@ def _extract_location_terms_from_text(text: str) -> List[str]:
         if term in _LOCATION_STOPWORDS:
             continue
         if len(term) < 3:
+            continue
+        if _looks_temporal_term(term, current_date):
             continue
         cleaned.append(term)
     return list(dict.fromkeys(cleaned))
@@ -170,7 +210,7 @@ def derive_constraints_from_text(
     exclude_styles = [str(s) for s in detect_excluded_styles_in_text(user_text)]
     include_event_types = _detect_event_types_from_text(user_text)
     exclude_event_types = _detect_excluded_event_types(user_text)
-    location_terms = _extract_location_terms_from_text(user_text)
+    location_terms = _extract_location_terms_from_text(user_text, current_date)
 
     replace_terms = ("instead", "not just", "not only", "any style", "all styles", "all dance")
     should_replace_styles = explicit_all_styles or any(t in user_text_l for t in replace_terms)

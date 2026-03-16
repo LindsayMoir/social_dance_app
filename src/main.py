@@ -1200,73 +1200,11 @@ def process_confirmation(request: ConfirmationRequest):
 
             if not is_valid_sql:
                 logging.warning("CONFIRMATION: SQL validation failed, using deterministic fallback. Error: %s", validation_error)
-                # Deterministic SQL fallback using date_calculator
-                from date_calculator import calculate_date_range, extract_temporal_phrase
                 cq = pending_query.get('combined_query') or pending_query.get('user_input') or ''
-                temporal = extract_temporal_phrase(cq)
-                if temporal:
-                    rng = calculate_date_range(temporal, current_date)
-                    sd, ed = rng.get('start_date'), rng.get('end_date')
-                    tf = rng.get('time_filter')
-                    cols = (
-                        "event_name, event_type, dance_style, day_of_week, start_date, end_date, "
-                        "start_time, end_time, source, url, price, description, location"
-                    )
-                    # Base filters: date range (and time filter if provided)
-                    filters = [f"start_date >= '{sd}'", f"start_date <= '{ed}'"]
-                    if tf:
-                        filters.append(f"start_time >= '{tf}'")
-
-                    # Detect explicit event_type in user text and apply centralized policy when absent.
-                    import re as _re_detect
-                    explicit_in_text = bool(_re_detect.search(r"(?i)\bevent_type\s*(=|ILIKE|LIKE|>=|<=|>|<|:)", cq))
-                    has_explicit_event_type = explicit_in_text or any('event_type' in f.lower() for f in filters)
-                    if not has_explicit_event_type:
-                        policy_clause = _derive_event_type_policy_clause(cq)
-                        if policy_clause:
-                            filters.append(policy_clause)
-
-                    # Optional: parse simple column filters from the confirmed question (safe subset)
-                    # Pattern: <column> <op> '<value>' where column is a known column and op in =, ILIKE, LIKE, >=, <=, >, <
-                    try:
-                        # Dynamically discover valid columns from the events table
-                        try:
-                            events_table = db_handler.metadata.tables.get('events')
-                            allowed_cols = set([c.name for c in events_table.columns]) if events_table else set()
-                        except Exception:
-                            allowed_cols = set()
-
-                        import re as _re
-                        # Pattern 1: SQL-like conditions with quoted values
-                        for m in _re.finditer(r"(?i)\b([a-z_]+)\s*(=|ILIKE|LIKE|>=|<=|>|<)\s*'([^']*)'", cq):
-                            col, op, val = m.group(1).lower(), m.group(2).upper(), m.group(3)
-                            if allowed_cols and col not in allowed_cols:
-                                continue
-                            safe_val = val.replace("'", "")
-                            # Prefer ILIKE with wildcards for textual comparisons when '=' is used
-                            if op == '=':
-                                op = 'ILIKE'
-                            if op in ('LIKE','ILIKE') and '%' not in safe_val:
-                                safe_val = f"%{safe_val}%"
-                            filters.append(f"{col} {op} '{safe_val}'")
-
-                        # Pattern 2: shorthand "col: value" or "col=value" without quotes → ILIKE '%value%'
-                        for m in _re.finditer(r"(?i)\b([a-z_]+)\s*[:=]\s*([\w\-\s%\./]+)", cq):
-                            col, val = m.group(1).lower(), m.group(2).strip()
-                            if allowed_cols and col not in allowed_cols:
-                                continue
-                            if not val:
-                                continue
-                            safe_val = val.replace("'", "")
-                            if '%' not in safe_val:
-                                safe_val = f"%{safe_val}%"
-                            filters.append(f"{col} ILIKE '{safe_val}'")
-                    except Exception:
-                        pass
-                    sanitized_query = (
-                        f"SELECT {cols} FROM events WHERE " + " AND ".join(filters) +
-                        " ORDER BY start_date, start_time LIMIT 30"
-                    )
+                deterministic_constraints = derive_constraints_from_text(cq, current_date)
+                deterministic_sql = build_sql_from_constraints(deterministic_constraints)
+                if deterministic_sql:
+                    sanitized_query = deterministic_sql
                     logging.info("CONFIRMATION: Using deterministic SQL fallback.")
                 else:
                     raise ValueError("Could not generate a valid SQL query from confirmation.")

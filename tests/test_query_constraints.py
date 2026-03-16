@@ -39,6 +39,19 @@ def test_derive_constraints_first_week_of_april() -> None:
     constraints = derive_constraints_from_text("Where can I dance the first week of April?", "2026-03-09")
     assert constraints["start_date"] == "2026-04-01"
     assert constraints["end_date"] == "2026-04-07"
+    assert constraints["location_terms"] == []
+
+
+def test_first_week_of_april_not_used_as_location_filter() -> None:
+    constraints = derive_constraints_from_text(
+        "Please give me all of the dance events in the first week of april",
+        "2026-03-09",
+    )
+    sql = build_sql_from_constraints(constraints)
+    assert sql is not None
+    sql_l = sql.lower()
+    assert "location ilike '%first week of april%'" not in sql_l
+    assert "source ilike '%first week of april%'" not in sql_l
 
 
 def test_derive_constraints_first_week_of_next_month() -> None:
