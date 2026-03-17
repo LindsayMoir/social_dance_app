@@ -800,6 +800,15 @@ class CleanUp:
         event_name = row["event_name"] if isinstance(row["event_name"], str) else ""
         description = row["description"] if isinstance(row["description"], str) else ""
         source = row["source"] if isinstance(row["source"], str) else ""
+        event_type = row["event_type"] if isinstance(row.get("event_type"), str) else ""
+        current_style = row["dance_style"] if isinstance(row.get("dance_style"), str) else ""
+
+        if "live music" in event_type.lower():
+            explicit_styles = self._extract_explicit_dance_styles(event_name, description)
+            explicit_style_text = ", ".join(explicit_styles)
+            if explicit_style_text != current_style:
+                return pd.Series([explicit_style_text or pd.NA, True])
+            return pd.Series([row["dance_style"], row["update"]])
 
         matches = [keyword for keyword in keywords_list if keyword.lower() in event_name.lower() 
                 or keyword.lower() in description.lower() or keyword.lower() in source.lower()]
@@ -807,6 +816,25 @@ class CleanUp:
         if matches:
             return pd.Series([", ".join(matches), True])  # Update dance_style and flag for update
         return pd.Series([row["dance_style"], row["update"]])  # Keep original values
+
+
+    def _extract_explicit_dance_styles(self, event_name: str, description: str) -> list[str]:
+        """
+        Return explicit dance-style matches from event text only.
+
+        This intentionally ignores generic keyword bundles and source labels so that
+        live-music events do not inherit broad styles like "rumba" without evidence.
+        """
+        evidence_text = f"{event_name or ''} {description or ''}".strip().lower()
+        if not evidence_text:
+            return []
+
+        tokens = sorted(self.db_handler._DANCE_STYLE_TOKENS, key=len, reverse=True)
+        matches: list[str] = []
+        for token in tokens:
+            if token in evidence_text and token not in matches:
+                matches.append(token)
+        return matches
 
 
     def _process_updated_events(self, events_df):
