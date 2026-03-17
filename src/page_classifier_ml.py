@@ -5,23 +5,39 @@ Offline training and runtime inference for the page classifier ML models.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 from pathlib import Path
 import re
 from typing import Any
 from urllib.parse import urlparse
 
-import joblib
-import pandas as pd
-from sklearn.feature_extraction import DictVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.multiclass import OneVsRestClassifier
-from sklearn.pipeline import Pipeline
+try:
+    import joblib
+except ImportError:  # pragma: no cover - exercised in deployment environments without ML deps
+    joblib = None
+
+try:
+    import pandas as pd
+except ImportError:  # pragma: no cover - exercised in deployment environments without ML deps
+    pd = None
+
+try:
+    from sklearn.feature_extraction import DictVectorizer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.multiclass import OneVsRestClassifier
+    from sklearn.pipeline import Pipeline
+except ImportError:  # pragma: no cover - exercised in deployment environments without ML deps
+    DictVectorizer = None
+    LogisticRegression = None
+    OneVsRestClassifier = None
+    Pipeline = Any  # type: ignore[assignment]
 
 
 DEFAULT_MODEL_PATH: Path = Path(__file__).resolve().parent.parent / "ml" / "models" / "page_classifier_models.joblib"
 _MODEL_CACHE: dict[str, Any] | None = None
 _EMAIL_INPUT_RE = re.compile(r"^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$", re.IGNORECASE)
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -41,6 +57,7 @@ def train_page_classifier_models(
     """
     Train archetype and owner-step models from the labeled training CSV.
     """
+    _require_training_dependencies()
     csv_path = Path(training_csv_path)
     df = pd.read_csv(csv_path)
     df = df.fillna("")
@@ -145,6 +162,9 @@ def load_page_classifier_models() -> dict[str, Any] | None:
         model_path = DEFAULT_MODEL_PATH
     if not model_path.exists():
         return None
+    if joblib is None:
+        LOGGER.warning("Page classifier ML artifact exists but joblib is not installed; skipping ML inference.")
+        return None
     _MODEL_CACHE = joblib.load(model_path)
     return _MODEL_CACHE
 
@@ -229,6 +249,7 @@ def build_model_features(
 
 
 def _build_pipeline() -> Pipeline:
+    _require_training_dependencies()
     return Pipeline(
         steps=[
             ("vectorizer", DictVectorizer(sparse=True)),
@@ -275,3 +296,18 @@ def _tokenize_path(path: str) -> list[str]:
 
 def _is_email_like_input(value: Any) -> bool:
     return _EMAIL_INPUT_RE.match(str(value or "").strip()) is not None
+
+
+def _require_training_dependencies() -> None:
+    missing: list[str] = []
+    if joblib is None:
+        missing.append("joblib")
+    if pd is None:
+        missing.append("pandas")
+    if DictVectorizer is None or LogisticRegression is None or OneVsRestClassifier is None:
+        missing.append("scikit-learn")
+    if missing:
+        raise RuntimeError(
+            "Page classifier ML dependencies are missing: "
+            + ", ".join(sorted(set(missing)))
+        )

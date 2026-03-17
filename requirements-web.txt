@@ -15,8 +15,10 @@ mistralai==1.7.0
 openai==1.78.1
 
 # Data processing
+joblib==1.4.2
 pandas==2.2.3
 numpy==2.2.5
+scikit-learn==1.6.1
 
 # Configuration & utilities
 python-dotenv==1.1.0
