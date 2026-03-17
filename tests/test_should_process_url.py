@@ -120,6 +120,34 @@ def test_should_skip_stale_instagram_post_detail_url_when_already_seen():
     assert db.get_should_process_decision_reason(url) == "skip_stale_instagram_post_detail"
 
 
+def test_should_skip_previously_rejected_old_facebook_event_detail_url():
+    db = DummyDB()
+    url = "https://www.facebook.com/events/1234567890123456/"
+    norm_url = db.normalize_url(url)
+    db.urls_df = pd.DataFrame(
+        [
+            {
+                "link": norm_url,
+                "parent_url": "",
+                "source": "fb",
+                "keywords": [],
+                "relevant": False,
+                "crawl_try": 1,
+                "time_stamp": datetime.now(),
+                "decision_reason": "rejected_old_facebook_event_detail",
+            }
+        ]
+    )
+    db.urls_gb = pd.DataFrame(
+        [{"link": norm_url, "hit_ratio": 0.5, "crawl_try": 1}]
+    )
+
+    assert db.should_process_url(url) is False
+    counts = db.get_should_process_decision_counts()
+    assert counts.get("skip_rejected_old_facebook_event_detail", 0) >= 1
+    assert db.get_should_process_decision_reason(url) == "skip_rejected_old_facebook_event_detail"
+
+
 def test_should_not_apply_stale_static_skip_to_instagram_profile_page():
     db = DummyDB()
     url = "https://www.instagram.com/socialdancevictoria/"

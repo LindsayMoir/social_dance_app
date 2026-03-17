@@ -2421,10 +2421,13 @@ class DatabaseHandler():
         df = self.clean_up_address_basic(df)
 
         # Drop old events before expensive address resolution.
+        rows_before_old_filter = len(df)
+        old_only_rejection_reason = self._old_only_rejection_reason_for_url(self.normalize_url(url))
         df = self._drop_old_events_by_date(df, context="pre_address")
         if df.empty:
             logging.info("write_events_to_db: No events remain after early old-date filtering, skipping address processing.")
-            self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
+            decision_reason = old_only_rejection_reason if rows_before_old_filter > 0 and old_only_rejection_reason else None
+            self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now(), decision_reason])
             return
 
         # Resolve structured addresses using LLM + match/insert logic
@@ -4738,6 +4741,38 @@ class DatabaseHandler():
         return False, None
 
 
+    def _old_only_rejection_reason_for_url(self, normalized_url: str) -> Optional[str]:
+        """
+        Return a structured reason when a static event-detail URL produced only old events.
+        """
+        kind, _ = self._classify_static_event_detail_url(normalized_url)
+        reason_map = {
+            "facebook_event_detail": "rejected_old_facebook_event_detail",
+            "eventbrite_event_detail": "rejected_old_eventbrite_event_detail",
+            "instagram_post_detail": "rejected_old_instagram_post_detail",
+        }
+        return reason_map.get(kind)
+
+
+    def _should_skip_old_only_static_rejection(
+        self,
+        df_url: pd.DataFrame,
+        normalized_url: str,
+    ) -> tuple[bool, Optional[str]]:
+        """
+        Skip static event-detail URLs that were previously scraped and rejected as old-only.
+        """
+        if df_url is None or df_url.empty:
+            return False, None
+        rejection_reason = self._old_only_rejection_reason_for_url(normalized_url)
+        if not rejection_reason:
+            return False, None
+        latest_reason = str(df_url.iloc[-1].get("decision_reason") or "").strip()
+        if latest_reason != rejection_reason:
+            return False, None
+        return True, rejection_reason.replace("rejected_old_", "skip_rejected_old_", 1)
+
+
     def normalize_url(self, url):
         """
         Normalize URLs by removing dynamic cache parameters that don't affect the underlying content.
@@ -4868,7 +4903,23 @@ class DatabaseHandler():
             self._set_last_should_process_reason(generic_norm, decision)
             return True
 
-        # 1b. For static event-detail URLs (Facebook/Eventbrite), skip when historical event is stale.
+        # 1b. For static event-detail URLs, skip when the last scrape already rejected the page as old-only.
+        should_skip_old_rejection, old_rejection_reason = self._should_skip_old_only_static_rejection(
+            df_url,
+            normalized_url,
+        )
+        if should_skip_old_rejection:
+            logging.info(
+                "should_process_url: URL %s skipped due to prior old-only rejection (%s).",
+                normalized_url[:100] + "...",
+                old_rejection_reason,
+            )
+            decision = old_rejection_reason or "skip_rejected_old_static_event_detail"
+            self._record_should_process_decision(decision)
+            self._set_last_should_process_reason(generic_norm, decision)
+            return False
+
+        # 1c. For static event-detail URLs (Facebook/Eventbrite), skip when historical event is stale.
         should_skip_stale, stale_reason = self._should_skip_stale_static_event_url(normalized_url)
         if should_skip_stale:
             logging.info(
