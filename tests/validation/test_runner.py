@@ -52,6 +52,10 @@ from chatbot_evaluator import (
 )
 
 # Import existing utilities
+from classifier_training_queue import (
+    build_classifier_training_queue,
+    filter_classifier_review_candidates,
+)
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_config import setup_logging
@@ -89,6 +93,7 @@ class ValidationTestRunner:
         self.llm_handler = LLMHandler(config_path=config_path)
         self._replay_fb_scraper = None
         self._replay_fb_module = None
+        self.training_csv_path = os.path.join(repo_root, "ml", "training_data", "original_td.csv")
 
         # Get validation configuration
         self.validation_config = self.config.get('testing', {}).get('validation', {})
@@ -343,9 +348,15 @@ class ValidationTestRunner:
         try:
             replay_summary = self._run_accuracy_replay_assessment(results)
             results["accuracy_replay"] = replay_summary
+            results["classifier_training_queue"] = self._build_classifier_training_queue_summary(replay_summary)
+            results["classifier_performance"] = self._summarize_classifier_performance(
+                run_id=str(replay_summary.get("run_id") or "").strip()
+            )
         except Exception as e:
             logging.error("Replay accuracy assessment failed: %s", e, exc_info=True)
             results["accuracy_replay"] = {"error": str(e), "status": "ERROR"}
+            results["classifier_training_queue"] = {"error": str(e), "status": "ERROR", "candidates": []}
+            results["classifier_performance"] = {"error": str(e), "status": "ERROR"}
             if results['overall_status'] == 'PASS':
                 results['overall_status'] = 'WARNING'
 
@@ -1351,6 +1362,251 @@ class ValidationTestRunner:
             "trend": self._load_metric_history("validation_replay_accuracy_pct", trend_days),
         }
 
+    def _build_classifier_training_queue_summary(self, accuracy_replay_summary: dict) -> dict:
+        """
+        Convert row-level replay results into one URL-level labeling candidate per normalized URL.
+        """
+        if not isinstance(accuracy_replay_summary, dict) or accuracy_replay_summary.get("error"):
+            return {
+                "status": "ERROR",
+                "error": str((accuracy_replay_summary or {}).get("error", "accuracy replay unavailable")),
+                "candidates": [],
+            }
+
+        replay_rows = accuracy_replay_summary.get("rows")
+        if not isinstance(replay_rows, list):
+            replay_rows = []
+
+        queue_summary = build_classifier_training_queue(
+            replay_rows,
+            training_csv_path=self.training_csv_path,
+            query_text=str(accuracy_replay_summary.get("query_text") or ""),
+        )
+        queue_summary["status"] = "OK"
+        queue_summary["run_id"] = str(accuracy_replay_summary.get("run_id") or "").strip()
+
+        run_id = queue_summary["run_id"]
+        if run_id:
+            for candidate in queue_summary.get("candidates", []):
+                self.db_handler.record_classifier_training_url_candidate(
+                    run_id=run_id,
+                    candidate=candidate,
+                )
+            self.db_handler.record_metric_observation(
+                run_id=run_id,
+                metric_key="classifier_training_queue_total_urls",
+                metric_value_numeric=float(queue_summary.get("total_urls", 0) or 0),
+                metric_unit="count",
+                description="URL-level replay candidates considered for classifier labeling",
+                higher_is_better=False,
+                notes={
+                    "status_counts": queue_summary.get("status_counts") or {},
+                    "training_ready_count": int(queue_summary.get("training_ready_count", 0) or 0),
+                },
+            )
+            self.db_handler.record_metric_observation(
+                run_id=run_id,
+                metric_key="classifier_training_queue_training_ready_urls",
+                metric_value_numeric=float(queue_summary.get("training_ready_count", 0) or 0),
+                metric_unit="count",
+                description="URL-level replay candidates eligible for positive classifier labeling review",
+                higher_is_better=True,
+                notes={
+                    "review_required_count": int(queue_summary.get("review_required_count", 0) or 0),
+                },
+            )
+        return queue_summary
+
+    def _summarize_classifier_performance(self, run_id: str) -> dict:
+        """
+        Summarize classifier-stage usage and replay accuracy honestly at the URL level.
+        """
+        safe_run_id = str(run_id or "").strip()
+        if not safe_run_id:
+            return {"status": "ERROR", "error": "missing_run_id"}
+
+        try:
+            rows = self.db_handler.execute_query(
+                """
+                WITH latest_scrape AS (
+                    SELECT DISTINCT ON (link)
+                        link,
+                        archetype,
+                        classification_stage,
+                        classification_confidence,
+                        classification_owner_step,
+                        classification_subtype,
+                        classification_features_json,
+                        time_stamp
+                    FROM url_scrape_metrics
+                    WHERE run_id = :run_id
+                      AND step_name = 'scraper'
+                      AND link IS NOT NULL
+                      AND classification_stage IS NOT NULL
+                    ORDER BY link, time_stamp DESC
+                ),
+                replay_rollup AS (
+                    SELECT
+                        baseline_url,
+                        COUNT(*) AS replay_row_count,
+                        SUM(CASE WHEN is_match THEN 1 ELSE 0 END) AS replay_true_count,
+                        BOOL_AND(is_match) AS replay_url_success
+                    FROM accuracy_replay_results
+                    WHERE run_id = :run_id
+                      AND baseline_url IS NOT NULL
+                    GROUP BY baseline_url
+                )
+                SELECT
+                    ls.link,
+                    ls.archetype,
+                    ls.classification_stage,
+                    ls.classification_confidence,
+                    ls.classification_owner_step,
+                    ls.classification_subtype,
+                    rr.replay_row_count,
+                    rr.replay_true_count,
+                    rr.replay_url_success
+                FROM latest_scrape ls
+                LEFT JOIN replay_rollup rr
+                  ON rr.baseline_url = ls.link
+                """,
+                {"run_id": safe_run_id},
+            ) or []
+        except Exception as e:
+            return {"status": "ERROR", "error": f"classifier_performance_query_failed:{e}"}
+
+        stage_counts: Counter[str] = Counter()
+        stage_confidences: dict[str, list[float]] = {}
+        stage_replay_url_totals: Counter[str] = Counter()
+        stage_replay_url_success: Counter[str] = Counter()
+        stage_replay_row_totals: Counter[str] = Counter()
+        stage_replay_row_success: Counter[str] = Counter()
+        archetype_counts: Counter[str] = Counter()
+        owner_counts: Counter[str] = Counter()
+
+        total_urls = 0
+        replay_url_total = 0
+        replay_url_success_total = 0
+        replay_row_total = 0
+        replay_row_success_total = 0
+
+        for row in rows:
+            mapping = row._mapping if hasattr(row, "_mapping") else row
+            stage = str(mapping.get("classification_stage") or "").strip() or "unknown"
+            archetype = str(mapping.get("archetype") or "").strip() or "unknown"
+            owner = str(mapping.get("classification_owner_step") or "").strip() or "unknown"
+            total_urls += 1
+            stage_counts.update([stage])
+            archetype_counts.update([archetype])
+            owner_counts.update([owner])
+
+            confidence = self._safe_float(mapping.get("classification_confidence"))
+            if confidence is not None:
+                stage_confidences.setdefault(stage, []).append(confidence)
+
+            replay_row_count = int(mapping.get("replay_row_count") or 0)
+            replay_true_count = int(mapping.get("replay_true_count") or 0)
+            replay_url_success = bool(mapping.get("replay_url_success")) if replay_row_count > 0 else None
+            if replay_row_count > 0:
+                replay_url_total += 1
+                replay_row_total += replay_row_count
+                replay_row_success_total += replay_true_count
+                stage_replay_url_totals.update([stage])
+                stage_replay_row_totals[stage] += replay_row_count
+                stage_replay_row_success[stage] += replay_true_count
+                if replay_url_success:
+                    replay_url_success_total += 1
+                    stage_replay_url_success.update([stage])
+
+        stage_details: list[dict[str, Any]] = []
+        for stage, count in stage_counts.items():
+            conf_values = stage_confidences.get(stage, [])
+            replay_stage_url_total = int(stage_replay_url_totals.get(stage, 0))
+            replay_stage_url_success = int(stage_replay_url_success.get(stage, 0))
+            replay_stage_row_total = int(stage_replay_row_totals.get(stage, 0))
+            replay_stage_row_success = int(stage_replay_row_success.get(stage, 0))
+            stage_details.append(
+                {
+                    "stage": stage,
+                    "url_count": int(count),
+                    "usage_pct": round((count / total_urls) * 100.0, 2) if total_urls else 0.0,
+                    "avg_confidence": round(sum(conf_values) / len(conf_values), 4) if conf_values else None,
+                    "replay_url_count": replay_stage_url_total,
+                    "replay_url_success_count": replay_stage_url_success,
+                    "replay_url_accuracy_pct": (
+                        round((replay_stage_url_success / replay_stage_url_total) * 100.0, 2)
+                        if replay_stage_url_total
+                        else None
+                    ),
+                    "replay_row_count": replay_stage_row_total,
+                    "replay_row_success_count": replay_stage_row_success,
+                    "replay_row_accuracy_pct": (
+                        round((replay_stage_row_success / replay_stage_row_total) * 100.0, 2)
+                        if replay_stage_row_total
+                        else None
+                    ),
+                }
+            )
+        stage_details.sort(key=lambda item: (-int(item["url_count"]), str(item["stage"])))
+
+        summary = {
+            "status": "OK",
+            "run_id": safe_run_id,
+            "total_classified_urls": total_urls,
+            "stage_counts": dict(stage_counts),
+            "archetype_counts": dict(archetype_counts),
+            "owner_step_counts": dict(owner_counts),
+            "ml_usage_count": int(stage_counts.get("ml", 0)),
+            "ml_usage_pct": round((stage_counts.get("ml", 0) / total_urls) * 100.0, 2) if total_urls else 0.0,
+            "replay_url_total": replay_url_total,
+            "replay_url_success_total": replay_url_success_total,
+            "replay_url_accuracy_pct": round((replay_url_success_total / replay_url_total) * 100.0, 2)
+            if replay_url_total
+            else None,
+            "replay_row_total": replay_row_total,
+            "replay_row_success_total": replay_row_success_total,
+            "replay_row_accuracy_pct": round((replay_row_success_total / replay_row_total) * 100.0, 2)
+            if replay_row_total
+            else None,
+            "stage_details": stage_details,
+        }
+
+        try:
+            self.db_handler.record_metric_observation(
+                run_id=safe_run_id,
+                metric_key="classifier_ml_usage_pct",
+                metric_value_numeric=float(summary["ml_usage_pct"] or 0.0),
+                metric_unit="percent",
+                description="Share of classified URLs handled by ML stage",
+                higher_is_better=False,
+                notes={"stage_counts": summary["stage_counts"]},
+            )
+            ml_stage = next((item for item in stage_details if item["stage"] == "ml"), None)
+            if ml_stage and ml_stage.get("replay_url_accuracy_pct") is not None:
+                self.db_handler.record_metric_observation(
+                    run_id=safe_run_id,
+                    metric_key="classifier_ml_replay_url_accuracy_pct",
+                    metric_value_numeric=float(ml_stage["replay_url_accuracy_pct"]),
+                    metric_unit="percent",
+                    description="Replay URL accuracy for ML-classified URLs",
+                    higher_is_better=True,
+                    notes={"replay_url_count": int(ml_stage.get("replay_url_count", 0) or 0)},
+                )
+            rule_stage = next((item for item in stage_details if item["stage"] == "rule"), None)
+            if rule_stage and rule_stage.get("replay_url_accuracy_pct") is not None:
+                self.db_handler.record_metric_observation(
+                    run_id=safe_run_id,
+                    metric_key="classifier_rule_replay_url_accuracy_pct",
+                    metric_value_numeric=float(rule_stage["replay_url_accuracy_pct"]),
+                    metric_unit="percent",
+                    description="Replay URL accuracy for rule-classified URLs",
+                    higher_is_better=True,
+                    notes={"replay_url_count": int(rule_stage.get("replay_url_count", 0) or 0)},
+                )
+        except Exception:
+            pass
+        return summary
+
     def _evaluate_chatbot_problem_category_gate(self, chatbot_report: dict, chatbot_config: dict) -> dict:
         """Evaluate category-level chatbot quality gate from problem-category buckets."""
         categories = chatbot_report.get("problem_categories", []) if isinstance(chatbot_report, dict) else []
@@ -1405,6 +1661,8 @@ class ValidationTestRunner:
         chatbot_performance_summary = self._summarize_chatbot_performance(results.get('timestamp'))
         chatbot_metrics_sync_summary = self._summarize_chatbot_metrics_sync(results.get('timestamp'))
         accuracy_replay_summary = results.get("accuracy_replay") if isinstance(results, dict) else {}
+        classifier_training_queue_summary = results.get("classifier_training_queue") if isinstance(results, dict) else {}
+        classifier_performance_summary = results.get("classifier_performance") if isinstance(results, dict) else {}
         scraper_network_summary = self._summarize_scraper_network_health(results.get('timestamp'))
         fb_block_summary = self._summarize_fb_block_health(results.get('timestamp'))
         fb_ig_funnel_summary = self._summarize_fb_ig_url_funnel(results.get('timestamp'), fb_block_summary)
@@ -1539,6 +1797,26 @@ class ValidationTestRunner:
         accuracy_replay_path = os.path.join(output_dir, 'accuracy_replay_summary.json')
         with open(accuracy_replay_path, 'w', encoding='utf-8') as f:
             json.dump(accuracy_replay_summary, f, indent=2)
+        classifier_training_queue_path = os.path.join(output_dir, 'classifier_training_queue.json')
+        with open(classifier_training_queue_path, 'w', encoding='utf-8') as f:
+            json.dump(classifier_training_queue_summary, f, indent=2)
+        classifier_training_queue_csv_path = os.path.join(output_dir, 'classifier_training_queue.csv')
+        self._write_classifier_training_queue_csv(
+            classifier_training_queue_csv_path,
+            classifier_training_queue_summary,
+        )
+        classifier_review_queue_summary = filter_classifier_review_candidates(classifier_training_queue_summary)
+        classifier_review_queue_path = os.path.join(output_dir, 'classifier_review_queue.json')
+        with open(classifier_review_queue_path, 'w', encoding='utf-8') as f:
+            json.dump(classifier_review_queue_summary, f, indent=2)
+        classifier_review_queue_csv_path = os.path.join(output_dir, 'classifier_review_queue.csv')
+        self._write_classifier_training_queue_csv(
+            classifier_review_queue_csv_path,
+            classifier_review_queue_summary,
+        )
+        classifier_performance_path = os.path.join(output_dir, 'classifier_performance_summary.json')
+        with open(classifier_performance_path, 'w', encoding='utf-8') as f:
+            json.dump(classifier_performance_summary, f, indent=2)
         openrouter_cost_path = os.path.join(output_dir, 'openrouter_run_cost.json')
         with open(openrouter_cost_path, 'w', encoding='utf-8') as f:
             json.dump(openrouter_cost_summary, f, indent=2)
@@ -1558,8 +1836,75 @@ class ValidationTestRunner:
         logging.info(f"Chatbot metrics sync summary saved: {chatbot_metrics_sync_path}")
         logging.info(f"Run control panel saved: {control_panel_path}")
         logging.info(f"Accuracy replay summary saved: {accuracy_replay_path}")
+        logging.info(f"Classifier training queue saved: {classifier_training_queue_path}")
+        logging.info(f"Classifier training queue CSV saved: {classifier_training_queue_csv_path}")
+        logging.info(f"Classifier review queue saved: {classifier_review_queue_path}")
+        logging.info(f"Classifier review queue CSV saved: {classifier_review_queue_csv_path}")
+        logging.info(f"Classifier performance summary saved: {classifier_performance_path}")
         logging.info(f"OpenRouter run cost summary saved: {openrouter_cost_path}")
         logging.info(f"OpenAI run cost summary saved: {openai_cost_path}")
+
+    def _write_classifier_training_queue_csv(self, path: str, queue_summary: dict) -> None:
+        """
+        Write URL-level classifier labeling candidates as a flat CSV for review.
+        """
+        candidates = queue_summary.get("candidates", []) if isinstance(queue_summary, dict) else []
+        fieldnames = [
+            "normalized_url",
+            "domain",
+            "query_text",
+            "total_rows",
+            "true_count",
+            "false_count",
+            "match_rate_pct",
+            "status",
+            "recommended_action",
+            "training_eligible",
+            "recommended_archetype",
+            "recommended_owner_step",
+            "recommended_subtype",
+            "priority_score",
+            "mismatch_category_counts",
+            "baseline_event_ids",
+            "sample_event_name",
+            "sample_start_date",
+            "sample_start_time",
+            "sample_source",
+            "sample_location",
+        ]
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for candidate in candidates:
+                baseline = candidate.get("sample_baseline", {}) if isinstance(candidate.get("sample_baseline"), dict) else {}
+                writer.writerow(
+                    {
+                        "normalized_url": candidate.get("normalized_url", ""),
+                        "domain": candidate.get("domain", ""),
+                        "query_text": candidate.get("query_text", ""),
+                        "total_rows": candidate.get("total_rows", 0),
+                        "true_count": candidate.get("true_count", 0),
+                        "false_count": candidate.get("false_count", 0),
+                        "match_rate_pct": candidate.get("match_rate_pct", 0.0),
+                        "status": candidate.get("status", ""),
+                        "recommended_action": candidate.get("recommended_action", ""),
+                        "training_eligible": candidate.get("training_eligible", False),
+                        "recommended_archetype": candidate.get("recommended_archetype", ""),
+                        "recommended_owner_step": candidate.get("recommended_owner_step", ""),
+                        "recommended_subtype": candidate.get("recommended_subtype", ""),
+                        "priority_score": candidate.get("priority_score", 0),
+                        "mismatch_category_counts": json.dumps(
+                            candidate.get("mismatch_category_counts") or {},
+                            ensure_ascii=True,
+                        ),
+                        "baseline_event_ids": json.dumps(candidate.get("baseline_event_ids") or [], ensure_ascii=True),
+                        "sample_event_name": baseline.get("event_name", ""),
+                        "sample_start_date": baseline.get("start_date", ""),
+                        "sample_start_time": baseline.get("start_time", ""),
+                        "sample_source": baseline.get("source", ""),
+                        "sample_location": baseline.get("location", ""),
+                    }
+                )
 
     @staticmethod
     def _escape_html(value: str) -> str:
@@ -3926,6 +4271,118 @@ class ValidationTestRunner:
             "</svg>"
         )
 
+    def _build_multi_metric_trend_svg(
+        self,
+        *,
+        series: list[dict[str, str]],
+        title: str,
+        days: int = 120,
+        value_format: str = "percent",
+    ) -> str:
+        """Render multiple DB-backed metric trends on a shared inline SVG."""
+        prepared_series: list[dict[str, Any]] = []
+        all_values: list[float] = []
+        all_labels: set[str] = set()
+
+        for item in series:
+            metric_key = str(item.get("metric_key") or "").strip()
+            label = str(item.get("label") or metric_key).strip()
+            color = str(item.get("color") or "#007bff").strip() or "#007bff"
+            if not metric_key:
+                continue
+            trend = self._load_metric_history(metric_key, days=days)
+            points = []
+            for point in trend:
+                ts = str(point.get("timestamp", "")).strip()
+                value = self._safe_float(point.get("value"))
+                if not ts or value is None:
+                    continue
+                day_label = ts[:10]
+                points.append({"timestamp": ts, "day_label": day_label, "value": float(value)})
+                all_values.append(float(value))
+                all_labels.add(day_label)
+            if points:
+                prepared_series.append(
+                    {
+                        "metric_key": metric_key,
+                        "label": label,
+                        "color": color,
+                        "points": points,
+                    }
+                )
+
+        if not prepared_series:
+            return f"<h3>{self._escape_html(title)}</h3><p>No DB trend data available for classifier metrics.</p>"
+
+        ordered_labels = sorted(all_labels)
+        if len(ordered_labels) == 1:
+            label_positions = {ordered_labels[0]: 0.0}
+        else:
+            label_positions = {
+                label: idx / max(1, len(ordered_labels) - 1)
+                for idx, label in enumerate(ordered_labels)
+            }
+
+        width = 860
+        height = 240
+        pad_left = 52
+        pad_right = 16
+        pad_top = 14
+        pad_bottom = 34
+        inner_w = max(10, width - pad_left - pad_right)
+        inner_h = max(10, height - pad_top - pad_bottom)
+        min_v = min(all_values)
+        max_v = max(all_values)
+        span = (max_v - min_v) if (max_v - min_v) > 1e-9 else 1.0
+        first_label = self._escape_html(ordered_labels[0])
+        last_label = self._escape_html(ordered_labels[-1])
+
+        def _fmt(value: float) -> str:
+            if value_format == "percent":
+                return f"{value:.1f}%"
+            if value_format == "usd":
+                return f"${value:.2f}"
+            if value_format == "hours":
+                return f"{value:.2f}h"
+            if value_format == "count":
+                return f"{int(round(value))}"
+            return f"{value:.2f}"
+
+        polylines: list[str] = []
+        legend_items: list[str] = []
+        for idx, item in enumerate(prepared_series):
+            coords: list[tuple[float, float]] = []
+            for point in item["points"]:
+                x = pad_left + label_positions[point["day_label"]] * inner_w
+                y = pad_top + (1.0 - ((point["value"] - min_v) / span)) * inner_h
+                coords.append((x, y))
+            polyline = " ".join(f"{x:.2f},{y:.2f}" for x, y in coords)
+            polylines.append(
+                f"<polyline points='{polyline}' fill='none' stroke='{self._escape_html(item['color'])}' "
+                f"stroke-width='2.5'/>"
+            )
+            legend_y = pad_top + 14 + idx * 16
+            legend_items.append(
+                f"<line x1='{width - 230}' y1='{legend_y}' x2='{width - 210}' y2='{legend_y}' "
+                f"stroke='{self._escape_html(item['color'])}' stroke-width='2.5'/>"
+                f"<text x='{width - 204}' y='{legend_y + 4}' font-size='11' fill='#444'>{self._escape_html(item['label'])}</text>"
+            )
+
+        return (
+            f"<h3>{self._escape_html(title)}</h3>"
+            f"<svg width='{width}' height='{height}' viewBox='0 0 {width} {height}' role='img' aria-label='{self._escape_html(title)}'>"
+            f"<rect x='0' y='0' width='{width}' height='{height}' fill='#ffffff'/>"
+            f"<line x1='{pad_left}' y1='{pad_top}' x2='{pad_left}' y2='{height - pad_bottom}' stroke='#999'/>"
+            f"<line x1='{pad_left}' y1='{height - pad_bottom}' x2='{width - pad_right}' y2='{height - pad_bottom}' stroke='#999'/>"
+            f"{''.join(polylines)}"
+            f"{''.join(legend_items)}"
+            f"<text x='6' y='{pad_top + 9}' font-size='11' fill='#666'>{self._escape_html(_fmt(max_v))}</text>"
+            f"<text x='6' y='{height - pad_bottom}' font-size='11' fill='#666'>{self._escape_html(_fmt(min_v))}</text>"
+            f"<text x='{pad_left}' y='{height - 7}' font-size='11' fill='#666'>{first_label}</text>"
+            f"<text x='{width - 92}' y='{height - 7}' font-size='11' fill='#666'>{last_label}</text>"
+            "</svg>"
+        )
+
     def _build_top_trend_dashboard_html(self) -> str:
         """Build top-of-report trend dashboard from DB-persisted metric_observations."""
         parts = [
@@ -3934,6 +4391,28 @@ class ValidationTestRunner:
                 title="Accuracy Trend (DB persisted metric_observations)",
                 days=180,
                 value_format="percent",
+            ),
+            self._build_multi_metric_trend_svg(
+                title="Classifier Trends",
+                days=180,
+                value_format="percent",
+                series=[
+                    {
+                        "metric_key": "classifier_ml_usage_pct",
+                        "label": "ML Usage %",
+                        "color": "#d94841",
+                    },
+                    {
+                        "metric_key": "classifier_ml_replay_url_accuracy_pct",
+                        "label": "ML Replay URL Accuracy %",
+                        "color": "#1f77b4",
+                    },
+                    {
+                        "metric_key": "classifier_rule_replay_url_accuracy_pct",
+                        "label": "Rule Replay URL Accuracy %",
+                        "color": "#2ca02c",
+                    },
+                ],
             ),
             self._build_metric_trend_svg(
                 metric_key="total_llm_run_cost_usd",

@@ -221,6 +221,8 @@ class DatabaseHandler():
                 routing_reason TEXT,
                 classification_confidence DOUBLE PRECISION,
                 classification_stage TEXT,
+                classification_owner_step TEXT,
+                classification_subtype TEXT,
                 classification_features_json TEXT,
                 links_discovered INTEGER,
                 links_followed INTEGER,
@@ -235,6 +237,8 @@ class DatabaseHandler():
                 "ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS classification_confidence DOUBLE PRECISION"
             )
             self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS classification_stage TEXT")
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS classification_owner_step TEXT")
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS classification_subtype TEXT")
             self.execute_query(
                 "ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS classification_features_json TEXT"
             )
@@ -259,6 +263,7 @@ class DatabaseHandler():
             - metric_definitions: stable metric registry (one row per metric key)
             - metric_observations: numeric observations over time/run windows
             - accuracy_replay_results: row-level replay audit records
+            - classifier_training_url_candidates: URL-level replay aggregation for training curation
         """
         create_metric_definitions = """
             CREATE TABLE IF NOT EXISTS metric_definitions (
@@ -298,6 +303,31 @@ class DatabaseHandler():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """
+        create_classifier_training_url_candidates = """
+            CREATE TABLE IF NOT EXISTS classifier_training_url_candidates (
+                id SERIAL PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                query_text TEXT,
+                normalized_url TEXT NOT NULL,
+                domain TEXT,
+                total_rows INTEGER NOT NULL,
+                true_count INTEGER NOT NULL,
+                false_count INTEGER NOT NULL,
+                match_rate_pct DOUBLE PRECISION NOT NULL,
+                status TEXT NOT NULL,
+                recommended_action TEXT,
+                training_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+                recommended_archetype TEXT,
+                recommended_owner_step TEXT,
+                recommended_subtype TEXT,
+                priority_score INTEGER NOT NULL DEFAULT 0,
+                mismatch_category_counts_json TEXT,
+                baseline_event_ids_json TEXT,
+                sample_baseline_json TEXT,
+                sample_replay_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
         indexes = [
             "CREATE INDEX IF NOT EXISTS idx_metric_observations_run_id ON metric_observations(run_id)",
             "CREATE INDEX IF NOT EXISTS idx_metric_observations_metric_id ON metric_observations(metric_id)",
@@ -306,11 +336,15 @@ class DatabaseHandler():
             "CREATE INDEX IF NOT EXISTS idx_accuracy_replay_results_is_match ON accuracy_replay_results(is_match)",
             "CREATE INDEX IF NOT EXISTS idx_accuracy_replay_results_category ON accuracy_replay_results(mismatch_category)",
             "CREATE INDEX IF NOT EXISTS idx_accuracy_replay_results_event_id ON accuracy_replay_results(baseline_event_id)",
+            "CREATE INDEX IF NOT EXISTS idx_classifier_training_candidates_run_id ON classifier_training_url_candidates(run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_classifier_training_candidates_status ON classifier_training_url_candidates(status)",
+            "CREATE INDEX IF NOT EXISTS idx_classifier_training_candidates_url ON classifier_training_url_candidates(normalized_url)",
         ]
         try:
             self.execute_query(create_metric_definitions)
             self.execute_query(create_metric_observations)
             self.execute_query(create_accuracy_replay_results)
+            self.execute_query(create_classifier_training_url_candidates)
             for index_sql in indexes:
                 self.execute_query(index_sql)
             logging.info("ensure_validation_metric_tables: ensured normalized validation metric tables exist")
@@ -765,6 +799,136 @@ class DatabaseHandler():
         except Exception as e:
             logging.error("DatabaseHandler: Database connection failed: %s", e)
             return None
+
+    def get_historical_classifier_memory(
+        self,
+        url: str,
+        *,
+        min_samples: int = 3,
+        dominance_threshold: float = 0.80,
+        success_rate_threshold: float = 0.70,
+        max_runs: int = 24,
+    ) -> Dict[str, Any] | None:
+        """
+        Return a conservative routing-memory hint for an exact normalized URL.
+
+        This only returns a hint when recent telemetry shows strong agreement on the
+        same archetype/owner-step/subtype combination and replay validation
+        indicates that route actually worked.
+        """
+        normalized_url = self._normalize_for_compare(self.normalize_url(url))
+        if not normalized_url:
+            return None
+        try:
+            rows = self.execute_query(
+                """
+                WITH replay_rollup AS (
+                    SELECT
+                        run_id,
+                        baseline_url,
+                        BOOL_AND(is_match) AS replay_url_success
+                    FROM accuracy_replay_results
+                    WHERE baseline_url = :link
+                    GROUP BY run_id, baseline_url
+                ),
+                latest_scrape_per_run AS (
+                    SELECT DISTINCT ON (run_id, link)
+                        run_id,
+                        link,
+                        archetype,
+                        classification_owner_step,
+                        classification_subtype,
+                        classification_stage,
+                        classification_confidence,
+                        time_stamp
+                    FROM url_scrape_metrics
+                    WHERE link = :link
+                      AND step_name = 'scraper'
+                      AND archetype IS NOT NULL
+                      AND classification_owner_step IS NOT NULL
+                    ORDER BY run_id, link, time_stamp DESC
+                )
+                SELECT
+                    ls.archetype,
+                    ls.classification_owner_step,
+                    ls.classification_subtype,
+                    ls.classification_stage,
+                    ls.classification_confidence,
+                    rr.replay_url_success
+                FROM latest_scrape_per_run ls
+                JOIN replay_rollup rr
+                  ON rr.run_id = ls.run_id
+                 AND rr.baseline_url = ls.link
+                ORDER BY ls.time_stamp DESC
+                LIMIT :limit
+                """,
+                {"link": normalized_url, "limit": int(max(1, max_runs))},
+            ) or []
+        except Exception as e:
+            logging.warning("get_historical_classifier_memory(): query failed for %s: %s", normalized_url, e)
+            return None
+
+        if len(rows) < int(max(1, min_samples)):
+            return None
+
+        combo_counts: Counter[tuple[str, str, str]] = Counter()
+        combo_success_counts: Counter[tuple[str, str, str]] = Counter()
+        combo_confidences: Dict[tuple[str, str, str], list[float]] = {}
+        combo_stages: Dict[tuple[str, str, str], Counter[str]] = {}
+        for row in rows:
+            archetype = str(row[0] or "").strip()
+            owner_step = str(row[1] or "").strip()
+            subtype = str(row[2] or "").strip()
+            stage = str(row[3] or "").strip()
+            confidence = row[4]
+            replay_url_success = bool(row[5])
+            if not archetype or not owner_step:
+                continue
+            combo = (archetype, owner_step, subtype)
+            combo_counts.update([combo])
+            if replay_url_success:
+                combo_success_counts.update([combo])
+            combo_confidences.setdefault(combo, [])
+            combo_stages.setdefault(combo, Counter())
+            combo_stages[combo].update([stage or "unknown"])
+            try:
+                if confidence is not None:
+                    combo_confidences[combo].append(float(confidence))
+            except Exception:
+                pass
+
+        if not combo_counts:
+            return None
+
+        top_combo, top_count = combo_counts.most_common(1)[0]
+        total = sum(combo_counts.values())
+        dominance = (top_count / total) if total else 0.0
+        if top_count < int(max(1, min_samples)) or dominance < float(dominance_threshold):
+            return None
+        success_count = int(combo_success_counts.get(top_combo, 0))
+        success_rate = (success_count / top_count) if top_count else 0.0
+        if success_count < int(max(1, min_samples)) or success_rate < float(success_rate_threshold):
+            return None
+
+        confidence_values = combo_confidences.get(top_combo, [])
+        stage_counter = combo_stages.get(top_combo, Counter())
+        archetype, owner_step, subtype = top_combo
+        return {
+            "url": normalized_url,
+            "archetype": archetype,
+            "owner_step": owner_step,
+            "subtype": subtype,
+            "sample_count": int(top_count),
+            "success_count": success_count,
+            "success_rate": float(round(success_rate, 4)),
+            "dominance": float(round(dominance, 4)),
+            "avg_confidence": (
+                float(round(sum(confidence_values) / len(confidence_values), 4))
+                if confidence_values
+                else None
+            ),
+            "stage_mode": stage_counter.most_common(1)[0][0] if stage_counter else "unknown",
+        }
         
 
     def create_tables(self):
@@ -1329,6 +1493,8 @@ class DatabaseHandler():
                 else None
             ),
             "classification_stage": str(metric.get("classification_stage", "") or "").strip() or None,
+            "classification_owner_step": str(metric.get("classification_owner_step", "") or "").strip() or None,
+            "classification_subtype": str(metric.get("classification_subtype", "") or "").strip() or None,
             "classification_features_json": (
                 str(metric.get("classification_features_json", "") or "").strip() or None
             ),
@@ -1467,6 +1633,70 @@ class DatabaseHandler():
                 "record_accuracy_replay_result(): failed for run_id=%s baseline_event_id=%s: %s",
                 safe_run_id,
                 baseline_event_id,
+                e,
+            )
+
+    def record_classifier_training_url_candidate(
+        self,
+        *,
+        run_id: str,
+        candidate: Dict[str, Any],
+    ) -> None:
+        """
+        Insert one URL-level classifier training candidate derived from replay validation.
+        """
+        safe_run_id = str(run_id or "").strip()
+        normalized_url = str((candidate or {}).get("normalized_url") or "").strip()
+        if not safe_run_id or not normalized_url:
+            return
+        try:
+            self.execute_query(
+                """
+                INSERT INTO classifier_training_url_candidates (
+                    run_id, query_text, normalized_url, domain, total_rows, true_count, false_count,
+                    match_rate_pct, status, recommended_action, training_eligible, recommended_archetype,
+                    recommended_owner_step, recommended_subtype, priority_score, mismatch_category_counts_json,
+                    baseline_event_ids_json, sample_baseline_json, sample_replay_json
+                ) VALUES (
+                    :run_id, :query_text, :normalized_url, :domain, :total_rows, :true_count, :false_count,
+                    :match_rate_pct, :status, :recommended_action, :training_eligible, :recommended_archetype,
+                    :recommended_owner_step, :recommended_subtype, :priority_score, :mismatch_category_counts_json,
+                    :baseline_event_ids_json, :sample_baseline_json, :sample_replay_json
+                )
+                """,
+                {
+                    "run_id": safe_run_id,
+                    "query_text": str(candidate.get("query_text") or "").strip() or None,
+                    "normalized_url": normalized_url,
+                    "domain": str(candidate.get("domain") or "").strip() or None,
+                    "total_rows": int(candidate.get("total_rows", 0) or 0),
+                    "true_count": int(candidate.get("true_count", 0) or 0),
+                    "false_count": int(candidate.get("false_count", 0) or 0),
+                    "match_rate_pct": float(candidate.get("match_rate_pct", 0.0) or 0.0),
+                    "status": str(candidate.get("status") or "").strip() or "manual_review_needed",
+                    "recommended_action": str(candidate.get("recommended_action") or "").strip() or None,
+                    "training_eligible": bool(candidate.get("training_eligible")),
+                    "recommended_archetype": str(candidate.get("recommended_archetype") or "").strip() or None,
+                    "recommended_owner_step": str(candidate.get("recommended_owner_step") or "").strip() or None,
+                    "recommended_subtype": str(candidate.get("recommended_subtype") or "").strip() or None,
+                    "priority_score": int(candidate.get("priority_score", 0) or 0),
+                    "mismatch_category_counts_json": json.dumps(
+                        candidate.get("mismatch_category_counts") or {},
+                        ensure_ascii=True,
+                    ),
+                    "baseline_event_ids_json": json.dumps(
+                        candidate.get("baseline_event_ids") or [],
+                        ensure_ascii=True,
+                    ),
+                    "sample_baseline_json": json.dumps(candidate.get("sample_baseline") or {}, ensure_ascii=True),
+                    "sample_replay_json": json.dumps(candidate.get("sample_replay") or {}, ensure_ascii=True),
+                },
+            )
+        except Exception as e:
+            logging.warning(
+                "record_classifier_training_url_candidate(): failed for run_id=%s url=%s: %s",
+                safe_run_id,
+                normalized_url,
                 e,
             )
     

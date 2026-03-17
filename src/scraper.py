@@ -39,6 +39,7 @@ from db import DatabaseHandler
 from llm import LLMHandler
 from logging_config import setup_logging
 from page_classifier import (
+    apply_historical_routing_memory,
     classify_page,
     classify_page_with_confidence,
     evaluate_step_ownership,
@@ -48,6 +49,7 @@ from page_classifier import (
     is_instagram_url as classifier_is_instagram_url,
     resolve_prompt_type,
 )
+from page_classifier_features import extract_html_features
 
 # --------------------------------------------------
 # Global objects initialization.
@@ -883,13 +885,22 @@ class EventSpider(scrapy.Spider):
             )
             or re.search(r"/event(?:[/?#]|$)", l.lower())
         ]
+        html_features = extract_html_features(response.text, url=url)
         class_decision = classify_page_with_confidence(
             url=url,
             visible_text=extracted_text,
+            html_features=html_features,
             page_links_count=len(event_like_links),
             calendar_sources_count=len(calendar_sources),
             calendar_ids_count=len(calendar_ids),
         )
+        memory_hint = None
+        if class_decision.stage != "rule":
+            memory_hint = db_handler.get_historical_classifier_memory(url)
+            class_decision = apply_historical_routing_memory(
+                class_decision,
+                memory_hint=memory_hint,
+            )
         page_archetype = class_decision.classification.archetype
         archetype_bucket = self._archetype_bucket(page_archetype)
         archetype_bucket["pages_seen"] += 1
@@ -1088,6 +1099,8 @@ class EventSpider(scrapy.Spider):
                     "routing_reason": decision_reason or "unknown",
                     "classification_confidence": class_decision.confidence,
                     "classification_stage": class_decision.stage,
+                    "classification_owner_step": class_decision.classification.owner_step,
+                    "classification_subtype": class_decision.classification.subtype,
                     "classification_features_json": json.dumps(class_decision.features),
                     "links_discovered": len(page_links),
                     "links_followed": links_followed_count,

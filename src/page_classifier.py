@@ -9,9 +9,12 @@ import re
 from typing import Any, Dict
 from urllib.parse import urlparse
 
+from page_classifier_ml import predict_page_classifier_labels
+
 
 _FB_EVENT_RE = re.compile(r"/events/(\d+)")
 _EB_TICKET_RE = re.compile(r"-tickets-(\d+)")
+_EMAIL_INPUT_RE = re.compile(r"^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,10 @@ def is_instagram_url(url: str) -> bool:
 
 def is_social_url(url: str) -> bool:
     return is_facebook_url(url) or is_instagram_url(url)
+
+
+def is_email_like_input(value: str) -> bool:
+    return _EMAIL_INPUT_RE.match(_safe_url(value)) is not None
 
 
 def is_facebook_event_detail_url(url: str) -> bool:
@@ -193,6 +200,18 @@ def classify_page(
     low_url = url.lower()
     low_text = str(visible_text or "").lower()
 
+    if is_email_like_input(url):
+        return PageClassification(
+            url=url,
+            archetype="other",
+            owner_step="emails.py",
+            prompt_type=url,
+            is_social=False,
+            is_calendar=False,
+            is_event_detail=False,
+            subtype="email_input",
+        )
+
     if is_google_calendar_like_url(url) or calendar_sources_count > 0 or calendar_ids_count > 0:
         return PageClassification(
             url=url,
@@ -303,6 +322,7 @@ def classify_page_with_confidence(
     *,
     url: str,
     visible_text: str = "",
+    html_features: Dict[str, Any] | None = None,
     page_links_count: int = 0,
     calendar_sources_count: int = 0,
     calendar_ids_count: int = 0,
@@ -330,16 +350,19 @@ def classify_page_with_confidence(
         "event_detail",
     }
     if base.subtype in deterministic_subtypes:
+        feature_payload: Dict[str, Any] = {
+            "event_like_links": int(page_links_count or 0),
+            "calendar_sources_count": int(calendar_sources_count or 0),
+            "calendar_ids_count": int(calendar_ids_count or 0),
+            "deterministic_subtype": base.subtype,
+        }
+        if html_features:
+            feature_payload.update(html_features)
         return ClassificationDecision(
             classification=base,
             confidence=0.99,
             stage="rule",
-            features={
-                "event_like_links": int(page_links_count or 0),
-                "calendar_sources_count": int(calendar_sources_count or 0),
-                "calendar_ids_count": int(calendar_ids_count or 0),
-                "deterministic_subtype": base.subtype,
-            },
+            features=feature_payload,
         )
 
     # Stage B: structural scoring for generic websites.
@@ -376,6 +399,49 @@ def classify_page_with_confidence(
         "listing_score": int(listing_score),
         "event_signal": bool(event_signal),
     }
+    if html_features:
+        feature_payload.update(html_features)
+
+    ml_prediction = predict_page_classifier_labels(
+        url=url,
+        page_links_count=event_like_links,
+        calendar_sources_count=calendar_sources_count,
+        calendar_ids_count=calendar_ids_count,
+        listing_signal=bool(listing_signal),
+        repeated_date_tokens=int(repeated_date_tokens),
+        listing_score=int(listing_score),
+        event_signal=bool(event_signal),
+        html_features=html_features,
+    )
+    if ml_prediction and ml_prediction.archetype_confidence >= 0.70:
+        ml_owner = base.owner_step
+        if ml_prediction.owner_confidence >= 0.60:
+            ml_owner = ml_prediction.owner_step
+        ml_classification = PageClassification(
+            url=base.url,
+            archetype=ml_prediction.archetype,
+            owner_step=ml_owner,
+            prompt_type="fb" if ml_owner == "fb.py" else base.prompt_type,
+            is_social=base.is_social or ml_owner == "fb.py",
+            is_calendar=base.is_calendar,
+            is_event_detail=base.is_event_detail if ml_prediction.archetype != "incomplete_event" else False,
+            subtype=f"ml_{ml_prediction.archetype}",
+        )
+        feature_payload.update(
+            {
+                "ml_model_version": ml_prediction.model_version,
+                "ml_archetype_confidence": round(ml_prediction.archetype_confidence, 4),
+                "ml_owner_confidence": round(ml_prediction.owner_confidence, 4),
+                "ml_predicted_archetype": ml_prediction.archetype,
+                "ml_predicted_owner_step": ml_prediction.owner_step,
+            }
+        )
+        return ClassificationDecision(
+            classification=ml_classification,
+            confidence=ml_prediction.archetype_confidence,
+            stage="ml",
+            features=feature_payload,
+        )
 
     if listing_score >= 3:
         classification = PageClassification(
@@ -421,6 +487,67 @@ def classify_page_with_confidence(
         confidence=0.52,
         stage="structural",
         features=feature_payload,
+    )
+
+
+def apply_historical_routing_memory(
+    decision: ClassificationDecision,
+    *,
+    memory_hint: Dict[str, Any] | None,
+) -> ClassificationDecision:
+    """
+    Apply a conservative telemetry-backed routing override when history is consistent.
+    """
+    if not memory_hint:
+        return decision
+    if decision.stage == "rule" and decision.confidence >= 0.95:
+        return decision
+
+    archetype = str(memory_hint.get("archetype") or "").strip()
+    owner_step = str(memory_hint.get("owner_step") or "").strip()
+    subtype = str(memory_hint.get("subtype") or "").strip() or archetype
+    if not archetype or not owner_step:
+        return decision
+
+    memory_confidence = memory_hint.get("avg_confidence")
+    if memory_confidence is None:
+        memory_confidence = decision.confidence
+    try:
+        memory_conf = max(float(memory_confidence), float(decision.confidence))
+    except Exception:
+        memory_conf = float(decision.confidence)
+    memory_conf = min(memory_conf, 0.98)
+
+    current = decision.classification
+    classification = PageClassification(
+        url=current.url,
+        archetype=archetype,
+        owner_step=owner_step,
+        prompt_type="fb" if owner_step == "fb.py" else current.prompt_type,
+        is_social=current.is_social or owner_step == "fb.py",
+        is_calendar=current.is_calendar,
+        is_event_detail=current.is_event_detail if archetype != "incomplete_event" else False,
+        subtype=f"memory_{subtype}",
+    )
+    features = dict(decision.features)
+    features.update(
+        {
+            "memory_sample_count": int(memory_hint.get("sample_count", 0) or 0),
+            "memory_success_count": int(memory_hint.get("success_count", 0) or 0),
+            "memory_success_rate": float(memory_hint.get("success_rate", 0.0) or 0.0),
+            "memory_dominance": float(memory_hint.get("dominance", 0.0) or 0.0),
+            "memory_avg_confidence": float(memory_hint.get("avg_confidence", 0.0) or 0.0),
+            "memory_stage_mode": str(memory_hint.get("stage_mode") or "").strip() or "unknown",
+            "memory_archetype": archetype,
+            "memory_owner_step": owner_step,
+            "memory_subtype": subtype,
+        }
+    )
+    return ClassificationDecision(
+        classification=classification,
+        confidence=memory_conf,
+        stage="memory",
+        features=features,
     )
 
 

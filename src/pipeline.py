@@ -1453,6 +1453,69 @@ def remediation_planner_step():
     return True
 
 # ------------------------
+# CLASSIFIER TRAINING PROMOTION STEP
+# Promote safe URL-level replay candidates into the classifier training CSV
+# ------------------------
+@task
+def run_classifier_training_promotion():
+    """Promote auto-positive classifier queue candidates into the training CSV."""
+    try:
+        command = [
+            sys.executable,
+            "utilities/promote_classifier_training_candidates.py",
+        ]
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode == 0:
+            logger.info("run_classifier_training_promotion(): Promotion completed successfully")
+            if result.stdout:
+                logger.info(result.stdout.strip())
+            return "Classifier training promotion completed"
+        logger.warning(
+            "run_classifier_training_promotion(): Promotion completed with issues (exit code %s)",
+            result.returncode,
+        )
+        if result.stderr:
+            logger.warning(result.stderr.strip())
+        if result.stdout:
+            logger.warning(result.stdout.strip())
+        logger.warning("run_classifier_training_promotion(): Continuing pipeline despite promotion issues")
+        return "Classifier training promotion completed with warnings"
+    except subprocess.TimeoutExpired:
+        logger.error("run_classifier_training_promotion(): Promotion timed out after 120 seconds")
+        logger.warning("run_classifier_training_promotion(): Continuing pipeline despite timeout")
+        return "Classifier training promotion timed out"
+    except Exception as e:
+        logger.error("run_classifier_training_promotion(): Unexpected error: %s", e)
+        logger.warning("run_classifier_training_promotion(): Continuing pipeline despite error")
+        return "Classifier training promotion encountered error"
+
+
+@flow(name="Classifier Training Promotion Step")
+def classifier_training_promotion_step():
+    """
+    Promote safe replay-derived URL candidates into the classifier training CSV.
+
+    NOTE: This updates the local training dataset but does not modify production DB state.
+    """
+    logger.info("=" * 70)
+    logger.info("CLASSIFIER TRAINING PROMOTION STEP")
+    logger.info("Promote safe replay-derived URL candidates into training CSV")
+    logger.info("=" * 70)
+
+    promotion_result = run_classifier_training_promotion()
+    logger.info(
+        "classifier_training_promotion_step: run_classifier_training_promotion returned: %s",
+        promotion_result,
+    )
+    logger.info("classifier_training_promotion_step: Step completed")
+    return True
+
+# ------------------------
 # COPY DEV DATABASE TO PRODUCTION DATABASE STEP
 # This step copies the working database (local or render_dev) to production
 # ------------------------
@@ -2026,6 +2089,7 @@ PIPELINE_STEPS = [
     ("validation", validation_step),  # Pre-commit validation before prod deployment
     ("result_analyzer", result_analyzer_step),  # LLM analysis of validation results
     ("remediation_planner", remediation_planner_step),  # Read-only plan from reliability artifacts
+    ("classifier_training_promotion", classifier_training_promotion_step),  # Promote safe replay candidates into training data
     ("copy_dev_to_prod", copy_dev_db_to_prod_db_step),
     ("sync_render_chatbot_metrics", sync_render_chatbot_metrics_step),
 ]
