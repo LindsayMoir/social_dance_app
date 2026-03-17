@@ -9,7 +9,7 @@ It also includes methods for fuzzy matching addresses and deduplicating the addr
                     WHERE address_id = :old_id
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from collections import Counter
 import csv
 from dotenv import load_dotenv
@@ -4661,9 +4661,9 @@ class DatabaseHandler():
 
         return None, []
 
-    def _latest_event_start_date_for_urls(self, url_candidates: List[str]) -> Optional[datetime.date]:
+    def _latest_event_start_date_for_urls(self, url_candidates: List[str]) -> Optional[date]:
         """Return latest historical start_date across provided URL candidates."""
-        latest_date: Optional[datetime.date] = None
+        latest_date: Optional[date] = None
         for candidate in url_candidates:
             try:
                 rows = self.execute_query(
@@ -4687,6 +4687,230 @@ class DatabaseHandler():
             except Exception:
                 continue
         return latest_date
+
+    def maybe_reuse_static_event_detail_from_history(
+        self,
+        *,
+        url: str,
+        rescrape_window_days: int = 7,
+    ) -> Dict[str, Any]:
+        """
+        Reuse one upcoming static event-detail row from events_history when safe.
+
+        Rules:
+        - Only applies to static event-detail URLs recognized by the classifier.
+        - Only reuses one unambiguous upcoming event identity for the URL.
+        - Events within the rescrape window are not reused.
+        """
+        normalized_url = self.normalize_url(str(url or "").strip())
+        kind, candidates = self._classify_static_event_detail_url(normalized_url)
+        if not kind or not candidates:
+            return {"reused": False, "reason": "not_static_event_detail"}
+
+        cutoff_date = datetime.now().date() + timedelta(days=max(0, int(rescrape_window_days or 0)))
+        history_rows = self._load_events_history_rows_for_urls(candidates)
+        if not history_rows:
+            return {"reused": False, "reason": "no_history_rows"}
+
+        eligible_rows = [
+            row for row in history_rows
+            if isinstance(row.get("start_date"), date) and row["start_date"] > cutoff_date
+        ]
+        if not eligible_rows:
+            return {"reused": False, "reason": "no_upcoming_history_outside_rescrape_window"}
+
+        grouped: Dict[tuple, List[Dict[str, Any]]] = {}
+        for row in eligible_rows:
+            grouped.setdefault(self._history_event_identity_key(row), []).append(row)
+
+        if len(grouped) != 1:
+            return {"reused": False, "reason": "ambiguous_history_match", "match_count": len(grouped)}
+
+        selected_rows = next(iter(grouped.values()))
+        selected = max(
+            selected_rows,
+            key=lambda row: (
+                self._coerce_history_sort_value(row.get("time_stamp")),
+                int(row.get("event_id") or 0),
+            ),
+        )
+
+        event_payload = {
+            "event_name": selected.get("event_name"),
+            "dance_style": selected.get("dance_style"),
+            "description": selected.get("description"),
+            "day_of_week": selected.get("day_of_week"),
+            "start_date": selected.get("start_date"),
+            "end_date": selected.get("end_date"),
+            "start_time": selected.get("start_time"),
+            "end_time": selected.get("end_time"),
+            "source": selected.get("source"),
+            "location": selected.get("location"),
+            "price": selected.get("price"),
+            "url": selected.get("url") or normalized_url,
+            "event_type": selected.get("event_type"),
+            # Never trust historical address_id directly; re-resolve it from the event payload.
+            "address_id": None,
+            "time_stamp": datetime.now(),
+        }
+        event_payload = self.normalize_nulls(event_payload)
+        try:
+            event_payload = self.process_event_address(event_payload)
+        except Exception as e:
+            logging.warning(
+                "maybe_reuse_static_event_detail_from_history: address refresh failed for %s: %s",
+                normalized_url,
+                e,
+            )
+        sanitized = self._sanitize_events_dataframe_for_insert(pd.DataFrame([event_payload]))
+        if sanitized.empty:
+            return {"reused": False, "reason": "history_payload_sanitized_empty"}
+
+        sanitized.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
+        return {
+            "reused": True,
+            "reason": "history_reuse_static_event_detail",
+            "history_kind": kind,
+            "event_count": int(len(sanitized)),
+            "events_history_event_id": selected.get("event_id"),
+            "events_history_original_event_id": selected.get("original_event_id"),
+            "history_time_stamp": self._coerce_history_sort_value(selected.get("time_stamp")).isoformat(),
+            "start_date": selected["start_date"].isoformat() if isinstance(selected.get("start_date"), date) else None,
+            "days_until_event": int((selected["start_date"] - datetime.now().date()).days),
+            "url": normalized_url,
+        }
+
+    def _load_events_history_rows_for_urls(self, url_candidates: List[str]) -> List[Dict[str, Any]]:
+        """Load events_history rows for the provided URLs."""
+        loaded: List[Dict[str, Any]] = []
+        seen_row_keys: set[tuple] = set()
+        query = """
+            SELECT
+                event_id,
+                original_event_id,
+                event_name,
+                dance_style,
+                description,
+                day_of_week,
+                start_date,
+                end_date,
+                start_time,
+                end_time,
+                source,
+                location,
+                price,
+                url,
+                event_type,
+                address_id,
+                time_stamp
+            FROM events_history
+            WHERE url = :url
+        """
+        for candidate in url_candidates:
+            rows = self.execute_query(query, {"url": candidate}) or []
+            for row in rows:
+                parsed = self._coerce_events_history_row(row)
+                if not parsed:
+                    continue
+                row_key = (
+                    parsed.get("event_id"),
+                    parsed.get("original_event_id"),
+                    parsed.get("url"),
+                    parsed.get("start_date"),
+                    parsed.get("start_time"),
+                )
+                if row_key in seen_row_keys:
+                    continue
+                seen_row_keys.add(row_key)
+                loaded.append(parsed)
+        return loaded
+
+    def _coerce_events_history_row(self, row: Any) -> Optional[Dict[str, Any]]:
+        """Normalize an events_history row into a dict."""
+        columns = [
+            "event_id",
+            "original_event_id",
+            "event_name",
+            "dance_style",
+            "description",
+            "day_of_week",
+            "start_date",
+            "end_date",
+            "start_time",
+            "end_time",
+            "source",
+            "location",
+            "price",
+            "url",
+            "event_type",
+            "address_id",
+            "time_stamp",
+        ]
+        if hasattr(row, "_mapping"):
+            raw = dict(row._mapping)
+        elif isinstance(row, dict):
+            raw = dict(row)
+        elif isinstance(row, (tuple, list)) and len(row) == len(columns):
+            raw = dict(zip(columns, row))
+        else:
+            return None
+
+        raw["start_date"] = self._coerce_date_value(raw.get("start_date"))
+        raw["end_date"] = self._coerce_date_value(raw.get("end_date"))
+        raw["time_stamp"] = self._coerce_history_sort_value(raw.get("time_stamp"))
+        return raw
+
+    @staticmethod
+    def _history_event_identity_key(row: Dict[str, Any]) -> tuple:
+        """Build a stable identity key for one historical event detail row."""
+        return (
+            str(row.get("url") or "").strip(),
+            str(row.get("event_name") or "").strip().lower(),
+            row.get("start_date"),
+            str(row.get("start_time") or "").strip(),
+            row.get("end_date"),
+            str(row.get("end_time") or "").strip(),
+        )
+
+    @staticmethod
+    def _coerce_date_value(value: Any) -> Optional[date]:
+        """Coerce a value to a date when possible."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
+            return value.date()
+        if hasattr(value, "to_pydatetime"):
+            try:
+                return value.to_pydatetime().date()
+            except Exception:
+                pass
+        if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+            try:
+                return datetime(value.year, value.month, value.day).date()
+            except Exception:
+                pass
+        try:
+            parsed = pd.to_datetime(value, errors="coerce")
+            if pd.isna(parsed):
+                return None
+            return parsed.date()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _coerce_history_sort_value(value: Any) -> datetime:
+        """Return a sortable datetime for history rows."""
+        if isinstance(value, datetime):
+            return value
+        if value is None or value == "":
+            return datetime.min
+        try:
+            parsed = pd.to_datetime(value, errors="coerce")
+            if pd.isna(parsed):
+                return datetime.min
+            return parsed.to_pydatetime()
+        except Exception:
+            return datetime.min
 
     def _record_should_process_decision(self, decision_key: str) -> None:
         """Track should_process_url decision counts for runtime reporting."""

@@ -1569,6 +1569,51 @@ class FacebookEventScraper():
         # Set up url_row for database writing
         url_row = [url, parent_url, source, keywords, False, 1, datetime.now()]
 
+        history_reuse = db_handler.maybe_reuse_static_event_detail_from_history(url=url)
+        if history_reuse.get("reused"):
+            decision_reason = str(history_reuse.get("reason") or "history_reuse_static_event_detail")
+            reused_timestamp = datetime.now()
+            db_handler.write_url_to_db(
+                [url, parent_url, source, keywords, True, 1, reused_timestamp, decision_reason]
+            )
+            try:
+                route_classification = route.classification
+                db_handler.write_url_scrape_metric(
+                    {
+                        "run_id": os.getenv("DS_RUN_ID", "na"),
+                        "step_name": os.getenv("DS_STEP_NAME", "fb"),
+                        "link": url,
+                        "parent_url": parent_url,
+                        "source": source,
+                        "keywords": keywords,
+                        "archetype": route_classification.archetype,
+                        "extraction_attempted": False,
+                        "extraction_succeeded": False,
+                        "extraction_skipped": True,
+                        "decision_reason": decision_reason,
+                        "handled_by": "fb.py",
+                        "routing_reason": decision_reason,
+                        "classification_confidence": 1.0,
+                        "classification_stage": "history_reuse",
+                        "classification_owner_step": route_classification.owner_step,
+                        "classification_subtype": route_classification.subtype,
+                        "classification_features_json": json.dumps({"history_reuse": history_reuse}, default=str),
+                        "links_discovered": 0,
+                        "links_followed": 0,
+                        "time_stamp": reused_timestamp,
+                    }
+                )
+            except Exception as e:
+                logging.warning("process_fb_url: Failed recording history-reuse metric for %s: %s", url, e)
+            self.events_written_to_db += int(history_reuse.get("event_count", 0) or 0)
+            self.urls_visited.add(url)
+            logging.info(
+                "process_fb_url: Reused static event-detail URL from history and skipped navigation: %s (%s)",
+                url,
+                history_reuse.get("history_kind"),
+            )
+            return
+
         # Ensure we can access the page
         if not self.navigate_and_maybe_login(url):
             reason = self._get_last_access_reason(url)

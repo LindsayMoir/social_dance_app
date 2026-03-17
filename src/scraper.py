@@ -917,6 +917,48 @@ class EventSpider(scrapy.Spider):
             extract_parent_page,
             url,
         )
+        history_reuse = db_handler.maybe_reuse_static_event_detail_from_history(url=url)
+        if history_reuse.get("reused"):
+            time_stamp = datetime.now()
+            decision_reason = str(history_reuse.get("reason") or "history_reuse_static_event_detail")
+            url_row = [url, "", source, keywords, True, 1, time_stamp, decision_reason]
+            db_handler.write_url_to_db(url_row)
+            history_features = dict(class_decision.features)
+            history_features["history_reuse"] = history_reuse
+            try:
+                db_handler.write_url_scrape_metric(
+                    {
+                        "run_id": os.getenv("DS_RUN_ID", "na"),
+                        "step_name": os.getenv("DS_STEP_NAME", "scraper"),
+                        "link": url,
+                        "parent_url": "",
+                        "source": source,
+                        "keywords": keywords,
+                        "archetype": page_archetype,
+                        "extraction_attempted": False,
+                        "extraction_succeeded": False,
+                        "extraction_skipped": True,
+                        "decision_reason": decision_reason,
+                        "handled_by": "scraper.py",
+                        "routing_reason": decision_reason,
+                        "classification_confidence": 1.0,
+                        "classification_stage": "history_reuse",
+                        "classification_owner_step": class_decision.classification.owner_step,
+                        "classification_subtype": class_decision.classification.subtype,
+                        "classification_features_json": json.dumps(history_features, default=str),
+                        "links_discovered": 0,
+                        "links_followed": 0,
+                        "time_stamp": time_stamp,
+                    }
+                )
+            except Exception as e:
+                logging.warning("def parse(): Failed recording history-reuse metric for %s: %s", url, e)
+            logging.info(
+                "def parse(): Reused static event-detail URL from history and skipped extraction: %s (%s)",
+                url,
+                history_reuse.get("history_kind"),
+            )
+            return
 
         # 3) Keyword & LLM logic
         found_keywords = [kw for kw in self.keywords_list if kw in extracted_text.lower()]
@@ -1042,6 +1084,50 @@ class EventSpider(scrapy.Spider):
             # Skip if link has already been visited
             if link in self.visited_link:
                 continue
+
+            link_reuse = db_handler.maybe_reuse_static_event_detail_from_history(url=link)
+            if link_reuse.get("reused"):
+                link_classification = classify_page(url=link)
+                child_time_stamp = datetime.now()
+                child_reason = str(link_reuse.get("reason") or "history_reuse_static_event_detail")
+                self.visited_link.add(link)
+                child_row = [link, url, source, found_keywords, True, 1, child_time_stamp, child_reason]
+                db_handler.write_url_to_db(child_row)
+                try:
+                    db_handler.write_url_scrape_metric(
+                        {
+                            "run_id": os.getenv("DS_RUN_ID", "na"),
+                            "step_name": os.getenv("DS_STEP_NAME", "scraper"),
+                            "link": link,
+                            "parent_url": url,
+                            "source": source,
+                            "keywords": found_keywords,
+                            "archetype": link_classification.archetype,
+                            "extraction_attempted": False,
+                            "extraction_succeeded": False,
+                            "extraction_skipped": True,
+                            "decision_reason": child_reason,
+                            "handled_by": "scraper.py",
+                            "routing_reason": child_reason,
+                            "classification_confidence": 1.0,
+                            "classification_stage": "history_reuse",
+                            "classification_owner_step": link_classification.owner_step,
+                            "classification_subtype": link_classification.subtype,
+                            "classification_features_json": json.dumps({"history_reuse": link_reuse}, default=str),
+                            "links_discovered": 0,
+                            "links_followed": 0,
+                            "time_stamp": child_time_stamp,
+                        }
+                    )
+                except Exception as e:
+                    logging.warning("def parse(): Failed recording child history-reuse metric for %s: %s", link, e)
+                logging.info(
+                    "def parse(): Reused child static event-detail URL from history and skipped request: %s (%s)",
+                    link,
+                    link_reuse.get("history_kind"),
+                )
+                continue
+
             self.visited_link.add(link)
 
             # record the child link before crawling
