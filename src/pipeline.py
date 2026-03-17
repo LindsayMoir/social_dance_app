@@ -1470,11 +1470,16 @@ def run_classifier_training_promotion():
             text=True,
             timeout=120,
         )
+        payload = _parse_json_subprocess_stdout(result.stdout)
         if result.returncode == 0:
             logger.info("run_classifier_training_promotion(): Promotion completed successfully")
             if result.stdout:
                 logger.info(result.stdout.strip())
-            return "Classifier training promotion completed"
+            return {
+                "status": "success",
+                "message": "Classifier training promotion completed",
+                "payload": payload,
+            }
         logger.warning(
             "run_classifier_training_promotion(): Promotion completed with issues (exit code %s)",
             result.returncode,
@@ -1484,15 +1489,83 @@ def run_classifier_training_promotion():
         if result.stdout:
             logger.warning(result.stdout.strip())
         logger.warning("run_classifier_training_promotion(): Continuing pipeline despite promotion issues")
-        return "Classifier training promotion completed with warnings"
+        return {
+            "status": "warning",
+            "message": "Classifier training promotion completed with warnings",
+            "payload": payload,
+        }
     except subprocess.TimeoutExpired:
         logger.error("run_classifier_training_promotion(): Promotion timed out after 120 seconds")
         logger.warning("run_classifier_training_promotion(): Continuing pipeline despite timeout")
-        return "Classifier training promotion timed out"
+        return {
+            "status": "timeout",
+            "message": "Classifier training promotion timed out",
+            "payload": {},
+        }
     except Exception as e:
         logger.error("run_classifier_training_promotion(): Unexpected error: %s", e)
         logger.warning("run_classifier_training_promotion(): Continuing pipeline despite error")
-        return "Classifier training promotion encountered error"
+        return {
+            "status": "error",
+            "message": "Classifier training promotion encountered error",
+            "payload": {},
+        }
+
+
+@task
+def run_page_classifier_model_training():
+    """Retrain the page-classifier ML artifact from the current training CSV."""
+    try:
+        command = [
+            sys.executable,
+            "utilities/train_page_classifier_models.py",
+        ]
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        payload = _parse_json_subprocess_stdout(result.stdout)
+        if result.returncode == 0:
+            logger.info("run_page_classifier_model_training(): Training completed successfully")
+            if result.stdout:
+                logger.info(result.stdout.strip())
+            return {
+                "status": "success",
+                "message": "Page classifier model training completed",
+                "payload": payload,
+            }
+        logger.warning(
+            "run_page_classifier_model_training(): Training completed with issues (exit code %s)",
+            result.returncode,
+        )
+        if result.stderr:
+            logger.warning(result.stderr.strip())
+        if result.stdout:
+            logger.warning(result.stdout.strip())
+        logger.warning("run_page_classifier_model_training(): Continuing pipeline despite training issues")
+        return {
+            "status": "warning",
+            "message": "Page classifier model training completed with warnings",
+            "payload": payload,
+        }
+    except subprocess.TimeoutExpired:
+        logger.error("run_page_classifier_model_training(): Training timed out after 300 seconds")
+        logger.warning("run_page_classifier_model_training(): Continuing pipeline despite timeout")
+        return {
+            "status": "timeout",
+            "message": "Page classifier model training timed out",
+            "payload": {},
+        }
+    except Exception as e:
+        logger.error("run_page_classifier_model_training(): Unexpected error: %s", e)
+        logger.warning("run_page_classifier_model_training(): Continuing pipeline despite error")
+        return {
+            "status": "error",
+            "message": "Page classifier model training encountered error",
+            "payload": {},
+        }
 
 
 @flow(name="Classifier Training Promotion Step")
@@ -1512,8 +1585,34 @@ def classifier_training_promotion_step():
         "classifier_training_promotion_step: run_classifier_training_promotion returned: %s",
         promotion_result,
     )
+    promoted_count = int(((promotion_result or {}).get("payload") or {}).get("promoted_count") or 0)
+    if promoted_count > 0:
+        logger.info(
+            "classifier_training_promotion_step: %s rows promoted; retraining page-classifier ML artifact",
+            promoted_count,
+        )
+        training_result = run_page_classifier_model_training()
+        logger.info(
+            "classifier_training_promotion_step: run_page_classifier_model_training returned: %s",
+            training_result,
+        )
+    else:
+        logger.info(
+            "classifier_training_promotion_step: No rows promoted; skipping page-classifier ML retraining"
+        )
     logger.info("classifier_training_promotion_step: Step completed")
     return True
+
+
+def _parse_json_subprocess_stdout(stdout: str) -> dict:
+    """Return parsed JSON from subprocess stdout when available."""
+    if not stdout or not str(stdout).strip():
+        return {}
+    try:
+        payload = json.loads(stdout)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 # ------------------------
 # COPY DEV DATABASE TO PRODUCTION DATABASE STEP
