@@ -23,8 +23,24 @@ setup_logging('read_pdfs')
 from llm import LLMHandler
 from db import DatabaseHandler
 
-llm_handler = LLMHandler(config_path=get_config_path())
-db_handler = llm_handler.db_handler  # Use the DatabaseHandler from LLMHandler
+_llm_handler: LLMHandler | None = None
+_db_handler: DatabaseHandler | None = None
+
+
+def get_llm_handler() -> LLMHandler:
+    global _llm_handler
+    if _llm_handler is None:
+        logging.info("read_pdfs: Initializing LLMHandler lazily.")
+        _llm_handler = LLMHandler(config_path=get_config_path())
+    return _llm_handler
+
+
+def get_db_handler() -> DatabaseHandler:
+    global _db_handler
+    if _db_handler is None:
+        logging.info("read_pdfs: Initializing DatabaseHandler lazily via LLMHandler.")
+        _db_handler = get_llm_handler().db_handler
+    return _db_handler
 
 # ── 4) Parser registry decorator ───────────────────────────────────────────────
 PARSER_REGISTRY = {}
@@ -70,7 +86,7 @@ class ReadPDFs:
             logging.info("No black_list_domains configured.")
 
         # Use the global database handler
-        self.db = db_handler
+        self.db = get_db_handler()
         logging.info("DatabaseHandler initialized.")
 
 
@@ -232,6 +248,7 @@ def dump_pdf_text(pdf_file) -> str:
 def parse_butchart_gardens_concerts(pdf_file) -> pd.DataFrame:
     logging.info("Parsing Butchart Gardens concerts PDF…")
     text = dump_pdf_text(pdf_file)
+    llm_handler = get_llm_handler()
     prompt, schema_type = llm_handler.generate_prompt(pdf_file, text, 'images')
     if len(prompt) > config['crawling']['prompt_max_length']:
             logging.warning(f"def process_llm_response: Prompt for URL {url} exceeds maximum length. Skipping LLM query.")

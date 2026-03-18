@@ -67,11 +67,6 @@ except Exception as e:
 
 logging.info("main.py: Configuration loaded.")
 
-# Initialize the LLMHandler and DatabaseHandler
-llm_handler = LLMHandler(config_path=config_path)
-db_handler = DatabaseHandler(config)
-conversation_manager = ConversationManager(db_handler)
-
 # Get the DATABASE_URL from environment variables
 if os.getenv("RENDER"):
     DATABASE_URL = os.getenv("RENDER_EXTERNAL_DB_URL")
@@ -85,9 +80,43 @@ if DATABASE_URL:
 else:
     raise ValueError("DATABASE_URL / database connections string is not set.")
 
-# Create the SQLAlchemy engine
-engine = create_engine(DATABASE_URL)
-logging.info("main.py: SQLAlchemy engine created.")
+
+_llm_handler: LLMHandler | None = None
+_db_handler: DatabaseHandler | None = None
+_conversation_manager: ConversationManager | None = None
+_engine = None
+
+
+def get_llm_handler() -> LLMHandler:
+    global _llm_handler
+    if _llm_handler is None:
+        logging.info("main.py: Initializing LLMHandler lazily.")
+        _llm_handler = LLMHandler(config_path=config_path)
+    return _llm_handler
+
+
+def get_db_handler() -> DatabaseHandler:
+    global _db_handler
+    if _db_handler is None:
+        logging.info("main.py: Initializing DatabaseHandler lazily.")
+        _db_handler = DatabaseHandler(config)
+    return _db_handler
+
+
+def get_conversation_manager() -> ConversationManager:
+    global _conversation_manager
+    if _conversation_manager is None:
+        logging.info("main.py: Initializing ConversationManager lazily.")
+        _conversation_manager = ConversationManager(get_db_handler())
+    return _conversation_manager
+
+
+def get_engine():
+    global _engine
+    if _engine is None:
+        logging.info("main.py: Creating SQLAlchemy engine lazily.")
+        _engine = create_engine(DATABASE_URL)
+    return _engine
 
 SLOW_CHATBOT_RESPONSE_SECONDS = 20.0
 CHATBOT_HEDGE_OPENAI_DELAY_SECONDS = 15.0
@@ -149,7 +178,7 @@ def _ensure_chatbot_metrics_tables() -> None:
         "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_request_id ON chatbot_stage_metrics(request_id);",
     ]
     try:
-        with engine.begin() as conn:
+        with get_engine().begin() as conn:
             conn.execute(text(create_requests))
             conn.execute(text(create_stages))
             for idx_sql in create_indexes:
@@ -180,7 +209,7 @@ def _persist_request_start(request_id: str, endpoint: str, session_suffix: str |
         "updated_at": now_ts,
     }
     try:
-        with engine.begin() as conn:
+        with get_engine().begin() as conn:
             conn.execute(text(sql), params)
     except Exception as e:
         logging.warning("chatbot_metrics_db: failed to persist request start (%s): %s", request_id, e)
@@ -209,7 +238,7 @@ def _persist_request_end(request_id: str, endpoint: str, duration_ms: float, res
         "updated_at": now_ts,
     }
     try:
-        with engine.begin() as conn:
+        with get_engine().begin() as conn:
             conn.execute(text(sql), params)
     except Exception as e:
         logging.warning("chatbot_metrics_db: failed to persist request end (%s): %s", request_id, e)
@@ -239,7 +268,7 @@ def _persist_stage_metric(
         "metadata_json": json.dumps(fields or {}),
     }
     try:
-        with engine.begin() as conn:
+        with get_engine().begin() as conn:
             conn.execute(text(sql), params)
     except Exception as e:
         logging.warning("chatbot_metrics_db: failed to persist stage metric (%s/%s): %s", request_id, stage, e)
@@ -263,7 +292,7 @@ def _persist_request_trace(request_id: str, user_input: str | None = None, sql_s
         + ", updated_at = :updated_at WHERE request_id = :request_id"
     )
     try:
-        with engine.begin() as conn:
+        with get_engine().begin() as conn:
             result = conn.execute(text(sql), params)
             if int(getattr(result, "rowcount", 0) or 0) <= 0:
                 insert_sql = """
@@ -380,7 +409,7 @@ def _query_llm_timed(
                 tools=tools,
             )
         else:
-            response = llm_handler.query_llm(request_url, prompt, tools=tools)
+            response = get_llm_handler().query_llm(request_url, prompt, tools=tools)
             winner = "standard"
         _log_timing_end(
             request_id,
@@ -439,7 +468,7 @@ def _query_llm_chatbot_hedged(
             disable_fallback=True,
         )
         try:
-            response = llm_handler.query_llm(
+            response = get_llm_handler().query_llm(
                 request_url,
                 prompt,
                 tools=tools,
@@ -511,7 +540,7 @@ def _execute_query_timed(request_id: str, endpoint: str, stage: str, sql_query: 
         stage,
         sql_len=len(sql_query or ""),
     )
-    rows = db_handler.execute_query(sql_query)
+    rows = get_db_handler().execute_query(sql_query)
     row_count = 0 if not rows else len(rows)
     _log_timing_end(request_id, endpoint, stage, started, rows=row_count)
     return rows
@@ -573,7 +602,7 @@ def _validate_sql_select(sql: str) -> Tuple[bool, str]:
         return False, "Query is not a SELECT statement."
     candidate = sql.strip().rstrip(";")
     try:
-        with engine.connect() as conn:
+        with get_engine().connect() as conn:
             conn.execute(text(f"EXPLAIN {candidate}"))
         return True, ""
     except Exception as e:
@@ -1093,6 +1122,7 @@ def process_confirmation(request: ConfirmationRequest):
         raise HTTPException(status_code=400, detail="Session token is required for confirmations.")
     
     # Get conversation and pending query
+    conversation_manager = get_conversation_manager()
     conversation_id = conversation_manager.create_or_get_conversation(session_token)
     pending_query = conversation_manager.get_pending_query(conversation_id)
     
@@ -1419,6 +1449,7 @@ def process_query(request: QueryRequest):
         )
         try:
             # Get or create conversation
+            conversation_manager = get_conversation_manager()
             conversation_id = conversation_manager.create_or_get_conversation(session_token)
             
             # Get conversation context and recent messages

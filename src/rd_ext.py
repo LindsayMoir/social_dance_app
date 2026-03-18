@@ -34,6 +34,7 @@ from urllib.parse import urljoin, urlparse
 import yaml
 
 from config_runtime import get_config_path, load_config
+from db import DatabaseHandler
 from llm import LLMHandler
 from credentials import get_credentials  # Import the utility function
 from page_classifier import evaluate_step_ownership, is_social_url, resolve_prompt_type
