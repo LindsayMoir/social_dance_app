@@ -868,7 +868,7 @@ class EventSpider(scrapy.Spider):
             r'"gcal"\s*:\s*"([A-Za-z0-9_.+-]+@group\.calendar\.google\.com)"',
             response.text
         )
-        calendar_anchor_links = [link for link in page_links if is_calendar_candidate(link, self.calendar_urls_set)]
+        calendar_anchor_links = [link for link in page_links if is_google_calendar_like_url(link)]
         hycal_proxy_links = extract_hycal_proxy_links(response.url, response.text)
         calendar_sources = iframe_links + calendar_anchor_links + hycal_proxy_links
         calendar_ids: set[str] = {
@@ -876,6 +876,8 @@ class EventSpider(scrapy.Spider):
         }
         # Only trust high-confidence group calendar IDs from page text.
         calendar_ids.update(self.extract_calendar_ids(extracted_text, allow_gmail=False))
+        # Some calendar embeds exist only in script/data attributes, not visible page text.
+        calendar_ids.update(self.extract_calendar_ids(response.text, allow_gmail=False))
 
         event_like_links = [
             l for l in page_links

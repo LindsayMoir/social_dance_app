@@ -198,6 +198,12 @@ def test_parse_extracts_calendar_id_from_rendered_page_text(monkeypatch):
         def is_whitelisted_url(self, _url: str) -> bool:
             return False
 
+        def get_historical_classifier_memory(self, _url: str):
+            return None
+
+        def maybe_reuse_static_event_detail_from_history(self, *, url: str):
+            return {"reused": False}
+
         def write_url_to_db(self, _row):
             return None
 
@@ -220,7 +226,10 @@ def test_parse_extracts_calendar_id_from_rendered_page_text(monkeypatch):
     spider.calendar_urls_set = set()
     spider.whitelist_roots = set()
     spider.attempted_whitelist_roots = set()
+    spider.whitelist_transferred_to_fb_roots = set()
+    spider.whitelist_non_text_response_roots = set()
     spider.visited_link = set()
+    spider.page_archetype_stats = {}
     spider.domain_failure_events = defaultdict(deque)
     spider.domain_cooldown_until = {}
     spider.domain_cooldown_skip_count = 0
@@ -257,6 +266,152 @@ def test_parse_extracts_calendar_id_from_rendered_page_text(monkeypatch):
     list(spider.parse(response, keywords="salsa", source="Victoria Latin Dance Association", url="https://vlda.ca/resources/"))
 
     assert "17de2ca43f525c87058ffafe1f0206da82a19d00a85a6ae979ad6bb618dcd8ae@group.calendar.google.com" in processed_ids
+
+
+def test_parse_extracts_calendar_id_from_raw_html_attributes(monkeypatch):
+    import scraper as scraper_module
+
+    class DummyDB:
+        def is_whitelisted_url(self, _url: str) -> bool:
+            return False
+
+        def get_historical_classifier_memory(self, _url: str):
+            return None
+
+        def maybe_reuse_static_event_detail_from_history(self, *, url: str):
+            return {"reused": False}
+
+        def write_url_to_db(self, _row):
+            return None
+
+        def avoid_domains(self, _url: str) -> bool:
+            return False
+
+        def should_process_url(self, _url: str) -> bool:
+            return False
+
+    class DummyLLM:
+        def process_llm_response(self, *args, **kwargs) -> bool:
+            return False
+
+    monkeypatch.setattr(scraper_module, "db_handler", DummyDB(), raising=False)
+    monkeypatch.setattr(scraper_module, "llm_handler", DummyLLM(), raising=False)
+
+    spider = EventSpider.__new__(EventSpider)
+    spider.keywords_list = ["dance"]
+    spider.config = {"crawling": {"max_website_urls": 10, "urls_run_limit": 100}}
+    spider.calendar_urls_set = set()
+    spider.whitelist_roots = set()
+    spider.attempted_whitelist_roots = set()
+    spider.whitelist_transferred_to_fb_roots = set()
+    spider.whitelist_non_text_response_roots = set()
+    spider.visited_link = set()
+    spider.page_archetype_stats = {}
+    spider.domain_failure_events = defaultdict(deque)
+    spider.domain_cooldown_until = {}
+    spider.domain_cooldown_skip_count = 0
+    spider.scraper_priority_download_timeout_seconds = 90
+    spider.scraper_priority_retry_times = 3
+
+    processed_ids = []
+
+    def capture_calendar_id(calendar_id, _calendar_url, _url, _source, _keywords):
+        processed_ids.append(calendar_id)
+
+    monkeypatch.setattr(spider, "process_calendar_id", capture_calendar_id)
+    monkeypatch.setattr(spider, "fetch_google_calendar_events", lambda *args, **kwargs: None)
+
+    html = """
+    <html>
+      <body>
+        <div>Dance community resources</div>
+        <div data-calendar="https://calendar.google.com/calendar/ical/abc123%40group.calendar.google.com/public/basic.ics"></div>
+      </body>
+    </html>
+    """
+    response = HtmlResponse(
+        url="https://vlda.ca/resources/",
+        body=html,
+        encoding="utf-8",
+        request=Request(url="https://vlda.ca/resources/"),
+    )
+
+    list(spider.parse(response, keywords="salsa", source="Victoria Latin Dance Association", url="https://vlda.ca/resources/"))
+
+    assert "abc123@group.calendar.google.com" in processed_ids
+
+
+def test_parse_does_not_fetch_plain_calendar_root_links(monkeypatch):
+    import scraper as scraper_module
+
+    class DummyDB:
+        def is_whitelisted_url(self, _url: str) -> bool:
+            return False
+
+        def get_historical_classifier_memory(self, _url: str):
+            return None
+
+        def maybe_reuse_static_event_detail_from_history(self, *, url: str):
+            return {"reused": False}
+
+        def write_url_to_db(self, _row):
+            return None
+
+        def avoid_domains(self, _url: str) -> bool:
+            return False
+
+        def should_process_url(self, _url: str) -> bool:
+            return False
+
+    class DummyLLM:
+        def process_llm_response(self, *args, **kwargs) -> bool:
+            return False
+
+    monkeypatch.setattr(scraper_module, "db_handler", DummyDB(), raising=False)
+    monkeypatch.setattr(scraper_module, "llm_handler", DummyLLM(), raising=False)
+
+    spider = EventSpider.__new__(EventSpider)
+    spider.keywords_list = ["dance"]
+    spider.config = {"crawling": {"max_website_urls": 10, "urls_run_limit": 100}}
+    spider.calendar_urls_set = {normalize_url_for_compare("https://vlda.ca/resources/")}
+    spider.whitelist_roots = set()
+    spider.attempted_whitelist_roots = set()
+    spider.whitelist_transferred_to_fb_roots = set()
+    spider.whitelist_non_text_response_roots = set()
+    spider.visited_link = set()
+    spider.page_archetype_stats = {}
+    spider.domain_failure_events = defaultdict(deque)
+    spider.domain_cooldown_until = {}
+    spider.domain_cooldown_skip_count = 0
+    spider.scraper_priority_download_timeout_seconds = 90
+    spider.scraper_priority_retry_times = 3
+
+    fetched_calendar_urls = []
+
+    monkeypatch.setattr(spider, "process_calendar_id", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        spider,
+        "fetch_google_calendar_events",
+        lambda calendar_url, *_args, **_kwargs: fetched_calendar_urls.append(calendar_url),
+    )
+
+    html = """
+    <html>
+      <body>
+        <a href="/resources/">Resources</a>
+      </body>
+    </html>
+    """
+    response = HtmlResponse(
+        url="https://vlda.ca/about/",
+        body=html,
+        encoding="utf-8",
+        request=Request(url="https://vlda.ca/about/"),
+    )
+
+    list(spider.parse(response, keywords="salsa", source="Victoria Latin Dance Association", url="https://vlda.ca/about/"))
+
+    assert fetched_calendar_urls == []
 
 
 def test_start_whitelist_seed_bypasses_history_gate(monkeypatch, tmp_path):
