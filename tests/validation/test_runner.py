@@ -19,11 +19,12 @@ import os
 import csv
 import json
 import ast
+import asyncio
 import subprocess
 from collections import Counter
 import re
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse
 from difflib import SequenceMatcher
 
 # Add src to path for imports (calculate path relative to this script)
@@ -62,7 +63,13 @@ from evaluation_holdout import load_dev_urls, load_gold_holdout_urls, normalize_
 from llm import LLMHandler
 from logging_config import setup_logging
 from email_notifier import send_report_email
-from page_classifier import is_email_like_input, is_google_calendar_like_url, is_social_url, resolve_prompt_type
+from page_classifier import (
+    classify_page_with_confidence,
+    is_email_like_input,
+    is_google_calendar_like_url,
+    is_social_url,
+    resolve_prompt_type,
+)
 
 
 class ValidationTestRunner:
@@ -95,6 +102,7 @@ class ValidationTestRunner:
         self.llm_handler = LLMHandler(config_path=config_path)
         self._replay_fb_scraper = None
         self._replay_fb_module = None
+        self._replay_rd_ext_extractor = None
         self.training_csv_path = os.path.join(repo_root, "ml", "training_data", "original_td.csv")
 
         # Get validation configuration
@@ -414,6 +422,7 @@ class ValidationTestRunner:
         logging.info(f"VALIDATION COMPLETE - STATUS: {results['overall_status']}")
         logging.info("=" * 80)
         self._close_replay_fb_scraper()
+        self._close_replay_rd_ext_extractor()
 
         return results
 
@@ -772,6 +781,146 @@ class ValidationTestRunner:
         except Exception as e:
             logging.warning("Replay fb.py shutdown failed: %s", e)
 
+    def _get_replay_rd_ext_extractor(self):
+        """
+        Lazily initialize rd_ext extractor for replay of listing/calendar pages.
+        """
+        if self._replay_rd_ext_extractor is not None:
+            return self._replay_rd_ext_extractor
+        try:
+            from rd_ext import ReadExtract
+
+            extractor = ReadExtract(config_path=self.config_path)
+            asyncio.run(extractor.init_browser())
+            self._replay_rd_ext_extractor = extractor
+            return extractor
+        except Exception as e:
+            logging.warning("Replay rd_ext initialization failed: %s", e)
+            self._replay_rd_ext_extractor = None
+            return None
+
+    def _close_replay_rd_ext_extractor(self) -> None:
+        extractor = self._replay_rd_ext_extractor
+        self._replay_rd_ext_extractor = None
+        if extractor is None:
+            return
+        try:
+            asyncio.run(extractor.close())
+        except Exception as e:
+            logging.warning("Replay rd_ext shutdown failed: %s", e)
+
+    @staticmethod
+    def _extract_replay_links(url: str, html: str) -> list[str]:
+        """
+        Extract normalized href targets from replay HTML for classifier/routing use.
+        """
+        if not html:
+            return []
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+        except Exception:
+            return []
+        links: list[str] = []
+        for node in soup.find_all("a", href=True):
+            href = str(node.get("href") or "").strip()
+            if not href:
+                continue
+            if href.startswith("/"):
+                href = urljoin(url, href)
+            elif not href.startswith("http"):
+                href = urljoin(url, href)
+            links.append(href)
+        return links
+
+    def _parse_replay_events_from_text(self, source_url: str, extracted_text: str, replay_url: str | None = None) -> list[dict]:
+        """
+        Parse one extracted event text block into normalized replay event rows.
+        """
+        text = str(extracted_text or "").strip()
+        if not text:
+            return []
+        prompt, schema_type = self.llm_handler.generate_prompt(source_url, text, source_url)
+        if schema_type is None:
+            prompt, schema_type = self.llm_handler.generate_prompt(source_url, text, "default")
+        if schema_type is None:
+            return []
+
+        parsed = None
+        for _attempt in range(1, 3):
+            llm_response = self.llm_handler.query_llm(source_url, prompt, schema_type)
+            if not llm_response:
+                continue
+            parsed = self.llm_handler.extract_and_parse_json(llm_response, source_url, schema_type)
+            if parsed:
+                break
+        if not parsed:
+            return []
+
+        normalized_url = self._normalize_url_value(replay_url or source_url)
+        normalized_events: list[dict] = []
+        for event in parsed:
+            if not isinstance(event, dict):
+                continue
+            event_raw = dict(event)
+            if replay_url:
+                event_raw["replay_child_url"] = replay_url
+            normalized_events.append(
+                {
+                    "event_name": str(event.get("event_name") or "").strip(),
+                    "start_date": self._normalize_date_value(event.get("start_date")),
+                    "start_time": self._normalize_time_value(event.get("start_time")),
+                    "source": str(event.get("source") or "").strip(),
+                    "location": str(event.get("location") or "").strip(),
+                    "url": normalized_url,
+                    "raw": event_raw,
+                }
+            )
+        return normalized_events
+
+    def _fetch_replay_events_via_rd_ext(self, url: str) -> dict:
+        """
+        Replay fetch via rd_ext for listing/calendar pages with child event links.
+        """
+        extractor = self._get_replay_rd_ext_extractor()
+        if extractor is None:
+            return {
+                "ok": False,
+                "category": "parser_or_llm_failure",
+                "details": "rd_ext_unavailable_for_replay",
+                "events": [],
+            }
+
+        try:
+            event_payloads = asyncio.run(
+                extractor.extract_calendar_events(url, venue_name=(urlparse(url).netloc or "calendar"))
+            )
+        except Exception as e:
+            return {
+                "ok": False,
+                "category": "parser_or_llm_failure",
+                "details": f"rd_ext_replay_exception:{e}",
+                "events": [],
+            }
+
+        normalized_events: list[dict] = []
+        for child_url, event_text in event_payloads or []:
+            normalized_events.extend(
+                self._parse_replay_events_from_text(
+                    source_url=child_url or url,
+                    extracted_text=event_text,
+                    replay_url=url,
+                )
+            )
+
+        if not normalized_events:
+            return {
+                "ok": False,
+                "category": "no_event_extracted_replay",
+                "details": "rd_ext_no_normalized_events",
+                "events": [],
+            }
+        return {"ok": True, "category": "", "details": "rd_ext_replay", "events": normalized_events}
+
     def _fetch_replay_events_for_social_url(self, url: str) -> dict:
         """
         Replay fetch for Facebook/Instagram URLs via fb.py methods.
@@ -899,42 +1048,21 @@ class ValidationTestRunner:
         if not extracted_text:
             return {"ok": False, "category": "no_event_extracted_replay", "details": "no_visible_text", "events": []}
 
-        prompt, schema_type = self.llm_handler.generate_prompt(url, extracted_text, url)
-        if schema_type is None:
-            prompt, schema_type = self.llm_handler.generate_prompt(url, extracted_text, "default")
-        if schema_type is None:
-            return {"ok": False, "category": "parser_or_llm_failure", "details": "missing_schema_type", "events": []}
-
-        parsed = None
-        last_llm_error = ""
-        for _attempt in range(1, 3):
-            llm_response = self.llm_handler.query_llm(url, prompt, schema_type)
-            if not llm_response:
-                last_llm_error = "empty_llm_response"
-                continue
-            parsed = self.llm_handler.extract_and_parse_json(llm_response, url, schema_type)
-            if parsed:
-                break
-            last_llm_error = "parsed_empty"
-        if not parsed:
-            category = "no_event_extracted_replay" if last_llm_error == "parsed_empty" else "parser_or_llm_failure"
-            return {"ok": False, "category": category, "details": last_llm_error or "llm_failed", "events": []}
-
-        normalized_events: list[dict] = []
-        for event in parsed:
-            if not isinstance(event, dict):
-                continue
-            normalized_events.append(
-                {
-                    "event_name": str(event.get("event_name") or "").strip(),
-                    "start_date": self._normalize_date_value(event.get("start_date")),
-                    "start_time": self._normalize_time_value(event.get("start_time")),
-                    "source": str(event.get("source") or "").strip(),
-                    "location": str(event.get("location") or "").strip(),
-                    "url": self._normalize_url_value(event.get("url") or url),
-                    "raw": event,
-                }
+        replay_links = self._extract_replay_links(url, response.text)
+        try:
+            class_decision = classify_page_with_confidence(
+                url=url,
+                visible_text=extracted_text,
+                links=replay_links,
             )
+        except Exception:
+            class_decision = {}
+        if str((class_decision or {}).get("owner_step") or "").strip().lower() == "rd_ext.py":
+            rd_ext_payload = self._fetch_replay_events_via_rd_ext(url)
+            if rd_ext_payload.get("ok"):
+                return rd_ext_payload
+
+        normalized_events = self._parse_replay_events_from_text(source_url=url, extracted_text=extracted_text)
         if not normalized_events:
             return {"ok": False, "category": "no_event_extracted_replay", "details": "no_normalized_events", "events": []}
         return {"ok": True, "category": "", "details": "", "events": normalized_events}

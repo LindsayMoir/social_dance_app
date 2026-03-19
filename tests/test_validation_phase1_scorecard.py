@@ -912,3 +912,63 @@ def test_accuracy_replay_assessment_excludes_email_rows_before_sampling() -> Non
     assert summary["total_rows"] == 20
     assert summary["true_count"] == 20
     assert all("mailchimpapp.com" not in str((row.get("baseline") or {}).get("url", "")) for row in summary["rows"])
+
+
+def test_fetch_replay_events_for_url_uses_rd_ext_for_listing_pages(monkeypatch) -> None:
+    runner = _build_runner()
+    runner.config_path = "config/config.yaml"
+
+    class FakeLlm:
+        def generate_prompt(self, url, text, prompt_type):
+            return "prompt", "schema"
+
+        def query_llm(self, url, prompt, schema_type=None):
+            return '{"events":[{"event_name":"Bill Francis – Story & Song","start_date":"2026-03-23","start_time":"17:30","source":"The Loft Pub Victoria","location":"The Loft Pub Victoria"}]}'
+
+        def extract_and_parse_json(self, response, url, schema_type):
+            return [
+                {
+                    "event_name": "Bill Francis – Story & Song",
+                    "start_date": "2026-03-23",
+                    "start_time": "17:30",
+                    "source": "The Loft Pub Victoria",
+                    "location": "The Loft Pub Victoria",
+                }
+            ]
+
+    class FakeResponse:
+        status_code = 200
+        text = '<html><body><a href="/events/2026-03-23/">Bill Francis</a></body></html>'
+
+    runner.llm_handler = FakeLlm()
+    runner._fetch_replay_events_via_rd_ext = lambda url: {
+        "ok": True,
+        "category": "",
+        "details": "rd_ext_replay",
+        "events": [
+            {
+                "event_name": "Bill Francis – Story & Song",
+                "start_date": "2026-03-23",
+                "start_time": "17:30:00",
+                "source": "The Loft Pub Victoria",
+                "location": "The Loft Pub Victoria",
+                "url": "https://loftpubvictoria.com/events",
+                "raw": {"replay_child_url": "https://loftpubvictoria.com/events/2026-03-23/"},
+            }
+        ],
+    }
+
+    monkeypatch.setattr(validation_test_runner.requests, "get", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        validation_test_runner,
+        "classify_page_with_confidence",
+        lambda **kwargs: {"owner_step": "rd_ext.py", "archetype": "incomplete_event"},
+    )
+
+    payload = runner._fetch_replay_events_for_url("https://loftpubvictoria.com/events")
+
+    assert payload["ok"] is True
+    assert payload["details"] == "rd_ext_replay"
+    assert payload["events"][0]["start_date"] == "2026-03-23"
+    assert payload["events"][0]["url"] == "https://loftpubvictoria.com/events"
+    assert payload["events"][0]["raw"]["replay_child_url"] == "https://loftpubvictoria.com/events/2026-03-23/"
