@@ -165,6 +165,8 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert run_scorecard["kpis"]["run_time"]["summary"]["urls_processed_per_minute"] == 0.0667
     assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["cost_per_processed_url_usd"] == 0.5
     assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["cost_per_inserted_event_usd"] == 0.1
+    assert run_scorecard["scorecard_version"] == "phase4"
+    assert run_scorecard["comparison_summary"] == {}
     assert "top_regressions" not in run_scorecard["recommendations_input"]
     assert run_scorecard["overall_score"]["status"] == "PRELIMINARY"
 
@@ -213,6 +215,10 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
             "location_pct": 70.0,
             "source_pct": 95.0,
         },
+        run_delta_summary={
+            "previous_run": {"summary": {"delta_overall_score": 1.5}},
+            "holdout_baseline": {"summary": {"delta_holdout_replay_url_accuracy_pct": 2.0}},
+        },
     )
 
     metric_keys = [call["metric_key"] for call in fake_db.calls]
@@ -234,6 +240,8 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
         "field_accuracy_time_pct",
         "field_accuracy_location_pct",
         "field_accuracy_source_pct",
+        "overall_score_delta_vs_previous_run",
+        "holdout_replay_url_accuracy_delta_vs_baseline",
     ]
     assert all(call["run_id"] == "run-456" for call in fake_db.calls)
     assert all(isinstance(call["window_end"], datetime) for call in fake_db.calls)
@@ -449,10 +457,12 @@ def test_domain_evaluation_and_codex_review_bundle() -> None:
         holdout_summary={"replay_url_accuracy_pct": 70.0},
         domain_capped_summary={"replay_url_accuracy_pct": 75.0},
         domain_evaluation_summary=domain_summary,
+        run_delta_summary={"previous_run": {"available": True}},
     )
     assert bundle["bundle_version"] == "v1"
     assert bundle["run_id"] == "run-123"
     assert bundle["artifacts"]["domain_evaluation_summary"]["domain_count"] == 3
+    assert bundle["artifacts"]["run_delta_summary"]["previous_run"]["available"] is True
 
 
 def test_phase3_holdout_domain_caps_and_guardrails() -> None:
@@ -531,3 +541,48 @@ def test_phase3_holdout_domain_caps_and_guardrails() -> None:
         "chatbot_answer_correctness_min_pct",
         "chatbot_user_visible_error_rate_max_pct",
     }
+
+
+def test_run_delta_summary_compares_previous_run_and_holdout_baseline() -> None:
+    runner = _build_runner()
+    fake_db = _FakeDbHandler()
+    fake_db.query_map["FROM validation_run_artifacts"] = [
+        (
+            "run-122",
+            """{
+                "run_id": "run-122",
+                "run_timestamp_utc": "2026-03-17T12:00:00",
+                "overall_score": {"value": 80.0},
+                "evaluation_scope": {"holdout_summary": {"replay_url_accuracy_pct": 74.0}},
+                "kpis": {
+                    "database_accuracy": {"summary": {"replay_url_accuracy_pct": 81.0, "duplicate_rate_per_100_events": 5.0}},
+                    "events_coverage": {"summary": {"watchlist_source_hit_rate_pct": 70.0, "watchlist_event_capture_rate_pct": 66.0, "missed_event_rate_manual_audit_pct": 18.0}},
+                    "run_time": {"summary": {"pipeline_duration_minutes": 180.0, "urls_processed_per_minute": 0.05, "events_inserted_per_minute": 0.2}},
+                    "run_costs": {"summary": {"summary": {"total_usd": 5.0, "cost_per_processed_url_usd": 0.4, "cost_per_inserted_event_usd": 0.1}}},
+                    "chatbot_quality": {"summary": {"summary": {"chatbot_response_within_15s_pct": 85.0, "chatbot_answer_correctness_pct": 82.0}}}
+                }
+            }""",
+            datetime(2026, 3, 17, 12, 0, 0),
+        )
+    ]
+    runner.db_handler = fake_db
+    current_run_scorecard = {
+        "run_id": "run-123",
+        "overall_score": {"value": 84.5},
+        "evaluation_scope": {"holdout_summary": {"replay_url_accuracy_pct": 78.0}},
+        "kpis": {
+            "database_accuracy": {"summary": {"replay_url_accuracy_pct": 84.0, "duplicate_rate_per_100_events": 4.0}},
+            "events_coverage": {"summary": {"watchlist_source_hit_rate_pct": 75.0, "watchlist_event_capture_rate_pct": 68.0, "missed_event_rate_manual_audit_pct": 12.0}},
+            "run_time": {"summary": {"pipeline_duration_minutes": 160.0, "urls_processed_per_minute": 0.06, "events_inserted_per_minute": 0.25}},
+            "run_costs": {"summary": {"summary": {"total_usd": 4.0, "cost_per_processed_url_usd": 0.3, "cost_per_inserted_event_usd": 0.09}}},
+            "chatbot_quality": {"summary": {"summary": {"chatbot_response_within_15s_pct": 90.0, "chatbot_answer_correctness_pct": 88.0}}},
+        },
+    }
+
+    run_delta_summary = runner._build_run_delta_summary(current_run_scorecard)
+
+    assert run_delta_summary["available"] is True
+    assert run_delta_summary["previous_run"]["baseline_run_id"] == "run-122"
+    assert run_delta_summary["previous_run"]["summary"]["delta_overall_score"] == 4.5
+    assert run_delta_summary["holdout_baseline"]["summary"]["delta_holdout_replay_url_accuracy_pct"] == 4.0
+    assert any(item["metric_key"] == "pipeline_duration_minutes" and item["direction"] == "improved" for item in run_delta_summary["previous_run"]["metric_deltas"])
