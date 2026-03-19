@@ -789,3 +789,126 @@ def test_classifier_performance_summary_includes_stage_domain_details() -> None:
     summary = runner._summarize_classifier_performance("run-1")
     assert summary["status"] == "OK"
     assert any(item["stage"] == "ml" and item["domain"] == "a.example.org" and item["replay_url_accuracy_pct"] == 50.0 for item in summary["stage_domain_details"])
+
+
+def test_accuracy_replay_rows_html_excludes_email_like_rows() -> None:
+    runner = _build_runner()
+    replay_data = {
+        "coverage_accuracy_pct": 100.0,
+        "replay_accuracy_pct": 100.0,
+        "total_rows": 2,
+        "true_count": 2,
+        "false_count": 0,
+        "rows": [
+            {
+                "is_match": True,
+                "baseline": {
+                    "event_name": "Email Event",
+                    "url": "djdancingdean@39679421.mailchimpapp.com",
+                },
+                "replay": {
+                    "event_name": "Email Event",
+                    "url": "djdancingdean@39679421.mailchimpapp.com",
+                },
+                "mismatch_category": "",
+                "mismatch_details": "",
+                "action_taken": "",
+            },
+            {
+                "is_match": True,
+                "baseline": {
+                    "event_name": "Web Event",
+                    "url": "https://example.org/event",
+                },
+                "replay": {
+                    "event_name": "Web Event",
+                    "url": "https://example.org/event",
+                },
+                "mismatch_category": "",
+                "mismatch_details": "",
+                "action_taken": "",
+            },
+        ],
+    }
+    html = runner._build_accuracy_replay_rows_html(replay_data)
+    assert "Email Event" not in html
+    assert "Web Event" in html
+    full_html = runner._build_accuracy_replay_html(replay_data)
+    assert "2/2" in full_html
+    assert "False Rows" in full_html
+
+
+def test_accuracy_replay_assessment_excludes_email_rows_before_sampling() -> None:
+    runner = _build_runner()
+    runner.config = {
+        "testing": {
+            "validation": {
+                "accuracy_replay": {
+                    "enabled": True,
+                    "query_text": "test",
+                    "max_events": 20,
+                    "strict_time_match": True,
+                    "trend_days": 30,
+                }
+            }
+        }
+    }
+
+    class FakeExecutor:
+        def __init__(self, config, db_handler) -> None:
+            pass
+
+        def execute_test_question(self, question_dict):
+            return {
+                "execution_success": True,
+                "sql_query": "SELECT * FROM fake",
+            }
+
+    class FakeDb:
+        def execute_query(self, query):
+            rows = []
+            for idx in range(1, 22):
+                url = f"https://example.org/event-{idx}"
+                if idx == 5:
+                    url = "djdancingdean@39679421.mailchimpapp.com"
+                rows.append(
+                    {
+                        "event_name": f"Event {idx}",
+                        "start_date": "2026-04-01",
+                        "start_time": "19:00:00",
+                        "source": "source",
+                        "location": "Hall",
+                        "url": url,
+                    }
+                )
+            return rows
+
+        def record_accuracy_replay_result(self, **kwargs):
+            return None
+
+        def record_metric_observation(self, **kwargs):
+            return None
+
+    runner.db_handler = FakeDb()
+    runner._load_metric_history = lambda metric_key, days=90: []
+    runner._infer_latest_pipeline_run_id = lambda timestamp: "run-1"
+    runner._fetch_replay_events_for_url = lambda url: {"ok": True, "category": "", "details": "", "events": []}
+    runner._compare_replay_row = lambda baseline_row, replay_payload, strict_time_match: {
+        "is_match": True,
+        "category": "match",
+        "details": "",
+        "baseline": baseline_row,
+        "replay": baseline_row,
+    }
+    runner._resolve_baseline_event_id = lambda baseline: None
+
+    original_executor = validation_test_runner.ChatbotTestExecutor
+    validation_test_runner.ChatbotTestExecutor = FakeExecutor
+    try:
+        summary = runner._run_accuracy_replay_assessment({"timestamp": "2026-03-18T12:00:00"})
+    finally:
+        validation_test_runner.ChatbotTestExecutor = original_executor
+
+    assert summary["total_rows"] == 20
+    assert summary["true_count"] == 20
+    assert all("mailchimpapp.com" not in str((row.get("baseline") or {}).get("url", "")) for row in summary["rows"])

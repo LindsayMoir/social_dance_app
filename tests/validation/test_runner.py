@@ -62,7 +62,7 @@ from evaluation_holdout import load_dev_urls, load_gold_holdout_urls, normalize_
 from llm import LLMHandler
 from logging_config import setup_logging
 from email_notifier import send_report_email
-from page_classifier import is_google_calendar_like_url, is_social_url, resolve_prompt_type
+from page_classifier import is_email_like_input, is_google_calendar_like_url, is_social_url, resolve_prompt_type
 
 
 class ValidationTestRunner:
@@ -1255,7 +1255,19 @@ class ValidationTestRunner:
             }
 
         rows = self.db_handler.execute_query(sql_query) or []
-        baseline_rows = [dict(row._mapping) for row in rows[:max_events]]
+        baseline_rows: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
+            raw_url = str(payload.get("url", "") or "").strip()
+            if is_email_like_input(raw_url):
+                continue
+            normalized_url = self._normalize_url_value(raw_url)
+            if is_email_like_input(normalized_url):
+                continue
+            payload["url"] = normalized_url or raw_url
+            baseline_rows.append(payload)
+            if len(baseline_rows) >= max_events:
+                break
         if not baseline_rows:
             return {
                 "status": "WARN",
@@ -6062,6 +6074,10 @@ class ValidationTestRunner:
             match_text = "True" if is_match else "False"
             baseline = row.get("baseline", {}) if isinstance(row.get("baseline"), dict) else {}
             replay = row.get("replay", {}) if isinstance(row.get("replay"), dict) else {}
+            baseline_url = str(baseline.get("url", "") or "").strip()
+            replay_url = str(replay.get("url", "") or "").strip()
+            if is_email_like_input(baseline_url) or is_email_like_input(replay_url):
+                continue
             mismatch_category = self._escape_html(str(row.get("mismatch_category", "") or ""))
             mismatch_details = self._escape_html(str(row.get("mismatch_details", "") or ""))
             action_taken = self._escape_html(str(row.get("action_taken", "") or ""))
