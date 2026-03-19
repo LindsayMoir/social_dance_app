@@ -23,3 +23,43 @@ def test_scorecard_guardrails_allow_fail(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(pipeline, "RUN_SCORECARD_PATH", str(scorecard_path))
 
     assert pipeline._scorecard_guardrails_allow("copy_dev_to_prod") is False
+
+
+def test_scorecard_has_required_evaluation_scope_pass(tmp_path, monkeypatch) -> None:
+    scorecard_path = tmp_path / "run_scorecard.json"
+    scorecard_path.write_text(
+        json.dumps(
+            {
+                "evaluation_scope": {
+                    "uses_dev_split": True,
+                    "uses_holdout": True,
+                    "dev_summary": {"replay_url_accuracy_pct": 81.0},
+                    "holdout_summary": {"replay_url_accuracy_pct": 79.0},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pipeline, "RUN_SCORECARD_PATH", str(scorecard_path))
+
+    assert pipeline._scorecard_has_required_evaluation_scope("classifier_training_promotion") is True
+
+
+def test_scorecard_has_required_evaluation_scope_fail(tmp_path, monkeypatch) -> None:
+    scorecard_path = tmp_path / "run_scorecard.json"
+    scorecard_path.write_text(
+        json.dumps(
+            {
+                "evaluation_scope": {
+                    "uses_dev_split": True,
+                    "uses_holdout": True,
+                    "dev_summary": {"replay_url_accuracy_pct": None},
+                    "holdout_summary": {"replay_url_accuracy_pct": 79.0},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pipeline, "RUN_SCORECARD_PATH", str(scorecard_path))
+
+    assert pipeline._scorecard_has_required_evaluation_scope("classifier_training_promotion") is False

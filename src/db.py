@@ -35,6 +35,7 @@ import warnings
 from config_runtime import load_config
 # Import database configuration utility
 from db_config import get_database_config
+from evaluation_holdout import is_holdout_url
 from page_classifier import classify_page
 
 
@@ -833,6 +834,8 @@ class DatabaseHandler():
         """
         normalized_url = self._normalize_for_compare(self.normalize_url(url))
         if not normalized_url:
+            return None
+        if is_holdout_url(normalized_url):
             return None
         try:
             rows = self.execute_query(

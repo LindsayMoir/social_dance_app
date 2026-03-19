@@ -153,6 +153,33 @@ def _scorecard_guardrails_allow(action: str) -> bool:
         logger.warning("_scorecard_guardrails_allow(): violation=%s", violation)
     return False
 
+
+def _scorecard_has_required_evaluation_scope(action: str) -> bool:
+    """Return True when the latest scorecard contains usable dev and holdout evaluation results."""
+    scorecard = _load_run_scorecard()
+    if not scorecard:
+        logger.warning("_scorecard_has_required_evaluation_scope(): No run scorecard found for action=%s", action)
+        return False
+    evaluation_scope = scorecard.get("evaluation_scope", {}) if isinstance(scorecard.get("evaluation_scope"), dict) else {}
+    uses_dev_split = bool(evaluation_scope.get("uses_dev_split"))
+    uses_holdout = bool(evaluation_scope.get("uses_holdout"))
+    dev_summary = evaluation_scope.get("dev_summary", {}) if isinstance(evaluation_scope.get("dev_summary"), dict) else {}
+    holdout_summary = evaluation_scope.get("holdout_summary", {}) if isinstance(evaluation_scope.get("holdout_summary"), dict) else {}
+    dev_accuracy = dev_summary.get("replay_url_accuracy_pct")
+    holdout_accuracy = holdout_summary.get("replay_url_accuracy_pct")
+    if uses_dev_split and uses_holdout and dev_accuracy is not None and holdout_accuracy is not None:
+        return True
+    logger.warning(
+        "_scorecard_has_required_evaluation_scope(): Blocking %s because dev/holdout evaluation is incomplete "
+        "(uses_dev_split=%s, uses_holdout=%s, dev_accuracy=%s, holdout_accuracy=%s)",
+        action,
+        uses_dev_split,
+        uses_holdout,
+        dev_accuracy,
+        holdout_accuracy,
+    )
+    return False
+
 # Define common configuration updates for all pipeline steps
 COMMON_CONFIG_UPDATES = {
     "testing": {"drop_tables": False},
@@ -1614,6 +1641,9 @@ def classifier_training_promotion_step():
     if not _scorecard_guardrails_allow("classifier_training_promotion"):
         logger.warning("classifier_training_promotion_step: Guardrails failed; skipping promotion step")
         return True
+    if not _scorecard_has_required_evaluation_scope("classifier_training_promotion"):
+        logger.warning("classifier_training_promotion_step: Dev/holdout evaluation incomplete; skipping promotion step")
+        return True
 
     promotion_result = run_classifier_training_promotion()
     logger.info(
@@ -1700,6 +1730,8 @@ def copy_dev_db_to_prod_db_step():
     logger.info("def copy_dev_db_to_prod_db_step(): Starting table copy to production.")
     if not _scorecard_guardrails_allow("copy_dev_to_prod"):
         raise Exception("copy_dev_to_prod blocked: evaluation guardrails did not pass")
+    if not _scorecard_has_required_evaluation_scope("copy_dev_to_prod"):
+        raise Exception("copy_dev_to_prod blocked: dev/holdout evaluation is incomplete")
 
     # Get source database based on current DATABASE_TARGET
     source_conn_str, source_env_name = get_database_config()

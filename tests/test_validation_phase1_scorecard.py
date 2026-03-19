@@ -9,6 +9,7 @@ VALIDATION_DIR = os.path.join(TESTS_DIR, "validation")
 if VALIDATION_DIR not in sys.path:
     sys.path.insert(0, VALIDATION_DIR)
 
+import test_runner as validation_test_runner
 from test_runner import ValidationTestRunner
 
 
@@ -63,10 +64,16 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
         openrouter_cost={"available": True, "cost_usd": 1.25, "requests": 10, "tokens": 1000, "start_ts": "a", "end_ts": "b"},
         openai_cost={"available": True, "cost_usd": 2.75, "requests": 5, "tokens": 500, "start_ts": "a", "end_ts": "b"},
         accuracy_replay={"true_count": 4},
+        llm_activity_summary={
+            "top_models": [("gpt-5", 3), ("gpt-5-mini", 1)],
+            "top_files": [("scraper_log.txt", 2), ("fb_log.txt", 2)],
+        },
     )
     assert llm_cost_summary["summary"]["total_usd"] == 4.0
     assert llm_cost_summary["summary"]["total_requests"] == 15
     assert llm_cost_summary["summary"]["cost_per_successful_replay_url_usd"] == 1.0
+    assert llm_cost_summary["by_model"] == {"gpt-5": 3.0, "gpt-5-mini": 1.0}
+    assert llm_cost_summary["by_step"] == {"scraper": 2.0, "fb": 2.0}
 
     chatbot_quality_summary = runner._build_phase1_chatbot_quality_summary(
         chatbot_performance={
@@ -90,14 +97,28 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
                 "average_score": 88.0,
                 "execution_success_rate": 0.95,
             },
-            "problem_categories": [{"name": "Weekend Calculation", "count": 3}],
+            "problem_categories": [
+                {"name": "Weekend Calculation", "count": 3},
+                {"name": "Hallucinated Venue", "count": 1},
+            ],
         },
     )
     assert chatbot_quality_summary["summary"]["chatbot_response_within_15s_pct"] == 90.0
     assert chatbot_quality_summary["summary"]["chatbot_answer_correctness_pct"] == 88.0
     assert chatbot_quality_summary["summary"]["chatbot_sql_validity_pct"] == 95.0
+    assert chatbot_quality_summary["summary"]["chatbot_hallucination_rate_pct"] == 25.0
+    assert chatbot_quality_summary["summary"]["chatbot_fallback_rate_pct"] == 20.0
     assert chatbot_quality_summary["summary"]["chatbot_user_visible_error_rate_pct"] == 10.0
 
+    dev_summary = {
+        "available": True,
+        "dev_version": "v1",
+        "dev_urls_total": 3,
+        "replay_urls_seen": 2,
+        "matched_urls": 1,
+        "mismatched_urls": 1,
+        "replay_url_accuracy_pct": 50.0,
+    }
     run_scorecard = runner._build_phase1_run_scorecard(
         run_id="run-123",
         report_timestamp="2026-03-18T12:00:00",
@@ -126,16 +147,18 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
             "time_pct": 80.0,
             "location_pct": 70.0,
             "source_pct": 95.0,
-            "address_id_pct": None,
-            "dance_style_pct": None,
-            "description_pct": None,
+            "address_id_pct": 85.0,
+            "dance_style_pct": 75.0,
+            "description_pct": 65.0,
         },
         coverage_summary={
             "source_hit_rate_pct": 80.0,
             "event_capture_rate_pct": 60.0,
             "missed_event_rate_manual_audit_pct": 20.0,
+            "new_source_discovery_count": 4,
             "watchlist_source": "coverage_watchlist_csv",
         },
+        dev_summary=dev_summary,
         holdout_summary={
             "available": True,
             "holdout_version": "v1",
@@ -155,13 +178,19 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert run_scorecard["kpis"]["database_accuracy"]["summary"]["stale_event_rate_pct"] == 2.5
     assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["date_pct"] == 90.0
     assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["time_pct"] == 80.0
+    assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["address_id_pct"] == 85.0
+    assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["dance_style_pct"] == 75.0
+    assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["description_pct"] == 65.0
     assert run_scorecard["kpis"]["database_accuracy"]["summary"]["classifier_effect"]["ml_usage_pct"] == 25.0
     assert run_scorecard["kpis"]["events_coverage"]["summary"]["watchlist_source_hit_rate_pct"] == 80.0
     assert run_scorecard["kpis"]["events_coverage"]["summary"]["missed_event_rate_manual_audit_pct"] == 20.0
+    assert run_scorecard["kpis"]["events_coverage"]["summary"]["new_source_discovery_count"] == 4
     assert run_scorecard["evaluation_scope"]["uses_holdout"] is True
     assert run_scorecard["evaluation_scope"]["holdout_summary"]["replay_url_accuracy_pct"] == 78.0
     assert run_scorecard["evaluation_scope"]["uses_dev_split"] is True
     assert run_scorecard["evaluation_scope"]["dev_version"] == "v1"
+    assert run_scorecard["evaluation_scope"]["dev_summary"]["replay_url_accuracy_pct"] == 50.0
+    assert run_scorecard["kpis"]["events_coverage"]["summary"]["dev_replay_url_accuracy_pct"] == 50.0
     assert run_scorecard["kpis"]["run_time"]["summary"]["urls_processed_per_minute"] == 0.0667
     assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["cost_per_processed_url_usd"] == 0.5
     assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["cost_per_inserted_event_usd"] == 0.1
@@ -199,6 +228,9 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
             "event_capture_rate_pct": 72.0,
             "missed_event_rate_manual_audit_pct": 12.5,
         },
+        dev_summary={
+            "replay_url_accuracy_pct": 79.0,
+        },
         holdout_summary={
             "replay_url_accuracy_pct": 77.0,
         },
@@ -214,6 +246,9 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
             "time_pct": 80.0,
             "location_pct": 70.0,
             "source_pct": 95.0,
+            "address_id_pct": 88.0,
+            "dance_style_pct": 76.0,
+            "description_pct": 64.0,
         },
         run_delta_summary={
             "previous_run": {"summary": {"delta_overall_score": 1.5}},
@@ -232,6 +267,7 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
         "coverage_watchlist_source_hit_rate_pct",
         "coverage_watchlist_event_capture_rate_pct",
         "missed_event_rate_manual_audit_pct",
+        "dev_replay_url_accuracy_pct",
         "holdout_replay_url_accuracy_pct",
         "domain_capped_replay_url_accuracy_pct",
         "invalid_event_rate_pct",
@@ -240,6 +276,9 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
         "field_accuracy_time_pct",
         "field_accuracy_location_pct",
         "field_accuracy_source_pct",
+        "field_accuracy_address_id_pct",
+        "field_accuracy_dance_style_pct",
+        "field_accuracy_description_pct",
         "overall_score_delta_vs_previous_run",
         "holdout_replay_url_accuracy_delta_vs_baseline",
     ]
@@ -334,12 +373,20 @@ def test_phase2_duplicate_and_coverage_summaries() -> None:
         "missed_event_rate_manual_audit_pct": 50.0,
         "sample_missed_events": [{"event_name": "Missed Event"}],
     }
+    runner._summarize_new_source_discovery = lambda watchlist_rows: {
+        "available": True,
+        "new_source_discovery_count": 2,
+        "sample_new_source_domains": ["new.example.org", "other.example.org"],
+        "watchlist_domains_total": 3,
+        "error": "",
+    }
     coverage_summary = runner._summarize_coverage_watchlist()
     assert coverage_summary["source_hit_rate_pct"] == 66.67
     assert coverage_summary["event_capture_rate_pct"] == 33.33
     assert coverage_summary["priority_source_hit_rate_pct"] == 50.0
     assert coverage_summary["missed_event_rate_manual_audit_pct"] == 50.0
     assert coverage_summary["watchlist_source"] == "test_watchlist"
+    assert coverage_summary["new_source_discovery_count"] == 2
 
 
 def test_manual_coverage_audit_summary() -> None:
@@ -381,21 +428,49 @@ def test_manual_coverage_audit_summary() -> None:
     assert summary["missed_event_rate_manual_audit_pct"] == 50.0
 
 
+def test_new_source_discovery_summary() -> None:
+    runner = _build_runner()
+
+    class DiscoveryDb:
+        def execute_query(self, query, params=None):
+            return [
+                ("https://watch.example.org/event-1",),
+                ("https://new.example.org/event-2",),
+                ("https://www.other.example.org/event-3",),
+            ]
+
+    runner.db_handler = DiscoveryDb()
+    summary = runner._summarize_new_source_discovery(
+        [
+            {"source_url": "https://watch.example.org/calendar"},
+        ]
+    )
+    assert summary["available"] is True
+    assert summary["new_source_discovery_count"] == 2
+    assert summary["sample_new_source_domains"] == ["new.example.org", "other.example.org"]
+
+
 def test_field_accuracy_summary() -> None:
     runner = _build_runner()
+    class AddressDb:
+        def lookup_raw_location(self, location):
+            return None
+        def quick_address_lookup(self, location):
+            return 101 if location == "hall a" else 202 if location == "hall c" else None
+    runner.db_handler = AddressDb()
     accuracy_replay = {
         "rows": [
             {
-                "baseline": {"start_date": "2026-04-10", "start_time": "19:00:00", "location": "Hall A", "source": "source-a"},
-                "replay": {"start_date": "2026-04-10", "start_time": "19:00:00", "location": "Hall A", "source": "source-a"},
+                "baseline": {"start_date": "2026-04-10", "start_time": "19:00:00", "location": "Hall A", "source": "source-a", "address_id": 101, "dance_style": "salsa, bachata", "description": "A great social dance night."},
+                "replay": {"start_date": "2026-04-10", "start_time": "19:00:00", "location": "hall a", "source": "source-a", "dance_style": "bachata / salsa", "description": "A great social dance night."},
             },
             {
-                "baseline": {"start_date": "2026-04-11", "start_time": "20:00:00", "location": "Hall B", "source": "source-b"},
-                "replay": {"start_date": "2026-04-12", "start_time": "20:30:00", "location": "Hall C", "source": "source-c"},
+                "baseline": {"start_date": "2026-04-11", "start_time": "20:00:00", "location": "Hall B", "source": "source-b", "address_id": 201, "dance_style": "west coast swing", "description": "Weekly workshop and social."},
+                "replay": {"start_date": "2026-04-12", "start_time": "20:30:00", "location": "hall c", "source": "source-c", "dance_style": "salsa", "description": "Different content entirely."},
             },
             {
-                "baseline": {"start_date": "2026-04-13", "start_time": "", "location": "", "source": "unknown"},
-                "replay": {"start_date": "2026-04-13", "start_time": "", "location": "", "source": "unknown"},
+                "baseline": {"start_date": "2026-04-13", "start_time": "", "location": "", "source": "unknown", "address_id": None, "dance_style": "", "description": ""},
+                "replay": {"start_date": "2026-04-13", "start_time": "", "location": "", "source": "unknown", "dance_style": "", "description": ""},
             },
         ]
     }
@@ -405,6 +480,9 @@ def test_field_accuracy_summary() -> None:
     assert summary["time_pct"] == 50.0
     assert summary["location_pct"] == 50.0
     assert summary["source_pct"] == 50.0
+    assert summary["address_id_pct"] == 50.0
+    assert summary["dance_style_pct"] == 50.0
+    assert summary["description_pct"] == 50.0
 
 
 def test_event_data_quality_summary() -> None:
@@ -458,6 +536,7 @@ def test_domain_evaluation_and_codex_review_bundle() -> None:
         classifier_performance_summary={"status": "OK"},
         duplicate_summary={"duplicate_rate_per_100_events": 2.0},
         coverage_summary={"source_hit_rate_pct": 80.0},
+        dev_summary={"replay_url_accuracy_pct": 66.0},
         holdout_summary={"replay_url_accuracy_pct": 70.0},
         domain_capped_summary={"replay_url_accuracy_pct": 75.0},
         domain_evaluation_summary=domain_summary,
@@ -467,6 +546,7 @@ def test_domain_evaluation_and_codex_review_bundle() -> None:
     assert bundle["bundle_version"] == "v1"
     assert bundle["run_id"] == "run-123"
     assert bundle["artifacts"]["domain_evaluation_summary"]["domain_count"] == 3
+    assert bundle["artifacts"]["dev_summary"]["replay_url_accuracy_pct"] == 66.0
     assert bundle["artifacts"]["run_delta_summary"]["previous_run"]["available"] is True
     assert bundle["artifacts"]["recommendation_plan"]["plan_version"] == "v1"
 
@@ -513,6 +593,19 @@ def test_phase3_holdout_domain_caps_and_guardrails() -> None:
     assert holdout_summary["replay_urls_seen"] == 2
     assert holdout_summary["replay_url_accuracy_pct"] == 50.0
 
+    original_load_dev_urls = validation_test_runner.load_dev_urls
+    validation_test_runner.load_dev_urls = lambda: {
+        "https://example.org/a",
+        "https://another.org/c",
+    }
+    try:
+        dev_summary = runner._summarize_dev_replay(accuracy_replay)
+    finally:
+        validation_test_runner.load_dev_urls = original_load_dev_urls
+    assert dev_summary["available"] is True
+    assert dev_summary["replay_urls_seen"] == 2
+    assert dev_summary["replay_url_accuracy_pct"] == 100.0
+
     domain_capped_summary = runner._summarize_domain_capped_replay(accuracy_replay, per_domain_cap=1)
     assert domain_capped_summary["sampled_rows"] == 4
     assert domain_capped_summary["sampled_domains"] == 4
@@ -531,6 +624,7 @@ def test_phase3_holdout_domain_caps_and_guardrails() -> None:
         event_data_quality_summary={"invalid_event_rate_pct": 2.0, "stale_event_rate_pct": 6.0, "total_events": 50},
         field_accuracy_summary={"date_pct": 70.0, "time_pct": 60.0, "location_pct": 50.0, "source_pct": 80.0},
         coverage_summary={"source_hit_rate_pct": 55.0, "event_capture_rate_pct": 40.0, "watchlist_source": "test"},
+        dev_summary=dev_summary,
         holdout_summary=holdout_summary,
         domain_capped_summary=domain_capped_summary,
     )
@@ -559,7 +653,7 @@ def test_run_delta_summary_compares_previous_run_and_holdout_baseline() -> None:
                 "run_id": "run-122",
                 "run_timestamp_utc": "2026-03-17T12:00:00",
                 "overall_score": {"value": 80.0},
-                "evaluation_scope": {"holdout_summary": {"replay_url_accuracy_pct": 74.0}},
+                "evaluation_scope": {"dev_summary": {"replay_url_accuracy_pct": 72.0}, "holdout_summary": {"replay_url_accuracy_pct": 74.0}},
                 "kpis": {
                     "database_accuracy": {"summary": {"replay_url_accuracy_pct": 81.0, "duplicate_rate_per_100_events": 5.0}},
                     "events_coverage": {"summary": {"watchlist_source_hit_rate_pct": 70.0, "watchlist_event_capture_rate_pct": 66.0, "missed_event_rate_manual_audit_pct": 18.0}},
@@ -575,7 +669,7 @@ def test_run_delta_summary_compares_previous_run_and_holdout_baseline() -> None:
     current_run_scorecard = {
         "run_id": "run-123",
         "overall_score": {"value": 84.5},
-        "evaluation_scope": {"holdout_summary": {"replay_url_accuracy_pct": 78.0}},
+        "evaluation_scope": {"dev_summary": {"replay_url_accuracy_pct": 76.0}, "holdout_summary": {"replay_url_accuracy_pct": 78.0}},
         "kpis": {
             "database_accuracy": {"summary": {"replay_url_accuracy_pct": 84.0, "duplicate_rate_per_100_events": 4.0}},
             "events_coverage": {"summary": {"watchlist_source_hit_rate_pct": 75.0, "watchlist_event_capture_rate_pct": 68.0, "missed_event_rate_manual_audit_pct": 12.0}},
@@ -612,6 +706,7 @@ def test_recommendation_plan_uses_existing_scorecard_signals() -> None:
         coverage_summary={
             "missed_sources": [{"source_name": "Watchlist Venue", "source_url": "https://venue.example.org"}],
         },
+        dev_summary={"replay_url_accuracy_pct": 65.0, "replay_urls_seen": 4, "matched_urls": 2, "mismatched_urls": 2},
         runtime_summary={
             "step_spans": [{"log_file": "scraper_log.txt", "duration_minutes": 80.0}],
         },

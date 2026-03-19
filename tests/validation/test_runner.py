@@ -579,6 +579,59 @@ class ValidationTestRunner:
         return re.sub(r"\s+", " ", text)
 
     @staticmethod
+    def _normalize_optional_int(value: Any) -> int | None:
+        try:
+            if value is None or str(value).strip() == "":
+                return None
+            coerced = int(value)
+            return coerced if coerced > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _normalize_dance_style_tokens(value: Any) -> tuple[str, ...]:
+        text = str(value or "").strip().lower()
+        if not text:
+            return tuple()
+        text = text.replace("&", ",").replace("/", ",")
+        parts = [re.sub(r"\s+", " ", token).strip() for token in text.split(",")]
+        normalized = sorted({token for token in parts if token})
+        return tuple(normalized)
+
+    @staticmethod
+    def _descriptions_equivalent(baseline_description: str, replay_description: str) -> bool:
+        if not baseline_description or not replay_description:
+            return False
+        if baseline_description == replay_description:
+            return True
+        if baseline_description in replay_description or replay_description in baseline_description:
+            return True
+        return SequenceMatcher(None, baseline_description, replay_description).ratio() >= 0.85
+
+    def _resolve_replay_address_id(self, replay_row: dict) -> int | None:
+        """Resolve replay location text to an existing address_id without invoking LLM paths."""
+        if not isinstance(replay_row, dict) or not getattr(self, "db_handler", None):
+            return None
+        location = str(replay_row.get("location") or "").strip()
+        if not location:
+            return None
+        lookup_methods = [
+            getattr(self.db_handler, "lookup_raw_location", None),
+            getattr(self.db_handler, "quick_address_lookup", None),
+        ]
+        for method in lookup_methods:
+            if not callable(method):
+                continue
+            try:
+                address_id = method(location)
+            except Exception:
+                continue
+            normalized = self._normalize_optional_int(address_id)
+            if normalized is not None:
+                return normalized
+        return None
+
+    @staticmethod
     def _name_similarity(a: str, b: str) -> float:
         return SequenceMatcher(None, str(a or ""), str(b or "")).ratio()
 
@@ -947,6 +1000,9 @@ class ValidationTestRunner:
             "source": self._normalize_text_value(baseline_row.get("source")),
             "location": self._normalize_text_value(baseline_row.get("location")),
             "url": self._normalize_url_value(baseline_row.get("url")),
+            "address_id": self._normalize_optional_int(baseline_row.get("address_id")),
+            "dance_style": self._normalize_text_value(baseline_row.get("dance_style")),
+            "description": self._normalize_text_value(baseline_row.get("description")),
         }
 
         if not baseline["url"]:
@@ -1003,6 +1059,7 @@ class ValidationTestRunner:
 
         ranked = sorted(events, key=score_candidate, reverse=True)
         best = ranked[0]
+        best_raw = best.get("raw", {}) if isinstance(best.get("raw"), dict) else {}
         replay = {
             "event_name": self._normalize_text_value(best.get("event_name")),
             "start_date": self._normalize_date_value(best.get("start_date")),
@@ -1010,6 +1067,9 @@ class ValidationTestRunner:
             "source": self._normalize_text_value(best.get("source")),
             "location": self._normalize_text_value(best.get("location")),
             "url": self._normalize_url_value(best.get("url")),
+            "address_id": self._normalize_optional_int(best_raw.get("address_id")),
+            "dance_style": self._normalize_text_value(best_raw.get("dance_style")),
+            "description": self._normalize_text_value(best_raw.get("description")),
         }
 
         duplicate_identity_count = sum(
@@ -1685,6 +1745,7 @@ class ValidationTestRunner:
             openrouter_cost=openrouter_cost_summary,
             openai_cost=openai_cost_summary,
             accuracy_replay=accuracy_replay_summary,
+            llm_activity_summary=llm_activity_summary,
         )
         chatbot_quality_summary = self._build_phase1_chatbot_quality_summary(
             chatbot_performance=chatbot_performance_summary,
@@ -1694,6 +1755,7 @@ class ValidationTestRunner:
         event_data_quality_summary = self._summarize_event_data_quality()
         field_accuracy_summary = self._summarize_field_accuracy(accuracy_replay_summary)
         coverage_summary = self._summarize_coverage_watchlist()
+        dev_summary = self._summarize_dev_replay(accuracy_replay_summary)
         holdout_summary = self._summarize_holdout_replay(accuracy_replay_summary)
         domain_capped_summary = self._summarize_domain_capped_replay(accuracy_replay_summary)
         domain_evaluation_summary = self._summarize_domain_evaluation(accuracy_replay_summary)
@@ -1710,6 +1772,7 @@ class ValidationTestRunner:
             event_data_quality_summary=event_data_quality_summary,
             field_accuracy_summary=field_accuracy_summary,
             coverage_summary=coverage_summary,
+            dev_summary=dev_summary,
             holdout_summary=holdout_summary,
             domain_capped_summary=domain_capped_summary,
         )
@@ -1724,6 +1787,7 @@ class ValidationTestRunner:
             run_scorecard=run_scorecard,
             duplicate_summary=duplicate_audit_summary,
             coverage_summary=coverage_summary,
+            dev_summary=dev_summary,
             classifier_performance_summary=classifier_performance_summary,
             runtime_summary=runtime_summary,
             llm_cost_summary=llm_cost_summary,
@@ -1735,6 +1799,7 @@ class ValidationTestRunner:
             classifier_performance_summary=classifier_performance_summary,
             duplicate_summary=duplicate_audit_summary,
             coverage_summary=coverage_summary,
+            dev_summary=dev_summary,
             runtime_summary=runtime_summary,
             llm_cost_summary=llm_cost_summary,
             domain_evaluation_summary=domain_evaluation_summary,
@@ -1746,6 +1811,7 @@ class ValidationTestRunner:
             classifier_performance_summary=classifier_performance_summary,
             duplicate_summary=duplicate_audit_summary,
             coverage_summary=coverage_summary,
+            dev_summary=dev_summary,
             holdout_summary=holdout_summary,
             domain_capped_summary=domain_capped_summary,
             domain_evaluation_summary=domain_evaluation_summary,
@@ -1763,6 +1829,7 @@ class ValidationTestRunner:
             chatbot_quality_summary=chatbot_quality_summary,
             duplicate_summary=duplicate_audit_summary,
             coverage_summary=coverage_summary,
+            dev_summary=dev_summary,
             holdout_summary=holdout_summary,
             domain_capped_summary=domain_capped_summary,
             event_data_quality_summary=event_data_quality_summary,
@@ -1780,6 +1847,7 @@ class ValidationTestRunner:
                 "event_data_quality_summary": event_data_quality_summary,
                 "field_accuracy_summary": field_accuracy_summary,
                 "coverage_summary": coverage_summary,
+                "dev_summary": dev_summary,
                 "holdout_summary": holdout_summary,
                 "domain_capped_summary": domain_capped_summary,
                 "domain_evaluation_summary": domain_evaluation_summary,
@@ -1867,7 +1935,7 @@ class ValidationTestRunner:
         {self._build_phase2_integrity_html(duplicate_audit_summary, coverage_summary)}
 
         <h2>5. Phase 3 Honest Evaluation</h2>
-        {self._build_phase3_honest_evaluation_html(holdout_summary, domain_capped_summary, run_scorecard.get('guardrails', {}))}
+        {self._build_phase3_honest_evaluation_html(dev_summary, holdout_summary, domain_capped_summary, run_scorecard.get('guardrails', {}))}
 
         <h2>6. Domain Evaluation</h2>
         {self._build_domain_evaluation_html(domain_evaluation_summary)}
@@ -1942,6 +2010,9 @@ class ValidationTestRunner:
         coverage_summary_path = os.path.join(output_dir, 'coverage_summary.json')
         with open(coverage_summary_path, 'w', encoding='utf-8') as f:
             json.dump(coverage_summary, f, indent=2)
+        dev_summary_path = os.path.join(output_dir, 'dev_summary.json')
+        with open(dev_summary_path, 'w', encoding='utf-8') as f:
+            json.dump(dev_summary, f, indent=2)
         holdout_summary_path = os.path.join(output_dir, 'holdout_summary.json')
         with open(holdout_summary_path, 'w', encoding='utf-8') as f:
             json.dump(holdout_summary, f, indent=2)
@@ -2011,6 +2082,7 @@ class ValidationTestRunner:
         logging.info(f"Event data quality summary saved: {event_data_quality_summary_path}")
         logging.info(f"Field accuracy summary saved: {field_accuracy_summary_path}")
         logging.info(f"Coverage summary saved: {coverage_summary_path}")
+        logging.info(f"Dev summary saved: {dev_summary_path}")
         logging.info(f"Holdout summary saved: {holdout_summary_path}")
         logging.info(f"Domain-capped summary saved: {domain_capped_summary_path}")
         logging.info(f"Domain evaluation summary saved: {domain_evaluation_summary_path}")
@@ -2689,6 +2761,7 @@ class ValidationTestRunner:
         """Summarize coverage watchlist source hits and event capture using existing scrape evidence."""
         watchlist_rows, source_label = self._load_coverage_watchlist_rows()
         manual_audit_summary = self._summarize_manual_coverage_audit()
+        source_discovery_summary = self._summarize_new_source_discovery(watchlist_rows)
         summary = {
             "available": False,
             "watchlist_source": source_label,
@@ -2700,9 +2773,10 @@ class ValidationTestRunner:
             "priority_sources_total": 0,
             "priority_sources_hit": 0,
             "priority_source_hit_rate_pct": None,
-            "new_source_discovery_count": 0,
+            "new_source_discovery_count": source_discovery_summary.get("new_source_discovery_count"),
             "missed_event_rate_manual_audit_pct": None,
             "manual_audit": manual_audit_summary,
+            "new_source_discovery": source_discovery_summary,
             "missed_sources": [],
             "captured_sources": [],
             "error": "",
@@ -2764,11 +2838,67 @@ class ValidationTestRunner:
                 "priority_sources_total": priority_total,
                 "priority_sources_hit": priority_hits,
                 "priority_source_hit_rate_pct": round((priority_hits / priority_total) * 100.0, 2) if priority_total else None,
-                "new_source_discovery_count": 0,
+                "new_source_discovery_count": source_discovery_summary.get("new_source_discovery_count"),
                 "missed_event_rate_manual_audit_pct": manual_audit_summary.get("missed_event_rate_manual_audit_pct"),
                 "manual_audit": manual_audit_summary,
+                "new_source_discovery": source_discovery_summary,
                 "missed_sources": missed[:25],
                 "captured_sources": captured[:25],
+            }
+        )
+        return summary
+
+    def _summarize_new_source_discovery(self, watchlist_rows: list[dict[str, Any]] | None) -> dict:
+        """Summarize event-source domains currently in the DB that are not on the coverage watchlist."""
+        watchlist_domains: set[str] = set()
+        for row in watchlist_rows or []:
+            source_url = normalize_evaluation_url((row or {}).get("source_url"))
+            if not source_url:
+                continue
+            domain = (urlparse(source_url).netloc or "").lower().removeprefix("www.")
+            if domain:
+                watchlist_domains.add(domain)
+
+        summary = {
+            "available": False,
+            "new_source_discovery_count": 0,
+            "sample_new_source_domains": [],
+            "watchlist_domains_total": len(watchlist_domains),
+            "error": "",
+        }
+        if not getattr(self, "db_handler", None) or not hasattr(self.db_handler, "execute_query"):
+            summary["error"] = "db_handler unavailable"
+            return summary
+
+        try:
+            rows = self.db_handler.execute_query(
+                """
+                SELECT DISTINCT LOWER(TRIM(url)) AS url_value
+                FROM events
+                WHERE COALESCE(end_date, start_date) >= CURRENT_DATE
+                  AND COALESCE(NULLIF(TRIM(url), ''), '') <> ''
+                """
+            ) or []
+        except Exception as e:
+            summary["error"] = f"new source discovery query failed: {e}"
+            return summary
+
+        discovered_domains: set[str] = set()
+        for row in rows:
+            raw_url = str(row[0] or "").strip()
+            normalized_url = normalize_evaluation_url(raw_url)
+            if not normalized_url:
+                continue
+            domain = (urlparse(normalized_url).netloc or "").lower().removeprefix("www.")
+            if not domain or domain in watchlist_domains:
+                continue
+            discovered_domains.add(domain)
+
+        summary.update(
+            {
+                "available": True,
+                "new_source_discovery_count": len(discovered_domains),
+                "sample_new_source_domains": sorted(discovered_domains)[:25],
             }
         )
         return summary
@@ -2938,13 +3068,16 @@ class ValidationTestRunner:
         return summary
 
     def _summarize_field_accuracy(self, accuracy_replay_summary: dict | None) -> dict:
-        """Summarize field-level replay accuracy for fields that replay currently validates explicitly."""
+        """Summarize field-level replay accuracy using replay snapshots and existing address resolution."""
         rows = accuracy_replay_summary.get("rows", []) if isinstance(accuracy_replay_summary, dict) else []
         field_buckets = {
             "date": {"comparable": 0, "matches": 0},
             "time": {"comparable": 0, "matches": 0},
             "location": {"comparable": 0, "matches": 0},
             "source": {"comparable": 0, "matches": 0},
+            "address_id": {"comparable": 0, "matches": 0},
+            "dance_style": {"comparable": 0, "matches": 0},
+            "description": {"comparable": 0, "matches": 0},
         }
 
         for row in rows:
@@ -2981,6 +3114,29 @@ class ValidationTestRunner:
                 if baseline_source == replay_source:
                     field_buckets["source"]["matches"] += 1
 
+            baseline_address_id = self._normalize_optional_int(baseline.get("address_id"))
+            replay_address_id = self._normalize_optional_int(replay.get("address_id"))
+            if replay_address_id is None:
+                replay_address_id = self._resolve_replay_address_id(replay)
+            if baseline_address_id is not None and replay_address_id is not None:
+                field_buckets["address_id"]["comparable"] += 1
+                if baseline_address_id == replay_address_id:
+                    field_buckets["address_id"]["matches"] += 1
+
+            baseline_styles = self._normalize_dance_style_tokens(baseline.get("dance_style"))
+            replay_styles = self._normalize_dance_style_tokens(replay.get("dance_style"))
+            if baseline_styles and replay_styles:
+                field_buckets["dance_style"]["comparable"] += 1
+                if baseline_styles == replay_styles:
+                    field_buckets["dance_style"]["matches"] += 1
+
+            baseline_description = self._normalize_text_value(baseline.get("description"))
+            replay_description = self._normalize_text_value(replay.get("description"))
+            if baseline_description and replay_description:
+                field_buckets["description"]["comparable"] += 1
+                if self._descriptions_equivalent(baseline_description, replay_description):
+                    field_buckets["description"]["matches"] += 1
+
         def _pct(bucket: dict[str, int]) -> float | None:
             comparable = int(bucket.get("comparable", 0) or 0)
             matches = int(bucket.get("matches", 0) or 0)
@@ -2994,14 +3150,17 @@ class ValidationTestRunner:
             "time_pct": _pct(field_buckets["time"]),
             "location_pct": _pct(field_buckets["location"]),
             "source_pct": _pct(field_buckets["source"]),
-            "address_id_pct": None,
-            "dance_style_pct": None,
-            "description_pct": None,
+            "address_id_pct": _pct(field_buckets["address_id"]),
+            "dance_style_pct": _pct(field_buckets["dance_style"]),
+            "description_pct": _pct(field_buckets["description"]),
             "sample_sizes": {
                 "date": field_buckets["date"]["comparable"],
                 "time": field_buckets["time"]["comparable"],
                 "location": field_buckets["location"]["comparable"],
                 "source": field_buckets["source"]["comparable"],
+                "address_id": field_buckets["address_id"]["comparable"],
+                "dance_style": field_buckets["dance_style"]["comparable"],
+                "description": field_buckets["description"]["comparable"],
             },
         }
 
@@ -3038,16 +3197,19 @@ class ValidationTestRunner:
 
     def _build_phase3_honest_evaluation_html(
         self,
+        dev_summary: dict,
         holdout_summary: dict,
         domain_capped_summary: dict,
         guardrails: dict,
     ) -> str:
-        """Render a compact Phase 3 section for holdout, domain caps, and guardrail status."""
+        """Render a compact Phase 3 section for dev/holdout/domain-cap evaluation and guardrail status."""
+        dev_accuracy = dev_summary.get("replay_url_accuracy_pct")
         holdout_accuracy = holdout_summary.get("replay_url_accuracy_pct")
         domain_capped_accuracy = domain_capped_summary.get("replay_url_accuracy_pct")
         guardrail_status = str(guardrails.get("status", "UNKNOWN") or "UNKNOWN")
         html = "<div class='metric-container'>"
         for label, value in (
+            ("Dev Replay URL %", dev_accuracy),
             ("Holdout Replay URL %", holdout_accuracy),
             ("Domain-Capped Replay URL %", domain_capped_accuracy),
         ):
@@ -3076,6 +3238,10 @@ class ValidationTestRunner:
             html += f"<p><strong>Guardrail Violations:</strong></p><ul>{violation_items}</ul>"
         else:
             html += "<p><strong>Guardrail Violations:</strong> none</p>"
+        html += (
+            f"<p><strong>Dev URLs seen in replay:</strong> {int(dev_summary.get('replay_urls_seen', 0) or 0)} / "
+            f"{int(dev_summary.get('dev_urls_total', 0) or 0)}</p>"
+        )
         html += (
             f"<p><strong>Holdout URLs seen in replay:</strong> {int(holdout_summary.get('replay_urls_seen', 0) or 0)} / "
             f"{int(holdout_summary.get('holdout_urls_total', 0) or 0)}; "
@@ -3174,6 +3340,7 @@ class ValidationTestRunner:
         classifier_performance_summary: dict,
         duplicate_summary: dict,
         coverage_summary: dict,
+        dev_summary: dict,
         runtime_summary: dict,
         llm_cost_summary: dict,
         domain_evaluation_summary: dict,
@@ -3184,6 +3351,7 @@ class ValidationTestRunner:
             run_scorecard=run_scorecard,
             duplicate_summary=duplicate_summary,
             coverage_summary=coverage_summary,
+            dev_summary=dev_summary,
             classifier_performance_summary=classifier_performance_summary,
             runtime_summary=runtime_summary,
             llm_cost_summary=llm_cost_summary,
@@ -3384,6 +3552,7 @@ class ValidationTestRunner:
         run_scorecard: dict,
         duplicate_summary: dict,
         coverage_summary: dict,
+        dev_summary: dict,
         classifier_performance_summary: dict,
         runtime_summary: dict,
         llm_cost_summary: dict,
@@ -3419,6 +3588,7 @@ class ValidationTestRunner:
         duplicate_hotspots = duplicate_summary.get("top_duplicate_domains", []) if isinstance(duplicate_summary.get("top_duplicate_domains"), list) else []
         coverage_gaps = coverage_summary.get("missed_sources", []) if isinstance(coverage_summary.get("missed_sources"), list) else []
         domain_regressions = domain_evaluation_summary.get("worst_domains", []) if isinstance(domain_evaluation_summary.get("worst_domains"), list) else []
+        dev_info = dev_summary if isinstance(dev_summary, dict) else {}
         previous_run_regressions = (((run_delta_summary.get("previous_run") or {}).get("top_regressions")) or []) if isinstance(run_delta_summary, dict) else []
         holdout_baseline_regressions = (((run_delta_summary.get("holdout_baseline") or {}).get("top_regressions")) or []) if isinstance(run_delta_summary, dict) else []
         bottlenecks = []
@@ -3442,6 +3612,12 @@ class ValidationTestRunner:
             "domain_regressions": domain_regressions[:5],
             "previous_run_regressions": previous_run_regressions[:5],
             "holdout_baseline_regressions": holdout_baseline_regressions[:5],
+            "dev_replay_summary": {
+                "replay_url_accuracy_pct": dev_info.get("replay_url_accuracy_pct"),
+                "matched_urls": dev_info.get("matched_urls"),
+                "mismatched_urls": dev_info.get("mismatched_urls"),
+                "replay_urls_seen": dev_info.get("replay_urls_seen"),
+            },
             "classifier_routing_regressions": classifier_regressions[:5],
         }
 
@@ -3453,6 +3629,7 @@ class ValidationTestRunner:
         classifier_performance_summary: dict,
         duplicate_summary: dict,
         coverage_summary: dict,
+        dev_summary: dict,
         holdout_summary: dict,
         domain_capped_summary: dict,
         domain_evaluation_summary: dict,
@@ -3473,6 +3650,7 @@ class ValidationTestRunner:
                 "classifier_performance_summary": classifier_performance_summary,
                 "duplicate_audit_summary": duplicate_summary,
                 "coverage_summary": coverage_summary,
+                "dev_summary": dev_summary,
                 "holdout_summary": holdout_summary,
                 "domain_capped_summary": domain_capped_summary,
                 "domain_evaluation_summary": domain_evaluation_summary,
@@ -3571,6 +3749,7 @@ class ValidationTestRunner:
         runtime = (kpis.get("run_time") or {}).get("summary", {})
         cost_summary = ((kpis.get("run_costs") or {}).get("summary") or {}).get("summary", {})
         chatbot = ((kpis.get("chatbot_quality") or {}).get("summary") or {}).get("summary", {})
+        dev = (run_scorecard.get("evaluation_scope") or {}).get("dev_summary", {})
         holdout = (run_scorecard.get("evaluation_scope") or {}).get("holdout_summary", {})
         return [
             {"metric_key": "overall_score", "label": "Overall Score", "value": (run_scorecard.get("overall_score") or {}).get("value"), "higher_is_better": True},
@@ -3590,6 +3769,7 @@ class ValidationTestRunner:
             {"metric_key": "cost_per_inserted_event_usd", "label": "Cost / Inserted Event USD", "value": cost_summary.get("cost_per_inserted_event_usd"), "higher_is_better": False},
             {"metric_key": "chatbot_response_within_15s_pct", "label": "Chatbot <=15s %", "value": chatbot.get("chatbot_response_within_15s_pct"), "higher_is_better": True},
             {"metric_key": "chatbot_answer_correctness_pct", "label": "Chatbot Correctness %", "value": chatbot.get("chatbot_answer_correctness_pct"), "higher_is_better": True},
+            {"metric_key": "dev_replay_url_accuracy_pct", "label": "Dev Replay URL Accuracy %", "value": dev.get("replay_url_accuracy_pct"), "higher_is_better": True},
             {"metric_key": "holdout_replay_url_accuracy_pct", "label": "Holdout Replay URL Accuracy %", "value": holdout.get("replay_url_accuracy_pct"), "higher_is_better": True},
         ]
 
@@ -3736,6 +3916,64 @@ class ValidationTestRunner:
             "top_domains": top_domains[:20],
             "worst_domains": worst_domains[:20],
         }
+
+    def _summarize_dev_replay(self, accuracy_replay_summary: dict | None) -> dict:
+        """Summarize replay results restricted to the dev URL set."""
+        dev_urls = load_dev_urls()
+        summary = {
+            "available": bool(dev_urls),
+            "dev_version": "v1" if dev_urls else "",
+            "dev_urls_total": len(dev_urls),
+            "replay_urls_seen": 0,
+            "matched_urls": 0,
+            "mismatched_urls": 0,
+            "replay_url_accuracy_pct": None,
+            "mismatch_categories": {},
+            "sample_urls": [],
+            "error": "",
+        }
+        if not dev_urls:
+            summary["error"] = "dev urls unavailable"
+            return summary
+
+        rows = accuracy_replay_summary.get("rows", []) if isinstance(accuracy_replay_summary, dict) else []
+        matched_rows: list[dict[str, Any]] = []
+        mismatch_categories: Counter[str] = Counter()
+        seen_urls: set[str] = set()
+        matched_urls = 0
+
+        for row in rows:
+            baseline = row.get("baseline", {}) if isinstance(row, dict) else {}
+            url = normalize_evaluation_url(baseline.get("url"))
+            if not url or url not in dev_urls or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            is_match = bool(row.get("is_match"))
+            if is_match:
+                matched_urls += 1
+            else:
+                mismatch_categories.update([str(row.get("mismatch_category") or "unknown")])
+            matched_rows.append(
+                {
+                    "url": url,
+                    "is_match": is_match,
+                    "category": str(row.get("mismatch_category") or ""),
+                    "details": str(row.get("details") or ""),
+                }
+            )
+
+        replay_urls_seen = len(seen_urls)
+        summary.update(
+            {
+                "replay_urls_seen": replay_urls_seen,
+                "matched_urls": matched_urls,
+                "mismatched_urls": max(replay_urls_seen - matched_urls, 0),
+                "replay_url_accuracy_pct": round((matched_urls / replay_urls_seen) * 100.0, 2) if replay_urls_seen else None,
+                "mismatch_categories": dict(mismatch_categories),
+                "sample_urls": matched_rows[:20],
+            }
+        )
+        return summary
 
     def _summarize_holdout_replay(self, accuracy_replay_summary: dict | None) -> dict:
         """Summarize replay results restricted to the gold holdout URL set."""
@@ -7729,11 +7967,13 @@ class ValidationTestRunner:
         openrouter_cost: dict | None,
         openai_cost: dict | None,
         accuracy_replay: dict | None,
+        llm_activity_summary: dict | None = None,
     ) -> dict:
         """Normalize provider run-cost summaries into one Phase 1 cost artifact."""
         openrouter = openrouter_cost if isinstance(openrouter_cost, dict) else {}
         openai = openai_cost if isinstance(openai_cost, dict) else {}
         replay = accuracy_replay if isinstance(accuracy_replay, dict) else {}
+        llm_activity = llm_activity_summary if isinstance(llm_activity_summary, dict) else {}
 
         provider_costs = {
             "openrouter_usd": float(openrouter.get("cost_usd", 0.0) or 0.0),
@@ -7758,6 +7998,31 @@ class ValidationTestRunner:
         )
 
         available = bool(openrouter.get("available")) or bool(openai.get("available"))
+        top_models = llm_activity.get("top_models", []) if isinstance(llm_activity.get("top_models"), list) else []
+        top_files = llm_activity.get("top_files", []) if isinstance(llm_activity.get("top_files"), list) else []
+        total_model_attempts = sum(int(item[1]) for item in top_models if isinstance(item, (tuple, list)) and len(item) >= 2)
+        total_file_attempts = sum(int(item[1]) for item in top_files if isinstance(item, (tuple, list)) and len(item) >= 2)
+        by_model: dict[str, float] = {}
+        by_step: dict[str, float] = {}
+        if total_cost_usd > 0 and total_model_attempts > 0:
+            for item in top_models:
+                if not isinstance(item, (tuple, list)) or len(item) < 2:
+                    continue
+                model_key = str(item[0] or "")
+                attempts = int(item[1] or 0)
+                if not model_key or attempts <= 0:
+                    continue
+                by_model[model_key] = round(total_cost_usd * (attempts / total_model_attempts), 6)
+        if total_cost_usd > 0 and total_file_attempts > 0:
+            for item in top_files:
+                if not isinstance(item, (tuple, list)) or len(item) < 2:
+                    continue
+                log_file = str(item[0] or "")
+                attempts = int(item[1] or 0)
+                if not log_file or attempts <= 0:
+                    continue
+                step_name = os.path.basename(log_file).replace("_log.txt", "").replace(".txt", "")
+                by_step[step_name] = round(total_cost_usd * (attempts / total_file_attempts), 6)
         return {
             "available": available,
             "window": {
@@ -7775,6 +8040,9 @@ class ValidationTestRunner:
                 "openai": openai,
             },
             "by_provider": provider_costs,
+            "by_model": by_model,
+            "by_step": by_step,
+            "allocation_method": "estimated_from_llm_attempt_share",
             "request_counts": provider_requests,
             "token_counts": provider_tokens,
         }
@@ -7815,6 +8083,31 @@ class ValidationTestRunner:
             if testing_summary
             else None
         )
+        problem_categories = testing.get("problem_categories", []) if isinstance(testing.get("problem_categories"), list) else []
+        total_problem_count = sum(
+            int(category.get("count", 0) or 0)
+            for category in problem_categories
+            if isinstance(category, dict)
+        )
+        hallucination_problem_count = sum(
+            int(category.get("count", 0) or 0)
+            for category in problem_categories
+            if isinstance(category, dict)
+            and any(
+                token in str(category.get("name", "")).lower()
+                for token in ("halluc", "fabricat", "invent", "made up")
+            )
+        )
+        fallback_rate_pct = (
+            round((confirm_count / total_requests) * 100.0, 2)
+            if total_requests > 0
+            else None
+        )
+        hallucination_rate_pct = (
+            round((hallucination_problem_count / total_problem_count) * 100.0, 2)
+            if total_problem_count > 0
+            else 0.0
+        )
         unfinished_request_count = int(performance.get("unfinished_request_count", 0) or 0)
         user_visible_error_rate_pct = (
             round((unfinished_request_count / total_requests) * 100.0, 2)
@@ -7835,8 +8128,8 @@ class ValidationTestRunner:
                 "chatbot_p95_latency_seconds": round(float(((performance.get("query_latency_ms") or {}).get("p95", 0.0) or 0.0) / 1000.0), 3),
                 "chatbot_answer_correctness_pct": correctness_pct,
                 "chatbot_sql_validity_pct": sql_validity_pct,
-                "chatbot_hallucination_rate_pct": None,
-                "chatbot_fallback_rate_pct": None,
+                "chatbot_hallucination_rate_pct": hallucination_rate_pct,
+                "chatbot_fallback_rate_pct": fallback_rate_pct,
                 "chatbot_user_visible_error_rate_pct": user_visible_error_rate_pct,
             },
             "sample_sizes": {
@@ -7857,6 +8150,7 @@ class ValidationTestRunner:
         chatbot_quality_summary: dict,
         duplicate_summary: dict | None = None,
         coverage_summary: dict | None = None,
+        dev_summary: dict | None = None,
         holdout_summary: dict | None = None,
         domain_capped_summary: dict | None = None,
         event_data_quality_summary: dict | None = None,
@@ -7900,6 +8194,7 @@ class ValidationTestRunner:
         ]
         duplicate_info = duplicate_summary if isinstance(duplicate_summary, dict) else {}
         coverage_info = coverage_summary if isinstance(coverage_summary, dict) else {}
+        dev_info = dev_summary if isinstance(dev_summary, dict) else {}
         holdout_info = holdout_summary if isinstance(holdout_summary, dict) else {}
         domain_capped_info = domain_capped_summary if isinstance(domain_capped_summary, dict) else {}
         event_data_quality = event_data_quality_summary if isinstance(event_data_quality_summary, dict) else {}
@@ -7943,6 +8238,13 @@ class ValidationTestRunner:
                     "percent",
                     "Coverage manual audit: expected events missing from the current events table",
                     False,
+                ),
+                (
+                    "dev_replay_url_accuracy_pct",
+                    dev_info.get("replay_url_accuracy_pct"),
+                    "percent",
+                    "Phase 3 honest evaluation: dev replay URL accuracy",
+                    True,
                 ),
                 (
                     "holdout_replay_url_accuracy_pct",
@@ -7998,6 +8300,27 @@ class ValidationTestRunner:
                     field_accuracy.get("source_pct"),
                     "percent",
                     "Replay field accuracy: source",
+                    True,
+                ),
+                (
+                    "field_accuracy_address_id_pct",
+                    field_accuracy.get("address_id_pct"),
+                    "percent",
+                    "Replay field accuracy: resolved address_id",
+                    True,
+                ),
+                (
+                    "field_accuracy_dance_style_pct",
+                    field_accuracy.get("dance_style_pct"),
+                    "percent",
+                    "Replay field accuracy: dance_style",
+                    True,
+                ),
+                (
+                    "field_accuracy_description_pct",
+                    field_accuracy.get("description_pct"),
+                    "percent",
+                    "Replay field accuracy: description",
                     True,
                 ),
                 (
@@ -8070,6 +8393,7 @@ class ValidationTestRunner:
         event_data_quality_summary: dict | None,
         field_accuracy_summary: dict | None,
         coverage_summary: dict | None,
+        dev_summary: dict | None,
         holdout_summary: dict | None,
         domain_capped_summary: dict | None,
     ) -> dict:
@@ -8083,6 +8407,7 @@ class ValidationTestRunner:
         event_data_quality = event_data_quality_summary if isinstance(event_data_quality_summary, dict) else {}
         field_accuracy = field_accuracy_summary if isinstance(field_accuracy_summary, dict) else {}
         coverage_info = coverage_summary if isinstance(coverage_summary, dict) else {}
+        dev_info = dev_summary if isinstance(dev_summary, dict) else {}
         holdout_info = holdout_summary if isinstance(holdout_summary, dict) else {}
         domain_capped_info = domain_capped_summary if isinstance(domain_capped_summary, dict) else {}
         dev_urls = load_dev_urls()
@@ -8151,6 +8476,7 @@ class ValidationTestRunner:
                 "dev_version": "v1" if dev_urls else "",
                 "dev_urls_total": len(dev_urls),
                 "watchlist_version": str(coverage_info.get("watchlist_source", "") or ""),
+                "dev_summary": dev_info,
                 "holdout_summary": holdout_info,
                 "domain_capped_summary": domain_capped_info,
                 "notes": "Phase 4 scorecard adds train/dev/holdout separation metadata, holdout evaluation, domain-capped replay summaries, explicit guardrail evaluation, and run-to-run comparison hooks.",
@@ -8190,6 +8516,7 @@ class ValidationTestRunner:
                         "new_source_discovery_count": coverage_info.get("new_source_discovery_count"),
                         "missed_event_rate_manual_audit_pct": coverage_info.get("missed_event_rate_manual_audit_pct"),
                         "watchlist_source": coverage_info.get("watchlist_source"),
+                        "dev_replay_url_accuracy_pct": dev_info.get("replay_url_accuracy_pct"),
                         "holdout_replay_url_accuracy_pct": holdout_info.get("replay_url_accuracy_pct"),
                         "domain_capped_replay_url_accuracy_pct": domain_capped_info.get("replay_url_accuracy_pct"),
                     },
