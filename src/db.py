@@ -264,6 +264,7 @@ class DatabaseHandler():
             - metric_observations: numeric observations over time/run windows
             - accuracy_replay_results: row-level replay audit records
             - classifier_training_url_candidates: URL-level replay aggregation for training curation
+            - validation_run_artifacts: JSON run artifacts keyed by run_id + artifact_type
         """
         create_metric_definitions = """
             CREATE TABLE IF NOT EXISTS metric_definitions (
@@ -328,6 +329,17 @@ class DatabaseHandler():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """
+        create_validation_run_artifacts = """
+            CREATE TABLE IF NOT EXISTS validation_run_artifacts (
+                id SERIAL PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                artifact_type TEXT NOT NULL,
+                artifact_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (run_id, artifact_type)
+            )
+        """
         indexes = [
             "CREATE INDEX IF NOT EXISTS idx_metric_observations_run_id ON metric_observations(run_id)",
             "CREATE INDEX IF NOT EXISTS idx_metric_observations_metric_id ON metric_observations(metric_id)",
@@ -339,12 +351,15 @@ class DatabaseHandler():
             "CREATE INDEX IF NOT EXISTS idx_classifier_training_candidates_run_id ON classifier_training_url_candidates(run_id)",
             "CREATE INDEX IF NOT EXISTS idx_classifier_training_candidates_status ON classifier_training_url_candidates(status)",
             "CREATE INDEX IF NOT EXISTS idx_classifier_training_candidates_url ON classifier_training_url_candidates(normalized_url)",
+            "CREATE INDEX IF NOT EXISTS idx_validation_run_artifacts_run_id ON validation_run_artifacts(run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_validation_run_artifacts_type ON validation_run_artifacts(artifact_type)",
         ]
         try:
             self.execute_query(create_metric_definitions)
             self.execute_query(create_metric_observations)
             self.execute_query(create_accuracy_replay_results)
             self.execute_query(create_classifier_training_url_candidates)
+            self.execute_query(create_validation_run_artifacts)
             for index_sql in indexes:
                 self.execute_query(index_sql)
             logging.info("ensure_validation_metric_tables: ensured normalized validation metric tables exist")
@@ -1652,6 +1667,47 @@ class DatabaseHandler():
                 "record_accuracy_replay_result(): failed for run_id=%s baseline_event_id=%s: %s",
                 safe_run_id,
                 baseline_event_id,
+                e,
+            )
+
+    def record_validation_run_artifact(
+        self,
+        run_id: str,
+        artifact_type: str,
+        artifact_payload: Dict[str, Any],
+    ) -> None:
+        """Upsert one JSON validation artifact keyed by run_id and artifact_type."""
+        safe_run_id = str(run_id or "").strip()
+        safe_artifact_type = str(artifact_type or "").strip()
+        if not safe_run_id or not safe_artifact_type or not isinstance(artifact_payload, dict):
+            return
+        try:
+            self.execute_query(
+                """
+                INSERT INTO validation_run_artifacts (
+                    run_id, artifact_type, artifact_json, created_at, updated_at
+                )
+                VALUES (
+                    :run_id, :artifact_type, :artifact_json, :created_at, :updated_at
+                )
+                ON CONFLICT (run_id, artifact_type)
+                DO UPDATE SET
+                    artifact_json = EXCLUDED.artifact_json,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                {
+                    "run_id": safe_run_id,
+                    "artifact_type": safe_artifact_type,
+                    "artifact_json": json.dumps(artifact_payload, ensure_ascii=True),
+                    "created_at": datetime.now(),
+                    "updated_at": datetime.now(),
+                },
+            )
+        except Exception as e:
+            logging.warning(
+                "record_validation_run_artifact(): failed for run_id=%s artifact_type=%s: %s",
+                safe_run_id,
+                safe_artifact_type,
                 e,
             )
 
