@@ -59,6 +59,37 @@ def _normalize_text(text: str) -> str:
     return normalized.strip(" .,!?:;\"'")
 
 
+def _build_forward_days_range(current: datetime, day_count: int) -> dict:
+    """Return an inclusive forward-looking date range starting today."""
+    safe_day_count = max(1, int(day_count))
+    end_date = current + timedelta(days=safe_day_count - 1)
+    return {
+        "start_date": current.strftime("%Y-%m-%d"),
+        "end_date": end_date.strftime("%Y-%m-%d"),
+    }
+
+
+def _canonicalize_temporal_phrase(temporal_phrase: str) -> tuple[str, dict | None]:
+    """
+    Map supported alias phrases to canonical phrases or direct ranges.
+
+    Returns:
+        tuple[str, dict | None]:
+            - canonical phrase to continue parsing, or original phrase
+            - direct range override when the alias should bypass phrase parsing
+    """
+    phrase = _normalize_text(temporal_phrase)
+    if phrase == "upcoming week":
+        return phrase, {"relative_day_count": 7}
+    if phrase == "upcoming 30 days":
+        return phrase, {"relative_day_count": 30}
+    if phrase == "upcoming events":
+        return phrase, {"relative_day_count": 30}
+    if phrase in {"live band", "live bands", "live music"}:
+        return phrase, {"relative_day_count": 30}
+    return phrase, None
+
+
 def _build_iso_date(year: int, month: int, day: int) -> str:
     """Validate date parts and return YYYY-MM-DD."""
     return datetime(year, month, day).strftime("%Y-%m-%d")
@@ -253,7 +284,9 @@ def calculate_date_range(temporal_phrase: str, current_date: str) -> dict:
         logger.error(f"Invalid date format: {current_date}, error: {e}")
         raise ValueError(f"current_date must be in YYYY-MM-DD format, got: {current_date}")
 
-    temporal_phrase = _normalize_text(temporal_phrase)
+    temporal_phrase, direct_range = _canonicalize_temporal_phrase(temporal_phrase)
+    if direct_range and "relative_day_count" in direct_range:
+        return _build_forward_days_range(current, int(direct_range["relative_day_count"]))
 
     range_expression = _parse_date_range_expression(temporal_phrase, current_date)
     if range_expression:
@@ -637,6 +670,9 @@ def extract_temporal_phrase(user_text: str) -> str | None:
 
     # Priority phrases (longer/specific first)
     phrase_candidates = [
+        "upcoming 30 days",
+        "upcoming events",
+        "upcoming week",
         "tomorrow night",
         "coming weekend",
         "this weekend",

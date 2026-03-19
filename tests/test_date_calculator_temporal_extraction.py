@@ -64,3 +64,37 @@ def test_resolve_temporal_from_full_text() -> None:
     assert result["temporal_phrase"] == "the first week of next month"
     assert result["start_date"] == "2026-04-01"
     assert result["end_date"] == "2026-04-07"
+
+
+def test_extract_upcoming_week_phrase() -> None:
+    phrase = extract_temporal_phrase("What social dances are happening in the upcoming week?")
+    assert phrase == "upcoming week"
+
+
+def test_upcoming_week_range_is_forward_looking() -> None:
+    result = calculate_date_range("upcoming week", "2026-03-09")
+    assert result["start_date"] == "2026-03-09"
+    assert result["end_date"] == "2026-03-15"
+
+
+def test_extract_upcoming_30_days_phrase() -> None:
+    phrase = extract_temporal_phrase("Show me upcoming 30 days of dance events.")
+    assert phrase == "upcoming 30 days"
+
+
+def test_upcoming_30_days_range_is_forward_looking() -> None:
+    result = calculate_date_range("upcoming 30 days", "2026-03-09")
+    assert result["start_date"] == "2026-03-09"
+    assert result["end_date"] == "2026-04-07"
+
+
+def test_upcoming_events_defaults_to_next_30_days() -> None:
+    result = calculate_date_range("upcoming events", "2026-03-09")
+    assert result["start_date"] == "2026-03-09"
+    assert result["end_date"] == "2026-04-07"
+
+
+def test_live_bands_no_longer_raises_and_defaults_forward() -> None:
+    result = calculate_date_range("live bands", "2026-03-09")
+    assert result["start_date"] == "2026-03-09"
+    assert result["end_date"] == "2026-04-07"
