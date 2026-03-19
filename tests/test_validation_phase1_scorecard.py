@@ -27,6 +27,7 @@ class _FakeDbHandler:
 def _build_runner() -> ValidationTestRunner:
     runner = ValidationTestRunner.__new__(ValidationTestRunner)
     runner.validation_config = {}
+    runner.config = {}
     runner.db_handler = None
     return runner
 
@@ -102,11 +103,34 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
             "stage_counts": {"rule": 6, "ml": 2},
             "stage_details": [{"stage": "rule", "replay_url_accuracy_pct": 80.0}],
         },
+        duplicate_summary={
+            "duplicate_rate_per_100_events": 4.5,
+            "severe_duplicate_rate_per_100_events": 1.5,
+        },
+        coverage_summary={
+            "source_hit_rate_pct": 80.0,
+            "event_capture_rate_pct": 60.0,
+            "watchlist_source": "coverage_watchlist_csv",
+        },
+        holdout_summary={
+            "available": True,
+            "holdout_version": "v1",
+            "replay_url_accuracy_pct": 78.0,
+        },
+        domain_capped_summary={
+            "available": True,
+            "per_domain_cap": 3,
+            "replay_url_accuracy_pct": 75.0,
+        },
     )
     assert run_scorecard["kpis"]["database_accuracy"]["score"] == 82.5
     assert run_scorecard["kpis"]["events_coverage"]["score"] == 85.0
     assert run_scorecard["kpis"]["chatbot_quality"]["score"] == 88.0
+    assert run_scorecard["kpis"]["database_accuracy"]["summary"]["duplicate_rate_per_100_events"] == 4.5
     assert run_scorecard["kpis"]["database_accuracy"]["summary"]["classifier_effect"]["ml_usage_pct"] == 25.0
+    assert run_scorecard["kpis"]["events_coverage"]["summary"]["watchlist_source_hit_rate_pct"] == 80.0
+    assert run_scorecard["evaluation_scope"]["uses_holdout"] is True
+    assert run_scorecard["evaluation_scope"]["holdout_summary"]["replay_url_accuracy_pct"] == 78.0
     assert run_scorecard["overall_score"]["status"] == "PRELIMINARY"
 
 
@@ -129,6 +153,20 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
                 "chatbot_answer_correctness_pct": 87.5,
             }
         },
+        duplicate_summary={
+            "duplicate_rate_per_100_events": 3.2,
+            "severe_duplicate_rate_per_100_events": 1.1,
+        },
+        coverage_summary={
+            "source_hit_rate_pct": 84.0,
+            "event_capture_rate_pct": 72.0,
+        },
+        holdout_summary={
+            "replay_url_accuracy_pct": 77.0,
+        },
+        domain_capped_summary={
+            "replay_url_accuracy_pct": 74.0,
+        },
     )
 
     metric_keys = [call["metric_key"] for call in fake_db.calls]
@@ -137,6 +175,12 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
         "phase1_total_llm_cost_usd",
         "phase1_chatbot_response_within_15s_pct",
         "phase1_chatbot_answer_correctness_pct",
+        "duplicate_rate_per_100_events",
+        "severe_duplicate_rate_per_100_events",
+        "coverage_watchlist_source_hit_rate_pct",
+        "coverage_watchlist_event_capture_rate_pct",
+        "holdout_replay_url_accuracy_pct",
+        "domain_capped_replay_url_accuracy_pct",
     ]
     assert all(call["run_id"] == "run-456" for call in fake_db.calls)
     assert all(isinstance(call["window_end"], datetime) for call in fake_db.calls)
@@ -161,3 +205,139 @@ def test_phase1_artifacts_persist_by_run_id_and_type() -> None:
         "runtime_summary",
     ]
     assert all(call["run_id"] == "run-789" for call in fake_db.artifact_calls)
+
+
+def test_phase2_duplicate_and_coverage_summaries() -> None:
+    runner = _build_runner()
+
+    class DuplicateDb:
+        def execute_query(self, query, params=None):
+            q = " ".join(str(query).split())
+            if "SELECT COUNT(*) FROM events" in q:
+                return [(20,)]
+            if "GROUP BY 1, 2, 3, 4 HAVING COUNT(*) > 1 ORDER BY row_count DESC" in q:
+                return [
+                    ("https://example.com/a", "Friday Salsa", "2026-03-20", "19:00:00", 3),
+                    ("https://example.com/b", "Sunday Swing", "2026-03-22", "18:00:00", 2),
+                ]
+            if "COUNT(DISTINCT COALESCE(NULLIF(TRIM(url), ''), '(no url)')) > 1" in q:
+                return [
+                    ("Friday Salsa", "2026-03-20", "19:00:00", 10, 2, 2),
+                ]
+            raise AssertionError(q)
+
+    runner.db_handler = DuplicateDb()
+    duplicate_summary = runner._summarize_duplicate_audit()
+    assert duplicate_summary["duplicate_clusters_count"] == 2
+    assert duplicate_summary["duplicate_rows"] == 3
+    assert duplicate_summary["duplicate_rate_per_100_events"] == 15.0
+    assert duplicate_summary["severe_duplicate_rate_per_100_events"] == 5.0
+
+    class FakeValidator:
+        days_back = 7
+
+        def _normalize_link_variants(self, url):
+            return [url]
+
+        def _query_recent_url_rows(self, variants, window_days):
+            if variants[0].endswith("/hit"):
+                return [("https://example.com/hit", "source", True, 1, "2026-03-18 10:00:00", "salsa")]
+            if variants[0].endswith("/seen"):
+                return [("https://example.com/seen", "source", False, 1, "2026-03-18 10:00:00", "")]
+            return []
+
+        def _query_recent_child_success_count(self, variants, window_days):
+            return 2 if variants[0].endswith("/hit") else 0
+
+        def _query_latest_overall_row(self, variants):
+            if variants[0].endswith("/seen"):
+                return ("https://example.com/seen", False, 1, "2026-03-18 10:00:00", "")
+            return None
+
+    runner._make_scraping_validator = lambda: FakeValidator()
+    runner._load_coverage_watchlist_rows = lambda: (
+        [
+            {"source_name": "Hit Source", "source_url": "https://example.com/hit", "priority": "high"},
+            {"source_name": "Seen Source", "source_url": "https://example.com/seen", "priority": "medium"},
+            {"source_name": "Missed Source", "source_url": "https://example.com/missed", "priority": "high"},
+        ],
+        "test_watchlist",
+    )
+    coverage_summary = runner._summarize_coverage_watchlist()
+    assert coverage_summary["source_hit_rate_pct"] == 66.67
+    assert coverage_summary["event_capture_rate_pct"] == 33.33
+    assert coverage_summary["priority_source_hit_rate_pct"] == 50.0
+    assert coverage_summary["watchlist_source"] == "test_watchlist"
+
+
+def test_phase3_holdout_domain_caps_and_guardrails() -> None:
+    runner = _build_runner()
+    accuracy_replay = {
+        "rows": [
+            {
+                "is_match": True,
+                "mismatch_category": "",
+                "baseline": {"url": "https://www.redhotswing.com/"},
+                "baseline_event_id": 1,
+            },
+            {
+                "is_match": False,
+                "mismatch_category": "wrong_time",
+                "baseline": {"url": "https://vlda.ca/resources/"},
+                "baseline_event_id": 2,
+            },
+            {
+                "is_match": True,
+                "mismatch_category": "",
+                "baseline": {"url": "https://example.org/a"},
+                "baseline_event_id": 3,
+            },
+            {
+                "is_match": False,
+                "mismatch_category": "wrong_date",
+                "baseline": {"url": "https://example.org/b"},
+                "baseline_event_id": 4,
+            },
+            {
+                "is_match": True,
+                "mismatch_category": "",
+                "baseline": {"url": "https://another.org/c"},
+                "baseline_event_id": 5,
+            },
+        ]
+    }
+
+    holdout_summary = runner._summarize_holdout_replay(accuracy_replay)
+    assert holdout_summary["available"] is True
+    assert holdout_summary["replay_urls_seen"] == 2
+    assert holdout_summary["replay_url_accuracy_pct"] == 50.0
+
+    domain_capped_summary = runner._summarize_domain_capped_replay(accuracy_replay, per_domain_cap=1)
+    assert domain_capped_summary["sampled_rows"] == 4
+    assert domain_capped_summary["sampled_domains"] == 4
+    assert domain_capped_summary["replay_url_accuracy_pct"] == 75.0
+
+    run_scorecard = runner._build_phase1_run_scorecard(
+        run_id="run-guardrails",
+        report_timestamp="2026-03-18T12:00:00",
+        accuracy_replay={"coverage_accuracy_pct": 74.0, "replay_accuracy_pct": 70.0, "total_rows": 5, "true_count": 3, "false_count": 2},
+        scraping_results={"summary": {"important_urls_checked": 10, "failed_count": 4}, "source_distribution": {"status": "WARNING"}},
+        runtime_summary={"pipeline_duration_minutes": 120.0},
+        llm_cost_summary={"summary": {"total_usd": 4.0}},
+        chatbot_quality_summary={"summary": {"chatbot_response_within_15s_pct": 85.0, "chatbot_answer_correctness_pct": 80.0}},
+        classifier_performance_summary={},
+        duplicate_summary={"duplicate_rate_per_100_events": 3.0, "severe_duplicate_rate_per_100_events": 2.5},
+        coverage_summary={"source_hit_rate_pct": 55.0, "event_capture_rate_pct": 40.0, "watchlist_source": "test"},
+        holdout_summary=holdout_summary,
+        domain_capped_summary=domain_capped_summary,
+    )
+    guardrails = runner._evaluate_phase3_guardrails(run_scorecard)
+    assert guardrails["status"] == "FAIL"
+    assert {item["metric_key"] for item in guardrails["violations"]} == {
+        "database_accuracy_min_pct",
+        "holdout_replay_url_accuracy_min_pct",
+        "coverage_watchlist_source_hit_rate_min_pct",
+        "severe_duplicate_rate_max_per_100_events",
+        "chatbot_response_within_15s_min_pct",
+        "chatbot_answer_correctness_min_pct",
+    }

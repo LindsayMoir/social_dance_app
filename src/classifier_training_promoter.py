@@ -12,6 +12,7 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
+from evaluation_holdout import load_gold_holdout_urls
 from page_classifier import classify_page_with_confidence
 
 
@@ -38,6 +39,7 @@ def promote_training_candidates(
 
     header = list(rows[0].keys())
     existing_urls = {str(row.get("url") or "").strip() for row in rows}
+    holdout_urls = load_gold_holdout_urls()
     current_row_ids = [int(str(row.get("row_id") or "0") or 0) for row in rows if str(row.get("row_id") or "").strip().isdigit()]
     next_row_id = max(current_row_ids, default=0) + 1
 
@@ -60,6 +62,7 @@ def promote_training_candidates(
         selected, reason = _select_candidate(
             candidate=candidate,
             existing_urls=existing_urls,
+            holdout_urls=holdout_urls,
             domain_archetype_counts=existing_domain_archetype_counts,
             max_per_domain_per_archetype=max_per_domain_per_archetype,
         )
@@ -115,6 +118,7 @@ def _select_candidate(
     *,
     candidate: dict[str, Any],
     existing_urls: set[str],
+    holdout_urls: set[str],
     domain_archetype_counts: Counter[tuple[str, str]],
     max_per_domain_per_archetype: int,
 ) -> tuple[bool, str]:
@@ -123,6 +127,8 @@ def _select_candidate(
         return False, "missing_url"
     if _is_email_like_input(url):
         return False, "email_like_input_excluded"
+    if url in holdout_urls:
+        return False, "holdout_url_excluded"
     if url in existing_urls:
         return False, "duplicate_url"
     if not bool(candidate.get("training_eligible")):

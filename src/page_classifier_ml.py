@@ -12,6 +12,8 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
+from evaluation_holdout import load_gold_holdout_urls
+
 try:
     import joblib
 except ImportError:  # pragma: no cover - exercised in deployment environments without ML deps
@@ -67,6 +69,9 @@ def train_page_classifier_models(
     ].copy()
     labeled = labeled[~labeled["url"].astype(str).map(_is_email_like_input)].copy()
     labeled = labeled[labeled["reviewed_truth_owner_step"].astype(str).str.strip() != "emails.py"].copy()
+    holdout_urls = load_gold_holdout_urls()
+    if holdout_urls:
+        labeled = labeled[~labeled["url"].astype(str).str.strip().isin(holdout_urls)].copy()
     if labeled.empty:
         raise ValueError(f"No labeled rows found in {csv_path}")
 

@@ -1,0 +1,7 @@
+source_name,source_url,source_type,priority,expected_frequency,coverage_region,active
+Red Hot Swing,https://www.redhotswing.com/,venue_site,high,weekly,Greater Victoria,True
+Victoria Latin Dance Association,https://vlda.ca/resources/,community_site,high,weekly,Greater Victoria,True
+Salsa Caliente,https://calientedance.com/,studio_site,high,weekly,Greater Victoria,True
+The Coda,https://gotothecoda.com/calendar,venue_calendar,medium,weekly,Greater Victoria,True
+The Loft,https://loftpubvictoria.com/events/month/,venue_calendar,medium,weekly,Greater Victoria,True
+Bard and Banker,https://www.bardandbanker.com/live-music,venue_calendar,medium,weekly,Greater Victoria,True
