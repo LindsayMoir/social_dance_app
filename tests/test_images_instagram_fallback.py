@@ -3,10 +3,12 @@ import logging
 import os
 import sys
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from images import ImageScraper
+import images
+from images import ImageScraper, _extract_instagram_post_links
 
 
 class _FakeLoop:
@@ -81,3 +83,98 @@ def test_extract_page_text_playwright_sanitizes_html() -> None:
     assert text is not None
     assert "Latin social dance tonight" in text
     assert "ignore_me" not in text
+
+
+def test_extract_instagram_post_links_from_profile_html() -> None:
+    html = """
+    <html><body>
+      <a href="/p/ABC123/">Post 1</a>
+      <a href="/reel/XYZ789/?hl=en">Reel</a>
+      <a href="/bachatavictoria/">Profile</a>
+      <a href="/p/ABC123/">Duplicate</a>
+    </body></html>
+    """
+    links = _extract_instagram_post_links(html, "https://www.instagram.com/bachatavictoria/")
+    assert links == [
+        "https://www.instagram.com/p/ABC123/",
+        "https://www.instagram.com/reel/XYZ789/?hl=en",
+    ]
+
+
+def test_process_webpage_url_expands_instagram_posts_before_page_images(monkeypatch) -> None:
+    original_process_webpage_url = ImageScraper.process_webpage_url
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.urls_visited = set()
+    scraper.keywords_list = ["bachata"]
+    scraper.images_per_page_limit = 2
+    scraper.config = {"crawling": {"max_website_urls": 10, "prompt_max_length": 10000}}
+
+    class _FakeDb:
+        def write_url_to_db(self, _row):
+            return None
+
+    class _FakeLLM:
+        def generate_prompt(self, *_args, **_kwargs):
+            return ("prompt", "event_extraction")
+
+        def process_llm_response(self, *_args, **_kwargs):
+            return False
+
+    class _FakePage:
+        async def content(self):
+            return """
+            <html><body>
+              <a href="/p/POST001/">Post 1</a>
+              <a href="/p/POST002/">Post 2</a>
+              <img src="https://static.cdninstagram.com/ui.webp" />
+            </body></html>
+            """
+
+    scraper.db_handler = _FakeDb()
+    scraper.llm_handler = _FakeLLM()
+    scraper.read_extract = SimpleNamespace(page=_FakePage())
+    def _run_until_complete(awaitable):
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
+        return """
+        <html><body>
+          <a href="/p/POST001/">Post 1</a>
+          <a href="/p/POST002/">Post 2</a>
+          <img src="https://static.cdninstagram.com/ui.webp" />
+        </body></html>
+        """
+
+    scraper.loop = SimpleNamespace(run_until_complete=_run_until_complete)
+    scraper._extract_dynamic_page_text = lambda _url: "bachata victoria profile text"
+    fake_response = Mock()
+    fake_response.text = "<html><body>short</body></html>"
+    fake_response.raise_for_status.return_value = None
+    monkeypatch.setattr(images.requests, "get", lambda *_args, **_kwargs: fake_response)
+
+    called_posts: list[tuple[str, str, str, str]] = []
+    called_images: list[tuple[str, str, str, str]] = []
+
+    def _process_post(url, parent, source, keywords):
+        called_posts.append((url, parent, source, keywords))
+
+    def _process_image(url, parent, source, keywords):
+        called_images.append((url, parent, source, keywords))
+
+    scraper.process_image_url = _process_image
+    scraper.process_webpage_url = _process_post
+
+    original_process_webpage_url(
+        scraper,
+        "https://www.instagram.com/bachatavictoria/",
+        "",
+        "Sebastian y Hannah",
+        "bachata",
+    )
+
+    assert called_posts == [
+        ("https://www.instagram.com/p/POST001/", "https://www.instagram.com/bachatavictoria/", "Sebastian y Hannah", "bachata"),
+        ("https://www.instagram.com/p/POST002/", "https://www.instagram.com/bachatavictoria/", "Sebastian y Hannah", "bachata"),
+    ]
+    assert called_images == []

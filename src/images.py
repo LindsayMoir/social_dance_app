@@ -27,7 +27,7 @@ from config_runtime import get_config_path, load_config
 
 from db import DatabaseHandler
 from llm import LLMHandler
-from page_classifier import is_instagram_url, resolve_prompt_type
+from page_classifier import is_instagram_post_detail_url, is_instagram_url, resolve_prompt_type
 from rd_ext import ReadExtract
 from secret_paths import get_auth_file
 
@@ -185,6 +185,27 @@ def detect_date_from_image(local_path: Path) -> tuple[str | None, str | None]:
             final_date = _date(year, month_num, day_num)
             return (final_date.isoformat(), final_date.strftime('%A'))
     return (None, None)
+
+
+def _extract_instagram_post_links(rendered_html: str, page_url: str) -> list[str]:
+    """Extract unique Instagram post/reel/tv links from rendered profile HTML."""
+    if not rendered_html or not is_instagram_url(page_url) or is_instagram_post_detail_url(page_url):
+        return []
+    selector = Selector(text=rendered_html)
+    seen: set[str] = set()
+    links: list[str] = []
+    for href in selector.xpath('//a/@href').getall():
+        candidate = str(href or "").strip()
+        if not candidate:
+            continue
+        absolute = urljoin(page_url, candidate)
+        if not is_instagram_post_detail_url(absolute):
+            continue
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+        links.append(absolute)
+    return links
 
 class ImageScraper:
     def __init__(self, config: dict):
@@ -756,6 +777,20 @@ class ImageScraper:
         rendered_html = self.loop.run_until_complete(
             self.read_extract.page.content()
         )
+        instagram_post_links = _extract_instagram_post_links(rendered_html, page_url)
+        if instagram_post_links:
+            post_limit = self.images_per_page_limit
+            if post_limit <= 0:
+                post_limit = int(self.config.get('crawling', {}).get('max_website_urls', 10) or 10)
+            selected_post_links = instagram_post_links[:post_limit]
+            self.logger.info(
+                "process_webpage_url(): extracted %d Instagram post link(s), processing %d before page-image OCR",
+                len(instagram_post_links),
+                len(selected_post_links),
+            )
+            for post_url in selected_post_links:
+                self.process_webpage_url(post_url, page_url, source, keywords)
+            return
         imgs = Selector(text=rendered_html).xpath('//img/@src').getall()
         img_urls = [urljoin(page_url, u) for u in imgs if self.is_image_url(u)]
         if self.images_per_page_limit > 0:
