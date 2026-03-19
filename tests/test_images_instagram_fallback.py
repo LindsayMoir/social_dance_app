@@ -8,7 +8,13 @@ from unittest.mock import Mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import images
-from images import ImageScraper, _build_image_context_text, _extract_instagram_post_links
+from images import (
+    ImageScraper,
+    _build_image_context_text,
+    _extract_instagram_post_links,
+    _is_ignored_instagram_ui_asset,
+    _score_image_candidate,
+)
 
 
 class _FakeLoop:
@@ -112,6 +118,15 @@ def test_build_image_context_text_includes_parent_context() -> None:
     assert "Parent_URL: https://www.instagram.com/bachatavictoria/" in combined
     assert "Parent_Page_Text: Next Social: March 20th" in combined
     assert "715 Yates St 8PM" in combined
+
+
+def test_instagram_ui_asset_filter_and_scoring() -> None:
+    ui_url = "https://static.cdninstagram.com/rsrc.php/yJ/r/53X3pk-t2Gn.webp"
+    poster_url = "https://instagram.fcxh2-1.fna.fbcdn.net/v/t51.82787-15/poster.jpg"
+    assert _is_ignored_instagram_ui_asset(ui_url) is True
+    assert _is_ignored_instagram_ui_asset(poster_url) is False
+    assert _score_image_candidate(ui_url, 1200, 1200) < 0
+    assert _score_image_candidate(poster_url, 1080, 1350) > _score_image_candidate(poster_url, 1080, 400)
 
 
 def test_process_webpage_url_expands_instagram_posts_before_page_images(monkeypatch) -> None:
@@ -250,3 +265,114 @@ def test_process_image_url_uses_parent_url_for_prompt_context(monkeypatch) -> No
     assert process_source == "Bachata Victoria BC"
     assert process_prompt_type == "fb"
     assert "bachata" in process_found
+
+
+def test_process_webpage_url_ranks_instagram_images_and_skips_ui_assets(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.urls_visited = set()
+    scraper.keywords_list = ["bachata"]
+    scraper.images_per_page_limit = 2
+    scraper.config = {"crawling": {"max_website_urls": 10, "prompt_max_length": 10000}}
+
+    class _FakeDb:
+        def write_url_to_db(self, _row):
+            return None
+
+    class _FakeLLM:
+        def generate_prompt(self, *_args, **_kwargs):
+            return ("prompt", "event_extraction")
+
+        def process_llm_response(self, *_args, **_kwargs):
+            return False
+
+    class _FakePage:
+        async def content(self):
+            return """
+            <html><body>
+              <img src="https://static.cdninstagram.com/rsrc.php/yJ/r/ui.webp" />
+              <img src="https://instagram.fcxh2-1.fna.fbcdn.net/v/t51.82787-15/poster1.jpg" />
+              <img src="https://instagram.fcxh2-1.fna.fbcdn.net/v/t51.82787-15/poster2.jpg" />
+            </body></html>
+            """
+
+        request = None
+
+    scraper.db_handler = _FakeDb()
+    scraper.llm_handler = _FakeLLM()
+    scraper.read_extract = SimpleNamespace(page=_FakePage())
+    scraper._extract_dynamic_page_text = lambda _url: "bachata victoria profile text"
+    fake_response = Mock()
+    fake_response.text = "<html><body>short</body></html>"
+    fake_response.raise_for_status.return_value = None
+    monkeypatch.setattr(images.requests, "get", lambda *_args, **_kwargs: fake_response)
+
+    results = [
+        """
+        <html><body>
+          <img src="https://static.cdninstagram.com/rsrc.php/yJ/r/ui.webp" />
+          <img src="https://instagram.fcxh2-1.fna.fbcdn.net/v/t51.82787-15/poster1.jpg" />
+          <img src="https://instagram.fcxh2-1.fna.fbcdn.net/v/t51.82787-15/poster2.jpg" />
+        </body></html>
+        """,
+        b"ui",
+        b"poster1",
+        b"poster2",
+    ]
+
+    def _run_until_complete(awaitable):
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
+        return results.pop(0)
+
+    scraper.loop = SimpleNamespace(run_until_complete=_run_until_complete)
+
+    class _FakeImage:
+        def __init__(self, size):
+            self.size = size
+
+    def _fake_open(obj):
+        value = getattr(obj, "getvalue", lambda: b"")().decode("utf-8", errors="ignore")
+        if "poster1" in value:
+            return _FakeImage((1080, 1350))
+        if "poster2" in value:
+            return _FakeImage((1080, 1080))
+        return _FakeImage((1200, 1200))
+
+    def _request_get(url):
+        if "poster2" in url:
+            async def _poster2():
+                return b"poster2"
+            return SimpleNamespace(status=200, body=_poster2)
+        if "poster1" in url:
+            async def _poster1():
+                return b"poster1"
+            return SimpleNamespace(status=200, body=_poster1)
+        async def _ui():
+            return b"ui"
+        return SimpleNamespace(status=200, body=_ui)
+
+    scraper.read_extract.page.request = SimpleNamespace(get=_request_get)
+    monkeypatch.setattr(images, "Image", SimpleNamespace(open=_fake_open))
+
+    called_images: list[tuple[str, str, str, str, str | None]] = []
+
+    def _process_image(url, parent, source, keywords, page_context_text=None):
+        called_images.append((url, parent, source, keywords, page_context_text))
+
+    scraper.process_image_url = _process_image
+
+    ImageScraper.process_webpage_url(
+        scraper,
+        "https://www.instagram.com/bachatavictoria/",
+        "",
+        "Sebastian y Hannah",
+        "bachata",
+    )
+
+    assert {row[0] for row in called_images} == {
+        "https://instagram.fcxh2-1.fna.fbcdn.net/v/t51.82787-15/poster1.jpg",
+        "https://instagram.fcxh2-1.fna.fbcdn.net/v/t51.82787-15/poster2.jpg",
+    }
+    assert all("static.cdninstagram.com" not in row[0] for row in called_images)

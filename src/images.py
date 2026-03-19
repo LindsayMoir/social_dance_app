@@ -227,6 +227,49 @@ def _build_image_context_text(
     parts.append(str(ocr_text or ""))
     return "\n".join(part for part in parts if part)
 
+
+def _is_ignored_instagram_ui_asset(image_url: str) -> bool:
+    """Return True for obvious Instagram UI/static assets that should not be OCR'd."""
+    try:
+        parsed = urlparse(str(image_url or ""))
+    except Exception:
+        return False
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").lower()
+    return "static.cdninstagram.com" in host or "/rsrc.php/" in path or path.endswith("/rsrc.php")
+
+
+def _score_image_candidate(image_url: str, width: int, height: int) -> int:
+    """Prefer likely poster/media images over UI assets and awkward aspect ratios."""
+    try:
+        parsed = urlparse(str(image_url or ""))
+    except Exception:
+        parsed = urlparse("")
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").lower()
+    if _is_ignored_instagram_ui_asset(image_url):
+        return -1000
+
+    score = 0
+    if "fbcdn.net" in host:
+        score += 120
+    elif "cdninstagram.com" in host:
+        score += 90
+    if "/v/t51" in path:
+        score += 35
+
+    area = max(0, int(width) * int(height))
+    score += min(40, area // 50000)
+
+    if height >= width * 1.1 and height <= width * 2.3:
+        score += 25
+    elif width >= height * 0.85 and width <= height * 1.2:
+        score += 12
+    elif width >= height * 2.0 or height >= width * 3.0:
+        score -= 30
+
+    return score
+
 class ImageScraper:
     def __init__(self, config: dict):
         self.config = config
@@ -813,10 +856,8 @@ class ImageScraper:
             return
         imgs = Selector(text=rendered_html).xpath('//img/@src').getall()
         img_urls = [urljoin(page_url, u) for u in imgs if self.is_image_url(u)]
-        if self.images_per_page_limit > 0:
-            img_urls = img_urls[: self.images_per_page_limit]
         self.logger.info(
-            "process_webpage_url(): considering %d image(s) on page after cap=%d",
+            "process_webpage_url(): considering %d raw image candidate(s) before ranking, cap=%d",
             len(img_urls),
             self.images_per_page_limit,
         )
@@ -824,8 +865,11 @@ class ImageScraper:
         # Establish a minimum size for the img_urls.
         MIN_W, MIN_H = 500, 500
 
-        valid_imgs = []
+        scored_imgs: list[tuple[int, str]] = []
         for url in img_urls:
+            if _is_ignored_instagram_ui_asset(url):
+                self.logger.info("Skipping %s: obvious Instagram UI/static asset", url)
+                continue
             try:
                 # Use Playwright for Instagram images, requests for others
                 if 'instagram.com' in url or 'fbcdn.net' in url:
@@ -854,15 +898,25 @@ class ImageScraper:
 
             w, h = img.size
             if w >= MIN_W and h >= MIN_H:
-                valid_imgs.append(url)
+                score = _score_image_candidate(url, w, h)
+                if score < 0:
+                    self.logger.info("Skipping %s: low image candidate score=%s (%sx%s)", url, score, w, h)
+                    continue
+                scored_imgs.append((score, url))
             else:
                 self.logger.info(f"Skipping {url}: too small ({w}x{h})")
 
-        # now process only the valid ones
+        scored_imgs.sort(key=lambda item: item[0], reverse=True)
         per_page_process_limit = self.images_per_page_limit
         if per_page_process_limit <= 0:
             per_page_process_limit = int(self.config.get('crawling', {}).get('max_website_urls', 10) or 10)
-        for src in valid_imgs[:per_page_process_limit]:
+        selected_imgs = scored_imgs[:per_page_process_limit]
+        self.logger.info(
+            "process_webpage_url(): selected %d ranked image(s) for OCR: %s",
+            len(selected_imgs),
+            [{"score": score, "url": url} for score, url in selected_imgs],
+        )
+        for _, src in selected_imgs:
             self.process_image_url(src, page_url, source, keywords, page_context_text=text)
 
 
