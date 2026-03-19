@@ -13,6 +13,7 @@ import csv
 import os
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -24,7 +25,83 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from logging_config import setup_logging
+import llm as llm_module
+import scraper as scraper_module
 from scraper import EventSpider
+
+
+class ReadOnlyNullDatabaseHandler:
+    """Minimal no-op DB boundary for diagnostic scrapes."""
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        self.conn = None
+        self.llm_handler = None
+
+    def set_llm_handler(self, handler) -> None:
+        self.llm_handler = handler
+
+    def get_db_connection(self):
+        return None
+
+    def get_historical_classifier_memory(self, _url: str):
+        return None
+
+    def maybe_reuse_static_event_detail_from_history(self, *, url: str):
+        return {"reused": False}
+
+    def is_whitelisted_url(self, _url: str) -> bool:
+        return False
+
+    def avoid_domains(self, _url: str) -> bool:
+        return False
+
+    def should_process_url(self, _url: str) -> bool:
+        return True
+
+    def execute_query(self, *_args, **_kwargs):
+        return []
+
+    def write_url_to_db(self, *_args, **_kwargs) -> None:
+        return None
+
+    def write_url_scrape_metric(self, *_args, **_kwargs) -> None:
+        return None
+
+    def write_events_to_db(self, *_args, **_kwargs) -> None:
+        return None
+
+    def count_events_urls_start(self, _file_name: str):
+        return None
+
+    def count_events_urls_end(self, _start_df, _file_name: str) -> None:
+        return None
+
+    def resolve_or_insert_address(self, *_args, **_kwargs):
+        return None
+
+    def process_event_address(self, *_args, **_kwargs):
+        return None
+
+
+@contextmanager
+def _diagnostic_handler_patch(enabled: bool):
+    """Temporarily swap scraper/LLM DB handlers for a read-only diagnostic run."""
+    if not enabled:
+        yield
+        return
+
+    original_scraper_db = scraper_module.DatabaseHandler
+    original_llm_db = llm_module.DatabaseHandler
+    original_handlers_cache = getattr(scraper_module, "_handlers_cache", None)
+    try:
+        scraper_module.DatabaseHandler = ReadOnlyNullDatabaseHandler
+        llm_module.DatabaseHandler = ReadOnlyNullDatabaseHandler
+        scraper_module._handlers_cache = None
+        yield
+    finally:
+        scraper_module.DatabaseHandler = original_scraper_db
+        llm_module.DatabaseHandler = original_llm_db
+        scraper_module._handlers_cache = original_handlers_cache
 
 
 def _normalize_seed_url(raw: str) -> str:
@@ -91,6 +168,7 @@ def run_single_domain_scrape(
     source_name: str | None = None,
     keywords: str = "",
     urls_run_limit: int | None = None,
+    allow_db_writes: bool = False,
 ) -> None:
     seed_url = _normalize_seed_url(domain_url)
     target_domain = _domain_from_url(seed_url)
@@ -113,50 +191,51 @@ def run_single_domain_scrape(
             cfg["crawling"]["urls_run_limit"] = int(urls_run_limit)
 
         logging_file = "logs/single_domain_scrape_log.txt"
-        process = CrawlerProcess(
-            settings={
-                "LOG_FILE": logging_file,
-                "LOG_LEVEL": "INFO",
-                "LOG_FORMAT": (
-                    "%(asctime)s [%(name)s] %(levelname)s: "
-                    f"[run_id={os.getenv('DS_RUN_ID', 'na')}] "
-                    f"[step={os.getenv('DS_STEP_NAME', 'single_domain_scrape')}] %(message)s"
-                ),
-                "DEPTH_LIMIT": cfg["crawling"]["depth_limit"],
-                "FEEDS": {"output/output.json": {"format": "json"}},
-                "DEFAULT_REQUEST_HEADERS": {
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "en",
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/114.0.0.0 Safari/537.36"
+        with _diagnostic_handler_patch(enabled=not allow_db_writes):
+            process = CrawlerProcess(
+                settings={
+                    "LOG_FILE": logging_file,
+                    "LOG_LEVEL": "INFO",
+                    "LOG_FORMAT": (
+                        "%(asctime)s [%(name)s] %(levelname)s: "
+                        f"[run_id={os.getenv('DS_RUN_ID', 'na')}] "
+                        f"[step={os.getenv('DS_STEP_NAME', 'single_domain_scrape')}] %(message)s"
                     ),
-                },
-                "HTTPERROR_ALLOWED_CODES": [406],
-                "DOWNLOAD_TIMEOUT": int(
-                    cfg.get("crawling", {}).get("scraper_download_timeout_seconds", 35) or 35
-                ),
-                "PLAYWRIGHT_TIMEOUT": int(
-                    cfg.get("crawling", {}).get("scraper_playwright_timeout_ms", 35000) or 35000
-                ),
-                "RETRY_ENABLED": True,
-                "RETRY_TIMES": int(cfg.get("crawling", {}).get("scraper_retry_times", 1) or 1),
-                "CONCURRENT_REQUESTS": int(
-                    cfg.get("crawling", {}).get("scraper_concurrent_requests", 16) or 16
-                ),
-                "CONCURRENT_REQUESTS_PER_DOMAIN": int(
-                    cfg.get("crawling", {}).get("scraper_concurrent_requests_per_domain", 8) or 8
-                ),
-            }
-        )
+                    "DEPTH_LIMIT": cfg["crawling"]["depth_limit"],
+                    "FEEDS": {"output/output.json": {"format": "json"}},
+                    "DEFAULT_REQUEST_HEADERS": {
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Language": "en",
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/114.0.0.0 Safari/537.36"
+                        ),
+                    },
+                    "HTTPERROR_ALLOWED_CODES": [406],
+                    "DOWNLOAD_TIMEOUT": int(
+                        cfg.get("crawling", {}).get("scraper_download_timeout_seconds", 35) or 35
+                    ),
+                    "PLAYWRIGHT_TIMEOUT": int(
+                        cfg.get("crawling", {}).get("scraper_playwright_timeout_ms", 35000) or 35000
+                    ),
+                    "RETRY_ENABLED": True,
+                    "RETRY_TIMES": int(cfg.get("crawling", {}).get("scraper_retry_times", 1) or 1),
+                    "CONCURRENT_REQUESTS": int(
+                        cfg.get("crawling", {}).get("scraper_concurrent_requests", 16) or 16
+                    ),
+                    "CONCURRENT_REQUESTS_PER_DOMAIN": int(
+                        cfg.get("crawling", {}).get("scraper_concurrent_requests_per_domain", 8) or 8
+                    ),
+                }
+            )
 
-        process.crawl(
-            DomainRestrictedEventSpider,
-            config=cfg,
-            target_domain=target_domain,
-        )
-        process.start()
+            process.crawl(
+                DomainRestrictedEventSpider,
+                config=cfg,
+                target_domain=target_domain,
+            )
+            process.start()
 
 
 def main() -> int:
@@ -185,6 +264,11 @@ def main() -> int:
         default=None,
         help="Override crawling.urls_run_limit for this run",
     )
+    parser.add_argument(
+        "--allow-db-writes",
+        action="store_true",
+        help="Allow normal DB writes during the single-domain scrape. Default is read-only diagnostic mode.",
+    )
     args = parser.parse_args()
 
     os.environ["DS_STEP_NAME"] = "single_domain_scrape"
@@ -196,6 +280,7 @@ def main() -> int:
         source_name=args.source,
         keywords=args.keywords,
         urls_run_limit=args.urls_run_limit,
+        allow_db_writes=args.allow_db_writes,
     )
     end_time = datetime.now()
     print(f"Single-domain scrape complete. Duration: {end_time - start_time}")
