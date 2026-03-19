@@ -314,6 +314,46 @@ def test_event_data_quality_summary() -> None:
     assert summary["stale_event_rate_pct"] == 7.5
 
 
+def test_domain_evaluation_and_codex_review_bundle() -> None:
+    runner = _build_runner()
+    accuracy_replay = {
+        "rows": [
+            {"is_match": True, "mismatch_category": "", "baseline": {"url": "https://a.example.org/1"}},
+            {"is_match": False, "mismatch_category": "wrong_time", "baseline": {"url": "https://a.example.org/2"}},
+            {"is_match": True, "mismatch_category": "", "baseline": {"url": "https://b.example.org/3"}},
+            {"is_match": False, "mismatch_category": "wrong_date", "baseline": {"url": "https://b.example.org/3"}},
+            {"is_match": False, "mismatch_category": "wrong_location", "baseline": {"url": "https://c.example.org/4"}},
+        ]
+    }
+    domain_summary = runner._summarize_domain_evaluation(accuracy_replay)
+    assert domain_summary["available"] is True
+    assert domain_summary["domain_count"] == 3
+    assert domain_summary["total_urls"] == 4
+    assert domain_summary["top_domains"][0]["domain"] == "a.example.org"
+    assert domain_summary["top_domains"][0]["replay_url_accuracy_pct"] == 50.0
+    assert domain_summary["worst_domains"][0]["domain"] == "c.example.org"
+
+    run_scorecard = {
+        "run_id": "run-123",
+        "overall_score": {"status": "FAIL"},
+        "guardrails": {"status": "FAIL", "violations": [{"detail": "Guardrail fail"}]},
+        "recommendations_input": {"top_regressions": ["Guardrail fail"]},
+    }
+    bundle = runner._build_codex_review_bundle(
+        run_scorecard=run_scorecard,
+        accuracy_replay_summary=accuracy_replay,
+        classifier_performance_summary={"status": "OK"},
+        duplicate_summary={"duplicate_rate_per_100_events": 2.0},
+        coverage_summary={"source_hit_rate_pct": 80.0},
+        holdout_summary={"replay_url_accuracy_pct": 70.0},
+        domain_capped_summary={"replay_url_accuracy_pct": 75.0},
+        domain_evaluation_summary=domain_summary,
+    )
+    assert bundle["bundle_version"] == "v1"
+    assert bundle["run_id"] == "run-123"
+    assert bundle["artifacts"]["domain_evaluation_summary"]["domain_count"] == 3
+
+
 def test_phase3_holdout_domain_caps_and_guardrails() -> None:
     runner = _build_runner()
     accuracy_replay = {
