@@ -8,7 +8,7 @@ from unittest.mock import Mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import images
-from images import ImageScraper, _extract_instagram_post_links
+from images import ImageScraper, _build_image_context_text, _extract_instagram_post_links
 
 
 class _FakeLoop:
@@ -101,6 +101,19 @@ def test_extract_instagram_post_links_from_profile_html() -> None:
     ]
 
 
+def test_build_image_context_text_includes_parent_context() -> None:
+    combined = _build_image_context_text(
+        ocr_text="715 Yates St 8PM",
+        parent_url="https://www.instagram.com/bachatavictoria/",
+        source="Bachata Victoria BC",
+        page_context_text="Next Social: March 20th",
+    )
+    assert "Source: Bachata Victoria BC" in combined
+    assert "Parent_URL: https://www.instagram.com/bachatavictoria/" in combined
+    assert "Parent_Page_Text: Next Social: March 20th" in combined
+    assert "715 Yates St 8PM" in combined
+
+
 def test_process_webpage_url_expands_instagram_posts_before_page_images(monkeypatch) -> None:
     original_process_webpage_url = ImageScraper.process_webpage_url
     scraper = ImageScraper.__new__(ImageScraper)
@@ -178,3 +191,62 @@ def test_process_webpage_url_expands_instagram_posts_before_page_images(monkeypa
         ("https://www.instagram.com/p/POST002/", "https://www.instagram.com/bachatavictoria/", "Sebastian y Hannah", "bachata"),
     ]
     assert called_images == []
+
+
+def test_process_image_url_uses_parent_url_for_prompt_context(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.urls_visited = set()
+    scraper.keywords_list = ["bachata", "dance", "salsa"]
+
+    class _FakeDb:
+        def check_image_events_exist(self, _url):
+            return False
+
+        def should_process_url(self, _url):
+            return True
+
+        def write_url_to_db(self, _row):
+            return None
+
+    class _FakeLLM:
+        def __init__(self):
+            self.generate_args = None
+            self.process_args = None
+
+        def generate_prompt(self, url, extracted_text, prompt_type):
+            self.generate_args = (url, extracted_text, prompt_type)
+            return ("prompt", "event_extraction")
+
+        def process_llm_response(self, image_url, parent_url, extracted_text, source, found, prompt_type):
+            self.process_args = (image_url, parent_url, extracted_text, source, found, prompt_type)
+            return False
+
+    scraper.db_handler = _FakeDb()
+    scraper.llm_handler = _FakeLLM()
+    scraper.download_image = lambda _url: "images/fake.jpg"
+    scraper.ocr_image_to_text = lambda _path: "BACHATA 715 YATES ST 8PM SOCIAL DANCE"
+
+    monkeypatch.setattr(images, "detect_date_from_image", lambda _path: (None, None))
+    monkeypatch.setattr(images, "resolve_prompt_type", lambda url, fallback_prompt_type='default': "fb" if "instagram.com" in url else fallback_prompt_type)
+
+    scraper.process_image_url(
+        "https://instagram.fcxh2-1.fna.fbcdn.net/poster.jpg",
+        "https://www.instagram.com/bachatavictoria/",
+        "Bachata Victoria BC",
+        "bachata",
+        page_context_text="Next Social: March 20th",
+    )
+
+    generate_url, generate_text, generate_prompt_type = scraper.llm_handler.generate_args
+    assert generate_url == "https://www.instagram.com/bachatavictoria/"
+    assert generate_prompt_type == "fb"
+    assert "Parent_Page_Text: Next Social: March 20th" in generate_text
+    assert "715 Yates ST".lower() in generate_text.lower()
+
+    process_image_url_arg, process_parent_url, process_text, process_source, process_found, process_prompt_type = scraper.llm_handler.process_args
+    assert process_image_url_arg == "https://www.instagram.com/bachatavictoria/"
+    assert process_parent_url == "https://www.instagram.com/bachatavictoria/"
+    assert process_source == "Bachata Victoria BC"
+    assert process_prompt_type == "fb"
+    assert "bachata" in process_found

@@ -207,6 +207,26 @@ def _extract_instagram_post_links(rendered_html: str, page_url: str) -> list[str
         links.append(absolute)
     return links
 
+
+def _build_image_context_text(
+    ocr_text: str,
+    parent_url: str,
+    source: str,
+    page_context_text: str | None = None,
+) -> str:
+    """Combine OCR text with parent-page context for image extraction."""
+    parts: list[str] = []
+    if source:
+        parts.append(f"Source: {source}")
+    if parent_url:
+        parts.append(f"Parent_URL: {parent_url}")
+    if page_context_text:
+        cleaned_context = " ".join(str(page_context_text).split())
+        if cleaned_context:
+            parts.append(f"Parent_Page_Text: {cleaned_context}")
+    parts.append(str(ocr_text or ""))
+    return "\n".join(part for part in parts if part)
+
 class ImageScraper:
     def __init__(self, config: dict):
         self.config = config
@@ -843,10 +863,17 @@ class ImageScraper:
         if per_page_process_limit <= 0:
             per_page_process_limit = int(self.config.get('crawling', {}).get('max_website_urls', 10) or 10)
         for src in valid_imgs[:per_page_process_limit]:
-            self.process_image_url(src, page_url, source, keywords)
+            self.process_image_url(src, page_url, source, keywords, page_context_text=text)
 
 
-    def process_image_url(self, image_url:str, parent_url:str, source:str, keywords: str) -> None:
+    def process_image_url(
+        self,
+        image_url: str,
+        parent_url: str,
+        source: str,
+        keywords: str,
+        page_context_text: str | None = None,
+    ) -> None:
         """
         Processes an image URL by downloading the image, extracting text using OCR, 
         searching for specified keywords, and handling the result with an LLM handler.
@@ -915,7 +942,14 @@ class ImageScraper:
             self.logger.info(f"process_image_url(): Detected date hint {det_date} ({det_dow}) added to OCR text")
 
         # Keyword filtering
-        found = [kw for kw in self.keywords_list if kw.lower() in text.lower()]
+        llm_text = _build_image_context_text(
+            ocr_text=text,
+            parent_url=parent_url,
+            source=source,
+            page_context_text=page_context_text,
+        )
+
+        found = [kw for kw in self.keywords_list if kw.lower() in llm_text.lower()]
         if not found:
             self.logger.info(f"process_image_url(): No relevant keywords in OCR text for {image_url}")
             self.db_handler.write_url_to_db(url_row)
@@ -923,15 +957,20 @@ class ImageScraper:
         self.logger.info(f"process_image_url(): Found keywords {found} in image {image_url}")
 
         # LLM prompt & response
-        prompt_type = resolve_prompt_type(image_url, fallback_prompt_type='default')
-        prompt_text, schema_type = self.llm_handler.generate_prompt(image_url, text, prompt_type)
+        prompt_basis_url = parent_url or image_url
+        prompt_type = resolve_prompt_type(prompt_basis_url, fallback_prompt_type='default')
+        prompt_text, schema_type = self.llm_handler.generate_prompt(prompt_basis_url, llm_text, prompt_type)
         if len(prompt_text) > config['crawling']['prompt_max_length']:
             logging.warning(f"def process_image_url(): Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
             return 
         
-        self.logger.info(f"process_image_url(): Generated default prompt for image_url: {image_url}")
+        self.logger.info(
+            "process_image_url(): Generated prompt using basis_url=%s for image_url=%s",
+            prompt_basis_url,
+            image_url,
+        )
         status = self.llm_handler.process_llm_response(
-            image_url, parent_url, text, source, found, prompt_type
+            prompt_basis_url, parent_url, llm_text, source, found, prompt_type
         )
         if status:
             self.logger.info(f"process_image_url(): LLM processing succeeded for {image_url}")
