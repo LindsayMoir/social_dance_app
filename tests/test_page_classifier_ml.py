@@ -214,9 +214,48 @@ def test_training_excludes_holdout_rows(tmp_path) -> None:
         writer.writerow(
             {
                 "row_id": "5",
-                "url": "https://www.redhotswing.com/",
+                "url": "https://www.redhotswing.com",
                 "domain": "www.redhotswing.com",
                 "url_path": "/",
+                "source_file": "events_table",
+                "predicted_archetype": "simple_page",
+                "predicted_subtype": "event_detail",
+                "predicted_owner_step": "scraper.py",
+                "predicted_is_event_detail": "True",
+                "predicted_is_calendar": "False",
+                "predicted_is_social": "False",
+                "classifier_stage": "rule",
+                "classifier_confidence": "0.99",
+                "feature_event_like_links": "1",
+                "feature_listing_signal": "False",
+                "feature_repeated_date_tokens": "1",
+                "feature_listing_score": "0",
+                "feature_event_signal": "True",
+                "reviewed_truth_archetype": "simple_page",
+                "reviewed_truth_owner_step": "scraper.py",
+                "review_notes": "",
+            }
+        )
+
+    result = train_page_classifier_models(
+        training_csv_path=training_csv,
+        output_path=model_path,
+    )
+    assert result["training_row_count"] == 4
+
+
+def test_training_excludes_dev_rows(tmp_path) -> None:
+    training_csv = tmp_path / "training.csv"
+    model_path = tmp_path / "model.joblib"
+    _write_training_rows(str(training_csv))
+    with open(training_csv, "a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
+        writer.writerow(
+            {
+                "row_id": "5",
+                "url": "https://www.bardandbanker.com/live-music",
+                "domain": "www.bardandbanker.com",
+                "url_path": "/live-music",
                 "source_file": "events_table",
                 "predicted_archetype": "simple_page",
                 "predicted_subtype": "event_detail",

@@ -57,7 +57,7 @@ from classifier_training_queue import (
     filter_classifier_review_candidates,
 )
 from db import DatabaseHandler
-from evaluation_holdout import load_gold_holdout_urls
+from evaluation_holdout import load_dev_urls, load_gold_holdout_urls, normalize_evaluation_url
 from llm import LLMHandler
 from logging_config import setup_logging
 from email_notifier import send_report_email
@@ -2798,7 +2798,7 @@ class ValidationTestRunner:
 
         for row in rows:
             baseline = row.get("baseline", {}) if isinstance(row, dict) else {}
-            url = str(baseline.get("url") or "").strip()
+            url = normalize_evaluation_url(baseline.get("url"))
             if not url or url not in holdout_urls or url in seen_urls:
                 continue
             seen_urls.add(url)
@@ -2841,10 +2841,14 @@ class ValidationTestRunner:
         per_domain_counts: Counter[str] = Counter()
         sampled_rows: list[dict[str, Any]] = []
         sampled_match_count = 0
+        seen_urls: set[str] = set()
 
         for row in rows:
             baseline = row.get("baseline", {}) if isinstance(row, dict) else {}
-            url = str(baseline.get("url") or "").strip()
+            url = normalize_evaluation_url(baseline.get("url"))
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
             domain = (urlparse(url).netloc or "").lower()
             if not domain:
                 domain = "(no domain)"
@@ -6908,6 +6912,7 @@ class ValidationTestRunner:
         coverage_info = coverage_summary if isinstance(coverage_summary, dict) else {}
         holdout_info = holdout_summary if isinstance(holdout_summary, dict) else {}
         domain_capped_info = domain_capped_summary if isinstance(domain_capped_summary, dict) else {}
+        dev_urls = load_dev_urls()
         metric_specs.extend(
             [
                 (
@@ -7019,6 +7024,7 @@ class ValidationTestRunner:
         coverage_info = coverage_summary if isinstance(coverage_summary, dict) else {}
         holdout_info = holdout_summary if isinstance(holdout_summary, dict) else {}
         domain_capped_info = domain_capped_summary if isinstance(domain_capped_summary, dict) else {}
+        dev_urls = load_dev_urls()
 
         replay_url_accuracy_pct = float(replay.get("coverage_accuracy_pct", 0.0) or 0.0)
         replay_row_accuracy_pct = float(replay.get("replay_accuracy_pct", 0.0) or 0.0)
@@ -7068,10 +7074,13 @@ class ValidationTestRunner:
                 "environment": str(os.getenv("RENDER_ENVIRONMENT", "local") or "local"),
                 "uses_holdout": bool(holdout_info.get("available")),
                 "holdout_version": str(holdout_info.get("holdout_version", "") or ""),
+                "uses_dev_split": bool(dev_urls),
+                "dev_version": "v1" if dev_urls else "",
+                "dev_urls_total": len(dev_urls),
                 "watchlist_version": str(coverage_info.get("watchlist_source", "") or ""),
                 "holdout_summary": holdout_info,
                 "domain_capped_summary": domain_capped_info,
-                "notes": "Phase 3 scorecard adds holdout evaluation, domain-capped replay summaries, and explicit guardrail evaluation.",
+                "notes": "Phase 3 scorecard adds train/dev/holdout separation metadata, holdout evaluation, domain-capped replay summaries, and explicit guardrail evaluation.",
             },
             "kpis": {
                 "database_accuracy": {

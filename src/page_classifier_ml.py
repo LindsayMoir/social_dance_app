@@ -12,7 +12,7 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from evaluation_holdout import load_gold_holdout_urls
+from evaluation_holdout import load_dev_urls, load_gold_holdout_urls, normalize_evaluation_url
 
 try:
     import joblib
@@ -69,9 +69,10 @@ def train_page_classifier_models(
     ].copy()
     labeled = labeled[~labeled["url"].astype(str).map(_is_email_like_input)].copy()
     labeled = labeled[labeled["reviewed_truth_owner_step"].astype(str).str.strip() != "emails.py"].copy()
-    holdout_urls = load_gold_holdout_urls()
-    if holdout_urls:
-        labeled = labeled[~labeled["url"].astype(str).str.strip().isin(holdout_urls)].copy()
+    excluded_urls = load_gold_holdout_urls() | load_dev_urls()
+    if excluded_urls:
+        normalized_urls = labeled["url"].astype(str).map(normalize_evaluation_url)
+        labeled = labeled[~normalized_urls.isin(excluded_urls)].copy()
     if labeled.empty:
         raise ValueError(f"No labeled rows found in {csv_path}")
 

@@ -12,7 +12,7 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from evaluation_holdout import load_gold_holdout_urls
+from evaluation_holdout import load_dev_urls, load_gold_holdout_urls, normalize_evaluation_url
 from page_classifier import classify_page_with_confidence
 
 
@@ -38,8 +38,8 @@ def promote_training_candidates(
         raise ValueError(f"Training CSV is empty: {training_path}")
 
     header = list(rows[0].keys())
-    existing_urls = {str(row.get("url") or "").strip() for row in rows}
-    holdout_urls = load_gold_holdout_urls()
+    existing_urls = {normalize_evaluation_url(row.get("url")) for row in rows if normalize_evaluation_url(row.get("url"))}
+    excluded_urls = load_gold_holdout_urls() | load_dev_urls()
     current_row_ids = [int(str(row.get("row_id") or "0") or 0) for row in rows if str(row.get("row_id") or "").strip().isdigit()]
     next_row_id = max(current_row_ids, default=0) + 1
 
@@ -62,7 +62,7 @@ def promote_training_candidates(
         selected, reason = _select_candidate(
             candidate=candidate,
             existing_urls=existing_urls,
-            holdout_urls=holdout_urls,
+            excluded_urls=excluded_urls,
             domain_archetype_counts=existing_domain_archetype_counts,
             max_per_domain_per_archetype=max_per_domain_per_archetype,
         )
@@ -83,7 +83,9 @@ def promote_training_candidates(
         url = str(csv_row.get("url") or "").strip()
         domain = (urlparse(url).netloc or "").lower()
         archetype = str(csv_row.get("reviewed_truth_archetype") or "").strip()
-        existing_urls.add(url)
+        normalized_url = normalize_evaluation_url(url)
+        if normalized_url:
+            existing_urls.add(normalized_url)
         existing_domain_archetype_counts[(domain, archetype)] += 1
         next_row_id += 1
 
@@ -118,17 +120,18 @@ def _select_candidate(
     *,
     candidate: dict[str, Any],
     existing_urls: set[str],
-    holdout_urls: set[str],
+    excluded_urls: set[str],
     domain_archetype_counts: Counter[tuple[str, str]],
     max_per_domain_per_archetype: int,
 ) -> tuple[bool, str]:
-    url = str(candidate.get("normalized_url") or "").strip()
-    if not url:
+    raw_url = str(candidate.get("normalized_url") or "").strip()
+    if not raw_url:
         return False, "missing_url"
-    if _is_email_like_input(url):
+    if _is_email_like_input(raw_url):
         return False, "email_like_input_excluded"
-    if url in holdout_urls:
-        return False, "holdout_url_excluded"
+    url = normalize_evaluation_url(raw_url)
+    if url in excluded_urls:
+        return False, "evaluation_url_excluded"
     if url in existing_urls:
         return False, "duplicate_url"
     if not bool(candidate.get("training_eligible")):

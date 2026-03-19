@@ -190,7 +190,7 @@ def test_promote_training_candidates_excludes_holdout_urls(tmp_path) -> None:
     queue_summary = {
         "candidates": [
             {
-                "normalized_url": "https://www.redhotswing.com/",
+                "normalized_url": "https://www.redhotswing.com",
                 "domain": "www.redhotswing.com",
                 "query_text": "query",
                 "status": "auto_positive_candidate",
@@ -211,4 +211,35 @@ def test_promote_training_candidates_excludes_holdout_urls(tmp_path) -> None:
     )
 
     assert result["promoted_count"] == 0
-    assert result["skipped"][0]["reason"] == "holdout_url_excluded"
+    assert result["skipped"][0]["reason"] == "evaluation_url_excluded"
+
+
+def test_promote_training_candidates_excludes_dev_urls(tmp_path) -> None:
+    training_csv = tmp_path / "training.csv"
+    _write_training_csv(training_csv)
+
+    queue_summary = {
+        "candidates": [
+            {
+                "normalized_url": "https://www.bardandbanker.com/live-music",
+                "domain": "www.bardandbanker.com",
+                "query_text": "query",
+                "status": "auto_positive_candidate",
+                "training_eligible": True,
+                "recommended_archetype": "simple_page",
+                "recommended_owner_step": "scraper.py",
+                "priority_score": 120,
+                "match_rate_pct": 100.0,
+            }
+        ]
+    }
+
+    result = promote_training_candidates(
+        queue_summary=queue_summary,
+        training_csv_path=training_csv,
+        max_promotions=10,
+        max_per_domain_per_archetype=3,
+    )
+
+    assert result["promoted_count"] == 0
+    assert result["skipped"][0]["reason"] == "evaluation_url_excluded"

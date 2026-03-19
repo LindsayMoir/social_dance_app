@@ -131,6 +131,8 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert run_scorecard["kpis"]["events_coverage"]["summary"]["watchlist_source_hit_rate_pct"] == 80.0
     assert run_scorecard["evaluation_scope"]["uses_holdout"] is True
     assert run_scorecard["evaluation_scope"]["holdout_summary"]["replay_url_accuracy_pct"] == 78.0
+    assert run_scorecard["evaluation_scope"]["uses_dev_split"] is True
+    assert run_scorecard["evaluation_scope"]["dev_version"] == "v1"
     assert run_scorecard["overall_score"]["status"] == "PRELIMINARY"
 
 
@@ -277,7 +279,7 @@ def test_phase3_holdout_domain_caps_and_guardrails() -> None:
             {
                 "is_match": True,
                 "mismatch_category": "",
-                "baseline": {"url": "https://www.redhotswing.com/"},
+                "baseline": {"url": "https://www.redhotswing.com"},
                 "baseline_event_id": 1,
             },
             {
