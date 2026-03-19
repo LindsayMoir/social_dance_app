@@ -1,13 +1,14 @@
 # Evaluation Framework
 
 ## Purpose
-Define a stable, honest evaluation framework for DanceScoop that optimizes the four core KPIs without allowing the system to improve one metric by silently damaging another.
+Define a stable, honest evaluation framework for DanceScoop that optimizes the five core KPIs without allowing the system to improve one metric by silently damaging another.
 
-The four KPIs are:
+The five KPIs are:
 1. Database Accuracy
 2. Events Coverage
 3. Run Time
 4. Run Costs
+5. Chatbot Quality
 
 This framework is intended to support:
 1. Human review
@@ -153,6 +154,31 @@ Recommended interpretation:
 2. Cost per URL and cost per inserted event make runs comparable over time.
 3. Step-level and provider-level costs identify where optimization will matter most.
 
+### 5. Chatbot Quality
+Chatbot Quality answers:
+"Does the chatbot respond quickly enough and correctly enough to be useful?"
+
+This KPI must include both latency and correctness. A chatbot that answers within the time target but gives a wrong answer is failing. A chatbot that gives a correct answer too slowly is also failing.
+
+Primary service target:
+1. The chatbot should respond within `15` seconds.
+
+Recommended submetrics:
+1. `chatbot_response_within_15s_pct`
+2. `chatbot_p50_latency_seconds`
+3. `chatbot_p95_latency_seconds`
+4. `chatbot_answer_correctness_pct`
+5. `chatbot_sql_validity_pct`
+6. `chatbot_hallucination_rate_pct`
+7. `chatbot_fallback_rate_pct`
+8. `chatbot_user_visible_error_rate_pct`
+
+Recommended interpretation:
+1. The `within_15s` metric is the primary latency KPI.
+2. Correctness must be measured separately from latency.
+3. SQL validity matters for any chatbot flows that generate or execute SQL.
+4. Hallucination and user-visible error rates should be treated as quality failures even when latency is good.
+
 ## KPI Weighting
 The framework should compute both:
 1. Individual KPI scores
@@ -163,12 +189,14 @@ Recommended initial weights:
 2. Events Coverage: `0.30`
 3. Run Time: `0.15`
 4. Run Costs: `0.10`
+5. Chatbot Quality: separate scorecard and gate until weighted integration is defined
 
 Rationale:
 1. Accuracy is the most important KPI.
 2. Coverage is second because missing major community events undermines the product.
 3. Runtime matters operationally but should not dominate product quality.
 4. Costs matter, but they should not be optimized ahead of correctness and coverage.
+5. Chatbot Quality should be measured as a first-class KPI, but because it is a different product surface from the scraper pipeline, it should initially be reported and gated separately rather than mixed into the pipeline score without enough baseline history.
 
 These weights can change, but changes should be explicit and versioned.
 
@@ -185,9 +213,10 @@ Supporting artifacts:
 4. `output/coverage_summary.json`
 5. `output/runtime_summary.json`
 6. `output/llm_cost_summary.json`
-7. `output/classifier_training_queue.json`
-8. `output/classifier_review_queue.json`
-9. `output/comprehensive_test_report.html`
+7. `output/chatbot_quality_summary.json`
+8. `output/classifier_training_queue.json`
+9. `output/classifier_review_queue.json`
+10. `output/comprehensive_test_report.html`
 
 Operational rule:
 1. JSON artifacts are the source of truth.
@@ -230,7 +259,8 @@ Persistence rules:
     "database_accuracy": {},
     "events_coverage": {},
     "run_time": {},
-    "run_costs": {}
+    "run_costs": {},
+    "chatbot_quality": {}
   },
   "guardrails": {},
   "overall_score": {},
@@ -361,6 +391,27 @@ The `recommendations_input` section should point Codex toward:
 }
 ```
 
+### Chatbot Quality Example
+```json
+{
+  "score": 84.2,
+  "weight": null,
+  "summary": {
+    "chatbot_response_within_15s_pct": 93.0,
+    "chatbot_p50_latency_seconds": 6.4,
+    "chatbot_p95_latency_seconds": 13.8,
+    "chatbot_answer_correctness_pct": 88.0,
+    "chatbot_sql_validity_pct": 97.0,
+    "chatbot_hallucination_rate_pct": 3.0,
+    "chatbot_user_visible_error_rate_pct": 1.5
+  },
+  "sample_sizes": {
+    "chat_sessions_evaluated": 120,
+    "graded_responses": 75
+  }
+}
+```
+
 ## Anti-Cheating Controls
 This section is mandatory. Without it, the system will optimize toward misleading improvements.
 
@@ -436,6 +487,9 @@ Example guardrails:
 2. `events_coverage_min_pct = 65.0`
 3. `severe_duplicate_rate_max_per_100_events = 2.0`
 4. `stale_event_rate_max_pct = 5.0`
+5. `chatbot_response_within_15s_min_pct = 90.0`
+6. `chatbot_answer_correctness_min_pct = 85.0`
+7. `chatbot_user_visible_error_rate_max_pct = 3.0`
 
 ### 6. Cap Domain Influence
 Some domains recur frequently and can distort both training and evaluation.
@@ -590,6 +644,38 @@ Recommended optimization priorities:
 2. Prefer deterministic short-circuits over expensive LLM calls where the route is already known.
 3. Prefer reuse of already-known stable event detail records over repeated full extraction when policy conditions are met.
 
+## Chatbot Evaluation Requirements
+The chatbot must be evaluated as a product surface with its own latency and correctness requirements.
+
+Primary requirement:
+1. User-visible responses should be returned within `15` seconds.
+
+Required chatbot metrics:
+1. `chatbot_response_within_15s_pct`
+2. `chatbot_p50_latency_seconds`
+3. `chatbot_p95_latency_seconds`
+4. `chatbot_answer_correctness_pct`
+5. `chatbot_sql_validity_pct`
+6. `chatbot_hallucination_rate_pct`
+7. `chatbot_user_visible_error_rate_pct`
+8. `chatbot_fallback_rate_pct`
+
+Measurement rules:
+1. Latency should be measured end-to-end from user request receipt to final response delivery.
+2. Correctness should be measured from a graded evaluation set, not inferred from latency or successful API return.
+3. SQL validity should be measured separately for chatbot requests that produce SQL.
+4. Hallucination rate should be measured on a reviewed sample of responses.
+5. Timeouts, hard failures, and visibly broken answers should count against chatbot quality even if retries eventually succeed internally.
+
+Recommended chatbot artifacts:
+1. `output/chatbot_quality_summary.json`
+2. Chatbot latency and correctness trend sections in `output/comprehensive_test_report.html`
+
+Recommended chatbot trend graphs:
+1. `Chatbot responses within 15s %`
+2. `Chatbot correctness %`
+3. `Chatbot p95 latency seconds`
+
 ## Codex Review Loop
 Codex should not be allowed to optimize directly against vague feedback. It should read a stable evaluation bundle and produce a constrained plan.
 
@@ -601,8 +687,9 @@ Recommended review inputs:
 5. `output/coverage_summary.json`
 6. `output/runtime_summary.json`
 7. `output/llm_cost_summary.json`
-8. `output/comprehensive_test_report.html`
-9. Relevant pipeline logs
+8. `output/chatbot_quality_summary.json`
+9. `output/comprehensive_test_report.html`
+10. Relevant pipeline logs
 
 Codex review discipline:
 1. Codex should propose changes against the KPI scorecard, not against subjective impressions from one run.
@@ -668,7 +755,8 @@ If a future automated optimization layer is added, it must still operate within 
 1. Add `run_scorecard.json`.
 2. Add `runtime_summary.json`.
 3. Add `llm_cost_summary.json`.
-4. Add classifier metrics to the scorecard.
+4. Add `chatbot_quality_summary.json`.
+5. Add classifier metrics to the scorecard.
 
 ### Phase 2: Integrity Coverage
 1. Add `duplicate_audit_summary.json`.
@@ -690,19 +778,21 @@ If a future automated optimization layer is added, it must still operate within 
 
 ## Definition of Done
 The evaluation framework is not complete until:
-1. All four KPI families are measured.
+1. All five KPI families are measured.
 2. Duplicate problems are measured explicitly.
 3. Coverage is measured against an external watchlist or audit set.
 4. Runtime and cost are reported at step level.
 5. A holdout evaluation set exists.
 6. Guardrails block false improvements.
 7. Codex recommendations are generated from stable artifacts, not ad hoc intuition.
+8. Chatbot latency and correctness are measured, including the `15` second response target.
 
 ## Immediate Next Actions
 1. Add `output/run_scorecard.json`.
 2. Add `output/runtime_summary.json`.
 3. Add `output/llm_cost_summary.json`.
 4. Add `output/duplicate_audit_summary.json`.
-5. Create `data/watchlists/coverage_watchlist.csv`.
-6. Add a holdout evaluation definition.
-7. Extend `comprehensive_test_report.html` to surface the scorecard and guardrail outcomes.
+5. Add `output/chatbot_quality_summary.json`.
+6. Create `data/watchlists/coverage_watchlist.csv`.
+7. Add a holdout evaluation definition.
+8. Extend `comprehensive_test_report.html` to surface the scorecard and guardrail outcomes.
