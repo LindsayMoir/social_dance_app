@@ -92,6 +92,7 @@ _TRANSIENT_DB_ERROR_MARKERS = (
     "the database system is starting up",
 )
 CHATBOT_METRICS_SYNC_LOG_PATH = os.path.join(log_dir, "chatbot_metrics_sync_log.txt")
+RUN_SCORECARD_PATH = os.path.join("output", "run_scorecard.json")
 
 
 def _is_transient_database_error(message: str) -> bool:
@@ -120,6 +121,37 @@ def _append_chatbot_sync_log(event: str, details: dict | None = None, level: str
                 fh.write(serialized)
     except Exception as e:
         logger.warning("_append_chatbot_sync_log(): failed to append diagnostic log: %s", e)
+
+
+def _load_run_scorecard() -> dict:
+    """Load the latest validation run scorecard from disk when available."""
+    try:
+        with open(RUN_SCORECARD_PATH, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _scorecard_guardrails_allow(action: str) -> bool:
+    """Return True when the latest scorecard permits the requested action."""
+    scorecard = _load_run_scorecard()
+    if not scorecard:
+        logger.warning("_scorecard_guardrails_allow(): No run scorecard found for action=%s", action)
+        return False
+    guardrails = scorecard.get("guardrails", {}) if isinstance(scorecard.get("guardrails"), dict) else {}
+    status = str(guardrails.get("status", "UNKNOWN") or "UNKNOWN").upper()
+    if status == "PASS":
+        return True
+    logger.warning(
+        "_scorecard_guardrails_allow(): Blocking %s because guardrails status is %s",
+        action,
+        status,
+    )
+    violations = guardrails.get("violations", []) if isinstance(guardrails.get("violations"), list) else []
+    for violation in violations[:10]:
+        logger.warning("_scorecard_guardrails_allow(): violation=%s", violation)
+    return False
 
 # Define common configuration updates for all pipeline steps
 COMMON_CONFIG_UPDATES = {
@@ -1579,6 +1611,9 @@ def classifier_training_promotion_step():
     logger.info("CLASSIFIER TRAINING PROMOTION STEP")
     logger.info("Promote safe replay-derived URL candidates into training CSV")
     logger.info("=" * 70)
+    if not _scorecard_guardrails_allow("classifier_training_promotion"):
+        logger.warning("classifier_training_promotion_step: Guardrails failed; skipping promotion step")
+        return True
 
     promotion_result = run_classifier_training_promotion()
     logger.info(
@@ -1663,6 +1698,8 @@ def copy_dev_db_to_prod_db_step():
     from urllib.parse import urlparse
 
     logger.info("def copy_dev_db_to_prod_db_step(): Starting table copy to production.")
+    if not _scorecard_guardrails_allow("copy_dev_to_prod"):
+        raise Exception("copy_dev_to_prod blocked: evaluation guardrails did not pass")
 
     # Get source database based on current DATABASE_TARGET
     source_conn_str, source_env_name = get_database_config()

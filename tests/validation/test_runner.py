@@ -1691,6 +1691,7 @@ class ValidationTestRunner:
             chatbot_testing=results.get('chatbot_testing'),
         )
         duplicate_audit_summary = self._summarize_duplicate_audit()
+        event_data_quality_summary = self._summarize_event_data_quality()
         coverage_summary = self._summarize_coverage_watchlist()
         holdout_summary = self._summarize_holdout_replay(accuracy_replay_summary)
         domain_capped_summary = self._summarize_domain_capped_replay(accuracy_replay_summary)
@@ -1704,11 +1705,20 @@ class ValidationTestRunner:
             chatbot_quality_summary=chatbot_quality_summary,
             classifier_performance_summary=classifier_performance_summary,
             duplicate_summary=duplicate_audit_summary,
+            event_data_quality_summary=event_data_quality_summary,
             coverage_summary=coverage_summary,
             holdout_summary=holdout_summary,
             domain_capped_summary=domain_capped_summary,
         )
         run_scorecard["guardrails"] = self._evaluate_phase3_guardrails(run_scorecard)
+        run_scorecard["recommendations_input"] = self._build_recommendations_input(
+            run_scorecard=run_scorecard,
+            duplicate_summary=duplicate_audit_summary,
+            coverage_summary=coverage_summary,
+            classifier_performance_summary=classifier_performance_summary,
+            runtime_summary=runtime_summary,
+            llm_cost_summary=llm_cost_summary,
+        )
         if run_scorecard["guardrails"]["status"] == "PASS" and run_scorecard.get("overall_score", {}).get("value") is not None:
             run_scorecard["overall_score"]["status"] = "PASS"
         else:
@@ -1722,6 +1732,7 @@ class ValidationTestRunner:
             coverage_summary=coverage_summary,
             holdout_summary=holdout_summary,
             domain_capped_summary=domain_capped_summary,
+            event_data_quality_summary=event_data_quality_summary,
         )
         self._persist_validation_artifacts(
             run_id=report_run_id,
@@ -1731,6 +1742,7 @@ class ValidationTestRunner:
                 "llm_cost_summary": llm_cost_summary,
                 "chatbot_quality_summary": chatbot_quality_summary,
                 "duplicate_audit_summary": duplicate_audit_summary,
+                "event_data_quality_summary": event_data_quality_summary,
                 "coverage_summary": coverage_summary,
                 "holdout_summary": holdout_summary,
                 "domain_capped_summary": domain_capped_summary,
@@ -1872,6 +1884,9 @@ class ValidationTestRunner:
         duplicate_audit_summary_path = os.path.join(output_dir, 'duplicate_audit_summary.json')
         with open(duplicate_audit_summary_path, 'w', encoding='utf-8') as f:
             json.dump(duplicate_audit_summary, f, indent=2)
+        event_data_quality_summary_path = os.path.join(output_dir, 'event_data_quality_summary.json')
+        with open(event_data_quality_summary_path, 'w', encoding='utf-8') as f:
+            json.dump(event_data_quality_summary, f, indent=2)
         coverage_summary_path = os.path.join(output_dir, 'coverage_summary.json')
         with open(coverage_summary_path, 'w', encoding='utf-8') as f:
             json.dump(coverage_summary, f, indent=2)
@@ -1929,6 +1944,7 @@ class ValidationTestRunner:
         logging.info(f"LLM cost summary saved: {llm_cost_summary_path}")
         logging.info(f"Chatbot quality summary saved: {chatbot_quality_summary_path}")
         logging.info(f"Duplicate audit summary saved: {duplicate_audit_summary_path}")
+        logging.info(f"Event data quality summary saved: {event_data_quality_summary_path}")
         logging.info(f"Coverage summary saved: {coverage_summary_path}")
         logging.info(f"Holdout summary saved: {holdout_summary_path}")
         logging.info(f"Domain-capped summary saved: {domain_capped_summary_path}")
@@ -2695,6 +2711,58 @@ class ValidationTestRunner:
         )
         return summary
 
+    def _summarize_event_data_quality(self) -> dict:
+        """Summarize stale and invalid event rates from the current events table."""
+        summary = {
+            "available": False,
+            "total_events": 0,
+            "invalid_event_count": 0,
+            "invalid_event_rate_pct": None,
+            "stale_event_count": 0,
+            "stale_event_rate_pct": None,
+            "error": "",
+        }
+        try:
+            total_rows = self.db_handler.execute_query("SELECT COUNT(*) FROM events") or []
+            total_events = int(total_rows[0][0]) if total_rows else 0
+            summary["total_events"] = total_events
+            if total_events <= 0:
+                summary["available"] = True
+                return summary
+
+            invalid_rows = self.db_handler.execute_query(
+                """
+                SELECT COUNT(*)
+                FROM events
+                WHERE COALESCE(NULLIF(TRIM(event_name), ''), '') = ''
+                   OR start_date IS NULL
+                   OR COALESCE(NULLIF(TRIM(url), ''), '') = ''
+                """
+            ) or []
+            stale_rows = self.db_handler.execute_query(
+                """
+                SELECT COUNT(*)
+                FROM events
+                WHERE COALESCE(end_date, start_date) < CURRENT_DATE
+                """
+            ) or []
+        except Exception as e:
+            summary["error"] = f"event quality query failed: {e}"
+            return summary
+
+        invalid_count = int(invalid_rows[0][0]) if invalid_rows else 0
+        stale_count = int(stale_rows[0][0]) if stale_rows else 0
+        summary.update(
+            {
+                "available": True,
+                "invalid_event_count": invalid_count,
+                "invalid_event_rate_pct": round((invalid_count / total_events) * 100.0, 2),
+                "stale_event_count": stale_count,
+                "stale_event_rate_pct": round((stale_count / total_events) * 100.0, 2),
+            }
+        )
+        return summary
+
     def _build_phase2_integrity_html(self, duplicate_summary: dict, coverage_summary: dict) -> str:
         """Render a compact Phase 2 integrity section for duplicates and watchlist coverage."""
         dup_rate = duplicate_summary.get("duplicate_rate_per_100_events")
@@ -2770,6 +2838,65 @@ class ValidationTestRunner:
             f"<strong>Domain cap:</strong> {int(domain_capped_summary.get('per_domain_cap', 0) or 0)}</p>"
         )
         return html
+
+    def _build_recommendations_input(
+        self,
+        *,
+        run_scorecard: dict,
+        duplicate_summary: dict,
+        coverage_summary: dict,
+        classifier_performance_summary: dict,
+        runtime_summary: dict,
+        llm_cost_summary: dict,
+    ) -> dict:
+        """Build a structured recommendations_input section for Codex review."""
+        guardrails = run_scorecard.get("guardrails", {}) if isinstance(run_scorecard.get("guardrails"), dict) else {}
+        violations = guardrails.get("violations", []) if isinstance(guardrails.get("violations"), list) else []
+        top_regressions = [str(item.get("detail") or "") for item in violations[:5] if str(item.get("detail") or "").strip()]
+
+        largest_cost_deltas: list[dict[str, Any]] = []
+        by_provider = llm_cost_summary.get("by_provider", {}) if isinstance(llm_cost_summary.get("by_provider"), dict) else {}
+        for provider_key, value in by_provider.items():
+            if value is None:
+                continue
+            largest_cost_deltas.append({"bucket": provider_key, "usd": float(value)})
+        largest_cost_deltas.sort(key=lambda item: float(item.get("usd", 0.0)), reverse=True)
+
+        stage_details = classifier_performance_summary.get("stage_details", []) if isinstance(classifier_performance_summary.get("stage_details"), list) else []
+        classifier_regressions = []
+        for item in stage_details:
+            if not isinstance(item, dict):
+                continue
+            classifier_regressions.append(
+                {
+                    "stage": str(item.get("stage") or ""),
+                    "replay_url_accuracy_pct": item.get("replay_url_accuracy_pct"),
+                    "replay_url_count": item.get("replay_url_count"),
+                }
+            )
+
+        duplicate_hotspots = duplicate_summary.get("top_duplicate_domains", []) if isinstance(duplicate_summary.get("top_duplicate_domains"), list) else []
+        coverage_gaps = coverage_summary.get("missed_sources", []) if isinstance(coverage_summary.get("missed_sources"), list) else []
+        bottlenecks = []
+        for span in runtime_summary.get("step_spans", []) if isinstance(runtime_summary.get("step_spans"), list) else []:
+            if not isinstance(span, dict):
+                continue
+            bottlenecks.append(
+                {
+                    "step": str(span.get("log_file") or ""),
+                    "duration_minutes": float(span.get("duration_minutes", 0.0) or 0.0),
+                }
+            )
+        bottlenecks.sort(key=lambda item: float(item.get("duration_minutes", 0.0)), reverse=True)
+
+        return {
+            "top_regressions": top_regressions,
+            "largest_cost_deltas": largest_cost_deltas[:5],
+            "runtime_bottlenecks": bottlenecks[:5],
+            "duplicate_hotspots": duplicate_hotspots[:5],
+            "coverage_gaps": coverage_gaps[:5],
+            "classifier_routing_regressions": classifier_regressions[:5],
+        }
 
     def _summarize_holdout_replay(self, accuracy_replay_summary: dict | None) -> dict:
         """Summarize replay results restricted to the gold holdout URL set."""
@@ -2908,11 +3035,25 @@ class ValidationTestRunner:
                 "Watchlist source hit rate below minimum",
             ),
             (
+                "events_coverage_min_pct",
+                coverage.get("watchlist_event_capture_rate_pct"),
+                65.0,
+                "min",
+                "Watchlist event capture rate below minimum",
+            ),
+            (
                 "severe_duplicate_rate_max_per_100_events",
                 db_accuracy.get("severe_duplicate_rate_per_100_events"),
                 2.0,
                 "max",
                 "Severe duplicate rate above maximum",
+            ),
+            (
+                "stale_event_rate_max_pct",
+                db_accuracy.get("stale_event_rate_pct"),
+                5.0,
+                "max",
+                "Stale event rate above maximum",
             ),
             (
                 "chatbot_response_within_15s_min_pct",
@@ -2927,6 +3068,13 @@ class ValidationTestRunner:
                 85.0,
                 "min",
                 "Chatbot correctness below minimum",
+            ),
+            (
+                "chatbot_user_visible_error_rate_max_pct",
+                chatbot.get("chatbot_user_visible_error_rate_pct"),
+                3.0,
+                "max",
+                "Chatbot user-visible error rate above maximum",
             ),
         ]
         violations: list[dict[str, Any]] = []
@@ -6872,6 +7020,7 @@ class ValidationTestRunner:
         coverage_summary: dict | None = None,
         holdout_summary: dict | None = None,
         domain_capped_summary: dict | None = None,
+        event_data_quality_summary: dict | None = None,
     ) -> None:
         """Persist key Phase 1 metrics for trend reporting."""
         if not getattr(self, "db_handler", None) or not hasattr(self.db_handler, "record_metric_observation"):
@@ -6912,7 +7061,7 @@ class ValidationTestRunner:
         coverage_info = coverage_summary if isinstance(coverage_summary, dict) else {}
         holdout_info = holdout_summary if isinstance(holdout_summary, dict) else {}
         domain_capped_info = domain_capped_summary if isinstance(domain_capped_summary, dict) else {}
-        dev_urls = load_dev_urls()
+        event_data_quality = event_data_quality_summary if isinstance(event_data_quality_summary, dict) else {}
         metric_specs.extend(
             [
                 (
@@ -6956,6 +7105,20 @@ class ValidationTestRunner:
                     "percent",
                     "Phase 3 honest evaluation: replay URL accuracy after per-domain cap",
                     True,
+                ),
+                (
+                    "invalid_event_rate_pct",
+                    event_data_quality.get("invalid_event_rate_pct"),
+                    "percent",
+                    "Event data quality: invalid events in current events table",
+                    False,
+                ),
+                (
+                    "stale_event_rate_pct",
+                    event_data_quality.get("stale_event_rate_pct"),
+                    "percent",
+                    "Event data quality: stale events in current events table",
+                    False,
                 ),
             ]
         )
@@ -7010,6 +7173,7 @@ class ValidationTestRunner:
         chatbot_quality_summary: dict,
         classifier_performance_summary: dict | None,
         duplicate_summary: dict | None,
+        event_data_quality_summary: dict | None,
         coverage_summary: dict | None,
         holdout_summary: dict | None,
         domain_capped_summary: dict | None,
@@ -7021,6 +7185,7 @@ class ValidationTestRunner:
         source_distribution = scraping.get("source_distribution", {}) if isinstance(scraping.get("source_distribution"), dict) else {}
         classifier = classifier_performance_summary if isinstance(classifier_performance_summary, dict) else {}
         duplicate_info = duplicate_summary if isinstance(duplicate_summary, dict) else {}
+        event_data_quality = event_data_quality_summary if isinstance(event_data_quality_summary, dict) else {}
         coverage_info = coverage_summary if isinstance(coverage_summary, dict) else {}
         holdout_info = holdout_summary if isinstance(holdout_summary, dict) else {}
         domain_capped_info = domain_capped_summary if isinstance(domain_capped_summary, dict) else {}
@@ -7045,11 +7210,23 @@ class ValidationTestRunner:
                 events_coverage_score = 50.0
 
         runtime_minutes = runtime_summary.get("pipeline_duration_minutes")
+        total_classified_urls = int(classifier.get("total_classified_urls", 0) or 0)
+        total_events = int(event_data_quality.get("total_events", 0) or 0)
         runtime_score = None
         if runtime_minutes is not None:
             runtime_score = max(0.0, round(100.0 - float(runtime_minutes) / 6.0, 2))
 
         total_cost_usd = ((llm_cost_summary.get("summary") or {}).get("total_usd") if isinstance(llm_cost_summary.get("summary"), dict) else None)
+        cost_per_processed_url_usd = (
+            round(float(total_cost_usd) / total_classified_urls, 6)
+            if total_cost_usd is not None and total_classified_urls > 0
+            else None
+        )
+        cost_per_inserted_event_usd = (
+            round(float(total_cost_usd) / total_events, 6)
+            if total_cost_usd is not None and total_events > 0
+            else None
+        )
         run_cost_score = None
         if total_cost_usd is not None:
             run_cost_score = max(0.0, round(100.0 - (float(total_cost_usd) * 5.0), 2))
@@ -7093,6 +7270,8 @@ class ValidationTestRunner:
                         "false_count": int(replay.get("false_count", 0) or 0),
                         "duplicate_rate_per_100_events": duplicate_info.get("duplicate_rate_per_100_events"),
                         "severe_duplicate_rate_per_100_events": duplicate_info.get("severe_duplicate_rate_per_100_events"),
+                        "invalid_event_rate_pct": event_data_quality.get("invalid_event_rate_pct"),
+                        "stale_event_rate_pct": event_data_quality.get("stale_event_rate_pct"),
                         "classifier_effect": {
                             "ml_usage_pct": float(classifier.get("ml_usage_pct", 0.0) or 0.0),
                             "stage_counts": classifier.get("stage_counts", {}) if isinstance(classifier.get("stage_counts"), dict) else {},
@@ -7118,11 +7297,30 @@ class ValidationTestRunner:
                 },
                 "run_time": {
                     "score": runtime_score,
-                    "summary": runtime_summary,
+                    "summary": {
+                        **runtime_summary,
+                        "urls_processed_per_minute": (
+                            round(total_classified_urls / float(runtime_minutes), 4)
+                            if runtime_minutes not in (None, 0, 0.0) and total_classified_urls > 0
+                            else None
+                        ),
+                        "events_inserted_per_minute": (
+                            round(total_events / float(runtime_minutes), 4)
+                            if runtime_minutes not in (None, 0, 0.0) and total_events > 0
+                            else None
+                        ),
+                    },
                 },
                 "run_costs": {
                     "score": run_cost_score,
-                    "summary": llm_cost_summary,
+                    "summary": {
+                        **llm_cost_summary,
+                        "summary": {
+                            **((llm_cost_summary.get("summary") or {}) if isinstance(llm_cost_summary.get("summary"), dict) else {}),
+                            "cost_per_processed_url_usd": cost_per_processed_url_usd,
+                            "cost_per_inserted_event_usd": cost_per_inserted_event_usd,
+                        },
+                    },
                 },
                 "chatbot_quality": {
                     "score": chatbot_score,
@@ -7134,6 +7332,7 @@ class ValidationTestRunner:
                 "value": overall_value,
                 "status": "PRELIMINARY",
             },
+            "recommendations_input": {},
         }
 
     def _build_phase1_scorecard_html(self, run_scorecard: dict) -> str:

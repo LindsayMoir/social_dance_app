@@ -16,12 +16,20 @@ class _FakeDbHandler:
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.artifact_calls: list[dict] = []
+        self.query_map: dict[str, list[tuple]] = {}
 
     def record_metric_observation(self, **kwargs) -> None:
         self.calls.append(kwargs)
 
     def record_validation_run_artifact(self, **kwargs) -> None:
         self.artifact_calls.append(kwargs)
+
+    def execute_query(self, query, params=None):
+        normalized = " ".join(str(query).split())
+        for key, value in sorted(self.query_map.items(), key=lambda item: len(item[0]), reverse=True):
+            if key in normalized:
+                return value
+        raise AssertionError(normalized)
 
 
 def _build_runner() -> ValidationTestRunner:
@@ -99,6 +107,7 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
         llm_cost_summary=llm_cost_summary,
         chatbot_quality_summary=chatbot_quality_summary,
         classifier_performance_summary={
+            "total_classified_urls": 8,
             "ml_usage_pct": 25.0,
             "stage_counts": {"rule": 6, "ml": 2},
             "stage_details": [{"stage": "rule", "replay_url_accuracy_pct": 80.0}],
@@ -106,6 +115,11 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
         duplicate_summary={
             "duplicate_rate_per_100_events": 4.5,
             "severe_duplicate_rate_per_100_events": 1.5,
+        },
+        event_data_quality_summary={
+            "invalid_event_rate_pct": 1.25,
+            "stale_event_rate_pct": 2.5,
+            "total_events": 40,
         },
         coverage_summary={
             "source_hit_rate_pct": 80.0,
@@ -127,12 +141,18 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert run_scorecard["kpis"]["events_coverage"]["score"] == 85.0
     assert run_scorecard["kpis"]["chatbot_quality"]["score"] == 88.0
     assert run_scorecard["kpis"]["database_accuracy"]["summary"]["duplicate_rate_per_100_events"] == 4.5
+    assert run_scorecard["kpis"]["database_accuracy"]["summary"]["invalid_event_rate_pct"] == 1.25
+    assert run_scorecard["kpis"]["database_accuracy"]["summary"]["stale_event_rate_pct"] == 2.5
     assert run_scorecard["kpis"]["database_accuracy"]["summary"]["classifier_effect"]["ml_usage_pct"] == 25.0
     assert run_scorecard["kpis"]["events_coverage"]["summary"]["watchlist_source_hit_rate_pct"] == 80.0
     assert run_scorecard["evaluation_scope"]["uses_holdout"] is True
     assert run_scorecard["evaluation_scope"]["holdout_summary"]["replay_url_accuracy_pct"] == 78.0
     assert run_scorecard["evaluation_scope"]["uses_dev_split"] is True
     assert run_scorecard["evaluation_scope"]["dev_version"] == "v1"
+    assert run_scorecard["kpis"]["run_time"]["summary"]["urls_processed_per_minute"] == 0.0667
+    assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["cost_per_processed_url_usd"] == 0.5
+    assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["cost_per_inserted_event_usd"] == 0.1
+    assert "top_regressions" not in run_scorecard["recommendations_input"]
     assert run_scorecard["overall_score"]["status"] == "PRELIMINARY"
 
 
@@ -169,6 +189,10 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
         domain_capped_summary={
             "replay_url_accuracy_pct": 74.0,
         },
+        event_data_quality_summary={
+            "invalid_event_rate_pct": 1.5,
+            "stale_event_rate_pct": 2.25,
+        },
     )
 
     metric_keys = [call["metric_key"] for call in fake_db.calls]
@@ -183,6 +207,8 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
         "coverage_watchlist_event_capture_rate_pct",
         "holdout_replay_url_accuracy_pct",
         "domain_capped_replay_url_accuracy_pct",
+        "invalid_event_rate_pct",
+        "stale_event_rate_pct",
     ]
     assert all(call["run_id"] == "run-456" for call in fake_db.calls)
     assert all(isinstance(call["window_end"], datetime) for call in fake_db.calls)
@@ -272,6 +298,22 @@ def test_phase2_duplicate_and_coverage_summaries() -> None:
     assert coverage_summary["watchlist_source"] == "test_watchlist"
 
 
+def test_event_data_quality_summary() -> None:
+    runner = _build_runner()
+    fake_db = _FakeDbHandler()
+    fake_db.query_map = {
+        "SELECT COUNT(*) FROM events": [(40,)],
+        "COALESCE(NULLIF(TRIM(event_name), ''), '') = ''": [(2,)],
+        "COALESCE(end_date, start_date) < CURRENT_DATE": [(3,)],
+    }
+    runner.db_handler = fake_db
+
+    summary = runner._summarize_event_data_quality()
+    assert summary["available"] is True
+    assert summary["invalid_event_rate_pct"] == 5.0
+    assert summary["stale_event_rate_pct"] == 7.5
+
+
 def test_phase3_holdout_domain_caps_and_guardrails() -> None:
     runner = _build_runner()
     accuracy_replay = {
@@ -326,9 +368,10 @@ def test_phase3_holdout_domain_caps_and_guardrails() -> None:
         scraping_results={"summary": {"important_urls_checked": 10, "failed_count": 4}, "source_distribution": {"status": "WARNING"}},
         runtime_summary={"pipeline_duration_minutes": 120.0},
         llm_cost_summary={"summary": {"total_usd": 4.0}},
-        chatbot_quality_summary={"summary": {"chatbot_response_within_15s_pct": 85.0, "chatbot_answer_correctness_pct": 80.0}},
+        chatbot_quality_summary={"summary": {"chatbot_response_within_15s_pct": 85.0, "chatbot_answer_correctness_pct": 80.0, "chatbot_user_visible_error_rate_pct": 5.0}},
         classifier_performance_summary={},
         duplicate_summary={"duplicate_rate_per_100_events": 3.0, "severe_duplicate_rate_per_100_events": 2.5},
+        event_data_quality_summary={"invalid_event_rate_pct": 2.0, "stale_event_rate_pct": 6.0, "total_events": 50},
         coverage_summary={"source_hit_rate_pct": 55.0, "event_capture_rate_pct": 40.0, "watchlist_source": "test"},
         holdout_summary=holdout_summary,
         domain_capped_summary=domain_capped_summary,
@@ -339,7 +382,10 @@ def test_phase3_holdout_domain_caps_and_guardrails() -> None:
         "database_accuracy_min_pct",
         "holdout_replay_url_accuracy_min_pct",
         "coverage_watchlist_source_hit_rate_min_pct",
+        "events_coverage_min_pct",
         "severe_duplicate_rate_max_per_100_events",
+        "stale_event_rate_max_pct",
         "chatbot_response_within_15s_min_pct",
         "chatbot_answer_correctness_min_pct",
+        "chatbot_user_visible_error_rate_max_pct",
     }
