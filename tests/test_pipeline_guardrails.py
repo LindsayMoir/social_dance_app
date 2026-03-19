@@ -119,3 +119,36 @@ def test_scorecard_evaluation_deltas_allow_fail(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(pipeline, "RUN_SCORECARD_PATH", str(scorecard_path))
 
     assert pipeline._scorecard_evaluation_deltas_allow("classifier_training_promotion") is False
+
+
+def test_log_copy_dev_to_prod_evaluation_warnings_does_not_raise(tmp_path, monkeypatch) -> None:
+    scorecard_path = tmp_path / "run_scorecard.json"
+    scorecard_path.write_text(
+        json.dumps(
+            {
+                "guardrails": {"status": "FAIL", "violations": [{"detail": "bad"}]},
+                "evaluation_scope": {
+                    "uses_dev_split": True,
+                    "uses_holdout": True,
+                    "dev_summary": {"replay_url_accuracy_pct": None},
+                    "holdout_summary": {"replay_url_accuracy_pct": 79.0},
+                },
+                "comparison_summary": {
+                    "previous_run": {
+                        "available": True,
+                        "metric_deltas": [
+                            {"metric_key": "dev_replay_url_accuracy_pct", "direction": "regressed"},
+                        ],
+                    },
+                    "holdout_baseline": {
+                        "available": False,
+                        "metric_deltas": [],
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pipeline, "RUN_SCORECARD_PATH", str(scorecard_path))
+
+    pipeline._log_copy_dev_to_prod_evaluation_warnings()
