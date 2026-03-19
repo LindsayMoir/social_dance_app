@@ -180,6 +180,43 @@ def _scorecard_has_required_evaluation_scope(action: str) -> bool:
     )
     return False
 
+
+def _scorecard_evaluation_deltas_allow(action: str) -> bool:
+    """Return True when dev and holdout comparisons do not show regressions."""
+    scorecard = _load_run_scorecard()
+    if not scorecard:
+        logger.warning("_scorecard_evaluation_deltas_allow(): No run scorecard found for action=%s", action)
+        return False
+    comparison_summary = scorecard.get("comparison_summary", {}) if isinstance(scorecard.get("comparison_summary"), dict) else {}
+    previous_run = comparison_summary.get("previous_run", {}) if isinstance(comparison_summary.get("previous_run"), dict) else {}
+    holdout_baseline = comparison_summary.get("holdout_baseline", {}) if isinstance(comparison_summary.get("holdout_baseline"), dict) else {}
+    if not previous_run.get("available") or not holdout_baseline.get("available"):
+        logger.warning(
+            "_scorecard_evaluation_deltas_allow(): Blocking %s because previous-run or holdout-baseline comparison is unavailable",
+            action,
+        )
+        return False
+
+    def _metric_regressed(comparison: dict, metric_key: str) -> bool:
+        for item in comparison.get("metric_deltas", []) if isinstance(comparison.get("metric_deltas"), list) else []:
+            if str(item.get("metric_key") or "") != metric_key:
+                continue
+            return str(item.get("direction") or "").lower() == "regressed"
+        return True
+
+    dev_regressed = _metric_regressed(previous_run, "dev_replay_url_accuracy_pct")
+    holdout_regressed = _metric_regressed(holdout_baseline, "holdout_replay_url_accuracy_pct")
+    if not dev_regressed and not holdout_regressed:
+        return True
+    logger.warning(
+        "_scorecard_evaluation_deltas_allow(): Blocking %s because evaluation regressed "
+        "(dev_regressed=%s, holdout_regressed=%s)",
+        action,
+        dev_regressed,
+        holdout_regressed,
+    )
+    return False
+
 # Define common configuration updates for all pipeline steps
 COMMON_CONFIG_UPDATES = {
     "testing": {"drop_tables": False},
@@ -1644,6 +1681,9 @@ def classifier_training_promotion_step():
     if not _scorecard_has_required_evaluation_scope("classifier_training_promotion"):
         logger.warning("classifier_training_promotion_step: Dev/holdout evaluation incomplete; skipping promotion step")
         return True
+    if not _scorecard_evaluation_deltas_allow("classifier_training_promotion"):
+        logger.warning("classifier_training_promotion_step: Dev/holdout comparisons regressed; skipping promotion step")
+        return True
 
     promotion_result = run_classifier_training_promotion()
     logger.info(
@@ -1732,6 +1772,8 @@ def copy_dev_db_to_prod_db_step():
         raise Exception("copy_dev_to_prod blocked: evaluation guardrails did not pass")
     if not _scorecard_has_required_evaluation_scope("copy_dev_to_prod"):
         raise Exception("copy_dev_to_prod blocked: dev/holdout evaluation is incomplete")
+    if not _scorecard_evaluation_deltas_allow("copy_dev_to_prod"):
+        raise Exception("copy_dev_to_prod blocked: dev/holdout comparisons regressed")
 
     # Get source database based on current DATABASE_TARGET
     source_conn_str, source_env_name = get_database_config()

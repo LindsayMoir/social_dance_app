@@ -19,6 +19,7 @@ import os
 import csv
 import json
 import ast
+import subprocess
 from collections import Counter
 import re
 from typing import Any
@@ -1542,6 +1543,8 @@ class ValidationTestRunner:
         stage_replay_url_success: Counter[str] = Counter()
         stage_replay_row_totals: Counter[str] = Counter()
         stage_replay_row_success: Counter[str] = Counter()
+        stage_domain_url_totals: dict[str, Counter[str]] = {}
+        stage_domain_url_success: dict[str, Counter[str]] = {}
         archetype_counts: Counter[str] = Counter()
         owner_counts: Counter[str] = Counter()
 
@@ -1565,6 +1568,7 @@ class ValidationTestRunner:
             if confidence is not None:
                 stage_confidences.setdefault(stage, []).append(confidence)
 
+            domain = (urlparse(str(mapping.get("link") or "")).netloc or "").lower() or "(no domain)"
             replay_row_count = int(mapping.get("replay_row_count") or 0)
             replay_true_count = int(mapping.get("replay_true_count") or 0)
             replay_url_success = bool(mapping.get("replay_url_success")) if replay_row_count > 0 else None
@@ -1575,9 +1579,11 @@ class ValidationTestRunner:
                 stage_replay_url_totals.update([stage])
                 stage_replay_row_totals[stage] += replay_row_count
                 stage_replay_row_success[stage] += replay_true_count
+                stage_domain_url_totals.setdefault(stage, Counter()).update([domain])
                 if replay_url_success:
                     replay_url_success_total += 1
                     stage_replay_url_success.update([stage])
+                    stage_domain_url_success.setdefault(stage, Counter()).update([domain])
 
         stage_details: list[dict[str, Any]] = []
         for stage, count in stage_counts.items():
@@ -1609,6 +1615,32 @@ class ValidationTestRunner:
                 }
             )
         stage_details.sort(key=lambda item: (-int(item["url_count"]), str(item["stage"])))
+        stage_domain_details: list[dict[str, Any]] = []
+        for stage, domain_totals in stage_domain_url_totals.items():
+            domain_success = stage_domain_url_success.get(stage, Counter())
+            for domain, replay_stage_domain_total in domain_totals.items():
+                replay_stage_domain_success = int(domain_success.get(domain, 0))
+                stage_domain_details.append(
+                    {
+                        "stage": stage,
+                        "domain": domain,
+                        "replay_url_count": int(replay_stage_domain_total),
+                        "replay_url_success_count": replay_stage_domain_success,
+                        "replay_url_accuracy_pct": (
+                            round((replay_stage_domain_success / replay_stage_domain_total) * 100.0, 2)
+                            if replay_stage_domain_total
+                            else None
+                        ),
+                    }
+                )
+        stage_domain_details.sort(
+            key=lambda item: (
+                str(item.get("stage") or ""),
+                float(item.get("replay_url_accuracy_pct") if item.get("replay_url_accuracy_pct") is not None else -1.0),
+                -int(item.get("replay_url_count") or 0),
+                str(item.get("domain") or ""),
+            )
+        )
 
         summary = {
             "status": "OK",
@@ -1630,6 +1662,7 @@ class ValidationTestRunner:
             if replay_row_total
             else None,
             "stage_details": stage_details,
+            "stage_domain_details": stage_domain_details,
         }
 
         try:
@@ -3707,6 +3740,31 @@ class ValidationTestRunner:
             payload.setdefault("run_id", str(row[0] or ""))
             artifacts.append(payload)
         return artifacts
+
+    def _get_code_version_info(self) -> dict[str, str]:
+        """Return lightweight Git provenance for the current working tree when available."""
+        try:
+            git_commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_root,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except Exception:
+            git_commit = ""
+        try:
+            branch = subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=repo_root,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except Exception:
+            branch = ""
+        return {
+            "git_commit": git_commit,
+            "branch": branch,
+        }
 
     def _metric_delta(
         self,
@@ -8191,6 +8249,13 @@ class ValidationTestRunner:
                 "Phase 1 scorecard: chatbot graded correctness score",
                 True,
             ),
+            (
+                "phase1_chatbot_p95_latency_seconds",
+                ((chatbot_quality_summary.get("summary") or {}).get("chatbot_p95_latency_seconds") if isinstance(chatbot_quality_summary.get("summary"), dict) else None),
+                "seconds",
+                "Phase 1 scorecard: chatbot p95 latency in seconds",
+                False,
+            ),
         ]
         duplicate_info = duplicate_summary if isinstance(duplicate_summary, dict) else {}
         coverage_info = coverage_summary if isinstance(coverage_summary, dict) else {}
@@ -8467,6 +8532,7 @@ class ValidationTestRunner:
         return {
             "run_id": str(run_id or ""),
             "run_timestamp_utc": str(report_timestamp or datetime.utcnow().isoformat()),
+            "code_version": self._get_code_version_info(),
             "scorecard_version": "phase4",
             "evaluation_scope": {
                 "environment": str(os.getenv("RENDER_ENVIRONMENT", "local") or "local"),

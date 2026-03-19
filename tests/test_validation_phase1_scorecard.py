@@ -41,8 +41,13 @@ def _build_runner() -> ValidationTestRunner:
     return runner
 
 
+def _stub_code_version(runner: ValidationTestRunner) -> None:
+    runner._get_code_version_info = lambda: {"git_commit": "abc123", "branch": "main"}  # type: ignore[method-assign]
+
+
 def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     runner = _build_runner()
+    _stub_code_version(runner)
 
     runtime_summary = runner._build_phase1_runtime_summary(
         {
@@ -108,6 +113,7 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert chatbot_quality_summary["summary"]["chatbot_sql_validity_pct"] == 95.0
     assert chatbot_quality_summary["summary"]["chatbot_hallucination_rate_pct"] == 25.0
     assert chatbot_quality_summary["summary"]["chatbot_fallback_rate_pct"] == 20.0
+    assert chatbot_quality_summary["summary"]["chatbot_p95_latency_seconds"] == 14.2
     assert chatbot_quality_summary["summary"]["chatbot_user_visible_error_rate_pct"] == 10.0
 
     dev_summary = {
@@ -194,6 +200,7 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert run_scorecard["kpis"]["run_time"]["summary"]["urls_processed_per_minute"] == 0.0667
     assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["cost_per_processed_url_usd"] == 0.5
     assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["cost_per_inserted_event_usd"] == 0.1
+    assert run_scorecard["code_version"] == {"git_commit": "abc123", "branch": "main"}
     assert run_scorecard["scorecard_version"] == "phase4"
     assert run_scorecard["comparison_summary"] == {}
     assert "top_regressions" not in run_scorecard["recommendations_input"]
@@ -217,6 +224,7 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
             "summary": {
                 "chatbot_response_within_15s_pct": 92.0,
                 "chatbot_answer_correctness_pct": 87.5,
+                "chatbot_p95_latency_seconds": 13.4,
             }
         },
         duplicate_summary={
@@ -262,6 +270,7 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
         "phase1_total_llm_cost_usd",
         "phase1_chatbot_response_within_15s_pct",
         "phase1_chatbot_answer_correctness_pct",
+        "phase1_chatbot_p95_latency_seconds",
         "duplicate_rate_per_100_events",
         "severe_duplicate_rate_per_100_events",
         "coverage_watchlist_source_hit_rate_pct",
@@ -553,6 +562,7 @@ def test_domain_evaluation_and_codex_review_bundle() -> None:
 
 def test_phase3_holdout_domain_caps_and_guardrails() -> None:
     runner = _build_runner()
+    _stub_code_version(runner)
     accuracy_replay = {
         "rows": [
             {
@@ -726,3 +736,56 @@ def test_recommendation_plan_uses_existing_scorecard_signals() -> None:
     assert len(recommendation_plan["top_issues"]) == 3
     assert recommendation_plan["top_issues"][0]["issue_type"] == "guardrail_violation"
     assert "recommended_actions" in recommendation_plan["top_issues"][0]
+
+
+def test_classifier_performance_summary_includes_stage_domain_details() -> None:
+    runner = _build_runner()
+
+    class PerfDb:
+        def __init__(self) -> None:
+            self.metric_calls: list[dict] = []
+
+        def execute_query(self, query, params=None):
+            return [
+                {
+                    "link": "https://a.example.org/1",
+                    "archetype": "simple_page",
+                    "classification_stage": "ml",
+                    "classification_confidence": 0.8,
+                    "classification_owner_step": "scraper.py",
+                    "classification_subtype": "detail",
+                    "replay_row_count": 2,
+                    "replay_true_count": 2,
+                    "replay_url_success": True,
+                },
+                {
+                    "link": "https://a.example.org/2",
+                    "archetype": "simple_page",
+                    "classification_stage": "ml",
+                    "classification_confidence": 0.6,
+                    "classification_owner_step": "scraper.py",
+                    "classification_subtype": "detail",
+                    "replay_row_count": 1,
+                    "replay_true_count": 0,
+                    "replay_url_success": False,
+                },
+                {
+                    "link": "https://b.example.org/3",
+                    "archetype": "simple_page",
+                    "classification_stage": "rule",
+                    "classification_confidence": 0.9,
+                    "classification_owner_step": "scraper.py",
+                    "classification_subtype": "detail",
+                    "replay_row_count": 1,
+                    "replay_true_count": 1,
+                    "replay_url_success": True,
+                },
+            ]
+
+        def record_metric_observation(self, **kwargs):
+            self.metric_calls.append(kwargs)
+
+    runner.db_handler = PerfDb()
+    summary = runner._summarize_classifier_performance("run-1")
+    assert summary["status"] == "OK"
+    assert any(item["stage"] == "ml" and item["domain"] == "a.example.org" and item["replay_url_accuracy_pct"] == 50.0 for item in summary["stage_domain_details"])

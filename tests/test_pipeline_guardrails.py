@@ -63,3 +63,59 @@ def test_scorecard_has_required_evaluation_scope_fail(tmp_path, monkeypatch) -> 
     monkeypatch.setattr(pipeline, "RUN_SCORECARD_PATH", str(scorecard_path))
 
     assert pipeline._scorecard_has_required_evaluation_scope("classifier_training_promotion") is False
+
+
+def test_scorecard_evaluation_deltas_allow_pass(tmp_path, monkeypatch) -> None:
+    scorecard_path = tmp_path / "run_scorecard.json"
+    scorecard_path.write_text(
+        json.dumps(
+            {
+                "comparison_summary": {
+                    "previous_run": {
+                        "available": True,
+                        "metric_deltas": [
+                            {"metric_key": "dev_replay_url_accuracy_pct", "direction": "improved"},
+                        ],
+                    },
+                    "holdout_baseline": {
+                        "available": True,
+                        "metric_deltas": [
+                            {"metric_key": "holdout_replay_url_accuracy_pct", "direction": "unchanged"},
+                        ],
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pipeline, "RUN_SCORECARD_PATH", str(scorecard_path))
+
+    assert pipeline._scorecard_evaluation_deltas_allow("classifier_training_promotion") is True
+
+
+def test_scorecard_evaluation_deltas_allow_fail(tmp_path, monkeypatch) -> None:
+    scorecard_path = tmp_path / "run_scorecard.json"
+    scorecard_path.write_text(
+        json.dumps(
+            {
+                "comparison_summary": {
+                    "previous_run": {
+                        "available": True,
+                        "metric_deltas": [
+                            {"metric_key": "dev_replay_url_accuracy_pct", "direction": "regressed"},
+                        ],
+                    },
+                    "holdout_baseline": {
+                        "available": True,
+                        "metric_deltas": [
+                            {"metric_key": "holdout_replay_url_accuracy_pct", "direction": "improved"},
+                        ],
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pipeline, "RUN_SCORECARD_PATH", str(scorecard_path))
+
+    assert pipeline._scorecard_evaluation_deltas_allow("classifier_training_promotion") is False
