@@ -166,7 +166,7 @@ location:
   - Vernon
   epicentre: Victoria, British Columbia, Canada
 logging:
-  extracted_text: output/extracted_text.csv
+  extracted_text: output/codex_review/extracted_text.csv
   log_file: logs/pipeline_4938_20250728_113202680395.log
   log_file_p2: logs/log_file_p2.txt
   scraper_log_file: logs/scraper_log.txt
@@ -229,16 +229,16 @@ normalization:
       type: weekly_weekday
       weekday: Wednesday
 output:
-  address_alias_audit: output/address_alias_hits.csv
-  dedup: output/dedup.csv
+  address_alias_audit: output/duplicates/address_alias_hits.csv
+  dedup: output/duplicates/dedup.csv
   ebs_events: data/other/ebs_events.csv
-  ebs_keywords_processed: output/ebs_keywords_processed.csv
-  ebs_search_results: output/ebs_search_results.csv
-  events_urls_diff: output/events_urls_diff.csv
-  fb_search_results: output/fb_search_results.csv
-  gs_search_results: output/gs_search_results.csv
-  irrelevant_rows: output/irrelevant_rows.csv
-  is_foreign: output/is_foreign.csv
+  ebs_keywords_processed: output/events/ebs_keywords_processed.csv
+  ebs_search_results: output/events/ebs_search_results.csv
+  events_urls_diff: output/events/events_urls_diff.csv
+  fb_search_results: output/fb/fb_search_results.csv
+  gs_search_results: output/events/gs_search_results.csv
+  irrelevant_rows: output/duplicates/irrelevant_rows.csv
+  is_foreign: output/events/is_foreign.csv
 prompts:
   address:
     file: prompts/address_from_raw_page.txt

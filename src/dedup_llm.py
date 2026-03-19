@@ -38,6 +38,8 @@ from sqlalchemy import create_engine, text
 import subprocess
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
+
+from output_paths import duplicates_path, events_path
 import yaml
 
 from config_runtime import get_config_path, load_config
@@ -343,8 +345,7 @@ class DeduplicationHandler:
     ) -> None:
         """Persist parse failures for dedup LLM responses."""
         try:
-            os.makedirs("output", exist_ok=True)
-            artifact_path = os.path.join("output", "dedup_parse_failures.jsonl")
+            artifact_path = duplicates_path("dedup_parse_failures.jsonl")
             payload = {
                 "time": datetime.now().isoformat(),
                 "reason": reason,
@@ -1080,8 +1081,8 @@ class DeduplicationHandler:
                 considered as a core point (DBSCAN min_samples parameter). Defaults to 2.
 
         Outputs:
-            - "output/dups_trans_db_scan.csv": CSV file containing deduplicated event clusters.
-            - "output/stats_dedup.csv": CSV file containing deduplication run statistics.
+            - "output/duplicates/dups_trans_db_scan.csv": CSV file containing deduplicated event clusters.
+            - "output/duplicates/stats_dedup.csv": CSV file containing deduplication run statistics.
 
         Logs:
             - Information about the deduplication process, including progress and output file locations.
@@ -1191,8 +1192,9 @@ class DeduplicationHandler:
 
         if results:
             output_df = pd.concat(results, ignore_index=True)
-            output_df.to_csv("output/dups_trans_db_scan.csv", index=False)
-            logging.info("Saved deduplication results to output/dups_trans_db_scan.csv")
+            dups_scan_path = duplicates_path("dups_trans_db_scan.csv")
+            output_df.to_csv(dups_scan_path, index=False)
+            logging.info("Saved deduplication results to %s", dups_scan_path)
             
             # Create a clean summary of ALL cluster members for review (canonical + duplicates)
             cluster_review = output_df[
@@ -1204,11 +1206,12 @@ class DeduplicationHandler:
             
             # Sort by cluster_id so canonical and duplicates are grouped together
             cluster_review = cluster_review.sort_values(['cluster_id', 'status'])
-            cluster_review.to_csv("output/duplicates.csv", index=False)
+            duplicates_csv_path = duplicates_path("duplicates.csv")
+            cluster_review.to_csv(duplicates_csv_path, index=False)
             
             num_duplicates = len(cluster_review[cluster_review['status'] == 'PROPOSED_DUPLICATE'])
             num_clusters = cluster_review['cluster_id'].nunique()
-            logging.info(f"Saved {num_clusters} clusters with {num_duplicates} proposed duplicates to output/duplicates.csv for review")
+            logging.info("Saved %s clusters with %s proposed duplicates to %s for review", num_clusters, num_duplicates, duplicates_csv_path)
             
             # Delete the proposed duplicate events from the database
             duplicate_event_ids = cluster_review[cluster_review['status'] == 'PROPOSED_DUPLICATE']['event_id'].tolist()
@@ -1248,22 +1251,24 @@ class DeduplicationHandler:
                 'git_commit': git_commit
             }])
 
-            stats_file = "output/stats_dedup.csv"
+            stats_file = duplicates_path("stats_dedup.csv")
             if os.path.exists(stats_file):
                 stats_row.to_csv(stats_file, mode='a', header=False, index=False)
             else:
                 stats_row.to_csv(stats_file, mode='w', header=True, index=False)
 
-            logging.info("Appended deduplication stats to output/stats_dedup.csv")
+            logging.info("Appended deduplication stats to %s", stats_file)
         else:
             logging.info("No clusters found to output.")
 
 
-    def evaluate_scored_clusters(self, input_file="output/dups_trans_db_scan.csv", stats_file="output/stats_dedup.csv"):
+    def evaluate_scored_clusters(self, input_file: str = "", stats_file: str = ""):
         """
         Loads manually scored results and logs evaluation statistics.
         Appends evaluation details to the same stats CSV used during deduplication.
         """
+        input_file = input_file or duplicates_path("dups_trans_db_scan.csv")
+        stats_file = stats_file or duplicates_path("stats_dedup.csv")
         if not os.path.exists(input_file):
             logging.warning(f"evaluate_scored_clusters: File not found: {input_file}")
             return
@@ -1304,7 +1309,7 @@ class DeduplicationHandler:
         else:
             eval_row.to_csv(stats_file, mode='w', header=True, index=False)
 
-        logging.info("Appended evaluation stats to output/stats_dedup.csv")
+        logging.info("Appended evaluation stats to %s", stats_file)
 
 
     def get_git_version(self):
@@ -1823,7 +1828,7 @@ Respond with ONLY valid JSON in this exact format:
         # Save decisions to CSV
         if decisions:
             decisions_df = pd.DataFrame(decisions)
-            output_file = "output/venue_time_conflict_resolutions.csv"
+            output_file = events_path("venue_time_conflict_resolutions.csv")
             decisions_df.to_csv(output_file, index=False)
             logging.info(f"\nSaved conflict resolution decisions to {output_file}")
 

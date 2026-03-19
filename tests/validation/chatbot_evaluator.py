@@ -23,10 +23,15 @@ import os
 import pandas as pd
 import re
 import random
+import sys
 import time
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 import yaml
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
+
+from output_paths import chatbot_path, reports_path
 
 
 class TestQuestionGenerator:
@@ -1572,7 +1577,7 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'outpu
             flattened_results.append(flat)
 
         results_df = pd.DataFrame(flattened_results)
-        csv_path = os.path.join(output_dir, 'chatbot_test_results.csv')
+        csv_path = chatbot_path('chatbot_test_results.csv')
         results_df.to_csv(csv_path, index=False)
         logging.info(f"CSV results saved: {csv_path}")
 
@@ -1833,7 +1838,7 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'outpu
 
     # Save JSON report
     try:
-        json_path = os.path.join(output_dir, 'chatbot_evaluation_report.json')
+        json_path = reports_path('chatbot_evaluation_report.json')
         with open(json_path, 'w') as f:
             json.dump(report, f, indent=2)
         logging.info(f"JSON report saved: {json_path}")

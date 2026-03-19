@@ -20,9 +20,12 @@ from datetime import datetime, timedelta
 import pandas as pd
 import yaml
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
+
 from logging_config import setup_logging
 from email_notifier import send_report_email
 from chatbot_evaluator import generate_chatbot_report
+from output_paths import chatbot_path, codex_review_path, reports_path
 
 
 def load_config(path: str = 'config/config.yaml') -> dict:
@@ -169,17 +172,17 @@ def build_html(results: dict, output_path: str) -> None:
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
-    with open(os.path.join(output_dir, 'reliability_scorecard.json'), 'w', encoding='utf-8') as f:
+    with open(codex_review_path('reliability_scorecard.json'), 'w', encoding='utf-8') as f:
         json.dump(reliability_scorecard, f, indent=2)
-    with open(os.path.join(output_dir, 'reliability_issues.json'), 'w', encoding='utf-8') as f:
+    with open(codex_review_path('reliability_issues.json'), 'w', encoding='utf-8') as f:
         json.dump({"issues": reliability_issues}, f, indent=2)
-    with open(os.path.join(output_dir, 'reliability_gates.json'), 'w', encoding='utf-8') as f:
+    with open(codex_review_path('reliability_gates.json'), 'w', encoding='utf-8') as f:
         json.dump(reliability_gates, f, indent=2)
-    with open(os.path.join(output_dir, 'reliability_optimization.json'), 'w', encoding='utf-8') as f:
+    with open(codex_review_path('reliability_optimization.json'), 'w', encoding='utf-8') as f:
         json.dump(optimization_plan, f, indent=2)
-    with open(os.path.join(output_dir, 'reliability_action_queue.json'), 'w', encoding='utf-8') as f:
+    with open(codex_review_path('reliability_action_queue.json'), 'w', encoding='utf-8') as f:
         json.dump(action_queue, f, indent=2)
-    with open(os.path.join(output_dir, 'suspicious_deletes.json'), 'w', encoding='utf-8') as f:
+    with open(codex_review_path('suspicious_deletes.json'), 'w', encoding='utf-8') as f:
         json.dump(suspicious_deletes_data, f, indent=2)
     logging.info("HTML report saved: %s", output_path)
 
@@ -208,7 +211,7 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
 def summarize_address_alias_audit(config: dict) -> dict:
     output_cfg = config.get('output', {}) if isinstance(config, dict) else {}
     validation_cfg = config.get('testing', {}).get('validation', {}) if isinstance(config, dict) else {}
-    csv_path = output_cfg.get('address_alias_audit', 'output/address_alias_hits.csv')
+    csv_path = output_cfg.get('address_alias_audit', 'output/duplicates/address_alias_hits.csv')
     days_window = int(validation_cfg.get('reporting', {}).get('address_alias_audit_days', 14) or 14)
 
     summary = {
@@ -1272,7 +1275,7 @@ def build_action_queue_html(action_queue: dict) -> str:
 
 def update_and_summarize_reliability_history(output_dir: str, scorecard: dict) -> dict:
     os.makedirs(output_dir, exist_ok=True)
-    history_path = os.path.join(output_dir, "reliability_history.jsonl")
+    history_path = codex_review_path("reliability_history.jsonl")
     record = {
         "timestamp": scorecard.get("timestamp", datetime.now().isoformat()),
         "score": float(scorecard.get("score", 0) or 0),
@@ -1322,7 +1325,7 @@ def update_and_summarize_reliability_history(output_dir: str, scorecard: dict) -
 
 def update_reliability_issue_registry(output_dir: str, issues: list[dict]) -> tuple[list[dict], dict]:
     os.makedirs(output_dir, exist_ok=True)
-    registry_path = os.path.join(output_dir, "reliability_issue_registry.json")
+    registry_path = codex_review_path("reliability_issue_registry.json")
     payload = {"issues": {}, "updated_at": datetime.now().isoformat()}
     if os.path.exists(registry_path):
         try:
@@ -1415,8 +1418,8 @@ def main():
     setup_logging('report_from_csv')
     config = load_config('config/config.yaml')
     output_dir = config.get('testing', {}).get('validation', {}).get('reporting', {}).get('output_dir', 'output')
-    csv_path = os.path.join(output_dir, 'chatbot_test_results.csv')
-    json_path = os.path.join(output_dir, 'chatbot_evaluation_report.json')
+    csv_path = chatbot_path('chatbot_test_results.csv')
+    json_path = reports_path('chatbot_evaluation_report.json')
 
     if not os.path.exists(csv_path) and not os.path.exists(json_path):
         logging.error("No chatbot report CSV or JSON found in %s", output_dir)
@@ -1441,7 +1444,7 @@ def main():
         'config': config
     }
 
-    html_path = os.path.join(output_dir, 'comprehensive_test_report.html')
+    html_path = reports_path('comprehensive_test_report.html')
     build_html(results, html_path)
 
     # Send email with attachment

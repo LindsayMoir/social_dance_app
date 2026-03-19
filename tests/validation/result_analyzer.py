@@ -16,7 +16,7 @@ import logging
 import os
 import sys
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pandas as pd
 import yaml
@@ -25,6 +25,7 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
 
 from llm import LLMHandler
+from output_paths import chatbot_path, reports_path
 
 
 class ResultAnalyzer:
@@ -386,8 +387,8 @@ def main():
         output_dir = 'output'
 
     # Paths
-    results_file = os.path.join(output_dir, 'chatbot_test_results.csv')
-    output_file = os.path.join(output_dir, 'analysis_report.txt')
+    results_file = chatbot_path('chatbot_test_results.csv')
+    output_file = reports_path('analysis_report.txt')
 
     try:
         # Initialize analyzer

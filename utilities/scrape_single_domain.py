@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from logging_config import setup_logging
 import llm as llm_module
 import scraper as scraper_module
+from output_paths import codex_review_path
 from scraper import EventSpider
 
 
@@ -202,7 +203,7 @@ def run_single_domain_scrape(
                         f"[step={os.getenv('DS_STEP_NAME', 'single_domain_scrape')}] %(message)s"
                     ),
                     "DEPTH_LIMIT": cfg["crawling"]["depth_limit"],
-                    "FEEDS": {"output/output.json": {"format": "json"}},
+                    "FEEDS": {codex_review_path("output.json"): {"format": "json"}},
                     "DEFAULT_REQUEST_HEADERS": {
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                         "Accept-Language": "en",

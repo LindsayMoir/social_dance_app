@@ -38,6 +38,8 @@ import re
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import AgglomerativeClustering, DBSCAN
 from tabulate import tabulate
+
+from output_paths import codex_review_path, duplicates_path, events_path
 from typing import List, Dict, Any
 import unicodedata
 import urllib.parse
@@ -1106,8 +1108,7 @@ class CleanUp:
             updated_count += len(updated_event_ids)
 
         log_df = pd.DataFrame(update_log)
-        os.makedirs("output", exist_ok=True)
-        log_path = os.path.join("output", "update_null_address_ids.csv")
+        log_path = events_path("update_null_address_ids.csv")
         log_df.to_csv(log_path, index=False)
         logging.info(f"fix_null_addresses_in_events(): Updated {updated_count} event(s). Log saved to {log_path}.")
 
@@ -1441,7 +1442,7 @@ Examples:
                 # Append to CSV file
                 import os
                 preview_df = pd.DataFrame(preview_data)
-                csv_file = "output/address_duplicates.csv"
+                csv_file = duplicates_path("address_duplicates.csv")
                 if os.path.exists(csv_file):
                     preview_df.to_csv(csv_file, mode='a', header=False, index=False)
                 else:
@@ -1985,7 +1986,7 @@ Examples:
         # Save all results for review
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        df_merged.to_csv(f"output/address_dedup_results_{timestamp}.csv", index=False)
+        df_merged.to_csv(duplicates_path(f"address_dedup_results_{timestamp}.csv"), index=False)
         
         # Create review CSV with canonical and duplicate addresses grouped
         review_df = df_merged[df_merged['Label'].notna()].copy()
@@ -1997,7 +1998,7 @@ Examples:
         review_df['reason'] = 'llm_analysis'
         review_df = review_df.sort_values(['group_id', 'status'])
         # Append to existing file if it exists (from semantic clustering)
-        csv_file = "output/address_duplicates.csv"
+        csv_file = duplicates_path("address_duplicates.csv")
         if os.path.exists(csv_file):
             review_df.to_csv(csv_file, mode='a', header=False, index=False)
         else:
@@ -2073,8 +2074,7 @@ Examples:
         using SentenceTransformer and sending each subcluster (if < 5 rows) to the LLM. Logs results only.
         """
         logging.info("Starting LLM-based address deduplication with semantic clustering...")
-        os.makedirs("output", exist_ok=True)
-        log_file_path = os.path.join("output", "llm_fix_semantic_clustering.txt")
+        log_file_path = codex_review_path("llm_fix_semantic_clustering.txt")
 
         df = pd.read_sql("SELECT * FROM address", self.conn).fillna("")
         if len(df) <= 1:

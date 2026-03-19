@@ -13,13 +13,14 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 from classifier_training_promoter import load_queue_summary, promote_training_candidates
+from output_paths import classifier_path
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Promote URL-level classifier queue candidates into training CSV.")
     parser.add_argument(
         "--queue",
-        default=os.path.join("output", "classifier_training_queue.json"),
+        default=classifier_path("classifier_training_queue.json"),
         help="Path to classifier_training_queue.json",
     )
     parser.add_argument(

@@ -38,6 +38,7 @@ from config_runtime import get_config_path, load_config
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_config import setup_logging
+from output_paths import codex_review_path, test_output_path
 from page_classifier import (
     apply_historical_routing_memory,
     classify_page,
@@ -718,8 +719,7 @@ class EventSpider(scrapy.Spider):
                 try:
                     if is_whitelisted:
                         # csv imported at module level
-                        os.makedirs('output', exist_ok=True)
-                        with open('output/skipped_whitelist.csv', 'a', newline='') as f:
+                        with open(test_output_path('skipped_whitelist.csv'), 'a', newline='') as f:
                             w = csv.writer(f)
                             w.writerow([datetime.now().isoformat(), url, source, 'history_gate'])
                 except Exception:
@@ -1518,7 +1518,7 @@ class EventSpider(scrapy.Spider):
             ),
             "DEPTH_LIMIT": self.config['crawling']['depth_limit'],
             "FEEDS": {
-                "output/output.json": {"format": "json"}
+                codex_review_path("output.json"): {"format": "json"}
             },
             # Pretend to be a real browser
             "DEFAULT_REQUEST_HEADERS": {

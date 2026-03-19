@@ -63,6 +63,14 @@ from evaluation_holdout import load_dev_urls, load_gold_holdout_urls, normalize_
 from llm import LLMHandler
 from logging_config import setup_logging
 from email_notifier import send_report_email
+from output_paths import (
+    chatbot_path,
+    classifier_path,
+    codex_review_path,
+    duplicates_path,
+    replay_path,
+    reports_path,
+)
 from page_classifier import (
     classify_page_with_confidence,
     is_email_like_input,
@@ -1875,7 +1883,7 @@ class ValidationTestRunner:
             "count": len(cases),
             "cases": cases,
         }
-        path = os.path.join(output_dir, "chatbot_problem_category_regressions.json")
+        path = chatbot_path("chatbot_problem_category_regressions.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         logging.info("Chatbot problem-category regression cases saved: %s", path)
@@ -1888,7 +1896,7 @@ class ValidationTestRunner:
             results (dict): Combined validation results
         """
         output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'output')
-        output_path = os.path.join(output_dir, 'comprehensive_test_report.html')
+        output_path = reports_path('comprehensive_test_report.html')
         alias_audit_summary = self._summarize_address_alias_audit()
         llm_activity_summary = self._summarize_llm_provider_activity(results.get('timestamp'))
         llm_extraction_quality = self._summarize_llm_extraction_quality(results.get('timestamp'))
@@ -2132,108 +2140,108 @@ class ValidationTestRunner:
         os.makedirs(output_dir, exist_ok=True)
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(html)
-        scorecard_path = os.path.join(output_dir, 'reliability_scorecard.json')
-        issues_path = os.path.join(output_dir, 'reliability_issues.json')
+        scorecard_path = codex_review_path('reliability_scorecard.json')
+        issues_path = codex_review_path('reliability_issues.json')
         with open(scorecard_path, 'w', encoding='utf-8') as f:
             json.dump(reliability_scorecard, f, indent=2)
         with open(issues_path, 'w', encoding='utf-8') as f:
             json.dump({"issues": reliability_issues}, f, indent=2)
-        gates_path = os.path.join(output_dir, 'reliability_gates.json')
+        gates_path = codex_review_path('reliability_gates.json')
         with open(gates_path, 'w', encoding='utf-8') as f:
             json.dump(reliability_gates, f, indent=2)
-        optimization_path = os.path.join(output_dir, 'reliability_optimization.json')
+        optimization_path = codex_review_path('reliability_optimization.json')
         with open(optimization_path, 'w', encoding='utf-8') as f:
             json.dump(optimization_plan, f, indent=2)
-        action_queue_path = os.path.join(output_dir, 'reliability_action_queue.json')
+        action_queue_path = codex_review_path('reliability_action_queue.json')
         with open(action_queue_path, 'w', encoding='utf-8') as f:
             json.dump(action_queue, f, indent=2)
-        llm_extraction_quality_path = os.path.join(output_dir, 'llm_extraction_quality.json')
+        llm_extraction_quality_path = codex_review_path('llm_extraction_quality.json')
         with open(llm_extraction_quality_path, 'w', encoding='utf-8') as f:
             json.dump(llm_extraction_quality, f, indent=2)
-        chatbot_performance_path = os.path.join(output_dir, 'chatbot_performance.json')
+        chatbot_performance_path = chatbot_path('chatbot_performance.json')
         with open(chatbot_performance_path, 'w', encoding='utf-8') as f:
             json.dump(chatbot_performance_summary, f, indent=2)
-        suspicious_deletes_path = os.path.join(output_dir, 'suspicious_deletes.json')
+        suspicious_deletes_path = codex_review_path('suspicious_deletes.json')
         with open(suspicious_deletes_path, 'w', encoding='utf-8') as f:
             json.dump(suspicious_deletes_summary, f, indent=2)
-        chatbot_metrics_sync_path = os.path.join(output_dir, 'chatbot_metrics_sync_summary.json')
+        chatbot_metrics_sync_path = chatbot_path('chatbot_metrics_sync_summary.json')
         with open(chatbot_metrics_sync_path, 'w', encoding='utf-8') as f:
             json.dump(chatbot_metrics_sync_summary, f, indent=2)
-        control_panel_path = os.path.join(output_dir, 'run_control_panel.json')
+        control_panel_path = codex_review_path('run_control_panel.json')
         with open(control_panel_path, 'w', encoding='utf-8') as f:
             json.dump(control_panel_summary, f, indent=2)
-        runtime_summary_path = os.path.join(output_dir, 'runtime_summary.json')
+        runtime_summary_path = codex_review_path('runtime_summary.json')
         with open(runtime_summary_path, 'w', encoding='utf-8') as f:
             json.dump(runtime_summary, f, indent=2)
-        llm_cost_summary_path = os.path.join(output_dir, 'llm_cost_summary.json')
+        llm_cost_summary_path = codex_review_path('llm_cost_summary.json')
         with open(llm_cost_summary_path, 'w', encoding='utf-8') as f:
             json.dump(llm_cost_summary, f, indent=2)
-        chatbot_quality_summary_path = os.path.join(output_dir, 'chatbot_quality_summary.json')
+        chatbot_quality_summary_path = chatbot_path('chatbot_quality_summary.json')
         with open(chatbot_quality_summary_path, 'w', encoding='utf-8') as f:
             json.dump(chatbot_quality_summary, f, indent=2)
-        duplicate_audit_summary_path = os.path.join(output_dir, 'duplicate_audit_summary.json')
+        duplicate_audit_summary_path = duplicates_path('duplicate_audit_summary.json')
         with open(duplicate_audit_summary_path, 'w', encoding='utf-8') as f:
             json.dump(duplicate_audit_summary, f, indent=2)
-        event_data_quality_summary_path = os.path.join(output_dir, 'event_data_quality_summary.json')
+        event_data_quality_summary_path = codex_review_path('event_data_quality_summary.json')
         with open(event_data_quality_summary_path, 'w', encoding='utf-8') as f:
             json.dump(event_data_quality_summary, f, indent=2)
-        field_accuracy_summary_path = os.path.join(output_dir, 'field_accuracy_summary.json')
+        field_accuracy_summary_path = codex_review_path('field_accuracy_summary.json')
         with open(field_accuracy_summary_path, 'w', encoding='utf-8') as f:
             json.dump(field_accuracy_summary, f, indent=2)
-        coverage_summary_path = os.path.join(output_dir, 'coverage_summary.json')
+        coverage_summary_path = codex_review_path('coverage_summary.json')
         with open(coverage_summary_path, 'w', encoding='utf-8') as f:
             json.dump(coverage_summary, f, indent=2)
-        dev_summary_path = os.path.join(output_dir, 'dev_summary.json')
+        dev_summary_path = codex_review_path('dev_summary.json')
         with open(dev_summary_path, 'w', encoding='utf-8') as f:
             json.dump(dev_summary, f, indent=2)
-        holdout_summary_path = os.path.join(output_dir, 'holdout_summary.json')
+        holdout_summary_path = codex_review_path('holdout_summary.json')
         with open(holdout_summary_path, 'w', encoding='utf-8') as f:
             json.dump(holdout_summary, f, indent=2)
-        domain_capped_summary_path = os.path.join(output_dir, 'domain_capped_summary.json')
+        domain_capped_summary_path = codex_review_path('domain_capped_summary.json')
         with open(domain_capped_summary_path, 'w', encoding='utf-8') as f:
             json.dump(domain_capped_summary, f, indent=2)
-        domain_evaluation_summary_path = os.path.join(output_dir, 'domain_evaluation_summary.json')
+        domain_evaluation_summary_path = codex_review_path('domain_evaluation_summary.json')
         with open(domain_evaluation_summary_path, 'w', encoding='utf-8') as f:
             json.dump(domain_evaluation_summary, f, indent=2)
-        run_delta_summary_path = os.path.join(output_dir, 'run_delta_summary.json')
+        run_delta_summary_path = codex_review_path('run_delta_summary.json')
         with open(run_delta_summary_path, 'w', encoding='utf-8') as f:
             json.dump(run_delta_summary, f, indent=2)
-        recommendation_plan_path = os.path.join(output_dir, 'recommendation_plan.json')
+        recommendation_plan_path = codex_review_path('recommendation_plan.json')
         with open(recommendation_plan_path, 'w', encoding='utf-8') as f:
             json.dump(recommendation_plan, f, indent=2)
-        run_scorecard_path = os.path.join(output_dir, 'run_scorecard.json')
+        run_scorecard_path = codex_review_path('run_scorecard.json')
         with open(run_scorecard_path, 'w', encoding='utf-8') as f:
             json.dump(run_scorecard, f, indent=2)
-        codex_review_bundle_path = os.path.join(output_dir, 'codex_review_bundle.json')
+        codex_review_bundle_path = codex_review_path('codex_review_bundle.json')
         with open(codex_review_bundle_path, 'w', encoding='utf-8') as f:
             json.dump(codex_review_bundle, f, indent=2)
-        accuracy_replay_path = os.path.join(output_dir, 'accuracy_replay_summary.json')
+        accuracy_replay_path = replay_path('accuracy_replay_summary.json')
         with open(accuracy_replay_path, 'w', encoding='utf-8') as f:
             json.dump(accuracy_replay_summary, f, indent=2)
-        classifier_training_queue_path = os.path.join(output_dir, 'classifier_training_queue.json')
+        classifier_training_queue_path = classifier_path('classifier_training_queue.json')
         with open(classifier_training_queue_path, 'w', encoding='utf-8') as f:
             json.dump(classifier_training_queue_summary, f, indent=2)
-        classifier_training_queue_csv_path = os.path.join(output_dir, 'classifier_training_queue.csv')
+        classifier_training_queue_csv_path = classifier_path('classifier_training_queue.csv')
         self._write_classifier_training_queue_csv(
             classifier_training_queue_csv_path,
             classifier_training_queue_summary,
         )
         classifier_review_queue_summary = filter_classifier_review_candidates(classifier_training_queue_summary)
-        classifier_review_queue_path = os.path.join(output_dir, 'classifier_review_queue.json')
+        classifier_review_queue_path = classifier_path('classifier_review_queue.json')
         with open(classifier_review_queue_path, 'w', encoding='utf-8') as f:
             json.dump(classifier_review_queue_summary, f, indent=2)
-        classifier_review_queue_csv_path = os.path.join(output_dir, 'classifier_review_queue.csv')
+        classifier_review_queue_csv_path = classifier_path('classifier_review_queue.csv')
         self._write_classifier_training_queue_csv(
             classifier_review_queue_csv_path,
             classifier_review_queue_summary,
         )
-        classifier_performance_path = os.path.join(output_dir, 'classifier_performance_summary.json')
+        classifier_performance_path = classifier_path('classifier_performance_summary.json')
         with open(classifier_performance_path, 'w', encoding='utf-8') as f:
             json.dump(classifier_performance_summary, f, indent=2)
-        openrouter_cost_path = os.path.join(output_dir, 'openrouter_run_cost.json')
+        openrouter_cost_path = codex_review_path('openrouter_run_cost.json')
         with open(openrouter_cost_path, 'w', encoding='utf-8') as f:
             json.dump(openrouter_cost_summary, f, indent=2)
-        openai_cost_path = os.path.join(output_dir, 'openai_run_cost.json')
+        openai_cost_path = codex_review_path('openai_run_cost.json')
         with open(openai_cost_path, 'w', encoding='utf-8') as f:
             json.dump(openai_cost_summary, f, indent=2)
 
@@ -2345,7 +2353,7 @@ class ValidationTestRunner:
         Missing/invalid files are reported as non-fatal metadata.
         """
         output_cfg = self.config.get('output', {})
-        csv_path = output_cfg.get('address_alias_audit', 'output/address_alias_hits.csv')
+        csv_path = output_cfg.get('address_alias_audit', duplicates_path('address_alias_hits.csv'))
         days_window = int(
             self.validation_config.get('reporting', {}).get('address_alias_audit_days', 14) or 14
         )
@@ -4878,7 +4886,7 @@ class ValidationTestRunner:
             return summary
 
         os.makedirs(output_dir, exist_ok=True)
-        history_path = os.path.join(output_dir, f"{provider_norm}_cost_snapshots.jsonl")
+        history_path = codex_review_path(f"{provider_norm}_cost_snapshots.jsonl")
 
         previous_snapshot: dict | None = None
         snapshots: list[dict] = []
@@ -5456,7 +5464,7 @@ class ValidationTestRunner:
 
         # Fallback to file history when DB metrics are unavailable.
         os.makedirs(output_dir, exist_ok=True)
-        history_path = os.path.join(output_dir, "run_control_history.jsonl")
+        history_path = codex_review_path("run_control_history.jsonl")
         with open(history_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
 
@@ -9519,7 +9527,7 @@ class ValidationTestRunner:
             "llm_success_rate": "LLM successes / LLM accesses. Denominator counts all query access lines across multi-log provider activity (emails/rd_ext/scraper/fb/validation_tests/etc.).",
             "llm_provider_exhausted": "Times all configured LLM providers failed in a call chain. Source scope: multi-log provider activity summary.",
             "llm_cost_pressure": "Cost/volume pressure level from recent LLM traffic. Source scope: multi-log provider activity summary.",
-            "address_alias_conflict_skips": "Address alias rows skipped due to conflicts. Source scope: output/address_alias_hits.csv audit data.",
+            "address_alias_conflict_skips": "Address alias rows skipped due to conflicts. Source scope: output/duplicates/address_alias_hits.csv audit data.",
         }
 
         html += "<h3>Core Reliability Metrics</h3>"
@@ -9941,7 +9949,7 @@ class ValidationTestRunner:
     def _update_and_summarize_reliability_history(self, output_dir: str, scorecard: dict) -> dict:
         """Append current scorecard and return 7d/30d trend summary."""
         os.makedirs(output_dir, exist_ok=True)
-        history_path = os.path.join(output_dir, "reliability_history.jsonl")
+        history_path = codex_review_path("reliability_history.jsonl")
         record = {
             "timestamp": scorecard.get("timestamp", datetime.now().isoformat()),
             "score": float(scorecard.get("score", 0) or 0),
@@ -9991,7 +9999,7 @@ class ValidationTestRunner:
     def _update_reliability_issue_registry(self, output_dir: str, issues: list[dict]) -> tuple[list[dict], dict]:
         """Upsert issues into persistent registry and annotate current issues with occurrence counts."""
         os.makedirs(output_dir, exist_ok=True)
-        registry_path = os.path.join(output_dir, "reliability_issue_registry.json")
+        registry_path = codex_review_path("reliability_issue_registry.json")
         payload = {"issues": {}, "updated_at": datetime.now().isoformat()}
         if os.path.exists(registry_path):
             try:
@@ -10857,7 +10865,7 @@ class ValidationTestRunner:
         summary['timestamp'] = results['timestamp']
 
         # Collect attachment paths — include only the comprehensive HTML report.
-        html_report = os.path.join(output_dir, 'comprehensive_test_report.html')
+        html_report = reports_path('comprehensive_test_report.html')
         attachments = [html_report] if os.path.exists(html_report) else []
 
         # Send email

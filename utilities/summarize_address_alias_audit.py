@@ -6,11 +6,15 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import yaml
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
+from output_paths import duplicates_path
 
 
 def load_config(config_path: str) -> Dict:
@@ -126,7 +130,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    csv_path = args.csv or cfg.get("output", {}).get("address_alias_audit", "output/address_alias_hits.csv")
+    csv_path = args.csv or cfg.get("output", {}).get("address_alias_audit", duplicates_path("address_alias_hits.csv"))
 
     if not os.path.exists(csv_path):
         print(f"Alias audit file not found: {csv_path}")

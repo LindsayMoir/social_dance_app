@@ -36,6 +36,7 @@ from config_runtime import load_config
 # Import database configuration utility
 from db_config import get_database_config
 from evaluation_holdout import is_holdout_url
+from output_paths import duplicates_path, events_path
 from page_classifier import classify_page
 
 
@@ -644,7 +645,7 @@ class DatabaseHandler():
         """Append alias-match telemetry to CSV for traceability."""
         try:
             output_cfg = self.config.get("output", {})
-            audit_path = output_cfg.get("address_alias_audit", "output/address_alias_hits.csv")
+            audit_path = output_cfg.get("address_alias_audit", duplicates_path("address_alias_hits.csv"))
             audit_dir = os.path.dirname(audit_path)
             if audit_dir:
                 os.makedirs(audit_dir, exist_ok=True)
@@ -2538,8 +2539,7 @@ class DatabaseHandler():
 
         # Write debug CSV (only locally, not on Render)
         if os.getenv('RENDER') != 'true':
-            os.makedirs('output', exist_ok=True)
-            df.to_csv('output/cleaned_events.csv', index=False)
+            df.to_csv(events_path('cleaned_events.csv'), index=False)
 
         logging.info(f"write_events_to_db: Number of events to write: {len(df)}")
 

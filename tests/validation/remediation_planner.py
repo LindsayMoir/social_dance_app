@@ -4,8 +4,8 @@ Build a section-aligned remediation plan from comprehensive report artifacts.
 
 This is a read-only planning step. It does not modify source code.
 Outputs:
-- output/remediation_plan.json
-- output/remediation_plan.md
+- output/codex_review/remediation_plan.json
+- output/codex_review/remediation_plan.md
 """
 
 from __future__ import annotations
@@ -13,10 +13,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from datetime import datetime
 from typing import Any, Dict, List
 
 import yaml
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
+
+from output_paths import chatbot_path, codex_review_path, replay_path, reports_path
 
 
 def load_config(path: str = "config/config.yaml") -> dict:
@@ -131,17 +136,17 @@ def _compute_section_issue_trends(issue_rows: List[dict]) -> Dict[str, dict]:
 
 
 def assess_sections(output_dir: str, report_sections: List[str]) -> List[dict]:
-    scorecard = load_json(os.path.join(output_dir, "reliability_scorecard.json"))
-    gates = load_json(os.path.join(output_dir, "reliability_gates.json"))
-    issues = load_json(os.path.join(output_dir, "reliability_issues.json"))
-    optimization = load_json(os.path.join(output_dir, "reliability_optimization.json"))
-    action_queue = load_json(os.path.join(output_dir, "reliability_action_queue.json"))
-    scraping = load_json(os.path.join(output_dir, "scraping_validation_report.json"))
-    chatbot = load_json(os.path.join(output_dir, "chatbot_evaluation_report.json"))
-    llm_quality = load_json(os.path.join(output_dir, "llm_extraction_quality.json"))
-    chatbot_performance = load_json(os.path.join(output_dir, "chatbot_performance.json"))
-    suspicious_deletes = load_json(os.path.join(output_dir, "suspicious_deletes.json"))
-    accuracy_replay = load_json(os.path.join(output_dir, "accuracy_replay_summary.json"))
+    scorecard = load_json(codex_review_path("reliability_scorecard.json"))
+    gates = load_json(codex_review_path("reliability_gates.json"))
+    issues = load_json(codex_review_path("reliability_issues.json"))
+    optimization = load_json(codex_review_path("reliability_optimization.json"))
+    action_queue = load_json(codex_review_path("reliability_action_queue.json"))
+    scraping = load_json(codex_review_path("scraping_validation_report.json"))
+    chatbot = load_json(reports_path("chatbot_evaluation_report.json"))
+    llm_quality = load_json(codex_review_path("llm_extraction_quality.json"))
+    chatbot_performance = load_json(chatbot_path("chatbot_performance.json"))
+    suspicious_deletes = load_json(codex_review_path("suspicious_deletes.json"))
+    accuracy_replay = load_json(replay_path("accuracy_replay_summary.json"))
 
     issue_rows = issues.get("issues", []) if isinstance(issues.get("issues"), list) else []
     section_issue_trends = _compute_section_issue_trends(issue_rows)
@@ -584,7 +589,7 @@ def assess_sections(output_dir: str, report_sections: List[str]) -> List[dict]:
 
 
 def build_plan(output_dir: str) -> dict:
-    html_path = os.path.join(output_dir, "comprehensive_test_report.html")
+    html_path = reports_path("comprehensive_test_report.html")
     report_sections = parse_report_sections(html_path)
 
     if not report_sections:
@@ -604,7 +609,7 @@ def build_plan(output_dir: str) -> dict:
 
     section_assessments = assess_sections(output_dir, report_sections)
     remediation_sections = [s for s in section_assessments if s.get("needs_remediation")]
-    action_queue = load_json(os.path.join(output_dir, "reliability_action_queue.json"))
+    action_queue = load_json(codex_review_path("reliability_action_queue.json"))
     action_items = action_queue.get("items", []) if isinstance(action_queue.get("items"), list) else []
 
     priority_rank = {"P0": 0, "P1": 1, "P2": 2, "NONE": 9}
@@ -746,8 +751,8 @@ def main() -> int:
     os.makedirs(output_dir, exist_ok=True)
 
     plan = build_plan(output_dir)
-    json_path = os.path.join(output_dir, "remediation_plan.json")
-    md_path = os.path.join(output_dir, "remediation_plan.md")
+    json_path = codex_review_path("remediation_plan.json")
+    md_path = codex_review_path("remediation_plan.md")
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(plan, f, indent=2)

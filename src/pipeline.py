@@ -32,6 +32,7 @@ from utils.chatbot_metrics_sync_utils import (
 # Setup centralized logging (logging_config.py is in the same directory)
 from logging_config import setup_logging
 setup_logging('pipeline')
+from output_paths import codex_review_path, reports_path
 
 # Configure Prefect based on environment
 if os.getenv('RENDER') == 'true':
@@ -92,7 +93,7 @@ _TRANSIENT_DB_ERROR_MARKERS = (
     "the database system is starting up",
 )
 CHATBOT_METRICS_SYNC_LOG_PATH = os.path.join(log_dir, "chatbot_metrics_sync_log.txt")
-RUN_SCORECARD_PATH = os.path.join("output", "run_scorecard.json")
+RUN_SCORECARD_PATH = codex_review_path("run_scorecard.json")
 
 
 def _is_transient_database_error(message: str) -> bool:
@@ -1515,8 +1516,8 @@ def send_remediation_email() -> bool:
             .get("output_dir", "output")
         )
 
-        html_report = os.path.join(output_dir, "comprehensive_test_report.html")
-        remediation_md = os.path.join(output_dir, "remediation_plan.md")
+        html_report = reports_path("comprehensive_test_report.html")
+        remediation_md = codex_review_path("remediation_plan.md")
         attachment_paths = [p for p in (html_report, remediation_md) if os.path.exists(p)]
 
         if not attachment_paths:

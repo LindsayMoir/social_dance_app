@@ -41,7 +41,8 @@ Classes:
 Usage Example:
     if __name__ == "__main__":
         # Setup centralized logging
-        from logging_config import setup_logging
+from logging_config import setup_logging
+from output_paths import codex_review_path
         setup_logging('llm')
 
         # Load configuration
@@ -654,10 +655,9 @@ class LLMHandler:
         raw_response: str,
         cleaned_blob: str = "",
     ) -> None:
-        """Append parse-failure diagnostics to output/llm_parse_failures.jsonl."""
+        """Append parse-failure diagnostics to output/codex_review/llm_parse_failures.jsonl."""
         try:
-            os.makedirs("output", exist_ok=True)
-            artifact_path = os.path.join("output", "llm_parse_failures.jsonl")
+            artifact_path = codex_review_path("llm_parse_failures.jsonl")
             payload = {
                 "time": datetime.now().isoformat(),
                 "reason": reason,

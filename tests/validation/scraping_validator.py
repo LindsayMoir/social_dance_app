@@ -17,8 +17,13 @@ import json
 import logging
 import os
 import re
+import sys
 from typing import Any, Dict, List
 import pandas as pd
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
+
+from output_paths import codex_review_path
 
 
 class ScrapingValidator:
@@ -1270,7 +1275,7 @@ class ScrapingValidator:
         output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'output')
         os.makedirs(output_dir, exist_ok=True)
 
-        output_path = os.path.join(output_dir, 'scraping_validation_report.json')
+        output_path = codex_review_path('scraping_validation_report.json')
 
         try:
             with open(output_path, 'w') as f:
