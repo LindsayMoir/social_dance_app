@@ -121,9 +121,19 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
             "stale_event_rate_pct": 2.5,
             "total_events": 40,
         },
+        field_accuracy_summary={
+            "date_pct": 90.0,
+            "time_pct": 80.0,
+            "location_pct": 70.0,
+            "source_pct": 95.0,
+            "address_id_pct": None,
+            "dance_style_pct": None,
+            "description_pct": None,
+        },
         coverage_summary={
             "source_hit_rate_pct": 80.0,
             "event_capture_rate_pct": 60.0,
+            "missed_event_rate_manual_audit_pct": 20.0,
             "watchlist_source": "coverage_watchlist_csv",
         },
         holdout_summary={
@@ -143,8 +153,11 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert run_scorecard["kpis"]["database_accuracy"]["summary"]["duplicate_rate_per_100_events"] == 4.5
     assert run_scorecard["kpis"]["database_accuracy"]["summary"]["invalid_event_rate_pct"] == 1.25
     assert run_scorecard["kpis"]["database_accuracy"]["summary"]["stale_event_rate_pct"] == 2.5
+    assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["date_pct"] == 90.0
+    assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["time_pct"] == 80.0
     assert run_scorecard["kpis"]["database_accuracy"]["summary"]["classifier_effect"]["ml_usage_pct"] == 25.0
     assert run_scorecard["kpis"]["events_coverage"]["summary"]["watchlist_source_hit_rate_pct"] == 80.0
+    assert run_scorecard["kpis"]["events_coverage"]["summary"]["missed_event_rate_manual_audit_pct"] == 20.0
     assert run_scorecard["evaluation_scope"]["uses_holdout"] is True
     assert run_scorecard["evaluation_scope"]["holdout_summary"]["replay_url_accuracy_pct"] == 78.0
     assert run_scorecard["evaluation_scope"]["uses_dev_split"] is True
@@ -182,6 +195,7 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
         coverage_summary={
             "source_hit_rate_pct": 84.0,
             "event_capture_rate_pct": 72.0,
+            "missed_event_rate_manual_audit_pct": 12.5,
         },
         holdout_summary={
             "replay_url_accuracy_pct": 77.0,
@@ -192,6 +206,12 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
         event_data_quality_summary={
             "invalid_event_rate_pct": 1.5,
             "stale_event_rate_pct": 2.25,
+        },
+        field_accuracy_summary={
+            "date_pct": 90.0,
+            "time_pct": 80.0,
+            "location_pct": 70.0,
+            "source_pct": 95.0,
         },
     )
 
@@ -205,10 +225,15 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
         "severe_duplicate_rate_per_100_events",
         "coverage_watchlist_source_hit_rate_pct",
         "coverage_watchlist_event_capture_rate_pct",
+        "missed_event_rate_manual_audit_pct",
         "holdout_replay_url_accuracy_pct",
         "domain_capped_replay_url_accuracy_pct",
         "invalid_event_rate_pct",
         "stale_event_rate_pct",
+        "field_accuracy_date_pct",
+        "field_accuracy_time_pct",
+        "field_accuracy_location_pct",
+        "field_accuracy_source_pct",
     ]
     assert all(call["run_id"] == "run-456" for call in fake_db.calls)
     assert all(isinstance(call["window_end"], datetime) for call in fake_db.calls)
@@ -291,11 +316,87 @@ def test_phase2_duplicate_and_coverage_summaries() -> None:
         ],
         "test_watchlist",
     )
+    runner._summarize_manual_coverage_audit = lambda: {
+        "available": True,
+        "manual_audit_source": "manual_coverage_audit_csv",
+        "sample_size": 2,
+        "expected_present_count": 2,
+        "captured_count": 1,
+        "missed_count": 1,
+        "missed_event_rate_manual_audit_pct": 50.0,
+        "sample_missed_events": [{"event_name": "Missed Event"}],
+    }
     coverage_summary = runner._summarize_coverage_watchlist()
     assert coverage_summary["source_hit_rate_pct"] == 66.67
     assert coverage_summary["event_capture_rate_pct"] == 33.33
     assert coverage_summary["priority_source_hit_rate_pct"] == 50.0
+    assert coverage_summary["missed_event_rate_manual_audit_pct"] == 50.0
     assert coverage_summary["watchlist_source"] == "test_watchlist"
+
+
+def test_manual_coverage_audit_summary() -> None:
+    runner = _build_runner()
+    fake_db = _FakeDbHandler()
+    runner.db_handler = fake_db
+    runner._load_manual_coverage_audit_rows = lambda: (
+        [
+            {
+                "source_name": "Audit A",
+                "source_url": "https://example.com/a",
+                "event_name": "Friday Social",
+                "start_date": "2026-04-10",
+                "expected_present": True,
+                "active": True,
+            },
+            {
+                "source_name": "Audit B",
+                "source_url": "https://example.com/b",
+                "event_name": "Saturday Salsa",
+                "start_date": "2026-04-11",
+                "expected_present": True,
+                "active": True,
+            },
+        ],
+        "manual_coverage_audit_csv",
+    )
+
+    def execute_query(query, params=None):
+        if params and params.get("source_url") == "https://example.com/a":
+            return [(1,)]
+        return [(0,)]
+
+    fake_db.execute_query = execute_query
+    summary = runner._summarize_manual_coverage_audit()
+    assert summary["available"] is True
+    assert summary["captured_count"] == 1
+    assert summary["missed_count"] == 1
+    assert summary["missed_event_rate_manual_audit_pct"] == 50.0
+
+
+def test_field_accuracy_summary() -> None:
+    runner = _build_runner()
+    accuracy_replay = {
+        "rows": [
+            {
+                "baseline": {"start_date": "2026-04-10", "start_time": "19:00:00", "location": "Hall A", "source": "source-a"},
+                "replay": {"start_date": "2026-04-10", "start_time": "19:00:00", "location": "Hall A", "source": "source-a"},
+            },
+            {
+                "baseline": {"start_date": "2026-04-11", "start_time": "20:00:00", "location": "Hall B", "source": "source-b"},
+                "replay": {"start_date": "2026-04-12", "start_time": "20:30:00", "location": "Hall C", "source": "source-c"},
+            },
+            {
+                "baseline": {"start_date": "2026-04-13", "start_time": "", "location": "", "source": "unknown"},
+                "replay": {"start_date": "2026-04-13", "start_time": "", "location": "", "source": "unknown"},
+            },
+        ]
+    }
+    summary = runner._summarize_field_accuracy(accuracy_replay)
+    assert summary["available"] is True
+    assert summary["date_pct"] == 66.67
+    assert summary["time_pct"] == 50.0
+    assert summary["location_pct"] == 50.0
+    assert summary["source_pct"] == 50.0
 
 
 def test_event_data_quality_summary() -> None:
@@ -412,6 +513,7 @@ def test_phase3_holdout_domain_caps_and_guardrails() -> None:
         classifier_performance_summary={},
         duplicate_summary={"duplicate_rate_per_100_events": 3.0, "severe_duplicate_rate_per_100_events": 2.5},
         event_data_quality_summary={"invalid_event_rate_pct": 2.0, "stale_event_rate_pct": 6.0, "total_events": 50},
+        field_accuracy_summary={"date_pct": 70.0, "time_pct": 60.0, "location_pct": 50.0, "source_pct": 80.0},
         coverage_summary={"source_hit_rate_pct": 55.0, "event_capture_rate_pct": 40.0, "watchlist_source": "test"},
         holdout_summary=holdout_summary,
         domain_capped_summary=domain_capped_summary,

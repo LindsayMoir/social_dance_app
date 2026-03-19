@@ -1692,6 +1692,7 @@ class ValidationTestRunner:
         )
         duplicate_audit_summary = self._summarize_duplicate_audit()
         event_data_quality_summary = self._summarize_event_data_quality()
+        field_accuracy_summary = self._summarize_field_accuracy(accuracy_replay_summary)
         coverage_summary = self._summarize_coverage_watchlist()
         holdout_summary = self._summarize_holdout_replay(accuracy_replay_summary)
         domain_capped_summary = self._summarize_domain_capped_replay(accuracy_replay_summary)
@@ -1707,6 +1708,7 @@ class ValidationTestRunner:
             classifier_performance_summary=classifier_performance_summary,
             duplicate_summary=duplicate_audit_summary,
             event_data_quality_summary=event_data_quality_summary,
+            field_accuracy_summary=field_accuracy_summary,
             coverage_summary=coverage_summary,
             holdout_summary=holdout_summary,
             domain_capped_summary=domain_capped_summary,
@@ -1745,6 +1747,7 @@ class ValidationTestRunner:
             holdout_summary=holdout_summary,
             domain_capped_summary=domain_capped_summary,
             event_data_quality_summary=event_data_quality_summary,
+            field_accuracy_summary=field_accuracy_summary,
         )
         self._persist_validation_artifacts(
             run_id=report_run_id,
@@ -1755,6 +1758,7 @@ class ValidationTestRunner:
                 "chatbot_quality_summary": chatbot_quality_summary,
                 "duplicate_audit_summary": duplicate_audit_summary,
                 "event_data_quality_summary": event_data_quality_summary,
+                "field_accuracy_summary": field_accuracy_summary,
                 "coverage_summary": coverage_summary,
                 "holdout_summary": holdout_summary,
                 "domain_capped_summary": domain_capped_summary,
@@ -1904,6 +1908,9 @@ class ValidationTestRunner:
         event_data_quality_summary_path = os.path.join(output_dir, 'event_data_quality_summary.json')
         with open(event_data_quality_summary_path, 'w', encoding='utf-8') as f:
             json.dump(event_data_quality_summary, f, indent=2)
+        field_accuracy_summary_path = os.path.join(output_dir, 'field_accuracy_summary.json')
+        with open(field_accuracy_summary_path, 'w', encoding='utf-8') as f:
+            json.dump(field_accuracy_summary, f, indent=2)
         coverage_summary_path = os.path.join(output_dir, 'coverage_summary.json')
         with open(coverage_summary_path, 'w', encoding='utf-8') as f:
             json.dump(coverage_summary, f, indent=2)
@@ -1968,6 +1975,7 @@ class ValidationTestRunner:
         logging.info(f"Chatbot quality summary saved: {chatbot_quality_summary_path}")
         logging.info(f"Duplicate audit summary saved: {duplicate_audit_summary_path}")
         logging.info(f"Event data quality summary saved: {event_data_quality_summary_path}")
+        logging.info(f"Field accuracy summary saved: {field_accuracy_summary_path}")
         logging.info(f"Coverage summary saved: {coverage_summary_path}")
         logging.info(f"Holdout summary saved: {holdout_summary_path}")
         logging.info(f"Domain-capped summary saved: {domain_capped_summary_path}")
@@ -2543,9 +2551,108 @@ class ValidationTestRunner:
             )
         return rows, source_label
 
+    def _load_manual_coverage_audit_rows(self) -> tuple[list[dict[str, Any]], str]:
+        """Load the periodic manual coverage audit set."""
+        audit_path = os.path.join("data", "evaluation", "manual_coverage_audit.csv")
+        if not os.path.exists(audit_path):
+            return [], "manual_coverage_audit_missing"
+        try:
+            audit_df = pd.read_csv(audit_path)
+        except Exception:
+            return [], "manual_coverage_audit_unreadable"
+        if audit_df.empty:
+            return [], "manual_coverage_audit_empty"
+
+        rows: list[dict[str, Any]] = []
+        for _, row in audit_df.iterrows():
+            active_raw = row.get("active", True)
+            active = str(active_raw).strip().lower() not in {"false", "0", "no", "n"}
+            if not active:
+                continue
+            rows.append(
+                {
+                    "source_name": str(row.get("source_name") or "").strip(),
+                    "source_url": str(row.get("source_url") or "").strip(),
+                    "event_name": str(row.get("event_name") or "").strip(),
+                    "start_date": str(row.get("start_date") or "").strip(),
+                    "expected_present": str(row.get("expected_present", "True") or "True").strip().lower() not in {"false", "0", "no", "n"},
+                    "active": True,
+                }
+            )
+        return rows, "manual_coverage_audit_csv"
+
+    def _summarize_manual_coverage_audit(self) -> dict:
+        """Summarize a curated manual audit of expected events against the current events table."""
+        audit_rows, source_label = self._load_manual_coverage_audit_rows()
+        summary = {
+            "available": False,
+            "manual_audit_source": source_label,
+            "sample_size": len(audit_rows),
+            "expected_present_count": 0,
+            "captured_count": 0,
+            "missed_count": 0,
+            "missed_event_rate_manual_audit_pct": None,
+            "sample_missed_events": [],
+            "error": "",
+        }
+        if not audit_rows:
+            summary["error"] = "manual coverage audit unavailable"
+            return summary
+
+        captured_count = 0
+        expected_present_count = 0
+        missed_rows: list[dict[str, Any]] = []
+        query = """
+            SELECT COUNT(*)
+            FROM events
+            WHERE (:event_name = '' OR LOWER(TRIM(event_name)) = LOWER(TRIM(:event_name)))
+              AND (:start_date = '' OR CAST(start_date AS TEXT) = :start_date)
+              AND (:source_url = '' OR LOWER(TRIM(url)) = LOWER(TRIM(:source_url)))
+        """
+        for row in audit_rows:
+            if not bool(row.get("expected_present")):
+                continue
+            expected_present_count += 1
+            params = {
+                "event_name": str(row.get("event_name") or "").strip(),
+                "start_date": str(row.get("start_date") or "").strip(),
+                "source_url": str(row.get("source_url") or "").strip(),
+            }
+            try:
+                result_rows = self.db_handler.execute_query(query, params) or []
+            except Exception as e:
+                summary["error"] = f"manual audit query failed: {e}"
+                return summary
+            match_count = int(result_rows[0][0]) if result_rows else 0
+            if match_count > 0:
+                captured_count += 1
+            else:
+                missed_rows.append(
+                    {
+                        "source_name": str(row.get("source_name") or ""),
+                        "source_url": str(row.get("source_url") or ""),
+                        "event_name": str(row.get("event_name") or ""),
+                        "start_date": str(row.get("start_date") or ""),
+                    }
+                )
+
+        missed_count = max(expected_present_count - captured_count, 0)
+        summary.update(
+            {
+                "available": True,
+                "expected_present_count": expected_present_count,
+                "captured_count": captured_count,
+                "missed_count": missed_count,
+                "missed_event_rate_manual_audit_pct": round((missed_count / expected_present_count) * 100.0, 2) if expected_present_count else None,
+                "sample_missed_events": missed_rows[:25],
+            }
+        )
+        return summary
+
     def _summarize_coverage_watchlist(self) -> dict:
         """Summarize coverage watchlist source hits and event capture using existing scrape evidence."""
         watchlist_rows, source_label = self._load_coverage_watchlist_rows()
+        manual_audit_summary = self._summarize_manual_coverage_audit()
         summary = {
             "available": False,
             "watchlist_source": source_label,
@@ -2557,6 +2664,9 @@ class ValidationTestRunner:
             "priority_sources_total": 0,
             "priority_sources_hit": 0,
             "priority_source_hit_rate_pct": None,
+            "new_source_discovery_count": 0,
+            "missed_event_rate_manual_audit_pct": None,
+            "manual_audit": manual_audit_summary,
             "missed_sources": [],
             "captured_sources": [],
             "error": "",
@@ -2618,6 +2728,9 @@ class ValidationTestRunner:
                 "priority_sources_total": priority_total,
                 "priority_sources_hit": priority_hits,
                 "priority_source_hit_rate_pct": round((priority_hits / priority_total) * 100.0, 2) if priority_total else None,
+                "new_source_discovery_count": 0,
+                "missed_event_rate_manual_audit_pct": manual_audit_summary.get("missed_event_rate_manual_audit_pct"),
+                "manual_audit": manual_audit_summary,
                 "missed_sources": missed[:25],
                 "captured_sources": captured[:25],
             }
@@ -2788,18 +2901,88 @@ class ValidationTestRunner:
         )
         return summary
 
+    def _summarize_field_accuracy(self, accuracy_replay_summary: dict | None) -> dict:
+        """Summarize field-level replay accuracy for fields that replay currently validates explicitly."""
+        rows = accuracy_replay_summary.get("rows", []) if isinstance(accuracy_replay_summary, dict) else []
+        field_buckets = {
+            "date": {"comparable": 0, "matches": 0},
+            "time": {"comparable": 0, "matches": 0},
+            "location": {"comparable": 0, "matches": 0},
+            "source": {"comparable": 0, "matches": 0},
+        }
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            baseline = row.get("baseline", {}) if isinstance(row.get("baseline"), dict) else {}
+            replay = row.get("replay", {}) if isinstance(row.get("replay"), dict) else {}
+
+            baseline_date = self._normalize_date_value(baseline.get("start_date"))
+            replay_date = self._normalize_date_value(replay.get("start_date"))
+            if baseline_date and replay_date:
+                field_buckets["date"]["comparable"] += 1
+                if baseline_date == replay_date:
+                    field_buckets["date"]["matches"] += 1
+
+            baseline_time = self._normalize_time_value(baseline.get("start_time"))
+            replay_time = self._normalize_time_value(replay.get("start_time"))
+            if baseline_time and replay_time:
+                field_buckets["time"]["comparable"] += 1
+                if self._times_equivalent_with_12h_guard(replay_time, baseline_time):
+                    field_buckets["time"]["matches"] += 1
+
+            baseline_location = self._normalize_text_value(baseline.get("location"))
+            replay_location = self._normalize_text_value(replay.get("location"))
+            if baseline_location and replay_location:
+                field_buckets["location"]["comparable"] += 1
+                if baseline_location == replay_location:
+                    field_buckets["location"]["matches"] += 1
+
+            baseline_source = self._normalize_text_value(baseline.get("source"))
+            replay_source = self._normalize_text_value(replay.get("source"))
+            if baseline_source and replay_source and not self._is_placeholder_source(baseline_source) and not self._is_placeholder_source(replay_source):
+                field_buckets["source"]["comparable"] += 1
+                if baseline_source == replay_source:
+                    field_buckets["source"]["matches"] += 1
+
+        def _pct(bucket: dict[str, int]) -> float | None:
+            comparable = int(bucket.get("comparable", 0) or 0)
+            matches = int(bucket.get("matches", 0) or 0)
+            if comparable <= 0:
+                return None
+            return round((matches / comparable) * 100.0, 2)
+
+        return {
+            "available": True,
+            "date_pct": _pct(field_buckets["date"]),
+            "time_pct": _pct(field_buckets["time"]),
+            "location_pct": _pct(field_buckets["location"]),
+            "source_pct": _pct(field_buckets["source"]),
+            "address_id_pct": None,
+            "dance_style_pct": None,
+            "description_pct": None,
+            "sample_sizes": {
+                "date": field_buckets["date"]["comparable"],
+                "time": field_buckets["time"]["comparable"],
+                "location": field_buckets["location"]["comparable"],
+                "source": field_buckets["source"]["comparable"],
+            },
+        }
+
     def _build_phase2_integrity_html(self, duplicate_summary: dict, coverage_summary: dict) -> str:
         """Render a compact Phase 2 integrity section for duplicates and watchlist coverage."""
         dup_rate = duplicate_summary.get("duplicate_rate_per_100_events")
         severe_rate = duplicate_summary.get("severe_duplicate_rate_per_100_events")
         source_hit = coverage_summary.get("source_hit_rate_pct")
         event_hit = coverage_summary.get("event_capture_rate_pct")
+        manual_missed = coverage_summary.get("missed_event_rate_manual_audit_pct")
         html = "<div class='metric-container'>"
         cards = [
             ("Duplicate Rate /100", dup_rate),
             ("Severe Duplicates /100", severe_rate),
             ("Watchlist Source Hit %", source_hit),
             ("Watchlist Event Capture %", event_hit),
+            ("Manual Audit Missed %", manual_missed),
         ]
         for label, value in cards:
             value_text = f"{float(value):.2f}" if isinstance(value, (int, float)) else "n/a"
@@ -7166,6 +7349,7 @@ class ValidationTestRunner:
         holdout_summary: dict | None = None,
         domain_capped_summary: dict | None = None,
         event_data_quality_summary: dict | None = None,
+        field_accuracy_summary: dict | None = None,
     ) -> None:
         """Persist key Phase 1 metrics for trend reporting."""
         if not getattr(self, "db_handler", None) or not hasattr(self.db_handler, "record_metric_observation"):
@@ -7207,6 +7391,7 @@ class ValidationTestRunner:
         holdout_info = holdout_summary if isinstance(holdout_summary, dict) else {}
         domain_capped_info = domain_capped_summary if isinstance(domain_capped_summary, dict) else {}
         event_data_quality = event_data_quality_summary if isinstance(event_data_quality_summary, dict) else {}
+        field_accuracy = field_accuracy_summary if isinstance(field_accuracy_summary, dict) else {}
         metric_specs.extend(
             [
                 (
@@ -7238,6 +7423,13 @@ class ValidationTestRunner:
                     True,
                 ),
                 (
+                    "missed_event_rate_manual_audit_pct",
+                    coverage_info.get("missed_event_rate_manual_audit_pct"),
+                    "percent",
+                    "Coverage manual audit: expected events missing from the current events table",
+                    False,
+                ),
+                (
                     "holdout_replay_url_accuracy_pct",
                     holdout_info.get("replay_url_accuracy_pct"),
                     "percent",
@@ -7264,6 +7456,34 @@ class ValidationTestRunner:
                     "percent",
                     "Event data quality: stale events in current events table",
                     False,
+                ),
+                (
+                    "field_accuracy_date_pct",
+                    field_accuracy.get("date_pct"),
+                    "percent",
+                    "Replay field accuracy: start_date",
+                    True,
+                ),
+                (
+                    "field_accuracy_time_pct",
+                    field_accuracy.get("time_pct"),
+                    "percent",
+                    "Replay field accuracy: start_time",
+                    True,
+                ),
+                (
+                    "field_accuracy_location_pct",
+                    field_accuracy.get("location_pct"),
+                    "percent",
+                    "Replay field accuracy: location",
+                    True,
+                ),
+                (
+                    "field_accuracy_source_pct",
+                    field_accuracy.get("source_pct"),
+                    "percent",
+                    "Replay field accuracy: source",
+                    True,
                 ),
             ]
         )
@@ -7319,6 +7539,7 @@ class ValidationTestRunner:
         classifier_performance_summary: dict | None,
         duplicate_summary: dict | None,
         event_data_quality_summary: dict | None,
+        field_accuracy_summary: dict | None,
         coverage_summary: dict | None,
         holdout_summary: dict | None,
         domain_capped_summary: dict | None,
@@ -7331,6 +7552,7 @@ class ValidationTestRunner:
         classifier = classifier_performance_summary if isinstance(classifier_performance_summary, dict) else {}
         duplicate_info = duplicate_summary if isinstance(duplicate_summary, dict) else {}
         event_data_quality = event_data_quality_summary if isinstance(event_data_quality_summary, dict) else {}
+        field_accuracy = field_accuracy_summary if isinstance(field_accuracy_summary, dict) else {}
         coverage_info = coverage_summary if isinstance(coverage_summary, dict) else {}
         holdout_info = holdout_summary if isinstance(holdout_summary, dict) else {}
         domain_capped_info = domain_capped_summary if isinstance(domain_capped_summary, dict) else {}
@@ -7423,6 +7645,7 @@ class ValidationTestRunner:
                             "stage_details": classifier.get("stage_details", []) if isinstance(classifier.get("stage_details"), list) else [],
                         },
                     },
+                    "field_accuracy": field_accuracy,
                 },
                 "events_coverage": {
                     "score": events_coverage_score,
@@ -7435,6 +7658,8 @@ class ValidationTestRunner:
                         "watchlist_source_hit_rate_pct": coverage_info.get("source_hit_rate_pct"),
                         "watchlist_event_capture_rate_pct": coverage_info.get("event_capture_rate_pct"),
                         "priority_source_hit_rate_pct": coverage_info.get("priority_source_hit_rate_pct"),
+                        "new_source_discovery_count": coverage_info.get("new_source_discovery_count"),
+                        "missed_event_rate_manual_audit_pct": coverage_info.get("missed_event_rate_manual_audit_pct"),
                         "watchlist_source": coverage_info.get("watchlist_source"),
                         "holdout_replay_url_accuracy_pct": holdout_info.get("replay_url_accuracy_pct"),
                         "domain_capped_replay_url_accuracy_pct": domain_capped_info.get("replay_url_accuracy_pct"),

@@ -1,0 +1,4 @@
+source_name,source_url,event_name,start_date,expected_present,active,notes
+Red Hot Swing,https://www.redhotswing.com/,Friday Social Dance,2026-04-10,True,True,Sample manual audit row for coverage checks
+VLDA,https://vlda.ca/resources/,Beginner Salsa Night,2026-04-15,True,True,Sample manual audit row for coverage checks
+Sunday Afternoon Salsa,https://sundayafternoonsalsa.com/,Sunday Salsa Social,2026-04-20,True,True,Sample manual audit row for coverage checks
