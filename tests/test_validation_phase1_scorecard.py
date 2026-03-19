@@ -448,6 +448,10 @@ def test_domain_evaluation_and_codex_review_bundle() -> None:
         "guardrails": {"status": "FAIL", "violations": [{"detail": "Guardrail fail"}]},
         "recommendations_input": {"top_regressions": ["Guardrail fail"]},
     }
+    recommendation_plan = {
+        "plan_version": "v1",
+        "top_issues": [{"issue_type": "guardrail_violation"}],
+    }
     bundle = runner._build_codex_review_bundle(
         run_scorecard=run_scorecard,
         accuracy_replay_summary=accuracy_replay,
@@ -458,11 +462,13 @@ def test_domain_evaluation_and_codex_review_bundle() -> None:
         domain_capped_summary={"replay_url_accuracy_pct": 75.0},
         domain_evaluation_summary=domain_summary,
         run_delta_summary={"previous_run": {"available": True}},
+        recommendation_plan=recommendation_plan,
     )
     assert bundle["bundle_version"] == "v1"
     assert bundle["run_id"] == "run-123"
     assert bundle["artifacts"]["domain_evaluation_summary"]["domain_count"] == 3
     assert bundle["artifacts"]["run_delta_summary"]["previous_run"]["available"] is True
+    assert bundle["artifacts"]["recommendation_plan"]["plan_version"] == "v1"
 
 
 def test_phase3_holdout_domain_caps_and_guardrails() -> None:
@@ -586,3 +592,42 @@ def test_run_delta_summary_compares_previous_run_and_holdout_baseline() -> None:
     assert run_delta_summary["previous_run"]["summary"]["delta_overall_score"] == 4.5
     assert run_delta_summary["holdout_baseline"]["summary"]["delta_holdout_replay_url_accuracy_pct"] == 4.0
     assert any(item["metric_key"] == "pipeline_duration_minutes" and item["direction"] == "improved" for item in run_delta_summary["previous_run"]["metric_deltas"])
+
+
+def test_recommendation_plan_uses_existing_scorecard_signals() -> None:
+    runner = _build_runner()
+    run_scorecard = {
+        "run_id": "run-plan",
+        "overall_score": {"status": "FAIL"},
+        "guardrails": {"status": "FAIL", "violations": [{"detail": "Replay URL accuracy below minimum"}]},
+    }
+    recommendation_plan = runner._build_recommendation_plan(
+        run_scorecard=run_scorecard,
+        classifier_performance_summary={
+            "stage_details": [{"stage": "ml", "replay_url_accuracy_pct": 60.0, "replay_url_count": 8}],
+        },
+        duplicate_summary={
+            "top_duplicate_domains": [{"domain": "dup.example.org", "duplicate_groups": 3}],
+        },
+        coverage_summary={
+            "missed_sources": [{"source_name": "Watchlist Venue", "source_url": "https://venue.example.org"}],
+        },
+        runtime_summary={
+            "step_spans": [{"log_file": "scraper_log.txt", "duration_minutes": 80.0}],
+        },
+        llm_cost_summary={
+            "by_provider": {"openai_usd": 4.2, "openrouter_usd": 1.1},
+        },
+        domain_evaluation_summary={
+            "worst_domains": [{"domain": "bad.example.org", "replay_url_accuracy_pct": 25.0}],
+        },
+        run_delta_summary={
+            "previous_run": {"top_regressions": [{"label": "Overall Score", "delta": -3.0}]},
+            "holdout_baseline": {"top_regressions": [{"label": "Holdout Replay URL Accuracy %", "delta": -5.0}]},
+        },
+    )
+    assert recommendation_plan["plan_version"] == "v1"
+    assert recommendation_plan["summary"]["has_guardrail_failure"] is True
+    assert len(recommendation_plan["top_issues"]) == 3
+    assert recommendation_plan["top_issues"][0]["issue_type"] == "guardrail_violation"
+    assert "recommended_actions" in recommendation_plan["top_issues"][0]
