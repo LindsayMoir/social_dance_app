@@ -25,7 +25,7 @@ import re  # Added missing import
 import requests
 from sqlalchemy import create_engine, MetaData, Table, text
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import PendingRollbackError, SQLAlchemyError
 from typing import Optional, List, Dict, Any
 from urllib.parse import urlparse
 import sys
@@ -954,7 +954,7 @@ class DatabaseHandler():
             ]
             # Copy events to events_history
             sql = 'SELECT * FROM events;'
-            events_df = pd.read_sql(sql, self.conn) 
+            events_df = self.read_sql_df(sql)
             events_df.to_sql('events_history', self.conn, if_exists='append', index=False)
 
         else:
@@ -1131,7 +1131,7 @@ class DatabaseHandler():
         """
         query = "SELECT * FROM urls;"
         try:
-            urls_df = pd.read_sql(query, self.conn)
+            urls_df = self.read_sql_df(query)
             logging.info("create_urls_df: Successfully created DataFrame from 'urls' table.")
             if urls_df.empty:
                 logging.warning("create_urls_df: 'urls' table is empty.")
@@ -1141,6 +1141,25 @@ class DatabaseHandler():
         except SQLAlchemyError as e:
             logging.error("create_urls_df: Failed to create DataFrame from 'urls' table: %s", e)
             return pd.DataFrame()
+
+    def read_sql_df(
+        self,
+        query: Any,
+        params: Optional[Any] = None,
+    ) -> pd.DataFrame:
+        """Execute a pandas SQL read with recovery from invalid pooled transaction state."""
+        try:
+            with self.conn.connect() as connection:
+                return pd.read_sql(query, connection, params=params)
+        except PendingRollbackError as exc:
+            logging.warning(
+                "read_sql_df(): Connection was left in an invalid transaction state; "
+                "disposing engine and retrying query. Error: %s",
+                exc,
+            )
+            self.conn.dispose()
+            with self.conn.connect() as connection:
+                return pd.read_sql(query, connection, params=params)
         
 
     def execute_query(self, query, params=None):
@@ -1738,7 +1757,7 @@ class DatabaseHandler():
         """
         logging.info("clean_up_address_basic(): Starting with shape %s", events_df.shape)
 
-        address_df = pd.read_sql("SELECT * FROM address", self.conn)
+        address_df = self.read_sql_df("SELECT * FROM address")
 
         for index, row in events_df.iterrows():
             event_id = row.get('event_id')
@@ -1914,7 +1933,7 @@ class DatabaseHandler():
             FROM locations
             WHERE mail_postal_code = %s;
         """
-        df = pd.read_sql(query, self.conn, params=(postal_code,))
+        df = self.read_sql_df(query, params=(postal_code,))
 
         # Single or multiple rows
         if df.empty:
@@ -3778,7 +3797,7 @@ class DatabaseHandler():
             sorted by 'start_date' and 'start_time' columns.
         """
         query = "SELECT * FROM events"
-        df = pd.read_sql(query, self.conn)
+        df = self.read_sql_df(query)
         df.sort_values(by=['start_date', 'start_time'], inplace=True)
         return df
 
@@ -4329,12 +4348,12 @@ class DatabaseHandler():
         """
         # 1. Load events from the database.
         events_sql = "SELECT * FROM events"
-        events_df = pd.read_sql(events_sql, self.conn)
+        events_df = self.read_sql_df(events_sql)
         logging.info("is_foreign(): Loaded %d records from events.", len(events_df))
 
         # 2. Load address street names.
         address_sql = "SELECT street_name FROM address"
-        address_df = pd.read_sql(address_sql, self.conn)
+        address_df = self.read_sql_df(address_sql)
         street_list = address_df['street_name'].tolist()
         logging.info("is_foreign(): Loaded %d street names from address.", len(street_list))
 
@@ -4431,11 +4450,11 @@ class DatabaseHandler():
 
         # Count events in db at start
         sql = "SELECT COUNT(*) as events_count_start FROM events"
-        events_count_start_df = pd.read_sql(sql, self.conn)
+        events_count_start_df = self.read_sql_df(sql)
 
         # Count events in db at start
         sql = "SELECT COUNT(DISTINCT link) as urls_count_start FROM urls"
-        urls_count_start_df = pd.read_sql(sql, self.conn)
+        urls_count_start_df = self.read_sql_df(sql)
 
         # Concatenate the above dataframes into a new dataframe called start_df
         start_df = pd.concat([file_name_df, start_time_df, events_count_start_df, urls_count_start_df], axis=1)
@@ -4466,11 +4485,11 @@ class DatabaseHandler():
 
         # Count events in db at end
         sql = "SELECT COUNT(*) as events_count_end FROM events"
-        events_count_end_df = pd.read_sql(sql, self.conn)
+        events_count_end_df = self.read_sql_df(sql)
 
         # Count events in db at end
         sql = "SELECT COUNT(DISTINCT link) as urls_count_end FROM urls"
-        urls_count_end_df = pd.read_sql(sql, self.conn)
+        urls_count_end_df = self.read_sql_df(sql)
 
         # Create the dataframe
         results_df = pd.concat([start_df, events_count_end_df, urls_count_end_df], axis=1)
@@ -5551,7 +5570,7 @@ class DatabaseHandler():
             ORDER BY address_id;
             """
             
-            addresses_df = pd.read_sql(get_addresses_sql, self.conn)
+            addresses_df = self.read_sql_df(get_addresses_sql)
             
             if addresses_df.empty:
                 logging.info("reset_address_id_sequence(): No addresses found to renumber.")
@@ -5734,7 +5753,7 @@ class DatabaseHandler():
             ORDER BY address_id;
             """
             
-            addresses_df = pd.read_sql(find_addresses_sql, self.conn)
+            addresses_df = self.read_sql_df(find_addresses_sql)
             
             if addresses_df.empty:
                 logging.info("update_full_address_with_building_names(): No addresses found.")
