@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from io import BytesIO
+import numpy as np
 import pandas as pd
 import pytesseract
 import requests
@@ -24,6 +25,11 @@ from scrapy import Selector
 from sqlalchemy import text
 import yaml
 from config_runtime import get_config_path, load_config
+
+try:
+    from paddleocr import PaddleOCR
+except Exception:  # pragma: no cover - defensive import fallback
+    PaddleOCR = None
 
 from db import DatabaseHandler
 from llm import LLMHandler
@@ -59,6 +65,15 @@ config = load_config(str(config_path))
 
 logger = logging.getLogger(__name__)
 logger.info("\n\nStarting images.py ...")
+
+_INSTAGRAM_DEGRADED_SHELL_TOKENS = (
+    "this content is no longer available",
+    "the content you requested cannot be displayed right now",
+    "see everyday moments from your close friends",
+    "continue use another profile create new account",
+    "sign up for instagram",
+    "log in by continuing",
+)
 
 
 
@@ -241,6 +256,31 @@ def _build_image_context_text(
     return "\n".join(part for part in parts if part)
 
 
+def _is_degraded_instagram_profile_text(text: str) -> bool:
+    """Return True when Instagram profile text looks like a shell/login/degraded page."""
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return True
+    return any(token in normalized for token in _INSTAGRAM_DEGRADED_SHELL_TOKENS)
+
+
+def _extract_rankable_image_urls(rendered_html: str, page_url: str) -> list[str]:
+    """Extract image-like URLs from rendered HTML, excluding obvious Instagram UI assets."""
+    if not rendered_html:
+        return []
+    imgs = Selector(text=rendered_html).xpath('//img/@src').getall()
+    image_urls = [urljoin(page_url, src) for src in imgs if src and src.strip()]
+    rankable_urls: list[str] = []
+    for image_url in image_urls:
+        if not image_url or not image_url.strip():
+            continue
+        if "instagram.com" in image_url or "fbcdn.net" in image_url or Path(urlparse(image_url).path).suffix.lower() in IMAGE_EXTENSIONS:
+            if _is_ignored_instagram_ui_asset(image_url):
+                continue
+            rankable_urls.append(image_url)
+    return _dedupe_preserve_order(rankable_urls)
+
+
 def _is_ignored_instagram_ui_asset(image_url: str) -> bool:
     """Return True for obvious Instagram UI/static assets that should not be OCR'd."""
     try:
@@ -284,6 +324,9 @@ def _score_image_candidate(image_url: str, width: int, height: int) -> int:
     return score
 
 class ImageScraper:
+    _paddle_ocr_engine = None
+    _paddle_ocr_init_attempted = False
+
     def __init__(self, config: dict):
         self.config = config
         self.logger = logging.getLogger(f"{__name__}.ImageScraper")
@@ -785,6 +828,10 @@ class ImageScraper:
         if max_dim < 800:
             scale = 800/max_dim
             img = img.resize((int(img.width*scale), int(img.height*scale)), Image.LANCZOS)
+        paddle_text = self._extract_text_paddleocr(img)
+        if paddle_text:
+            self.logger.info("ocr_image_to_text(): PaddleOCR succeeded for %s", local_path)
+            return paddle_text
         gray = img.convert('L')
         bw = ImageEnhance.Contrast(gray).enhance(1.5).point(lambda x:0 if x<128 else 255,'1')
         try:
@@ -792,6 +839,54 @@ class ImageScraper:
         except Exception:
             self.logger.exception(f"OCR failed on {local_path}")
             return ""
+
+    def _get_paddle_ocr_engine(self):
+        """Lazily initialize and cache the PaddleOCR engine."""
+        cls = type(self)
+        if cls._paddle_ocr_engine is not None:
+            return cls._paddle_ocr_engine
+        if cls._paddle_ocr_init_attempted:
+            return None
+        cls._paddle_ocr_init_attempted = True
+        if PaddleOCR is None:
+            self.logger.info("_get_paddle_ocr_engine(): PaddleOCR not installed, using Tesseract fallback")
+            return None
+        try:
+            cls._paddle_ocr_engine = PaddleOCR(
+                use_angle_cls=True,
+                lang="en",
+                show_log=False,
+            )
+            self.logger.info("_get_paddle_ocr_engine(): PaddleOCR initialized successfully")
+        except Exception as exc:
+            self.logger.warning("_get_paddle_ocr_engine(): PaddleOCR initialization failed: %s", exc)
+            cls._paddle_ocr_engine = None
+        return cls._paddle_ocr_engine
+
+    def _extract_text_paddleocr(self, image: Image.Image) -> str:
+        """Extract text with PaddleOCR and return joined lines, or an empty string on failure."""
+        engine = self._get_paddle_ocr_engine()
+        if engine is None:
+            return ""
+        try:
+            result = engine.ocr(np.array(image), cls=True)
+        except Exception as exc:
+            self.logger.warning("_extract_text_paddleocr(): PaddleOCR failed: %s", exc)
+            return ""
+
+        lines: list[str] = []
+        for block in result or []:
+            if not isinstance(block, list):
+                continue
+            for item in block:
+                if not item or len(item) < 2:
+                    continue
+                text_info = item[1]
+                if isinstance(text_info, (list, tuple)) and text_info:
+                    detected_text = str(text_info[0] or "").strip()
+                    if detected_text:
+                        lines.append(detected_text)
+        return "\n".join(lines).strip()
 
 
     def get_image_links(self) -> pd.DataFrame:
@@ -879,6 +974,13 @@ class ImageScraper:
 
         # Instantiate url_row
         url_row = (page_url, parent_url, source, '', False, 1, datetime.now())
+        rendered_html = ""
+        post_limit = self.images_per_page_limit
+        if post_limit <= 0:
+            post_limit = int(self.config.get('crawling', {}).get('max_website_urls', 10) or 10)
+        instagram_post_links: list[str] = []
+        prefiltered_img_urls: list[str] = []
+        skip_profile_llm = False
 
         try:
             resp = requests.get(page_url, timeout=10)
@@ -914,6 +1016,31 @@ class ImageScraper:
             self.db_handler.write_url_to_db(url_row)
             return
 
+        if is_instagram_url(page_url):
+            rendered_html = self.loop.run_until_complete(self.read_extract.page.content())
+            if not is_instagram_post_detail_url(page_url):
+                instagram_post_links = _extract_instagram_post_links(rendered_html, page_url)
+                if not instagram_post_links:
+                    instagram_post_links = self.loop.run_until_complete(
+                        self._extract_instagram_post_links_playwright(page_url, post_limit)
+                    )
+                prefiltered_img_urls = _extract_rankable_image_urls(rendered_html, page_url)
+                if _is_degraded_instagram_profile_text(text):
+                    if instagram_post_links or prefiltered_img_urls:
+                        skip_profile_llm = True
+                        self.logger.info(
+                            "process_webpage_url(): Instagram profile is degraded shell text, skipping profile-level LLM and using %d post link(s) / %d image candidate(s)",
+                            len(instagram_post_links),
+                            len(prefiltered_img_urls),
+                        )
+                    else:
+                        self.logger.warning(
+                            "process_webpage_url(): Instagram profile appears degraded and exposed no post links or image candidates for %s",
+                            page_url,
+                        )
+                        self.db_handler.write_url_to_db(url_row)
+                        return
+
         # keyword filtering
         found = [kw for kw in self.keywords_list if kw.lower() in text.lower()]
         if not found:
@@ -923,25 +1050,27 @@ class ImageScraper:
         self.logger.info(f"process_webpage_url(): Keywords {found} found in {page_url}")
 
         # LLM processing
-        prompt_type = resolve_prompt_type(page_url, fallback_prompt_type='default')
-        prompt_text, schema_type = self.llm_handler.generate_prompt(page_url, text, prompt_type)
-        status = self.llm_handler.process_llm_response(
-            page_url, parent_url, text, source, found, prompt_type
-        )
-        if status:
-            self.logger.info(f"process_webpage_url(): LLM succeeded for {page_url}")
+        if not skip_profile_llm:
+            prompt_type = resolve_prompt_type(page_url, fallback_prompt_type='default')
+            prompt_text, schema_type = self.llm_handler.generate_prompt(page_url, text, prompt_type)
+            status = self.llm_handler.process_llm_response(
+                page_url, parent_url, text, source, found, prompt_type
+            )
+            if status:
+                self.logger.info(f"process_webpage_url(): LLM succeeded for {page_url}")
+            else:
+                self.logger.warning(f"process_webpage_url(): LLM produced no events for {page_url}")
         else:
-            self.logger.warning(f"process_webpage_url(): LLM produced no events for {page_url}")
+            self.logger.info("process_webpage_url(): Skipped profile-level LLM for degraded Instagram profile %s", page_url)
 
         # extract and process images
         # pull down the browser’s rendered DOM
-        rendered_html = self.loop.run_until_complete(
-            self.read_extract.page.content()
-        )
-        post_limit = self.images_per_page_limit
-        if post_limit <= 0:
-            post_limit = int(self.config.get('crawling', {}).get('max_website_urls', 10) or 10)
-        instagram_post_links = _extract_instagram_post_links(rendered_html, page_url)
+        if not rendered_html:
+            rendered_html = self.loop.run_until_complete(
+                self.read_extract.page.content()
+            )
+        if not instagram_post_links:
+            instagram_post_links = _extract_instagram_post_links(rendered_html, page_url)
         if not instagram_post_links and is_instagram_url(page_url) and not is_instagram_post_detail_url(page_url):
             instagram_post_links = self.loop.run_until_complete(
                 self._extract_instagram_post_links_playwright(page_url, post_limit)
@@ -956,8 +1085,7 @@ class ImageScraper:
             for post_url in selected_post_links:
                 self.process_webpage_url(post_url, page_url, source, keywords)
             return
-        imgs = Selector(text=rendered_html).xpath('//img/@src').getall()
-        img_urls = [urljoin(page_url, u) for u in imgs if self.is_image_url(u)]
+        img_urls = prefiltered_img_urls or _extract_rankable_image_urls(rendered_html, page_url)
         self.logger.info(
             "process_webpage_url(): considering %d raw image candidate(s) before ranking, cap=%d",
             len(img_urls),
@@ -969,9 +1097,6 @@ class ImageScraper:
 
         scored_imgs: list[tuple[int, str]] = []
         for url in img_urls:
-            if _is_ignored_instagram_ui_asset(url):
-                self.logger.info("Skipping %s: obvious Instagram UI/static asset", url)
-                continue
             try:
                 # Use Playwright for Instagram images, requests for others
                 if 'instagram.com' in url or 'fbcdn.net' in url:

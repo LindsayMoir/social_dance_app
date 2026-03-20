@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 import sys
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -12,6 +14,7 @@ from images import (
     ImageScraper,
     _build_image_context_text,
     _extract_instagram_post_links,
+    _is_degraded_instagram_profile_text,
     _is_ignored_instagram_ui_asset,
     _score_image_candidate,
 )
@@ -127,6 +130,11 @@ def test_instagram_ui_asset_filter_and_scoring() -> None:
     assert _is_ignored_instagram_ui_asset(poster_url) is False
     assert _score_image_candidate(ui_url, 1200, 1200) < 0
     assert _score_image_candidate(poster_url, 1080, 1350) > _score_image_candidate(poster_url, 1080, 400)
+
+
+def test_instagram_degraded_profile_text_detection() -> None:
+    assert _is_degraded_instagram_profile_text("This content is no longer available. Sign up for Instagram.") is True
+    assert _is_degraded_instagram_profile_text("Bachata Victoria BC 116 posts 1100 followers Next Social: March 20th") is False
 
 
 def test_process_webpage_url_expands_instagram_posts_before_page_images(monkeypatch) -> None:
@@ -282,6 +290,133 @@ def test_process_webpage_url_uses_playwright_post_fallback_when_html_has_no_post
     assert called_images == []
 
 
+def test_process_webpage_url_skips_degraded_instagram_shell_without_posts_or_media(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.urls_visited = set()
+    scraper.keywords_list = ["bachata"]
+    scraper.images_per_page_limit = 2
+    scraper.config = {"crawling": {"max_website_urls": 10, "prompt_max_length": 10000}}
+
+    written_rows: list[tuple] = []
+
+    class _FakeDb:
+        def write_url_to_db(self, row):
+            written_rows.append(row)
+
+    class _FakeLLM:
+        def generate_prompt(self, *_args, **_kwargs):
+            raise AssertionError("profile LLM should not run for degraded shell pages without posts/media")
+
+        def process_llm_response(self, *_args, **_kwargs):
+            raise AssertionError("profile LLM should not run for degraded shell pages without posts/media")
+
+    class _FakePage:
+        async def content(self):
+            return '<html><body><img src="https://static.cdninstagram.com/rsrc.php/yJ/r/ui.webp" /></body></html>'
+
+    scraper.db_handler = _FakeDb()
+    scraper.llm_handler = _FakeLLM()
+    scraper.read_extract = SimpleNamespace(page=_FakePage())
+
+    def _run_until_complete(awaitable):
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
+        name = getattr(getattr(awaitable, "cr_code", None), "co_name", "")
+        if name == "_extract_instagram_post_links_playwright":
+            return []
+        return '<html><body><img src="https://static.cdninstagram.com/rsrc.php/yJ/r/ui.webp" /></body></html>'
+
+    scraper.loop = SimpleNamespace(run_until_complete=_run_until_complete)
+    scraper._extract_dynamic_page_text = lambda _url: (
+        "See everyday moments from your close friends. Continue Use another profile Create new account."
+    )
+    fake_response = Mock()
+    fake_response.text = "<html><body>short</body></html>"
+    fake_response.raise_for_status.return_value = None
+    monkeypatch.setattr(images.requests, "get", lambda *_args, **_kwargs: fake_response)
+
+    ImageScraper.process_webpage_url(
+        scraper,
+        "https://www.instagram.com/bachatavictoria/",
+        "",
+        "Sebastian y Hannah",
+        "bachata",
+    )
+
+    assert len(written_rows) == 1
+
+
+def test_process_webpage_url_skips_profile_llm_for_degraded_shell_with_posts(monkeypatch) -> None:
+    original_process_webpage_url = ImageScraper.process_webpage_url
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.urls_visited = set()
+    scraper.keywords_list = ["bachata"]
+    scraper.images_per_page_limit = 2
+    scraper.config = {"crawling": {"max_website_urls": 10, "prompt_max_length": 10000}}
+
+    class _FakeDb:
+        def write_url_to_db(self, _row):
+            return None
+
+    class _FakeLLM:
+        def generate_prompt(self, *_args, **_kwargs):
+            raise AssertionError("profile LLM should be skipped when post links are available")
+
+        def process_llm_response(self, *_args, **_kwargs):
+            raise AssertionError("profile LLM should be skipped when post links are available")
+
+    class _FakePage:
+        async def content(self):
+            return """
+            <html><body>
+              <a href="/p/POST001/">Post 1</a>
+              <img src="https://static.cdninstagram.com/ui.webp" />
+            </body></html>
+            """
+
+    scraper.db_handler = _FakeDb()
+    scraper.llm_handler = _FakeLLM()
+    scraper.read_extract = SimpleNamespace(page=_FakePage())
+
+    def _run_until_complete(awaitable):
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
+        return """
+        <html><body>
+          <a href="/p/POST001/">Post 1</a>
+          <img src="https://static.cdninstagram.com/ui.webp" />
+        </body></html>
+        """
+
+    scraper.loop = SimpleNamespace(run_until_complete=_run_until_complete)
+    scraper._extract_dynamic_page_text = lambda _url: (
+        "See everyday moments from your close friends. Continue Use another profile Create new account. Bachata Victoria."
+    )
+    fake_response = Mock()
+    fake_response.text = "<html><body>short</body></html>"
+    fake_response.raise_for_status.return_value = None
+    monkeypatch.setattr(images.requests, "get", lambda *_args, **_kwargs: fake_response)
+
+    called_posts: list[tuple[str, str, str, str]] = []
+    scraper.process_webpage_url = lambda url, parent, source, keywords: called_posts.append((url, parent, source, keywords))
+
+    original_process_webpage_url(
+        scraper,
+        "https://www.instagram.com/bachatavictoria/",
+        "",
+        "Sebastian y Hannah",
+        "bachata",
+    )
+
+    assert called_posts == [
+        ("https://www.instagram.com/p/POST001/", "https://www.instagram.com/bachatavictoria/", "Sebastian y Hannah", "bachata"),
+    ]
+
+
 def test_process_image_url_uses_parent_url_for_prompt_context(monkeypatch) -> None:
     scraper = ImageScraper.__new__(ImageScraper)
     scraper.logger = logging.getLogger("test.images")
@@ -333,12 +468,51 @@ def test_process_image_url_uses_parent_url_for_prompt_context(monkeypatch) -> No
     assert "Parent_Page_Text: Next Social: March 20th" in generate_text
     assert "715 Yates ST".lower() in generate_text.lower()
 
-    process_image_url_arg, process_parent_url, process_text, process_source, process_found, process_prompt_type = scraper.llm_handler.process_args
-    assert process_image_url_arg == "https://www.instagram.com/bachatavictoria/"
-    assert process_parent_url == "https://www.instagram.com/bachatavictoria/"
-    assert process_source == "Bachata Victoria BC"
-    assert process_prompt_type == "fb"
-    assert "bachata" in process_found
+
+def test_ocr_image_to_text_prefers_paddleocr(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+
+    class _FakePaddle:
+        def ocr(self, *_args, **_kwargs):
+            return [[
+                [None, ("BACHATA VICTORIA", 0.99)],
+                [None, ("715 YATES ST", 0.98)],
+            ]]
+
+    monkeypatch.setattr(ImageScraper, "_paddle_ocr_engine", _FakePaddle())
+    monkeypatch.setattr(ImageScraper, "_paddle_ocr_init_attempted", True)
+    monkeypatch.setattr(images.pytesseract, "image_to_string", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("tesseract should not be used")))
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        images.Image.new("RGB", (40, 40), color="white").save(tmp_path)
+        text = scraper.ocr_image_to_text(tmp_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    assert "BACHATA VICTORIA" in text
+    assert "715 YATES ST" in text
+
+
+def test_ocr_image_to_text_falls_back_to_tesseract(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+
+    monkeypatch.setattr(ImageScraper, "_paddle_ocr_engine", None)
+    monkeypatch.setattr(ImageScraper, "_paddle_ocr_init_attempted", True)
+    monkeypatch.setattr(images.pytesseract, "image_to_string", lambda *_args, **_kwargs: "fallback text")
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        images.Image.new("RGB", (40, 40), color="white").save(tmp_path)
+        text = scraper.ocr_image_to_text(tmp_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    assert text == "fallback text"
 
 
 def test_process_webpage_url_ranks_instagram_images_and_skips_ui_assets(monkeypatch) -> None:
