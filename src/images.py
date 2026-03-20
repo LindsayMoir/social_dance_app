@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import random
+import re
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
 
@@ -281,6 +282,14 @@ def _extract_rankable_image_urls(rendered_html: str, page_url: str) -> list[str]
     return _dedupe_preserve_order(rankable_urls)
 
 
+def _safe_screenshot_stem(page_url: str) -> str:
+    """Create a filesystem-safe stem for screenshot artifacts."""
+    parsed = urlparse(str(page_url or ""))
+    raw = f"{parsed.netloc or 'page'}_{parsed.path or 'root'}"
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._")
+    return cleaned or "page"
+
+
 def _is_ignored_instagram_ui_asset(image_url: str) -> bool:
     """Return True for obvious Instagram UI/static assets that should not be OCR'd."""
     try:
@@ -460,6 +469,20 @@ class ImageScraper:
                 )
 
         return _dedupe_preserve_order(discovered_links)[:max_links]
+
+    async def _capture_page_screenshot(self, page_url: str) -> Path | None:
+        """Capture a screenshot of the currently rendered page for OCR fallback."""
+        try:
+            if getattr(self.read_extract.page, "url", "") != page_url:
+                await self.read_extract.page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
+                await self.read_extract.page.wait_for_timeout(2500)
+            screenshot_path = self.download_dir / f"{_safe_screenshot_stem(page_url)}_rendered.png"
+            await self.read_extract.page.screenshot(path=str(screenshot_path), full_page=True)
+            self.logger.info("_capture_page_screenshot(): Saved screenshot for %s to %s", page_url, screenshot_path)
+            return screenshot_path
+        except Exception as exc:
+            self.logger.warning("_capture_page_screenshot(): Failed for %s: %s", page_url, exc)
+            return None
 
     def _extract_dynamic_page_text(self, page_url: str) -> str | None:
         """
@@ -1038,7 +1061,17 @@ class ImageScraper:
                             "process_webpage_url(): Instagram profile appears degraded and exposed no post links or image candidates for %s",
                             page_url,
                         )
-                        self.db_handler.write_url_to_db(url_row)
+                        screenshot_path = self.loop.run_until_complete(self._capture_page_screenshot(page_url))
+                        if screenshot_path:
+                            self._process_local_image_path(
+                                screenshot_path,
+                                page_url,
+                                parent_url,
+                                source,
+                                page_context_text=text,
+                            )
+                        else:
+                            self.db_handler.write_url_to_db(url_row)
                         return
 
         # keyword filtering
@@ -1145,6 +1178,74 @@ class ImageScraper:
         )
         for _, src in selected_imgs:
             self.process_image_url(src, page_url, source, keywords, page_context_text=text)
+        if not selected_imgs and is_instagram_url(page_url):
+            screenshot_path = self.loop.run_until_complete(self._capture_page_screenshot(page_url))
+            if screenshot_path:
+                self._process_local_image_path(
+                    screenshot_path,
+                    page_url,
+                    parent_url,
+                    source,
+                    page_context_text=text,
+                )
+
+    def _process_local_image_path(
+        self,
+        local_path: Path,
+        canonical_url: str,
+        parent_url: str,
+        source: str,
+        page_context_text: str | None = None,
+    ) -> bool:
+        """Run OCR/LLM extraction against an already-rendered local screenshot."""
+        self.logger.info("_process_local_image_path(): Starting OCR for %s", local_path)
+        text = self.ocr_image_to_text(local_path)
+        if not text:
+            self.logger.info("_process_local_image_path(): No text extracted from screenshot %s", local_path)
+            return False
+        self.logger.info("_process_local_image_path(): Extracted text length %d characters", len(text))
+        self.logger.info("_process_local_image_path(): Extracted text:\n%s", text)
+
+        det_date, det_dow = detect_date_from_image(local_path)
+        if det_date and det_dow:
+            text = f"Detected_Date: {det_date}\nDetected_Day: {det_dow}\n{text}"
+            self.logger.info(
+                "_process_local_image_path(): Detected date hint %s (%s) added to OCR text",
+                det_date,
+                det_dow,
+            )
+
+        llm_text = _build_image_context_text(
+            ocr_text=text,
+            parent_url=canonical_url,
+            source=source,
+            page_context_text=page_context_text,
+        )
+        found = [kw for kw in self.keywords_list if kw.lower() in llm_text.lower()]
+        if not found:
+            self.logger.info("_process_local_image_path(): No relevant keywords in screenshot OCR for %s", local_path)
+            return False
+
+        prompt_basis_url = canonical_url or parent_url
+        prompt_type = resolve_prompt_type(prompt_basis_url, fallback_prompt_type='default')
+        prompt_text, schema_type = self.llm_handler.generate_prompt(prompt_basis_url, llm_text, prompt_type)
+        if len(prompt_text) > config['crawling']['prompt_max_length']:
+            self.logger.warning("_process_local_image_path(): Prompt exceeds maximum length for %s", local_path)
+            return False
+
+        status = self.llm_handler.process_llm_response(
+            prompt_basis_url,
+            parent_url,
+            llm_text,
+            source,
+            found,
+            prompt_type,
+        )
+        if status:
+            self.logger.info("_process_local_image_path(): LLM processing succeeded for screenshot %s", local_path)
+        else:
+            self.logger.warning("_process_local_image_path(): LLM processing did not produce any events for screenshot %s", local_path)
+        return bool(status)
 
 
     def process_image_url(

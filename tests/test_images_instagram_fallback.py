@@ -16,6 +16,7 @@ from images import (
     _extract_instagram_post_links,
     _is_degraded_instagram_profile_text,
     _is_ignored_instagram_ui_asset,
+    _safe_screenshot_stem,
     _score_image_candidate,
 )
 
@@ -135,6 +136,12 @@ def test_instagram_ui_asset_filter_and_scoring() -> None:
 def test_instagram_degraded_profile_text_detection() -> None:
     assert _is_degraded_instagram_profile_text("This content is no longer available. Sign up for Instagram.") is True
     assert _is_degraded_instagram_profile_text("Bachata Victoria BC 116 posts 1100 followers Next Social: March 20th") is False
+
+
+def test_safe_screenshot_stem_is_filesystem_safe() -> None:
+    stem = _safe_screenshot_stem("https://www.instagram.com/bachatavictoria/p/ABC123/?hl=en")
+    assert "/" not in stem
+    assert "instagram.com" in stem
 
 
 def test_process_webpage_url_expands_instagram_posts_before_page_images(monkeypatch) -> None:
@@ -299,6 +306,7 @@ def test_process_webpage_url_skips_degraded_instagram_shell_without_posts_or_med
     scraper.config = {"crawling": {"max_website_urls": 10, "prompt_max_length": 10000}}
 
     written_rows: list[tuple] = []
+    screenshot_calls: list[tuple[str, str, str, str | None]] = []
 
     class _FakeDb:
         def write_url_to_db(self, row):
@@ -332,6 +340,9 @@ def test_process_webpage_url_skips_degraded_instagram_shell_without_posts_or_med
     scraper._extract_dynamic_page_text = lambda _url: (
         "See everyday moments from your close friends. Continue Use another profile Create new account."
     )
+    scraper._process_local_image_path = lambda path, canonical_url, parent_url, source, page_context_text=None: screenshot_calls.append(
+        (str(path), canonical_url, source, page_context_text)
+    ) or True
     fake_response = Mock()
     fake_response.text = "<html><body>short</body></html>"
     fake_response.raise_for_status.return_value = None
@@ -345,7 +356,9 @@ def test_process_webpage_url_skips_degraded_instagram_shell_without_posts_or_med
         "bachata",
     )
 
-    assert len(written_rows) == 1
+    assert written_rows == []
+    assert len(screenshot_calls) == 1
+    assert screenshot_calls[0][1] == "https://www.instagram.com/bachatavictoria/"
 
 
 def test_process_webpage_url_skips_profile_llm_for_degraded_shell_with_posts(monkeypatch) -> None:
@@ -467,6 +480,50 @@ def test_process_image_url_uses_parent_url_for_prompt_context(monkeypatch) -> No
     assert generate_prompt_type == "fb"
     assert "Parent_Page_Text: Next Social: March 20th" in generate_text
     assert "715 Yates ST".lower() in generate_text.lower()
+
+
+def test_process_local_image_path_reuses_existing_ocr_llm_flow(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.keywords_list = ["bachata", "dance"]
+
+    class _FakeLLM:
+        def __init__(self):
+            self.generate_args = None
+            self.process_args = None
+
+        def generate_prompt(self, url, extracted_text, prompt_type):
+            self.generate_args = (url, extracted_text, prompt_type)
+            return ("prompt", "event_extraction")
+
+        def process_llm_response(self, image_url, parent_url, extracted_text, source, found, prompt_type):
+            self.process_args = (image_url, parent_url, extracted_text, source, found, prompt_type)
+            return True
+
+    scraper.llm_handler = _FakeLLM()
+    scraper.ocr_image_to_text = lambda _path: "BACHATA 715 YATES ST 8PM SOCIAL DANCE"
+    monkeypatch.setattr(images, "detect_date_from_image", lambda _path: ("2026-03-20", "Friday"))
+    monkeypatch.setattr(images, "resolve_prompt_type", lambda *_args, **_kwargs: "fb")
+
+    result = scraper._process_local_image_path(
+        Path("/tmp/fake_screenshot.png"),
+        "https://www.instagram.com/bachatavictoria/",
+        "",
+        "Bachata Victoria BC",
+        page_context_text="Next Social: March 20th",
+    )
+
+    assert result is True
+    generate_url, generate_text, generate_prompt_type = scraper.llm_handler.generate_args
+    assert generate_url == "https://www.instagram.com/bachatavictoria/"
+    assert generate_prompt_type == "fb"
+    assert "Detected_Date: 2026-03-20" in generate_text
+    assert "Parent_Page_Text: Next Social: March 20th" in generate_text
+    process_url, process_parent_url, process_text, process_source, process_found, process_prompt_type = scraper.llm_handler.process_args
+    assert process_url == "https://www.instagram.com/bachatavictoria/"
+    assert process_source == "Bachata Victoria BC"
+    assert "bachata" in process_found
+    assert process_prompt_type == "fb"
 
 
 def test_ocr_image_to_text_prefers_paddleocr(monkeypatch) -> None:
