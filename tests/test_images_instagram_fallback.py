@@ -208,6 +208,80 @@ def test_process_webpage_url_expands_instagram_posts_before_page_images(monkeypa
     assert called_images == []
 
 
+def test_process_webpage_url_uses_playwright_post_fallback_when_html_has_no_posts(monkeypatch) -> None:
+    original_process_webpage_url = ImageScraper.process_webpage_url
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.urls_visited = set()
+    scraper.keywords_list = ["bachata"]
+    scraper.images_per_page_limit = 2
+    scraper.config = {"crawling": {"max_website_urls": 10, "prompt_max_length": 10000}}
+
+    class _FakeDb:
+        def write_url_to_db(self, _row):
+            return None
+
+    class _FakeLLM:
+        def generate_prompt(self, *_args, **_kwargs):
+            return ("prompt", "event_extraction")
+
+        def process_llm_response(self, *_args, **_kwargs):
+            return False
+
+    class _FakePage:
+        async def content(self):
+            return '<html><body><img src="https://static.cdninstagram.com/ui.webp" /></body></html>'
+
+    scraper.db_handler = _FakeDb()
+    scraper.llm_handler = _FakeLLM()
+    scraper.read_extract = SimpleNamespace(page=_FakePage())
+
+    def _run_until_complete(awaitable):
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
+        name = getattr(getattr(awaitable, "cr_code", None), "co_name", "")
+        if name == "_extract_instagram_post_links_playwright":
+            return [
+                "https://www.instagram.com/p/FALLBACK001/",
+                "https://www.instagram.com/reel/FALLBACK002/",
+            ]
+        return '<html><body><img src="https://static.cdninstagram.com/ui.webp" /></body></html>'
+
+    scraper.loop = SimpleNamespace(run_until_complete=_run_until_complete)
+    scraper._extract_dynamic_page_text = lambda _url: "bachata victoria profile text"
+    fake_response = Mock()
+    fake_response.text = "<html><body>short</body></html>"
+    fake_response.raise_for_status.return_value = None
+    monkeypatch.setattr(images.requests, "get", lambda *_args, **_kwargs: fake_response)
+
+    called_posts: list[tuple[str, str, str, str]] = []
+    called_images: list[tuple[str, str, str, str]] = []
+
+    def _process_post(url, parent, source, keywords):
+        called_posts.append((url, parent, source, keywords))
+
+    def _process_image(url, parent, source, keywords):
+        called_images.append((url, parent, source, keywords))
+
+    scraper.process_image_url = _process_image
+    scraper.process_webpage_url = _process_post
+
+    original_process_webpage_url(
+        scraper,
+        "https://www.instagram.com/bachatavictoria/",
+        "",
+        "Sebastian y Hannah",
+        "bachata",
+    )
+
+    assert called_posts == [
+        ("https://www.instagram.com/p/FALLBACK001/", "https://www.instagram.com/bachatavictoria/", "Sebastian y Hannah", "bachata"),
+        ("https://www.instagram.com/reel/FALLBACK002/", "https://www.instagram.com/bachatavictoria/", "Sebastian y Hannah", "bachata"),
+    ]
+    assert called_images == []
+
+
 def test_process_image_url_uses_parent_url_for_prompt_context(monkeypatch) -> None:
     scraper = ImageScraper.__new__(ImageScraper)
     scraper.logger = logging.getLogger("test.images")
@@ -365,8 +439,8 @@ def test_process_webpage_url_ranks_instagram_images_and_skips_ui_assets(monkeypa
 
     ImageScraper.process_webpage_url(
         scraper,
+        "https://www.instagram.com/p/POST001/",
         "https://www.instagram.com/bachatavictoria/",
-        "",
         "Sebastian y Hannah",
         "bachata",
     )

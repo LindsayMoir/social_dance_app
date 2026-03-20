@@ -208,6 +208,19 @@ def _extract_instagram_post_links(rendered_html: str, page_url: str) -> list[str
     return links
 
 
+def _dedupe_preserve_order(urls: list[str]) -> list[str]:
+    """Return unique URLs while preserving their first-seen order."""
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for url in urls:
+        candidate = str(url or "").strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+    return deduped
+
+
 def _build_image_context_text(
     ocr_text: str,
     parent_url: str,
@@ -319,6 +332,91 @@ class ImageScraper:
             tag.decompose()
         text = " ".join(soup.get_text(separator=" ").split())
         return text or None
+
+    async def _extract_instagram_post_links_playwright(
+        self,
+        page_url: str,
+        max_links: int,
+    ) -> list[str]:
+        """Use the authenticated Playwright page to resolve visible Instagram post links."""
+        if not is_instagram_url(page_url) or is_instagram_post_detail_url(page_url):
+            return []
+
+        page = self.read_extract.page
+        discovered_links: list[str] = []
+        selector = 'a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]'
+        max_candidates = max(max_links * 3, max_links)
+
+        try:
+            await page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as exc:
+            self.logger.warning(
+                "_extract_instagram_post_links_playwright(): failed initial goto for %s: %s",
+                page_url,
+                exc,
+            )
+            return []
+
+        for attempt in range(3):
+            try:
+                await page.wait_for_timeout(2500 if attempt == 0 else 1500)
+                rendered_html = await page.content()
+                discovered_links.extend(_extract_instagram_post_links(rendered_html, page_url))
+                if discovered_links:
+                    break
+
+                locator = page.locator(selector)
+                try:
+                    await locator.first.wait_for(timeout=4000)
+                except Exception:
+                    pass
+
+                count = await locator.count()
+                for index in range(min(count, max_candidates)):
+                    href = await locator.nth(index).get_attribute("href")
+                    absolute = urljoin(page_url, str(href or "").strip())
+                    if is_instagram_post_detail_url(absolute):
+                        discovered_links.append(absolute)
+                if discovered_links:
+                    break
+
+                article_links = page.locator("article a")
+                article_count = await article_links.count()
+                for index in range(min(article_count, max_candidates)):
+                    anchor = article_links.nth(index)
+                    href = await anchor.get_attribute("href")
+                    absolute = urljoin(page_url, str(href or "").strip())
+                    if is_instagram_post_detail_url(absolute):
+                        discovered_links.append(absolute)
+                        continue
+                    try:
+                        await anchor.click(timeout=2500)
+                        await page.wait_for_timeout(1000)
+                    except Exception:
+                        continue
+                    current_url = str(getattr(page, "url", "") or "")
+                    if is_instagram_post_detail_url(current_url):
+                        discovered_links.append(current_url)
+                    try:
+                        if current_url and current_url != page_url:
+                            await page.go_back(timeout=3000, wait_until="domcontentloaded")
+                        else:
+                            await page.keyboard.press("Escape")
+                    except Exception:
+                        pass
+                if discovered_links:
+                    break
+
+                await page.mouse.wheel(0, 1400)
+            except Exception as exc:
+                self.logger.info(
+                    "_extract_instagram_post_links_playwright(): attempt %d failed for %s: %s",
+                    attempt + 1,
+                    page_url,
+                    exc,
+                )
+
+        return _dedupe_preserve_order(discovered_links)[:max_links]
 
     def _extract_dynamic_page_text(self, page_url: str) -> str | None:
         """
@@ -840,11 +938,15 @@ class ImageScraper:
         rendered_html = self.loop.run_until_complete(
             self.read_extract.page.content()
         )
+        post_limit = self.images_per_page_limit
+        if post_limit <= 0:
+            post_limit = int(self.config.get('crawling', {}).get('max_website_urls', 10) or 10)
         instagram_post_links = _extract_instagram_post_links(rendered_html, page_url)
+        if not instagram_post_links and is_instagram_url(page_url) and not is_instagram_post_detail_url(page_url):
+            instagram_post_links = self.loop.run_until_complete(
+                self._extract_instagram_post_links_playwright(page_url, post_limit)
+            )
         if instagram_post_links:
-            post_limit = self.images_per_page_limit
-            if post_limit <= 0:
-                post_limit = int(self.config.get('crawling', {}).get('max_website_urls', 10) or 10)
             selected_post_links = instagram_post_links[:post_limit]
             self.logger.info(
                 "process_webpage_url(): extracted %d Instagram post link(s), processing %d before page-image OCR",
