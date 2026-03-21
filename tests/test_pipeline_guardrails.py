@@ -152,3 +152,7 @@ def test_log_copy_dev_to_prod_evaluation_warnings_does_not_raise(tmp_path, monke
     monkeypatch.setattr(pipeline, "RUN_SCORECARD_PATH", str(scorecard_path))
 
     pipeline._log_copy_dev_to_prod_evaluation_warnings()
+
+
+def test_parallel_crawler_group_includes_images() -> None:
+    assert pipeline.PARALLEL_CRAWLER_STEPS == {"rd_ext", "ebs", "scraper", "fb", "images"}

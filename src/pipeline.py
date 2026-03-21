@@ -272,7 +272,7 @@ PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_post_nav_wait_ms"] = 1800
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_post_expand_wait_ms"] = 900
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_final_wait_ms"] = 700
 
-PARALLEL_CRAWLER_STEPS = {"rd_ext", "ebs", "scraper", "fb"}
+PARALLEL_CRAWLER_STEPS = {"rd_ext", "ebs", "scraper", "fb", "images"}
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_failures_before_cooldown"] = 2
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_cooldown_base_seconds"] = 300
 PARALLEL_CRAWL_CONFIG_UPDATES["crawling"]["fb_block_cooldown_max_seconds"] = 1800
@@ -1047,10 +1047,10 @@ def run_parallel_crawlers_script(script_path: str) -> str:
 @flow(name="Parallel Crawlers Step")
 def parallel_crawlers_step():
     """
-    Run rd_ext.py, ebs.py, scraper.py, and fb.py concurrently using one shared config snapshot.
+    Run rd_ext.py, ebs.py, scraper.py, fb.py, and images.py concurrently using one shared config snapshot.
     This avoids config race conditions from each individual step wrapper.
     """
-    scripts = ["src/rd_ext.py", "src/ebs.py", "src/scraper.py", "src/fb.py"]
+    scripts = ["src/rd_ext.py", "src/ebs.py", "src/scraper.py", "src/fb.py", "src/images.py"]
     scraper_log_path = str(cfg.get("logging", {}).get("scraper_log_file", "logs/scraper_log.txt"))
     fb_log_path = os.path.join(os.path.dirname(scraper_log_path), "fb_log.txt")
     tuning = tune_crawl_config_from_first_pass(
@@ -1068,7 +1068,7 @@ def parallel_crawlers_step():
 
     failures: list[str] = []
     try:
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=len(scripts)) as executor:
             future_to_script = {
                 executor.submit(run_parallel_crawlers_script.fn, script): script
                 for script in scripts
@@ -2358,7 +2358,7 @@ def run_pipeline(start_step: str, end_step: str = None, parallel_crawlers: bool 
             and name == "rd_ext"
             and PARALLEL_CRAWLER_STEPS.issubset(set(selected_names))
         ):
-            print("Running parallel crawler group: rd_ext + ebs + scraper + fb")
+            print("Running parallel crawler group: rd_ext + ebs + scraper + fb + images")
             retry_count = 0
             while retry_count < 3:
                 try:
@@ -2451,11 +2451,11 @@ def prompt_user():
     end = PIPELINE_STEPS[end_index][0]
     print(f"Pipeline will run from '{start}' to '{end}'.")
     selected_steps = [name for name, _ in PIPELINE_STEPS[start_index:end_index + 1]]
-    can_run_parallel = all(step in selected_steps for step in ("ebs", "scraper", "fb"))
+    can_run_parallel = all(step in selected_steps for step in PARALLEL_CRAWLER_STEPS)
     parallel_crawlers = False
     if can_run_parallel:
         parallel_answer = input(
-            "Run rd_ext/ebs/scraper/fb in parallel? (y/N): "
+            "Run rd_ext/ebs/scraper/fb/images in parallel? (y/N): "
         ).strip().lower()
         parallel_crawlers = parallel_answer in {"y", "yes"}
         print(f"Parallel crawlers: {'enabled' if parallel_crawlers else 'disabled'}")
