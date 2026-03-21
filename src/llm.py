@@ -2169,10 +2169,10 @@ class LLMHandler:
         # --- 2) Build content blocks (array-of-parts is fine) ---
         content_blocks = [{"type": "text", "text": prompt}]
         if image_url:
-            # OpenAI expects "input_image"
+            # OpenAI chat completions expect "image_url"
             content_blocks.append({
-                "type": "input_image",
-                "image_url": {"url": image_url}
+                "type": "image_url",
+                "image_url": {"url": image_url},
             })
 
         # --- 3) Optional JSON schema handling ---

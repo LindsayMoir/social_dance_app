@@ -1,4 +1,5 @@
 import asyncio
+import time
 import logging
 import os
 import sys
@@ -435,6 +436,7 @@ def test_process_image_url_uses_parent_url_for_prompt_context(monkeypatch) -> No
     scraper.logger = logging.getLogger("test.images")
     scraper.urls_visited = set()
     scraper.keywords_list = ["bachata", "dance", "salsa"]
+    scraper._process_local_image_path_with_vision = lambda *_args, **_kwargs: False
 
     class _FakeDb:
         def check_image_events_exist(self, _url):
@@ -482,10 +484,53 @@ def test_process_image_url_uses_parent_url_for_prompt_context(monkeypatch) -> No
     assert "715 Yates ST".lower() in generate_text.lower()
 
 
+def test_process_image_url_uses_vision_before_ocr() -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.urls_visited = set()
+    scraper.keywords_list = ["bachata", "dance", "salsa"]
+
+    class _FakeDb:
+        def check_image_events_exist(self, _url):
+            return False
+
+        def should_process_url(self, _url):
+            return True
+
+        def write_url_to_db(self, _row):
+            return None
+
+    scraper.db_handler = _FakeDb()
+    scraper.download_image = lambda _url: "images/fake.jpg"
+
+    called = {"vision": 0, "ocr": 0}
+
+    def _vision(path, canonical_url, parent_url, source, page_context_text=None):
+        called["vision"] += 1
+        assert str(path) == "images/fake.jpg"
+        assert canonical_url == "https://www.instagram.com/bachatavictoria/"
+        return True
+
+    scraper._process_local_image_path_with_vision = _vision
+    scraper.ocr_image_to_text = lambda _path: called.__setitem__("ocr", called["ocr"] + 1) or ""
+
+    scraper.process_image_url(
+        "https://instagram.fcxh2-1.fna.fbcdn.net/poster.jpg",
+        "https://www.instagram.com/bachatavictoria/",
+        "Bachata Victoria BC",
+        "bachata",
+        page_context_text="Next Social: March 20th",
+    )
+
+    assert called["vision"] == 1
+    assert called["ocr"] == 0
+
+
 def test_process_local_image_path_reuses_existing_ocr_llm_flow(monkeypatch) -> None:
     scraper = ImageScraper.__new__(ImageScraper)
     scraper.logger = logging.getLogger("test.images")
     scraper.keywords_list = ["bachata", "dance"]
+    scraper._process_local_image_path_with_vision = lambda *_args, **_kwargs: False
 
     class _FakeLLM:
         def __init__(self):
@@ -518,7 +563,134 @@ def test_process_local_image_path_reuses_existing_ocr_llm_flow(monkeypatch) -> N
     assert generate_url == "https://www.instagram.com/bachatavictoria/"
     assert generate_prompt_type == "fb"
     assert "Detected_Date: 2026-03-20" in generate_text
-    assert "Parent_Page_Text: Next Social: March 20th" in generate_text
+
+
+def test_process_local_image_path_uses_vision_first(tmp_path) -> None:
+    screenshot_path = tmp_path / "poster.png"
+    screenshot_path.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.keywords_list = ["bachata", "dance"]
+
+    written = {}
+
+    class _FakeDb:
+        def write_events_to_db(self, events_df, source):
+            written["events_df"] = events_df.copy()
+            written["source"] = source
+
+    class _FakeLLM:
+        def __init__(self):
+            self.generate_args = None
+            self.query_args = None
+
+        def generate_prompt(self, url, extracted_text, prompt_type):
+            self.generate_args = (url, extracted_text, prompt_type)
+            return ("prompt", "event_extraction")
+
+        def query_openai(self, prompt, model, image_url=None, schema_type=None):
+            self.query_args = (prompt, model, image_url, schema_type)
+            return '[{"event_name":"Bachata Victoria Social Night","start_date":"2026-03-20"}]'
+
+        def extract_and_parse_json(self, result, url, schema_type=None):
+            return [{"event_name": "Bachata Victoria Social Night", "start_date": "2026-03-20"}]
+
+        def _apply_url_context_to_events_df(self, events_df, url, parent_url):
+            events_df = events_df.copy()
+            events_df["url"] = url
+            return events_df
+
+    scraper.db_handler = _FakeDb()
+    scraper.llm_handler = _FakeLLM()
+
+    result = scraper._process_local_image_path(
+        screenshot_path,
+        "https://www.instagram.com/bachatavictoria/",
+        "",
+        "Bachata Victoria BC",
+        page_context_text="Next Social: March 20th",
+    )
+
+    assert result is True
+    assert written["source"] == "Bachata Victoria BC"
+    assert written["events_df"].iloc[0]["event_name"] == "Bachata Victoria Social Night"
+    _, model, image_url, schema_type = scraper.llm_handler.query_args
+    assert model == "gpt-4.1-mini"
+    assert image_url.startswith("data:image/png;base64,")
+    assert schema_type == "event_extraction"
+
+
+def test_process_local_image_path_falls_back_when_vision_times_out(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.keywords_list = ["bachata", "dance"]
+
+    class _FakeLLM:
+        def __init__(self):
+            self.process_args = None
+
+        def generate_prompt(self, url, extracted_text, prompt_type):
+            return ("prompt", "event_extraction")
+
+        def query_openai(self, *args, **kwargs):
+            time.sleep(images._VISION_REQUEST_TIMEOUT_SECONDS + 1)
+            return None
+
+        def process_llm_response(self, image_url, parent_url, extracted_text, source, found, prompt_type):
+            self.process_args = (image_url, parent_url, extracted_text, source, found, prompt_type)
+            return True
+
+    scraper.llm_handler = _FakeLLM()
+    scraper.ocr_image_to_text = lambda _path: "BACHATA 715 YATES ST 8PM SOCIAL DANCE"
+    monkeypatch.setattr(images, "detect_date_from_image", lambda _path: (None, None))
+    monkeypatch.setattr(images, "resolve_prompt_type", lambda *_args, **_kwargs: "fb")
+
+    result = scraper._process_local_image_path(
+        Path("/tmp/fake_screenshot.png"),
+        "https://www.instagram.com/bachatavictoria/",
+        "",
+        "Bachata Victoria BC",
+        page_context_text="Next Social: March 20th",
+    )
+
+    assert result is True
+    assert scraper.llm_handler.process_args is not None
+
+
+def test_process_local_image_path_falls_back_to_ocr_when_vision_fails(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.keywords_list = ["bachata", "dance"]
+    scraper._process_local_image_path_with_vision = lambda *_args, **_kwargs: False
+
+    class _FakeLLM:
+        def __init__(self):
+            self.process_args = None
+
+        def generate_prompt(self, url, extracted_text, prompt_type):
+            return ("prompt", "event_extraction")
+
+        def process_llm_response(self, image_url, parent_url, extracted_text, source, found, prompt_type):
+            self.process_args = (image_url, parent_url, extracted_text, source, found, prompt_type)
+            return True
+
+    scraper.llm_handler = _FakeLLM()
+    scraper.ocr_image_to_text = lambda _path: "BACHATA 715 YATES ST 8PM SOCIAL DANCE"
+    monkeypatch.setattr(images, "detect_date_from_image", lambda _path: (None, None))
+    monkeypatch.setattr(images, "resolve_prompt_type", lambda *_args, **_kwargs: "fb")
+
+    result = scraper._process_local_image_path(
+        Path("/tmp/fake_screenshot.png"),
+        "https://www.instagram.com/bachatavictoria/",
+        "",
+        "Bachata Victoria BC",
+        page_context_text="Next Social: March 20th",
+    )
+
+    assert result is True
+    assert scraper.llm_handler.process_args is not None
+    assert "Parent_Page_Text: Next Social: March 20th" in scraper.llm_handler.process_args[2]
     process_url, process_parent_url, process_text, process_source, process_found, process_prompt_type = scraper.llm_handler.process_args
     assert process_url == "https://www.instagram.com/bachatavictoria/"
     assert process_source == "Bachata Victoria BC"

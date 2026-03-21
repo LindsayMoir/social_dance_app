@@ -2,6 +2,8 @@
 
 from pathlib import Path
 import asyncio
+import base64
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import json
 import logging
 import os
@@ -75,6 +77,8 @@ _INSTAGRAM_DEGRADED_SHELL_TOKENS = (
     "sign up for instagram",
     "log in by continuing",
 )
+_VISION_MODEL = "gpt-4.1-mini"
+_VISION_REQUEST_TIMEOUT_SECONDS = 12
 
 
 
@@ -911,6 +915,129 @@ class ImageScraper:
                         lines.append(detected_text)
         return "\n".join(lines).strip()
 
+    @staticmethod
+    def _local_image_to_data_url(local_path: Path) -> str | None:
+        """Encode a local image as a data URL for multimodal OpenAI requests."""
+        suffix = local_path.suffix.lower()
+        mime_type = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+        }.get(suffix)
+        if not mime_type:
+            return None
+        try:
+            encoded = base64.b64encode(local_path.read_bytes()).decode("ascii")
+        except Exception:
+            logger.exception("_local_image_to_data_url(): Failed to read image %s", local_path)
+            return None
+        return f"data:{mime_type};base64,{encoded}"
+
+    def _process_local_image_path_with_vision(
+        self,
+        local_path: Path,
+        canonical_url: str,
+        parent_url: str,
+        source: str,
+        page_context_text: str | None = None,
+    ) -> bool:
+        """Try multimodal image extraction before falling back to OCR."""
+        image_data_url = self._local_image_to_data_url(local_path)
+        if not image_data_url:
+            self.logger.info(
+                "_process_local_image_path_with_vision(): Unsupported screenshot type for vision path: %s",
+                local_path,
+            )
+            return False
+
+        prompt_basis_url = canonical_url or parent_url
+        vision_context = _build_image_context_text(
+            ocr_text="Use the screenshot image as the primary source of truth.",
+            parent_url=canonical_url,
+            source=source,
+            page_context_text=page_context_text,
+        )
+        found = [kw for kw in self.keywords_list if kw.lower() in vision_context.lower()]
+        if not found:
+            found = [source] if source else ["event"]
+
+        prompt_type = resolve_prompt_type(prompt_basis_url, fallback_prompt_type='default')
+        prompt_text, schema_type = self.llm_handler.generate_prompt(prompt_basis_url, vision_context, prompt_type)
+        max_prompt_length = int(config['crawling']['prompt_max_length'])
+        if len(prompt_text) > max_prompt_length:
+            self.logger.warning(
+                "_process_local_image_path_with_vision(): Prompt exceeds max length for %s",
+                local_path,
+            )
+            return False
+
+        openai_model = _VISION_MODEL
+        self.logger.info(
+            "_process_local_image_path_with_vision(): Querying vision model %s for %s",
+            openai_model,
+            local_path,
+        )
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    self.llm_handler.query_openai,
+                    prompt_text,
+                    openai_model,
+                    image_data_url,
+                    schema_type,
+                )
+                llm_response = future.result(timeout=_VISION_REQUEST_TIMEOUT_SECONDS)
+        except FuturesTimeoutError:
+            self.logger.warning(
+                "_process_local_image_path_with_vision(): Vision query timed out after %ss for %s",
+                _VISION_REQUEST_TIMEOUT_SECONDS,
+                local_path,
+            )
+            return False
+        except Exception:
+            self.logger.exception(
+                "_process_local_image_path_with_vision(): Vision query failed for %s",
+                local_path,
+            )
+            return False
+
+        if not llm_response:
+            self.logger.warning(
+                "_process_local_image_path_with_vision(): Vision model returned no response for %s",
+                local_path,
+            )
+            return False
+
+        parsed_result = self.llm_handler.extract_and_parse_json(llm_response, prompt_basis_url, schema_type)
+        if not parsed_result:
+            self.logger.warning(
+                "_process_local_image_path_with_vision(): Vision model produced no parseable events for %s",
+                local_path,
+            )
+            return False
+
+        events_df = pd.DataFrame(parsed_result)
+        events_df = self.llm_handler._apply_url_context_to_events_df(
+            events_df=events_df,
+            url=prompt_basis_url,
+            parent_url=parent_url,
+        )
+        if events_df.empty:
+            self.logger.warning(
+                "_process_local_image_path_with_vision(): Vision model parsed empty events for %s",
+                local_path,
+            )
+            return False
+
+        self.db_handler.write_events_to_db(events_df, source)
+        self.logger.info(
+            "_process_local_image_path_with_vision(): Vision model wrote %d event(s) for %s",
+            len(events_df),
+            local_path,
+        )
+        return True
+
 
     def get_image_links(self) -> pd.DataFrame:
         """
@@ -1197,7 +1324,15 @@ class ImageScraper:
         source: str,
         page_context_text: str | None = None,
     ) -> bool:
-        """Run OCR/LLM extraction against an already-rendered local screenshot."""
+        """Run vision-first extraction against a local screenshot, then fall back to OCR."""
+        if self._process_local_image_path_with_vision(
+            local_path,
+            canonical_url,
+            parent_url,
+            source,
+            page_context_text=page_context_text,
+        ):
+            return True
         self.logger.info("_process_local_image_path(): Starting OCR for %s", local_path)
         text = self.ocr_image_to_text(local_path)
         if not text:
@@ -1306,6 +1441,19 @@ class ImageScraper:
             self.db_handler.write_url_to_db(url_row)
             return
         self.logger.info(f"process_image_url(): Image saved to {path}")
+
+        if self._process_local_image_path_with_vision(
+            Path(path),
+            parent_url or image_url,
+            parent_url,
+            source,
+            page_context_text=page_context_text,
+        ):
+            self.logger.info(
+                "process_image_url(): Vision-first extraction succeeded for %s",
+                image_url,
+            )
+            return
 
         # Run OCR
         self.logger.info(f"process_image_url(): Running OCR on {path}")
