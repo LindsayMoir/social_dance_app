@@ -1856,30 +1856,83 @@ class ImageScraper:
         start_df = self.db_handler.count_events_urls_start(file_name)
 
         self.logger.info("process_images(): Starting batch processing of image/webpage links.")
-        df = self.get_image_links()
-        total = len(df)
-        self.logger.info(f"process_images(): Retrieved {total} links to process.")
+        initial_df = self.get_image_links()
+        self.logger.info("process_images(): Retrieved %d initial links to process.", len(initial_df))
+        self._process_image_rows(initial_df, phase_label="initial")
 
-        for idx, row in enumerate(df.itertuples(index=False), start=1):
-            url, parent, source, keywords, *_ = row
-            self.logger.info(f"process_images(): [{idx}/{total}] url={url}, parent={parent}, source={source}")
-
-            # Check and see if we should process this url
-            if not self.db_handler.should_process_url(url):
-                self.logger.info(f"process_images(): should_process_url returned False for url: {url}")
-                continue
-
-            if self.is_image_url(url):
-                self.logger.info(f"process_images(): Detected direct image URL ({url}), invoking OCR pipeline.")
-                self.process_image_url(url, parent, source, keywords)
+        remaining_capacity = self._remaining_url_capacity()
+        if remaining_capacity > 0:
+            refreshed_df = self.get_image_links()
+            refreshed_df = self._filter_unvisited_rows(refreshed_df)
+            if not refreshed_df.empty:
+                self.logger.info(
+                    "process_images(): Retrieved %d newly discovered links on final refresh (remaining_capacity=%d).",
+                    len(refreshed_df),
+                    remaining_capacity,
+                )
+                self._process_image_rows(refreshed_df, phase_label="final_refresh")
             else:
-                self.logger.info(f"process_images(): Detected webpage URL ({url}), extracting embedded images.")
-                self.process_webpage_url(url, parent, source, keywords)
+                self.logger.info("process_images(): Final refresh found no new image/webpage links.")
+        else:
+            self.logger.info("process_images(): Skipping final refresh because urls_run_limit has been reached.")
 
         self.logger.info("process_images(): Completed processing all links.")
 
         self.db_handler.count_events_urls_end(start_df, __file__)
         logging.info(f"Wrote events and urls statistics to: {file_name}")
+
+    def _remaining_url_capacity(self) -> int:
+        """Return how many more URLs may be visited within the configured run cap."""
+        limit = int(self.config.get("crawling", {}).get("urls_run_limit", 0) or 0)
+        if limit <= 0:
+            return 0
+        return max(limit - len(self.urls_visited), 0)
+
+    def _filter_unvisited_rows(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Filter queued rows down to links that have not already been visited."""
+        if df.empty or "link" not in df.columns:
+            return df
+        mask = ~df["link"].astype(str).isin(self.urls_visited)
+        return df.loc[mask].reset_index(drop=True)
+
+    def _process_image_rows(self, df: pd.DataFrame, phase_label: str) -> None:
+        """Process queued image/webpage rows while honoring the configured URL run cap."""
+        if df.empty:
+            self.logger.info("process_images(): %s queue is empty.", phase_label)
+            return
+
+        total = len(df)
+        for idx, row in enumerate(df.itertuples(index=False), start=1):
+            if self._remaining_url_capacity() <= 0:
+                self.logger.info(
+                    "process_images(): Reached urls_run_limit during %s queue at item %d/%d.",
+                    phase_label,
+                    idx,
+                    total,
+                )
+                break
+
+            url, parent, source, keywords, *_ = row
+            self.logger.info(
+                "process_images(): [%s %d/%d] url=%s, parent=%s, source=%s",
+                phase_label,
+                idx,
+                total,
+                url,
+                parent,
+                source,
+            )
+
+            if not self.db_handler.should_process_url(url):
+                self.logger.info("process_images(): should_process_url returned False for url: %s", url)
+                continue
+
+            if self.is_image_url(url):
+                self.logger.info("process_images(): Detected direct image URL (%s), invoking OCR pipeline.", url)
+                self.process_image_url(url, parent, source, keywords)
+            else:
+                self.logger.info("process_images(): Detected webpage URL (%s), extracting embedded images.", url)
+                self.process_webpage_url(url, parent, source, keywords)
 
 
 if __name__ == '__main__':

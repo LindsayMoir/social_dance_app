@@ -1188,3 +1188,81 @@ def test_get_image_links_uses_smallest_page_limit_for_instagram_keyword_search(m
 
     assert search_calls == [("bachata", 2)]
     assert len(df) == 2
+
+
+def test_process_images_final_refresh_processes_new_urls(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.config = {"crawling": {"urls_run_limit": 5}}
+    scraper.urls_visited = set()
+
+    initial_df = pd.DataFrame(
+        [
+            {"link": "https://www.instagram.com/existing1/", "parent_url": "", "source": "db", "keywords": "bachata"},
+        ]
+    )
+    refresh_df = pd.DataFrame(
+        [
+            {"link": "https://www.instagram.com/existing1/", "parent_url": "", "source": "db", "keywords": "bachata"},
+            {"link": "https://www.instagram.com/new2/", "parent_url": "", "source": "db", "keywords": "salsa"},
+        ]
+    )
+    queued = [initial_df, refresh_df]
+    scraper.get_image_links = lambda: queued.pop(0)
+    scraper.db_handler = SimpleNamespace(
+        should_process_url=lambda _url: True,
+        count_events_urls_start=lambda _file: pd.DataFrame(),
+        count_events_urls_end=lambda _start_df, _file: None,
+    )
+    monkeypatch.setattr(images.os.path, "basename", lambda _value: "images.py")
+
+    processed: list[tuple[str, str]] = []
+
+    def _process_web(url, parent, source, keywords):
+        processed.append((url, keywords))
+        scraper.urls_visited.add(url)
+
+    scraper.process_webpage_url = _process_web
+    scraper.process_image_url = lambda *args, **kwargs: None
+    scraper.is_image_url = lambda _url: False
+
+    ImageScraper.process_images(scraper)
+
+    assert processed == [
+        ("https://www.instagram.com/existing1/", "bachata"),
+        ("https://www.instagram.com/new2/", "salsa"),
+    ]
+
+
+def test_process_images_skips_final_refresh_when_url_limit_reached(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.config = {"crawling": {"urls_run_limit": 1}}
+    scraper.urls_visited = set()
+
+    initial_df = pd.DataFrame(
+        [
+            {"link": "https://www.instagram.com/existing1/", "parent_url": "", "source": "db", "keywords": "bachata"},
+        ]
+    )
+    call_count = {"get_image_links": 0}
+
+    def _get_links():
+        call_count["get_image_links"] += 1
+        return initial_df
+
+    scraper.get_image_links = _get_links
+    scraper.db_handler = SimpleNamespace(
+        should_process_url=lambda _url: True,
+        count_events_urls_start=lambda _file: pd.DataFrame(),
+        count_events_urls_end=lambda _start_df, _file: None,
+    )
+    monkeypatch.setattr(images.os.path, "basename", lambda _value: "images.py")
+
+    scraper.process_webpage_url = lambda url, parent, source, keywords: scraper.urls_visited.add(url)
+    scraper.process_image_url = lambda *args, **kwargs: None
+    scraper.is_image_url = lambda _url: False
+
+    ImageScraper.process_images(scraper)
+
+    assert call_count["get_image_links"] == 1
