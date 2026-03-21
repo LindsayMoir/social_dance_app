@@ -44,6 +44,13 @@ from secret_paths import get_auth_file
 db_handler = None
 
 
+def _safe_bool(value: object) -> bool:
+    """Coerce config-like boolean values safely."""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def is_social_media_url(url: str) -> bool:
     """
     Return True for Facebook/Instagram URLs that rd_ext must never crawl.
@@ -141,7 +148,9 @@ class ReadExtract:
         """
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=self.config['crawling']['headless'])
+                browser = p.chromium.launch(
+                    headless=_safe_bool(self.config.get('crawling', {}).get('headless', True))
+                )
                 page = browser.new_page()
                 page.goto(url, timeout=10000)
                 page.wait_for_timeout(3000)
@@ -165,7 +174,9 @@ class ReadExtract:
 
     async def init_browser(self):
         self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=self.config['crawling']['headless'])
+        self.browser = await self.playwright.chromium.launch(
+            headless=_safe_bool(self.config.get('crawling', {}).get('headless', True))
+        )
         # Set a realistic User-Agent to avoid being detected as a bot
         user_agent = (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
