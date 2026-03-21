@@ -12,7 +12,7 @@ import time
 import random
 import re
 from datetime import datetime
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote_plus, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from io import BytesIO
@@ -246,6 +246,35 @@ def _dedupe_preserve_order(urls: list[str]) -> list[str]:
         seen.add(candidate)
         deduped.append(candidate)
     return deduped
+
+
+def _is_instagram_profile_candidate(url: str) -> bool:
+    """Return True when the URL looks like an Instagram profile page."""
+    if not is_instagram_url(url) or is_instagram_post_detail_url(url):
+        return False
+    parsed = urlparse(url)
+    path = str(parsed.path or "").strip("/")
+    if not path:
+        return False
+    first_segment = path.split("/", 1)[0].lower()
+    return first_segment not in {"accounts", "explore", "direct", "about", "legal", "developer"}
+
+
+def _extract_instagram_search_links(rendered_html: str, page_url: str) -> list[str]:
+    """Extract profile and post links from an Instagram search results page."""
+    if not rendered_html or not is_instagram_url(page_url):
+        return []
+
+    selector = Selector(text=rendered_html)
+    discovered_links: list[str] = []
+    for href in selector.xpath("//a/@href").getall():
+        candidate = str(href or "").strip()
+        if not candidate:
+            continue
+        absolute = urljoin(page_url, candidate)
+        if is_instagram_post_detail_url(absolute) or _is_instagram_profile_candidate(absolute):
+            discovered_links.append(absolute)
+    return _dedupe_preserve_order(discovered_links)
 
 
 def _build_image_context_text(
@@ -522,6 +551,116 @@ class ImageScraper:
             self.logger.warning("_capture_page_screenshot(): Failed for %s: %s", page_url, exc)
             return None
 
+    async def _search_instagram_keyword_links_playwright(
+        self,
+        keyword: str,
+        max_links: int,
+    ) -> list[str]:
+        """Search Instagram for a keyword and return profile/post links."""
+        cleaned_keyword = str(keyword or "").strip()
+        if not cleaned_keyword or max_links <= 0:
+            return []
+
+        search_url = f"https://www.instagram.com/explore/search/keyword/?q={quote_plus(cleaned_keyword)}"
+        page = self.read_extract.page
+        discovered_links: list[str] = []
+        max_candidates = max(max_links * 3, max_links)
+
+        try:
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as exc:
+            self.logger.warning(
+                "_search_instagram_keyword_links_playwright(): failed goto for keyword=%s: %s",
+                cleaned_keyword,
+                exc,
+            )
+            return []
+
+        for attempt in range(3):
+            try:
+                await page.wait_for_timeout(2500 if attempt == 0 else 1500)
+                rendered_html = await page.content()
+                discovered_links.extend(_extract_instagram_search_links(rendered_html, search_url))
+                if len(_dedupe_preserve_order(discovered_links)) >= max_links:
+                    break
+
+                locator = page.locator('a[href*="/p/"], a[href*="/reel/"], a[href^="/"], a[href*="instagram.com/"]')
+                count = await locator.count()
+                for index in range(min(count, max_candidates)):
+                    href = await locator.nth(index).get_attribute("href")
+                    absolute = urljoin(search_url, str(href or "").strip())
+                    if is_instagram_post_detail_url(absolute) or _is_instagram_profile_candidate(absolute):
+                        discovered_links.append(absolute)
+                if len(_dedupe_preserve_order(discovered_links)) >= max_links:
+                    break
+
+                await page.mouse.wheel(0, 1600)
+            except Exception as exc:
+                self.logger.info(
+                    "_search_instagram_keyword_links_playwright(): attempt %d failed for keyword=%s: %s",
+                    attempt + 1,
+                    cleaned_keyword,
+                    exc,
+                )
+
+        return _dedupe_preserve_order(discovered_links)[:max_links]
+
+    def _discover_instagram_keyword_links(
+        self,
+        existing_links: set[str],
+        remaining_capacity: int,
+    ) -> pd.DataFrame:
+        """Discover Instagram profile/post URLs from configured keywords within crawl limits."""
+        if remaining_capacity <= 0:
+            return pd.DataFrame(columns=["link", "parent_url", "source", "keywords", "relevant", "crawl_try", "time_stamp"])
+
+        crawl_cfg = self.config.get("crawling", {})
+        page_link_limit = int(crawl_cfg.get("max_website_urls", 10) or 10)
+        image_page_limit = int(crawl_cfg.get("images_per_page_limit", 10) or 10)
+        positive_limits = [value for value in (page_link_limit, image_page_limit) if value > 0]
+        per_keyword_limit = min(positive_limits) if positive_limits else 0
+        if per_keyword_limit <= 0:
+            return pd.DataFrame(columns=["link", "parent_url", "source", "keywords", "relevant", "crawl_try", "time_stamp"])
+
+        discovered_rows: list[dict[str, object]] = []
+        seen_links = set(existing_links)
+        timestamp = datetime.now()
+
+        for keyword in self.keywords_list:
+            cleaned_keyword = str(keyword or "").strip()
+            if not cleaned_keyword:
+                continue
+
+            capacity_left = remaining_capacity - len(discovered_rows)
+            if capacity_left <= 0:
+                break
+
+            keyword_limit = min(per_keyword_limit, capacity_left)
+            discovered_links = self.loop.run_until_complete(
+                self._search_instagram_keyword_links_playwright(cleaned_keyword, keyword_limit)
+            )
+            for link in discovered_links:
+                if link in seen_links:
+                    continue
+                seen_links.add(link)
+                discovered_rows.append(
+                    {
+                        "link": link,
+                        "parent_url": "",
+                        "source": "instagram_keyword_search",
+                        "keywords": cleaned_keyword,
+                        "relevant": False,
+                        "crawl_try": 1,
+                        "time_stamp": timestamp,
+                    }
+                )
+                if len(discovered_rows) >= remaining_capacity:
+                    break
+
+        if not discovered_rows:
+            return pd.DataFrame(columns=["link", "parent_url", "source", "keywords", "relevant", "crawl_try", "time_stamp"])
+        return pd.DataFrame(discovered_rows)
+
     def _extract_dynamic_page_text(self, page_url: str) -> str | None:
         """
         Extract dynamic page text with service ownership-aware routing.
@@ -641,7 +780,25 @@ class ImageScraper:
             "Use the visible Chromium window to finish it, then press Enter here to continue..."
         )
         await self.read_extract.page.wait_for_timeout(1500)
-        return await self._verify_instagram_session(probe_url)
+        recovered = await self._verify_instagram_session(probe_url)
+        if not recovered:
+            return False
+
+        try:
+            storage_path = get_auth_file("instagram")
+            await self.read_extract.context.storage_state(path=storage_path)
+            from secret_paths import sync_auth_to_db
+            sync_auth_to_db(storage_path, "instagram")
+            self.logger.info(
+                "_attempt_manual_instagram_recovery(): Saved refreshed Instagram session state to %s",
+                storage_path,
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "_attempt_manual_instagram_recovery(): Failed to persist recovered Instagram session: %s",
+                exc,
+            )
+        return True
 
     async def _login_to_instagram(self) -> bool:
         if hasattr(self, 'ig_session'):
@@ -1176,9 +1333,27 @@ class ImageScraper:
             if before_filter > after_filter:
                 self.logger.info(f"get_image_links(): Filtered out {before_filter - after_filter} stale fbcdn URLs (older than 24 hours).")
 
+        # Discover additional Instagram URLs by keyword, respecting the configured run cap.
+        limit = int(self.config['crawling'].get('urls_run_limit', 0) or 0)
+        if limit > 0:
+            remaining_capacity = max(limit - len(df), 0)
+        else:
+            remaining_capacity = 0
+
+        if remaining_capacity > 0:
+            existing_links = set(df.get('link', pd.Series(dtype=str)).astype(str))
+            discovered_df = self._discover_instagram_keyword_links(existing_links, remaining_capacity)
+            if not discovered_df.empty:
+                self.logger.info(
+                    "get_image_links(): Discovered %d Instagram URL(s) from keyword search within remaining capacity=%d.",
+                    len(discovered_df),
+                    remaining_capacity,
+                )
+                df = pd.concat([df, discovered_df], ignore_index=True)
+                df = df.drop_duplicates(['link', 'parent_url']).reset_index(drop=True)
+
         # Restrict to configured maximum
-        limit = self.config['crawling']['urls_run_limit']
-        if isinstance(limit, int) and limit > 0:
+        if limit > 0:
             df = df.iloc[:limit]
 
         return df

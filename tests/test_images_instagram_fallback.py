@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pandas as pd
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import images
@@ -15,6 +17,7 @@ from images import (
     ImageScraper,
     _build_image_context_text,
     _extract_instagram_post_links,
+    _extract_instagram_search_links,
     _is_degraded_instagram_profile_text,
     _is_instagram_login_redirect_url,
     _is_ignored_instagram_ui_asset,
@@ -114,6 +117,26 @@ def test_extract_instagram_post_links_from_profile_html() -> None:
     ]
 
 
+def test_extract_instagram_search_links_from_search_html() -> None:
+    html = """
+    <html><body>
+      <a href="/bachatavictoria/">Profile</a>
+      <a href="/p/ABC123/">Post</a>
+      <a href="/explore/search/keyword/?q=bachata">Search</a>
+      <a href="/accounts/login/">Login</a>
+      <a href="/bachatavictoria/">Duplicate Profile</a>
+    </body></html>
+    """
+    links = _extract_instagram_search_links(
+        html,
+        "https://www.instagram.com/explore/search/keyword/?q=bachata",
+    )
+    assert links == [
+        "https://www.instagram.com/bachatavictoria/",
+        "https://www.instagram.com/p/ABC123/",
+    ]
+
+
 def test_build_image_context_text_includes_parent_context() -> None:
     combined = _build_image_context_text(
         ocr_text="715 Yates St 8PM",
@@ -166,6 +189,42 @@ def test_manual_instagram_recovery_skips_in_headless_mode() -> None:
 
     result = asyncio.run(scraper._attempt_manual_instagram_recovery("https://www.instagram.com/bachatavictoria/"))
     assert result is False
+
+
+def test_manual_instagram_recovery_persists_session(monkeypatch, tmp_path) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.config = {"crawling": {"headless": False}}
+
+    saved = {}
+
+    class _FakeContext:
+        async def storage_state(self, path):
+            saved["storage_path"] = path
+
+    class _FakePage:
+        async def wait_for_timeout(self, *_args, **_kwargs):
+            return None
+
+    scraper.read_extract = SimpleNamespace(context=_FakeContext(), page=_FakePage())
+    scraper._verify_instagram_session = lambda _url: asyncio.sleep(0, result=True)
+
+    auth_path = tmp_path / "instagram_auth.json"
+    monkeypatch.setattr(images, "get_auth_file", lambda _service: str(auth_path))
+    sync_calls: list[tuple[str, str]] = []
+
+    def _fake_sync(path, service):
+        sync_calls.append((path, service))
+        return True
+
+    monkeypatch.setattr("secret_paths.sync_auth_to_db", _fake_sync)
+    monkeypatch.setattr("builtins.input", lambda *_args, **_kwargs: "")
+
+    result = asyncio.run(scraper._attempt_manual_instagram_recovery("https://www.instagram.com/bachatavictoria/"))
+
+    assert result is True
+    assert saved["storage_path"] == str(auth_path)
+    assert sync_calls == [(str(auth_path), "instagram")]
 
 
 def test_safe_screenshot_stem_is_filesystem_safe() -> None:
@@ -1036,3 +1095,96 @@ def test_process_webpage_url_hard_caps_processed_images_at_five(monkeypatch) -> 
     )
 
     assert len(called_images) == 5
+
+
+def test_get_image_links_adds_instagram_keyword_search_results_with_limits(monkeypatch, tmp_path) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.keywords_list = ["bachata", "salsa"]
+    scraper.config = {
+        "input": {"images": str(tmp_path / "images.csv")},
+        "crawling": {
+            "urls_run_limit": 5,
+            "max_website_urls": 2,
+            "images_per_page_limit": 3,
+        },
+    }
+
+    csv_df = pd.DataFrame(
+        [
+            {"link": "https://www.instagram.com/existing1/", "parent_url": "", "source": "csv", "keywords": "bachata"},
+            {"link": "https://www.instagram.com/existing2/", "parent_url": "", "source": "csv", "keywords": "salsa"},
+        ]
+    )
+    csv_df.to_csv(scraper.config["input"]["images"], index=False)
+
+    monkeypatch.setattr(images.pd, "read_sql", lambda *_args, **_kwargs: pd.DataFrame(columns=[
+        "link", "parent_url", "source", "keywords", "relevant", "crawl_try", "time_stamp"
+    ]))
+    scraper.db_handler = SimpleNamespace(conn=object())
+
+    search_calls: list[tuple[str, int]] = []
+
+    def _discover(keyword: str, max_links: int) -> list[str]:
+        search_calls.append((keyword, max_links))
+        if keyword == "bachata":
+            return [
+                "https://www.instagram.com/bachatavictoria/",
+                "https://www.instagram.com/p/ABC123/",
+            ]
+        return [
+            "https://www.instagram.com/salsavictoria/",
+            "https://www.instagram.com/p/SALSA123/",
+        ]
+
+    scraper._search_instagram_keyword_links_playwright = _discover
+    scraper.loop = SimpleNamespace(run_until_complete=lambda result: result)
+
+    df = ImageScraper.get_image_links(scraper)
+
+    assert len(df) == 5
+    assert search_calls == [("bachata", 2), ("salsa", 1)]
+    assert list(df["link"]) == [
+        "https://www.instagram.com/existing1/",
+        "https://www.instagram.com/existing2/",
+        "https://www.instagram.com/bachatavictoria/",
+        "https://www.instagram.com/p/ABC123/",
+        "https://www.instagram.com/salsavictoria/",
+    ]
+
+
+def test_get_image_links_uses_smallest_page_limit_for_instagram_keyword_search(monkeypatch, tmp_path) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.keywords_list = ["bachata"]
+    scraper.config = {
+        "input": {"images": str(tmp_path / "images.csv")},
+        "crawling": {
+            "urls_run_limit": 10,
+            "max_website_urls": 4,
+            "images_per_page_limit": 2,
+        },
+    }
+
+    pd.DataFrame(columns=["link", "parent_url", "source", "keywords"]).to_csv(
+        scraper.config["input"]["images"],
+        index=False,
+    )
+    monkeypatch.setattr(images.pd, "read_sql", lambda *_args, **_kwargs: pd.DataFrame(columns=[
+        "link", "parent_url", "source", "keywords", "relevant", "crawl_try", "time_stamp"
+    ]))
+    scraper.db_handler = SimpleNamespace(conn=object())
+
+    search_calls: list[tuple[str, int]] = []
+
+    def _discover(keyword: str, max_links: int) -> list[str]:
+        search_calls.append((keyword, max_links))
+        return [f"https://www.instagram.com/p/{keyword}{i}/" for i in range(max_links)]
+
+    scraper._search_instagram_keyword_links_playwright = _discover
+    scraper.loop = SimpleNamespace(run_until_complete=lambda result: result)
+
+    df = ImageScraper.get_image_links(scraper)
+
+    assert search_calls == [("bachata", 2)]
+    assert len(df) == 2
