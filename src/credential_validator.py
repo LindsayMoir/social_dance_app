@@ -18,6 +18,7 @@ Functions:
     validate_gmail(headless, check_timeout_seconds): Validates Gmail OAuth credentials
     validate_eventbrite(headless, check_timeout_seconds): Validates Eventbrite session
     validate_facebook(headless, check_timeout_seconds): Validates Facebook session
+    validate_instagram(headless, check_timeout_seconds): Validates Instagram session
     validate_credentials(headless, check_timeout_seconds): Main validation orchestrator
 
 Usage:
@@ -470,6 +471,66 @@ def validate_facebook(headless=False, check_timeout_seconds=60):
         return {'valid': False, 'error': str(e)}
 
 
+def validate_instagram(headless=False, check_timeout_seconds=60):
+    """
+    Validates Instagram session credentials using the existing images.py login/session flow.
+
+    Quick check: Attempts to reuse saved auth/cookies.
+    If invalid: Opens browser for user to complete Instagram login/challenge and persists
+    refreshed session state for later headless reuse.
+
+    Args:
+        headless (bool): Whether to run browser in headless mode
+        check_timeout_seconds (int): Unused for now; retained for validator interface parity
+
+    Returns:
+        dict: {'valid': bool, 'error': str or None}
+    """
+    logging.info("=" * 50)
+    logging.info("INSTAGRAM CREDENTIAL VALIDATION")
+    logging.info("=" * 50)
+
+    try:
+        from images import ImageScraper
+
+        logging.info("validate_instagram(): Attempting to authenticate Instagram...")
+        start_time = datetime.now()
+
+        with _temporary_headless_config(headless):
+            current_config = load_config()
+            image_scraper = ImageScraper(current_config)
+            try:
+                image_scraper.loop.run_until_complete(
+                    image_scraper.read_extract.page.goto(
+                        "https://www.instagram.com/bachatavictoria/",
+                        wait_until="domcontentloaded",
+                        timeout=30000,
+                    )
+                )
+                logged_in = "accounts/login" not in str(image_scraper.read_extract.page.url).lower()
+            finally:
+                try:
+                    image_scraper.loop.run_until_complete(image_scraper.read_extract.close())
+                except Exception:
+                    logging.warning("validate_instagram(): Failed to close Instagram browser cleanly", exc_info=True)
+
+        elapsed = (datetime.now() - start_time).total_seconds()
+
+        if logged_in:
+            logging.info(f"validate_instagram(): Instagram authenticated successfully ({elapsed:.1f}s)")
+            return {'valid': True, 'error': None}
+
+        logging.error("validate_instagram(): Instagram authentication failed")
+        return {'valid': False, 'error': 'Instagram login failed'}
+
+    except SystemExit as e:
+        logging.error(f"validate_instagram(): Instagram authentication exited early: {e}")
+        return {'valid': False, 'error': f'Instagram login exited early ({e})'}
+    except Exception as e:
+        logging.error(f"validate_instagram(): Error during Instagram validation: {e}")
+        return {'valid': False, 'error': str(e)}
+
+
 def validate_credentials(headless=False, check_timeout_seconds=60):
     """
     Validates all service credentials sequentially.
@@ -486,7 +547,8 @@ def validate_credentials(headless=False, check_timeout_seconds=60):
         dict: {
             'gmail': {'valid': bool, 'error': str or None},
             'eventbrite': {'valid': bool, 'error': str or None},
-            'facebook': {'valid': bool, 'error': str or None}
+            'facebook': {'valid': bool, 'error': str or None},
+            'instagram': {'valid': bool, 'error': str or None}
         }
     """
     results = {}
@@ -522,6 +584,14 @@ def validate_credentials(headless=False, check_timeout_seconds=60):
     if not results['facebook']['valid']:
         logging.error(f"Facebook validation failed: {results['facebook']['error']}")
         logging.error("Cannot proceed with pipeline - Facebook credentials required")
+        return results
+
+    # Validate Instagram
+    logging.info("\nValidating Instagram credentials...")
+    results['instagram'] = validate_instagram(headless, check_timeout_seconds)
+    if not results['instagram']['valid']:
+        logging.error(f"Instagram validation failed: {results['instagram']['error']}")
+        logging.error("Cannot proceed with pipeline - Instagram credentials required")
         return results
 
     # All validations passed

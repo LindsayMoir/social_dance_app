@@ -413,7 +413,7 @@ def credential_validation_step():
     """
     logger.info("=" * 70)
     logger.info("CREDENTIAL VALIDATION STEP")
-    logger.info("Validating Gmail, Eventbrite, and Facebook credentials")
+    logger.info("Validating Gmail, Eventbrite, Facebook, and Instagram credentials")
     logger.info("Browser will open for user interaction if needed")
     logger.info("=" * 70)
 
