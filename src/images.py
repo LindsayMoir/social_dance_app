@@ -269,6 +269,26 @@ def _is_degraded_instagram_profile_text(text: str) -> bool:
     return any(token in normalized for token in _INSTAGRAM_DEGRADED_SHELL_TOKENS)
 
 
+def _is_instagram_login_redirect_url(page_url: str) -> bool:
+    """Return True when the current Instagram URL is a login or account-selection redirect."""
+    normalized_url = str(page_url or "").lower()
+    return any(
+        token in normalized_url
+        for token in (
+            "/accounts/login",
+            "next=%2f",
+            "source=omni_redirect",
+        )
+    )
+
+
+def _looks_like_authenticated_instagram_profile(page_url: str, text: str) -> bool:
+    """Return True only when the rendered Instagram page looks usable for profile scraping."""
+    if _is_instagram_login_redirect_url(page_url):
+        return False
+    return not _is_degraded_instagram_profile_text(text)
+
+
 def _extract_rankable_image_urls(rendered_html: str, page_url: str) -> list[str]:
     """Extract image-like URLs from rendered HTML, excluding obvious Instagram UI assets."""
     if not rendered_html:
@@ -555,26 +575,40 @@ class ImageScraper:
             self.logger.warning(f"_load_instagram_cookies(): Failed to load cookies: {e}")
             return None
 
-    async def _verify_instagram_session(self) -> bool:
+    async def _verify_instagram_session(self, probe_url: str = "https://www.instagram.com/") -> bool:
         """
-        Verifies that the current Instagram session is valid by making a test request.
+        Verify that the current Instagram session can render a usable authenticated page.
 
         Returns:
             bool: True if session is valid, False otherwise.
         """
         try:
-            # Try to fetch Instagram's main page as a validation test
-            response = await self.read_extract.page.request.get("https://www.instagram.com/")
+            await self.read_extract.page.goto(probe_url, wait_until="domcontentloaded", timeout=30000)
+            await self.read_extract.page.wait_for_timeout(2500)
+            current_url = str(getattr(self.read_extract.page, "url", "") or "")
+            content = await self.read_extract.page.content()
+            soup = BeautifulSoup(content, "html.parser")
+            for tag in soup(["script", "style"]):
+                tag.decompose()
+            rendered_text = " ".join(soup.get_text(separator=" ").split())
 
-            if response.status == 200:
-                self.logger.info("_verify_instagram_session(): Instagram session verified successfully")
+            if _looks_like_authenticated_instagram_profile(current_url, rendered_text):
+                self.logger.info(
+                    "_verify_instagram_session(): Instagram session verified successfully via %s",
+                    current_url,
+                )
                 return True
-            elif response.status == 403 or response.status == 401:
-                self.logger.warning(f"_verify_instagram_session(): Session verification failed with status {response.status}")
+
+            self.logger.warning(
+                "_verify_instagram_session(): Instagram session rendered an unusable page. url=%s",
+                current_url,
+            )
+            if _is_instagram_login_redirect_url(current_url):
+                self.logger.warning("_verify_instagram_session(): Landed on Instagram login redirect")
+            if _is_degraded_instagram_profile_text(rendered_text):
+                self.logger.warning("_verify_instagram_session(): Rendered Instagram page looks degraded/shell-like")
                 return False
-            else:
-                self.logger.info(f"_verify_instagram_session(): Unexpected status {response.status}, continuing with session")
-                return True
+            return False
 
         except Exception as e:
             self.logger.warning(f"_verify_instagram_session(): Failed to verify session: {e}")
@@ -596,7 +630,7 @@ class ImageScraper:
                 await self.read_extract.context.add_cookies(saved_cookies)
 
                 # Verify the session is valid
-                if await self._verify_instagram_session():
+                if await self._verify_instagram_session("https://www.instagram.com/bachatavictoria/"):
                     self.logger.info("_login_to_instagram(): Pre-saved cookies verified successfully, using cached session")
                     # Extract cookies for requests.Session
                     cookies = await self.read_extract.context.cookies()
@@ -636,6 +670,12 @@ class ImageScraper:
         )
         if not success:
             self.logger.error("_login_to_instagram(): Fresh login attempt failed")
+            return False
+
+        if not await self._verify_instagram_session("https://www.instagram.com/bachatavictoria/"):
+            self.logger.error(
+                "_login_to_instagram(): Fresh login completed but Instagram still redirected to a login/degraded page"
+            )
             return False
 
         self.logger.info("_login_to_instagram(): Fresh login successful, setting up session")

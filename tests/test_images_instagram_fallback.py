@@ -16,7 +16,9 @@ from images import (
     _build_image_context_text,
     _extract_instagram_post_links,
     _is_degraded_instagram_profile_text,
+    _is_instagram_login_redirect_url,
     _is_ignored_instagram_ui_asset,
+    _looks_like_authenticated_instagram_profile,
     _safe_screenshot_stem,
     _score_image_candidate,
 )
@@ -137,6 +139,24 @@ def test_instagram_ui_asset_filter_and_scoring() -> None:
 def test_instagram_degraded_profile_text_detection() -> None:
     assert _is_degraded_instagram_profile_text("This content is no longer available. Sign up for Instagram.") is True
     assert _is_degraded_instagram_profile_text("Bachata Victoria BC 116 posts 1100 followers Next Social: March 20th") is False
+
+
+def test_instagram_login_redirect_detection() -> None:
+    assert _is_instagram_login_redirect_url(
+        "https://www.instagram.com/accounts/login/?next=%2Fbachatavictoria%2F&source=omni_redirect"
+    ) is True
+    assert _is_instagram_login_redirect_url("https://www.instagram.com/bachatavictoria/") is False
+
+
+def test_authenticated_instagram_profile_detection() -> None:
+    assert _looks_like_authenticated_instagram_profile(
+        "https://www.instagram.com/bachatavictoria/",
+        "Bachata Victoria BC 116 posts 1,098 followers 756 following Next Social: March 20th",
+    ) is True
+    assert _looks_like_authenticated_instagram_profile(
+        "https://www.instagram.com/accounts/login/?next=%2Fbachatavictoria%2F&source=omni_redirect",
+        "See everyday moments from your close friends. Continue Use another profile Create new account.",
+    ) is False
 
 
 def test_safe_screenshot_stem_is_filesystem_safe() -> None:
