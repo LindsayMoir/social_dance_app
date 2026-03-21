@@ -159,6 +159,15 @@ def test_authenticated_instagram_profile_detection() -> None:
     ) is False
 
 
+def test_manual_instagram_recovery_skips_in_headless_mode() -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.config = {"crawling": {"headless": True}}
+
+    result = asyncio.run(scraper._attempt_manual_instagram_recovery("https://www.instagram.com/bachatavictoria/"))
+    assert result is False
+
+
 def test_safe_screenshot_stem_is_filesystem_safe() -> None:
     stem = _safe_screenshot_stem("https://www.instagram.com/bachatavictoria/p/ABC123/?hl=en")
     assert "/" not in stem
@@ -172,6 +181,8 @@ def test_process_webpage_url_expands_instagram_posts_before_page_images(monkeypa
     scraper.urls_visited = set()
     scraper.keywords_list = ["bachata"]
     scraper.images_per_page_limit = 2
+    scraper.max_images_per_page = 5
+    scraper.instagram_vision_image_limit = 3
     scraper.config = {"crawling": {"max_website_urls": 10, "prompt_max_length": 10000}}
 
     class _FakeDb:
@@ -327,7 +338,7 @@ def test_process_webpage_url_skips_degraded_instagram_shell_without_posts_or_med
     scraper.config = {"crawling": {"max_website_urls": 10, "prompt_max_length": 10000}}
 
     written_rows: list[tuple] = []
-    screenshot_calls: list[tuple[str, str, str, str | None]] = []
+    screenshot_calls: list[tuple[str, str, str, str, str | None]] = []
 
     class _FakeDb:
         def write_url_to_db(self, row):
@@ -361,8 +372,8 @@ def test_process_webpage_url_skips_degraded_instagram_shell_without_posts_or_med
     scraper._extract_dynamic_page_text = lambda _url: (
         "See everyday moments from your close friends. Continue Use another profile Create new account."
     )
-    scraper._process_local_image_path = lambda path, canonical_url, parent_url, source, page_context_text=None: screenshot_calls.append(
-        (str(path), canonical_url, source, page_context_text)
+    scraper._process_local_image_path = lambda path, canonical_url, parent_url, source, keywords, page_context_text=None: screenshot_calls.append(
+        (str(path), canonical_url, source, keywords, page_context_text)
     ) or True
     fake_response = Mock()
     fake_response.text = "<html><body>short</body></html>"
@@ -504,7 +515,7 @@ def test_process_image_url_uses_parent_url_for_prompt_context(monkeypatch) -> No
     assert "715 Yates ST".lower() in generate_text.lower()
 
 
-def test_process_image_url_uses_vision_before_ocr() -> None:
+def test_process_image_url_uses_ocr_before_vision() -> None:
     scraper = ImageScraper.__new__(ImageScraper)
     scraper.logger = logging.getLogger("test.images")
     scraper.urls_visited = set()
@@ -525,10 +536,11 @@ def test_process_image_url_uses_vision_before_ocr() -> None:
 
     called = {"vision": 0, "ocr": 0}
 
-    def _vision(path, canonical_url, parent_url, source, page_context_text=None):
+    def _vision(path, canonical_url, parent_url, source, keywords, page_context_text=None):
         called["vision"] += 1
         assert str(path) == "images/fake.jpg"
         assert canonical_url == "https://www.instagram.com/bachatavictoria/"
+        assert keywords == "bachata"
         return True
 
     scraper._process_local_image_path_with_vision = _vision
@@ -542,8 +554,65 @@ def test_process_image_url_uses_vision_before_ocr() -> None:
         page_context_text="Next Social: March 20th",
     )
 
+    assert called["ocr"] == 1
     assert called["vision"] == 1
-    assert called["ocr"] == 0
+
+
+def test_process_image_url_can_skip_vision_after_rank_limit(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.urls_visited = set()
+    scraper.keywords_list = ["bachata", "dance", "salsa"]
+
+    class _FakeDb:
+        def check_image_events_exist(self, _url):
+            return False
+
+        def should_process_url(self, _url):
+            return True
+
+        def write_url_to_db(self, _row):
+            return None
+
+    class _FakeLLM:
+        def __init__(self):
+            self.process_args = None
+
+        def generate_prompt(self, url, extracted_text, prompt_type):
+            return ("prompt", "event_extraction")
+
+        def process_llm_response(self, image_url, parent_url, extracted_text, source, found, prompt_type):
+            self.process_args = (image_url, parent_url, extracted_text, source, found, prompt_type)
+            return True
+
+    scraper.db_handler = _FakeDb()
+    scraper.llm_handler = _FakeLLM()
+    scraper.download_image = lambda _url: "images/fake.jpg"
+
+    called = {"vision": 0, "ocr": 0}
+
+    def _vision(*_args, **_kwargs):
+        called["vision"] += 1
+        return True
+
+    scraper._process_local_image_path_with_vision = _vision
+    scraper.ocr_image_to_text = lambda _path: called.__setitem__("ocr", called["ocr"] + 1) or "BACHATA 715 YATES ST 8PM"
+
+    monkeypatch.setattr(images, "detect_date_from_image", lambda _path: (None, None))
+    monkeypatch.setattr(images, "resolve_prompt_type", lambda *_args, **_kwargs: "fb")
+
+    scraper.process_image_url(
+        "https://instagram.fcxh2-1.fna.fbcdn.net/poster.jpg",
+        "https://www.instagram.com/bachatavictoria/",
+        "Bachata Victoria BC",
+        "bachata",
+        page_context_text="Next Social: March 20th",
+        use_vision_first=False,
+    )
+
+    assert called["vision"] == 0
+    assert called["ocr"] == 1
+    assert scraper.llm_handler.process_args is not None
 
 
 def test_process_local_image_path_reuses_existing_ocr_llm_flow(monkeypatch) -> None:
@@ -575,6 +644,7 @@ def test_process_local_image_path_reuses_existing_ocr_llm_flow(monkeypatch) -> N
         "https://www.instagram.com/bachatavictoria/",
         "",
         "Bachata Victoria BC",
+        "bachata",
         page_context_text="Next Social: March 20th",
     )
 
@@ -585,7 +655,7 @@ def test_process_local_image_path_reuses_existing_ocr_llm_flow(monkeypatch) -> N
     assert "Detected_Date: 2026-03-20" in generate_text
 
 
-def test_process_local_image_path_uses_vision_first(tmp_path) -> None:
+def test_process_local_image_path_uses_ocr_first(tmp_path, monkeypatch) -> None:
     screenshot_path = tmp_path / "poster.png"
     screenshot_path.write_bytes(b"\x89PNG\r\n\x1a\nfake")
 
@@ -596,14 +666,18 @@ def test_process_local_image_path_uses_vision_first(tmp_path) -> None:
     written = {}
 
     class _FakeDb:
-        def write_events_to_db(self, events_df, source):
+        def write_events_to_db(self, events_df, url, parent_url, source, keywords):
             written["events_df"] = events_df.copy()
+            written["url"] = url
+            written["parent_url"] = parent_url
             written["source"] = source
+            written["keywords"] = keywords
 
     class _FakeLLM:
         def __init__(self):
             self.generate_args = None
             self.query_args = None
+            self.process_args = None
 
         def generate_prompt(self, url, extracted_text, prompt_type):
             self.generate_args = (url, extracted_text, prompt_type)
@@ -621,24 +695,29 @@ def test_process_local_image_path_uses_vision_first(tmp_path) -> None:
             events_df["url"] = url
             return events_df
 
+        def process_llm_response(self, image_url, parent_url, extracted_text, source, found, prompt_type):
+            self.process_args = (image_url, parent_url, extracted_text, source, found, prompt_type)
+            return True
+
     scraper.db_handler = _FakeDb()
     scraper.llm_handler = _FakeLLM()
+    scraper.ocr_image_to_text = lambda _path: "BACHATA 715 YATES ST 8PM SOCIAL DANCE"
+    monkeypatch.setattr(images, "detect_date_from_image", lambda _path: (None, None))
+    monkeypatch.setattr(images, "resolve_prompt_type", lambda *_args, **_kwargs: "fb")
 
     result = scraper._process_local_image_path(
         screenshot_path,
         "https://www.instagram.com/bachatavictoria/",
         "",
         "Bachata Victoria BC",
+        "bachata",
         page_context_text="Next Social: March 20th",
     )
 
     assert result is True
-    assert written["source"] == "Bachata Victoria BC"
-    assert written["events_df"].iloc[0]["event_name"] == "Bachata Victoria Social Night"
-    _, model, image_url, schema_type = scraper.llm_handler.query_args
-    assert model == "gpt-4.1-mini"
-    assert image_url.startswith("data:image/png;base64,")
-    assert schema_type == "event_extraction"
+    assert "events_df" not in written
+    assert scraper.llm_handler.query_args is None
+    assert scraper.llm_handler.process_args is not None
 
 
 def test_process_local_image_path_falls_back_when_vision_times_out(monkeypatch) -> None:
@@ -671,6 +750,7 @@ def test_process_local_image_path_falls_back_when_vision_times_out(monkeypatch) 
         "https://www.instagram.com/bachatavictoria/",
         "",
         "Bachata Victoria BC",
+        "bachata",
         page_context_text="Next Social: March 20th",
     )
 
@@ -705,6 +785,7 @@ def test_process_local_image_path_falls_back_to_ocr_when_vision_fails(monkeypatc
         "https://www.instagram.com/bachatavictoria/",
         "",
         "Bachata Victoria BC",
+        "bachata",
         page_context_text="Next Social: March 20th",
     )
 
@@ -770,6 +851,8 @@ def test_process_webpage_url_ranks_instagram_images_and_skips_ui_assets(monkeypa
     scraper.urls_visited = set()
     scraper.keywords_list = ["bachata"]
     scraper.images_per_page_limit = 2
+    scraper.max_images_per_page = 5
+    scraper.instagram_vision_image_limit = 3
     scraper.config = {"crawling": {"max_website_urls": 10, "prompt_max_length": 10000}}
 
     class _FakeDb:
@@ -853,10 +936,10 @@ def test_process_webpage_url_ranks_instagram_images_and_skips_ui_assets(monkeypa
     scraper.read_extract.page.request = SimpleNamespace(get=_request_get)
     monkeypatch.setattr(images, "Image", SimpleNamespace(open=_fake_open))
 
-    called_images: list[tuple[str, str, str, str, str | None]] = []
+    called_images: list[tuple[str, str, str, str, str | None, bool]] = []
 
-    def _process_image(url, parent, source, keywords, page_context_text=None):
-        called_images.append((url, parent, source, keywords, page_context_text))
+    def _process_image(url, parent, source, keywords, page_context_text=None, use_vision_first=True):
+        called_images.append((url, parent, source, keywords, page_context_text, use_vision_first))
 
     scraper.process_image_url = _process_image
 
@@ -873,3 +956,83 @@ def test_process_webpage_url_ranks_instagram_images_and_skips_ui_assets(monkeypa
         "https://instagram.fcxh2-1.fna.fbcdn.net/v/t51.82787-15/poster2.jpg",
     }
     assert all("static.cdninstagram.com" not in row[0] for row in called_images)
+
+
+def test_process_webpage_url_hard_caps_processed_images_at_five(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.urls_visited = set()
+    scraper.keywords_list = ["bachata"]
+    scraper.images_per_page_limit = 10
+    scraper.max_images_per_page = 5
+    scraper.instagram_vision_image_limit = 3
+    scraper.config = {"crawling": {"max_website_urls": 10, "prompt_max_length": 10000}}
+
+    class _FakeDb:
+        def write_url_to_db(self, _row):
+            return None
+
+    class _FakeLLM:
+        def generate_prompt(self, *_args, **_kwargs):
+            return ("prompt", "event_extraction")
+
+        def process_llm_response(self, *_args, **_kwargs):
+            return False
+
+    img_tags = "\n".join(
+        f'<img src="https://instagram.fcxh2-1.fna.fbcdn.net/v/t51.82787-15/poster{i}.jpg" />'
+        for i in range(7)
+    )
+
+    class _FakePage:
+        async def content(self):
+            return f"<html><body>{img_tags}</body></html>"
+
+        request = None
+
+    scraper.db_handler = _FakeDb()
+    scraper.llm_handler = _FakeLLM()
+    scraper.read_extract = SimpleNamespace(page=_FakePage())
+    scraper._extract_dynamic_page_text = lambda _url: "bachata victoria profile text"
+
+    fake_response = Mock()
+    fake_response.text = "<html><body>short</body></html>"
+    fake_response.raise_for_status.return_value = None
+    monkeypatch.setattr(images.requests, "get", lambda *_args, **_kwargs: fake_response)
+
+    rendered_html = f"<html><body>{img_tags}</body></html>"
+
+    def _run_until_complete(awaitable):
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
+        name = getattr(getattr(awaitable, "cr_code", None), "co_name", "")
+        if name == "content":
+            return rendered_html
+        return b"poster"
+
+    scraper.loop = SimpleNamespace(run_until_complete=_run_until_complete)
+
+    class _FakeImage:
+        def __init__(self, size):
+            self.size = size
+
+    monkeypatch.setattr(images, "Image", SimpleNamespace(open=lambda _obj: _FakeImage((1080, 1350))))
+
+    async def _image_bytes():
+        return b"poster"
+
+    scraper.read_extract.page.request = SimpleNamespace(get=lambda _url: SimpleNamespace(status=200, body=_image_bytes))
+
+    called_images: list[str] = []
+    scraper.process_image_url = lambda url, *_args, **_kwargs: called_images.append(url)
+
+    ImageScraper.process_webpage_url(
+        scraper,
+        "https://www.instagram.com/p/POST001/",
+        "https://www.instagram.com/bachatavictoria/",
+        "Sebastian y Hannah",
+        "bachata",
+    )
+
+    assert len(called_images) == 5

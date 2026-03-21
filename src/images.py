@@ -81,6 +81,13 @@ _VISION_MODEL = "gpt-4.1-mini"
 _VISION_REQUEST_TIMEOUT_SECONDS = 12
 
 
+def _safe_bool(value: object) -> bool:
+    """Coerce config-like boolean values safely."""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 
 def detect_date_from_image(local_path: Path) -> tuple[str | None, str | None]:
     """
@@ -372,6 +379,12 @@ class ImageScraper:
         self.images_per_page_limit = int(
             self.config.get("crawling", {}).get("images_per_page_limit", 10) or 10
         )
+        self.max_images_per_page = int(
+            self.config.get("crawling", {}).get("image_max_processed_per_page", 5) or 5
+        )
+        self.instagram_vision_image_limit = int(
+            self.config.get("crawling", {}).get("instagram_vision_image_limit", 3) or 3
+        )
 
         # Directories
         self.download_dir = Path(config.get("image_download_dir", "images/"))
@@ -383,6 +396,7 @@ class ImageScraper:
 
         # Initialize ReadExtract and login
         self.read_extract = ReadExtract(config_path=str(config_path))
+        self.read_extract.config = self.config
         self.loop.run_until_complete(self.read_extract.init_browser())
         if not self.loop.run_until_complete(self._login_to_instagram()):
             self.logger.error("Instagram login failed. Exiting.")
@@ -614,6 +628,21 @@ class ImageScraper:
             self.logger.warning(f"_verify_instagram_session(): Failed to verify session: {e}")
             return False
 
+    async def _attempt_manual_instagram_recovery(self, probe_url: str) -> bool:
+        """Pause for manual Instagram login/challenge completion in headful mode and re-verify."""
+        if _safe_bool(self.config.get("crawling", {}).get("headless", True)):
+            return False
+
+        self.logger.warning(
+            "_attempt_manual_instagram_recovery(): Waiting for manual Instagram login/challenge completion"
+        )
+        input(
+            "Instagram challenge/login requires manual completion. "
+            "Use the visible Chromium window to finish it, then press Enter here to continue..."
+        )
+        await self.read_extract.page.wait_for_timeout(1500)
+        return await self._verify_instagram_session(probe_url)
+
     async def _login_to_instagram(self) -> bool:
         if hasattr(self, 'ig_session'):
             self.logger.info("_login_to_instagram(): Reusing existing Instagram session")
@@ -672,11 +701,15 @@ class ImageScraper:
             self.logger.error("_login_to_instagram(): Fresh login attempt failed")
             return False
 
-        if not await self._verify_instagram_session("https://www.instagram.com/bachatavictoria/"):
-            self.logger.error(
-                "_login_to_instagram(): Fresh login completed but Instagram still redirected to a login/degraded page"
-            )
-            return False
+        probe_url = "https://www.instagram.com/bachatavictoria/"
+        if not await self._verify_instagram_session(probe_url):
+            if await self._attempt_manual_instagram_recovery(probe_url):
+                self.logger.info("_login_to_instagram(): Manual Instagram recovery succeeded")
+            else:
+                self.logger.error(
+                    "_login_to_instagram(): Fresh login completed but Instagram still redirected to a login/degraded page"
+                )
+                return False
 
         self.logger.info("_login_to_instagram(): Fresh login successful, setting up session")
         cookies = await self.read_extract.context.cookies()
@@ -980,6 +1013,7 @@ class ImageScraper:
         canonical_url: str,
         parent_url: str,
         source: str,
+        keywords: str,
         page_context_text: str | None = None,
     ) -> bool:
         """Try multimodal image extraction before falling back to OCR."""
@@ -1070,7 +1104,13 @@ class ImageScraper:
             )
             return False
 
-        self.db_handler.write_events_to_db(events_df, source)
+        self.db_handler.write_events_to_db(
+            events_df,
+            prompt_basis_url,
+            parent_url,
+            source,
+            keywords,
+        )
         self.logger.info(
             "_process_local_image_path_with_vision(): Vision model wrote %d event(s) for %s",
             len(events_df),
@@ -1235,6 +1275,7 @@ class ImageScraper:
                                 page_url,
                                 parent_url,
                                 source,
+                                keywords,
                                 page_context_text=text,
                             )
                         else:
@@ -1337,14 +1378,25 @@ class ImageScraper:
         per_page_process_limit = self.images_per_page_limit
         if per_page_process_limit <= 0:
             per_page_process_limit = int(self.config.get('crawling', {}).get('max_website_urls', 10) or 10)
+        per_page_process_limit = min(per_page_process_limit, self.max_images_per_page)
         selected_imgs = scored_imgs[:per_page_process_limit]
         self.logger.info(
             "process_webpage_url(): selected %d ranked image(s) for OCR: %s",
             len(selected_imgs),
             [{"score": score, "url": url} for score, url in selected_imgs],
         )
-        for _, src in selected_imgs:
-            self.process_image_url(src, page_url, source, keywords, page_context_text=text)
+        for index, (_, src) in enumerate(selected_imgs):
+            use_vision_first = True
+            if is_instagram_url(page_url):
+                use_vision_first = index < self.instagram_vision_image_limit
+            self.process_image_url(
+                src,
+                page_url,
+                source,
+                keywords,
+                page_context_text=text,
+                use_vision_first=use_vision_first,
+            )
         if not selected_imgs and is_instagram_url(page_url):
             screenshot_path = self.loop.run_until_complete(self._capture_page_screenshot(page_url))
             if screenshot_path:
@@ -1353,6 +1405,7 @@ class ImageScraper:
                     page_url,
                     parent_url,
                     source,
+                    keywords,
                     page_context_text=text,
                 )
 
@@ -1362,22 +1415,22 @@ class ImageScraper:
         canonical_url: str,
         parent_url: str,
         source: str,
+        keywords: str,
         page_context_text: str | None = None,
     ) -> bool:
-        """Run vision-first extraction against a local screenshot, then fall back to OCR."""
-        if self._process_local_image_path_with_vision(
-            local_path,
-            canonical_url,
-            parent_url,
-            source,
-            page_context_text=page_context_text,
-        ):
-            return True
+        """Run OCR-first extraction against a local screenshot, then fall back to vision."""
         self.logger.info("_process_local_image_path(): Starting OCR for %s", local_path)
         text = self.ocr_image_to_text(local_path)
         if not text:
             self.logger.info("_process_local_image_path(): No text extracted from screenshot %s", local_path)
-            return False
+            return self._process_local_image_path_with_vision(
+                local_path,
+                canonical_url,
+                parent_url,
+                source,
+                keywords,
+                page_context_text=page_context_text,
+            )
         self.logger.info("_process_local_image_path(): Extracted text length %d characters", len(text))
         self.logger.info("_process_local_image_path(): Extracted text:\n%s", text)
 
@@ -1399,14 +1452,28 @@ class ImageScraper:
         found = [kw for kw in self.keywords_list if kw.lower() in llm_text.lower()]
         if not found:
             self.logger.info("_process_local_image_path(): No relevant keywords in screenshot OCR for %s", local_path)
-            return False
+            return self._process_local_image_path_with_vision(
+                local_path,
+                canonical_url,
+                parent_url,
+                source,
+                keywords,
+                page_context_text=page_context_text,
+            )
 
         prompt_basis_url = canonical_url or parent_url
         prompt_type = resolve_prompt_type(prompt_basis_url, fallback_prompt_type='default')
         prompt_text, schema_type = self.llm_handler.generate_prompt(prompt_basis_url, llm_text, prompt_type)
         if len(prompt_text) > config['crawling']['prompt_max_length']:
             self.logger.warning("_process_local_image_path(): Prompt exceeds maximum length for %s", local_path)
-            return False
+            return self._process_local_image_path_with_vision(
+                local_path,
+                canonical_url,
+                parent_url,
+                source,
+                keywords,
+                page_context_text=page_context_text,
+            )
 
         status = self.llm_handler.process_llm_response(
             prompt_basis_url,
@@ -1418,9 +1485,16 @@ class ImageScraper:
         )
         if status:
             self.logger.info("_process_local_image_path(): LLM processing succeeded for screenshot %s", local_path)
-        else:
-            self.logger.warning("_process_local_image_path(): LLM processing did not produce any events for screenshot %s", local_path)
-        return bool(status)
+            return True
+        self.logger.warning("_process_local_image_path(): LLM processing did not produce any events for screenshot %s", local_path)
+        return self._process_local_image_path_with_vision(
+            local_path,
+            canonical_url,
+            parent_url,
+            source,
+            keywords,
+            page_context_text=page_context_text,
+        )
 
 
     def process_image_url(
@@ -1430,6 +1504,7 @@ class ImageScraper:
         source: str,
         keywords: str,
         page_context_text: str | None = None,
+        use_vision_first: bool = True,
     ) -> None:
         """
         Processes an image URL by downloading the image, extracting text using OCR, 
@@ -1482,24 +1557,24 @@ class ImageScraper:
             return
         self.logger.info(f"process_image_url(): Image saved to {path}")
 
-        if self._process_local_image_path_with_vision(
-            Path(path),
-            parent_url or image_url,
-            parent_url,
-            source,
-            page_context_text=page_context_text,
-        ):
-            self.logger.info(
-                "process_image_url(): Vision-first extraction succeeded for %s",
-                image_url,
-            )
-            return
-
         # Run OCR
         self.logger.info(f"process_image_url(): Running OCR on {path}")
         text = self.ocr_image_to_text(path)
         if not text:
-            self.logger.info(f"process_image_url(): No text extracted from {path}, skipping.")
+            self.logger.info(f"process_image_url(): No text extracted from {path}, trying vision fallback if allowed.")
+            if use_vision_first and self._process_local_image_path_with_vision(
+                Path(path),
+                parent_url or image_url,
+                parent_url,
+                source,
+                keywords,
+                page_context_text=page_context_text,
+            ):
+                self.logger.info(
+                    "process_image_url(): Vision fallback extraction succeeded for %s after empty OCR",
+                    image_url,
+                )
+                return
             self.db_handler.write_url_to_db(url_row)
             return
         self.logger.info(f"process_image_url(): Extracted text length {len(text)} characters")
@@ -1522,6 +1597,19 @@ class ImageScraper:
         found = [kw for kw in self.keywords_list if kw.lower() in llm_text.lower()]
         if not found:
             self.logger.info(f"process_image_url(): No relevant keywords in OCR text for {image_url}")
+            if use_vision_first and self._process_local_image_path_with_vision(
+                Path(path),
+                parent_url or image_url,
+                parent_url,
+                source,
+                keywords,
+                page_context_text=page_context_text,
+            ):
+                self.logger.info(
+                    "process_image_url(): Vision fallback extraction succeeded for %s after OCR keyword miss",
+                    image_url,
+                )
+                return
             self.db_handler.write_url_to_db(url_row)
             return
         self.logger.info(f"process_image_url(): Found keywords {found} in image {image_url}")
@@ -1532,6 +1620,19 @@ class ImageScraper:
         prompt_text, schema_type = self.llm_handler.generate_prompt(prompt_basis_url, llm_text, prompt_type)
         if len(prompt_text) > config['crawling']['prompt_max_length']:
             logging.warning(f"def process_image_url(): Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
+            if use_vision_first and self._process_local_image_path_with_vision(
+                Path(path),
+                parent_url or image_url,
+                parent_url,
+                source,
+                keywords,
+                page_context_text=page_context_text,
+            ):
+                self.logger.info(
+                    "process_image_url(): Vision fallback extraction succeeded for %s after OCR prompt overflow",
+                    image_url,
+                )
+                return
             return 
         
         self.logger.info(
@@ -1546,6 +1647,19 @@ class ImageScraper:
             self.logger.info(f"process_image_url(): LLM processing succeeded for {image_url}")
         else:
             self.logger.warning(f"process_image_url(): LLM processing did not produce any events for {image_url}")
+            if use_vision_first and self._process_local_image_path_with_vision(
+                Path(path),
+                parent_url or image_url,
+                parent_url,
+                source,
+                keywords,
+                page_context_text=page_context_text,
+            ):
+                self.logger.info(
+                    "process_image_url(): Vision fallback extraction succeeded for %s after OCR/LLM miss",
+                    image_url,
+                )
+                return
 
 
     def process_images(self) -> None:

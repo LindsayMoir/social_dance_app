@@ -32,6 +32,8 @@ crawling:
   fb_temp_block_wait_max_seconds: 600
   fb_temp_block_wait_min_seconds: 300
   headless: true
+  image_max_processed_per_page: 5
+  instagram_vision_image_limit: 3
   max_attempts: 3
   max_crawl_trys: 3
   max_website_urls: 10
