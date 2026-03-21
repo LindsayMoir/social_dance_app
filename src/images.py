@@ -79,6 +79,7 @@ _INSTAGRAM_DEGRADED_SHELL_TOKENS = (
 )
 _VISION_MODEL = "gpt-4.1-mini"
 _VISION_REQUEST_TIMEOUT_SECONDS = 12
+_INSTAGRAM_MANUAL_RECOVERY_TIMEOUT_SECONDS = 180
 
 
 def _safe_bool(value: object) -> bool:
@@ -775,12 +776,26 @@ class ImageScraper:
         self.logger.warning(
             "_attempt_manual_instagram_recovery(): Waiting for manual Instagram login/challenge completion"
         )
-        input(
-            "Instagram challenge/login requires manual completion. "
-            "Use the visible Chromium window to finish it, then press Enter here to continue..."
-        )
-        await self.read_extract.page.wait_for_timeout(1500)
-        recovered = await self._verify_instagram_session(probe_url)
+        recovered = False
+        try:
+            input(
+                "Instagram challenge/login requires manual completion. "
+                "Use the visible Chromium window to finish it, then press Enter here to continue..."
+            )
+            await self.read_extract.page.wait_for_timeout(1500)
+            recovered = await self._verify_instagram_session(probe_url)
+        except EOFError:
+            self.logger.warning(
+                "_attempt_manual_instagram_recovery(): stdin is unavailable; keeping browser open for up to %ds "
+                "while polling for successful manual login",
+                _INSTAGRAM_MANUAL_RECOVERY_TIMEOUT_SECONDS,
+            )
+            deadline = time.monotonic() + _INSTAGRAM_MANUAL_RECOVERY_TIMEOUT_SECONDS
+            while time.monotonic() < deadline:
+                await self.read_extract.page.wait_for_timeout(2000)
+                recovered = await self._verify_instagram_session(probe_url)
+                if recovered:
+                    break
         if not recovered:
             return False
 

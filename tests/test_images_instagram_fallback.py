@@ -227,6 +227,45 @@ def test_manual_instagram_recovery_persists_session(monkeypatch, tmp_path) -> No
     assert sync_calls == [(str(auth_path), "instagram")]
 
 
+def test_manual_instagram_recovery_falls_back_when_stdin_unavailable(monkeypatch, tmp_path) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.config = {"crawling": {"headless": False}}
+
+    saved = {}
+
+    class _FakeContext:
+        async def storage_state(self, path):
+            saved["storage_path"] = path
+
+    class _FakePage:
+        async def wait_for_timeout(self, *_args, **_kwargs):
+            return None
+
+    verify_calls = {"count": 0}
+
+    async def _verify(_url):
+        verify_calls["count"] += 1
+        return verify_calls["count"] >= 2
+
+    scraper.read_extract = SimpleNamespace(context=_FakeContext(), page=_FakePage())
+    scraper._verify_instagram_session = _verify
+
+    auth_path = tmp_path / "instagram_auth.json"
+    monkeypatch.setattr(images, "get_auth_file", lambda _service: str(auth_path))
+    monkeypatch.setattr(images, "_INSTAGRAM_MANUAL_RECOVERY_TIMEOUT_SECONDS", 1)
+    sync_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr("secret_paths.sync_auth_to_db", lambda path, service: sync_calls.append((path, service)) or True)
+    monkeypatch.setattr("builtins.input", lambda *_args, **_kwargs: (_ for _ in ()).throw(EOFError()))
+
+    result = asyncio.run(scraper._attempt_manual_instagram_recovery("https://www.instagram.com/bachatavictoria/"))
+
+    assert result is True
+    assert verify_calls["count"] >= 2
+    assert saved["storage_path"] == str(auth_path)
+    assert sync_calls == [(str(auth_path), "instagram")]
+
+
 def test_safe_screenshot_stem_is_filesystem_safe() -> None:
     stem = _safe_screenshot_stem("https://www.instagram.com/bachatavictoria/p/ABC123/?hl=en")
     assert "/" not in stem
