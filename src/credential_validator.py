@@ -618,6 +618,9 @@ def validate_credentials(headless=False, check_timeout_seconds=60):
     logging.info("\n")
     logging.info("=" * 70)
     logging.info("CREDENTIAL VALIDATION COMPLETED SUCCESSFULLY")
+    logging.info(
+        "SUCCESS: Credential validation passed for Gmail, Eventbrite, Facebook, and Instagram."
+    )
     logging.info(f"Total validation time: {elapsed:.1f} seconds")
     logging.info("All services authenticated and ready")
     logging.info("=" * 70)
@@ -661,6 +664,9 @@ def main():
 
         logging.info("=" * 70)
         logging.info("ALL CREDENTIALS VALIDATED SUCCESSFULLY")
+        logging.info(
+            "SUCCESS: All required credentials are valid. The pipeline can continue."
+        )
         logging.info("Pipeline will continue with headless=True")
         logging.info("=" * 70)
         return 0
