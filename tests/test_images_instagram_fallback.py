@@ -1305,3 +1305,78 @@ def test_process_images_skips_final_refresh_when_url_limit_reached(monkeypatch) 
     ImageScraper.process_images(scraper)
 
     assert call_count["get_image_links"] == 1
+
+
+def test_record_image_metric_writes_structured_ocr_vision_fields() -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.run_id = "run-123"
+    scraper.step_name = "images"
+    scraper.telemetry_counts = images.Counter()
+
+    written: list[dict] = []
+    scraper.db_handler = SimpleNamespace(write_url_scrape_metric=lambda row: written.append(row))
+
+    scraper._record_image_metric(
+        link="https://www.instagram.com/p/ABC123/",
+        parent_url="https://www.instagram.com/bachatavictoria/",
+        source="Bachata Victoria",
+        keywords="bachata",
+        archetype="image_url",
+        access_succeeded=True,
+        extraction_attempted=True,
+        extraction_succeeded=True,
+        extraction_skipped=False,
+        decision_reason="ocr_llm_success",
+        text_extracted=True,
+        keywords_found=True,
+        events_written=1,
+        ocr_attempted=True,
+        ocr_succeeded=True,
+        vision_attempted=False,
+        vision_succeeded=False,
+        fallback_used=False,
+    )
+
+    assert len(written) == 1
+    assert written[0]["run_id"] == "run-123"
+    assert written[0]["step_name"] == "images"
+    assert written[0]["access_succeeded"] is True
+    assert written[0]["text_extracted"] is True
+    assert written[0]["keywords_found"] is True
+    assert written[0]["events_written"] == 1
+    assert written[0]["ocr_attempted"] is True
+    assert written[0]["ocr_succeeded"] is True
+    assert written[0]["vision_attempted"] is False
+    assert written[0]["vision_succeeded"] is False
+    assert written[0]["fallback_used"] is False
+
+
+def test_log_processing_summary_reports_rates(caplog) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.telemetry_counts = images.Counter(
+        {
+            "total_urls": 5,
+            "access_succeeded": 4,
+            "text_extracted": 3,
+            "keywords_found": 2,
+            "urls_with_events": 2,
+            "ocr_attempted": 4,
+            "ocr_succeeded": 3,
+            "vision_attempted": 2,
+            "vision_succeeded": 1,
+            "fallback_used": 2,
+        }
+    )
+
+    with caplog.at_level(logging.INFO):
+        scraper._log_processing_summary()
+
+    assert "IMAGES SCRAPER SUMMARY" in caplog.text
+    assert "URL access success rate: 80.0% (4/5)" in caplog.text
+    assert "Text extracted rate: 60.0% (3/5)" in caplog.text
+    assert "Keyword hit rate: 40.0% (2/5)" in caplog.text
+    assert "Event extraction success rate: 40.0% (2/5)" in caplog.text
+    assert "OCR success rate: 75.0% (3/4)" in caplog.text
+    assert "Vision success rate: 50.0% (1/2)" in caplog.text

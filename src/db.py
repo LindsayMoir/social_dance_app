@@ -226,6 +226,15 @@ class DatabaseHandler():
                 classification_owner_step TEXT,
                 classification_subtype TEXT,
                 classification_features_json TEXT,
+                access_succeeded BOOLEAN,
+                text_extracted BOOLEAN,
+                keywords_found BOOLEAN,
+                events_written INTEGER,
+                ocr_attempted BOOLEAN,
+                ocr_succeeded BOOLEAN,
+                vision_attempted BOOLEAN,
+                vision_succeeded BOOLEAN,
+                fallback_used BOOLEAN,
                 links_discovered INTEGER,
                 links_followed INTEGER,
                 time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -244,6 +253,15 @@ class DatabaseHandler():
             self.execute_query(
                 "ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS classification_features_json TEXT"
             )
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS access_succeeded BOOLEAN")
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS text_extracted BOOLEAN")
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS keywords_found BOOLEAN")
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS events_written INTEGER")
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS ocr_attempted BOOLEAN")
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS ocr_succeeded BOOLEAN")
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS vision_attempted BOOLEAN")
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS vision_succeeded BOOLEAN")
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS fallback_used BOOLEAN")
             self.execute_query(
                 "CREATE INDEX IF NOT EXISTS idx_url_scrape_metrics_run_id ON url_scrape_metrics(run_id)"
             )
@@ -1536,6 +1554,15 @@ class DatabaseHandler():
             "classification_features_json": (
                 str(metric.get("classification_features_json", "") or "").strip() or None
             ),
+            "access_succeeded": bool(metric.get("access_succeeded", False)),
+            "text_extracted": bool(metric.get("text_extracted", False)),
+            "keywords_found": bool(metric.get("keywords_found", False)),
+            "events_written": int(metric.get("events_written", 0) or 0),
+            "ocr_attempted": bool(metric.get("ocr_attempted", False)),
+            "ocr_succeeded": bool(metric.get("ocr_succeeded", False)),
+            "vision_attempted": bool(metric.get("vision_attempted", False)),
+            "vision_succeeded": bool(metric.get("vision_succeeded", False)),
+            "fallback_used": bool(metric.get("fallback_used", False)),
             "links_discovered": int(metric.get("links_discovered", 0) or 0),
             "links_followed": int(metric.get("links_followed", 0) or 0),
             "time_stamp": metric.get("time_stamp", datetime.now()),
