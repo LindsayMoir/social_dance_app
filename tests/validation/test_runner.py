@@ -1321,6 +1321,239 @@ class ValidationTestRunner:
                 continue
         return history
 
+    def _summarize_scraper_step_telemetry(self, run_id: str) -> dict:
+        """Aggregate per-step scraper telemetry for the requested run from url_scrape_metrics."""
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_run_id:
+            return {"available": False, "run_id": normalized_run_id, "steps": {}}
+
+        query = """
+            SELECT
+                COALESCE(NULLIF(step_name, ''), REPLACE(COALESCE(handled_by, ''), '.py', '')) AS step_norm,
+                COUNT(*) AS total_urls,
+                SUM(CASE WHEN access_succeeded THEN 1 ELSE 0 END) AS access_success_count,
+                SUM(CASE WHEN text_extracted THEN 1 ELSE 0 END) AS text_extracted_count,
+                SUM(CASE WHEN keywords_found THEN 1 ELSE 0 END) AS keywords_found_count,
+                SUM(CASE WHEN extraction_attempted THEN 1 ELSE 0 END) AS extraction_attempted_count,
+                SUM(CASE WHEN extraction_attempted AND extraction_succeeded THEN 1 ELSE 0 END) AS extraction_success_count,
+                SUM(CASE WHEN events_written > 0 THEN 1 ELSE 0 END) AS urls_with_events_count,
+                SUM(COALESCE(events_written, 0)) AS events_written_total,
+                SUM(CASE WHEN ocr_attempted THEN 1 ELSE 0 END) AS ocr_attempted_count,
+                SUM(CASE WHEN ocr_succeeded THEN 1 ELSE 0 END) AS ocr_success_count,
+                SUM(CASE WHEN vision_attempted THEN 1 ELSE 0 END) AS vision_attempted_count,
+                SUM(CASE WHEN vision_succeeded THEN 1 ELSE 0 END) AS vision_success_count,
+                SUM(CASE WHEN fallback_used THEN 1 ELSE 0 END) AS fallback_used_count
+            FROM url_scrape_metrics
+            WHERE run_id = :run_id
+            GROUP BY 1
+        """
+        try:
+            rows = self.db_handler.execute_query(query, {"run_id": normalized_run_id}) or []
+        except Exception as exc:
+            return {"available": False, "run_id": normalized_run_id, "error": str(exc), "steps": {}}
+
+        steps: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            mapping = dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
+            step_name = str(mapping.get("step_norm", "") or "").strip()
+            if not step_name:
+                continue
+            total_urls = int(mapping.get("total_urls", 0) or 0)
+            extraction_attempted_count = int(mapping.get("extraction_attempted_count", 0) or 0)
+            ocr_attempted_count = int(mapping.get("ocr_attempted_count", 0) or 0)
+            vision_attempted_count = int(mapping.get("vision_attempted_count", 0) or 0)
+
+            def _pct(numerator: str, denominator: int) -> float | None:
+                if denominator <= 0:
+                    return None
+                return round((int(mapping.get(numerator, 0) or 0) / denominator) * 100.0, 2)
+
+            steps[step_name] = {
+                "total_urls": total_urls,
+                "access_success_count": int(mapping.get("access_success_count", 0) or 0),
+                "text_extracted_count": int(mapping.get("text_extracted_count", 0) or 0),
+                "keywords_found_count": int(mapping.get("keywords_found_count", 0) or 0),
+                "extraction_attempted_count": extraction_attempted_count,
+                "extraction_success_count": int(mapping.get("extraction_success_count", 0) or 0),
+                "urls_with_events_count": int(mapping.get("urls_with_events_count", 0) or 0),
+                "events_written_total": int(mapping.get("events_written_total", 0) or 0),
+                "ocr_attempted_count": ocr_attempted_count,
+                "ocr_success_count": int(mapping.get("ocr_success_count", 0) or 0),
+                "vision_attempted_count": vision_attempted_count,
+                "vision_success_count": int(mapping.get("vision_success_count", 0) or 0),
+                "fallback_used_count": int(mapping.get("fallback_used_count", 0) or 0),
+                "access_success_rate_pct": _pct("access_success_count", total_urls),
+                "text_extracted_rate_pct": _pct("text_extracted_count", total_urls),
+                "keyword_hit_rate_pct": _pct("keywords_found_count", total_urls),
+                "extraction_success_rate_pct": _pct("extraction_success_count", extraction_attempted_count),
+                "url_event_hit_rate_pct": _pct("urls_with_events_count", total_urls),
+                "ocr_success_rate_pct": _pct("ocr_success_count", ocr_attempted_count),
+                "vision_success_rate_pct": _pct("vision_success_count", vision_attempted_count),
+                "fallback_usage_rate_pct": _pct("fallback_used_count", total_urls),
+            }
+
+        return {
+            "available": bool(steps),
+            "run_id": normalized_run_id,
+            "steps": steps,
+        }
+
+    def _persist_scraper_step_telemetry_metrics(
+        self,
+        *,
+        run_id: str,
+        scraper_telemetry_summary: dict,
+        runtime_summary: dict,
+    ) -> None:
+        """Persist per-scraper telemetry rates for DB-backed trend charts."""
+        if not getattr(self, "db_handler", None) or not hasattr(self.db_handler, "record_metric_observation"):
+            return
+        if not isinstance(scraper_telemetry_summary, dict) or not scraper_telemetry_summary.get("available"):
+            return
+        window_start = self._parse_iso_datetime(str(runtime_summary.get("start_ts", "") or ""))
+        window_end = self._parse_iso_datetime(str(runtime_summary.get("end_ts", "") or "")) or datetime.now()
+        description_map = {
+            "access_success_rate_pct": ("percentage of scraper URLs reached successfully", True),
+            "text_extracted_rate_pct": ("percentage of scraper URLs yielding extracted text", True),
+            "keyword_hit_rate_pct": ("percentage of scraper URLs containing target keywords", True),
+            "extraction_success_rate_pct": ("percentage of attempted scraper URLs producing extracted events", True),
+            "url_event_hit_rate_pct": ("percentage of scraper URLs yielding at least one event", True),
+            "ocr_success_rate_pct": ("percentage of OCR attempts succeeding", True),
+            "vision_success_rate_pct": ("percentage of vision attempts succeeding", True),
+            "fallback_usage_rate_pct": ("percentage of scraper URLs using fallback logic", False),
+        }
+        for step_name, payload in (scraper_telemetry_summary.get("steps") or {}).items():
+            for metric_name, (description_suffix, higher_is_better) in description_map.items():
+                value = payload.get(metric_name)
+                if value is None:
+                    continue
+                self.db_handler.record_metric_observation(
+                    run_id=str(run_id or ""),
+                    metric_key=f"scraper_{step_name}_{metric_name}",
+                    metric_value_numeric=float(value),
+                    metric_unit="percent",
+                    description=f"Scraper telemetry for {step_name}: {description_suffix}",
+                    higher_is_better=higher_is_better,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+
+    def _build_scraper_telemetry_html(self, scraper_telemetry_summary: dict | None) -> str:
+        """Render current-run scraper telemetry plus DB-backed trend charts."""
+        if not isinstance(scraper_telemetry_summary, dict) or not scraper_telemetry_summary:
+            return "<p class='error-box'>❌ Scraper telemetry unavailable</p>"
+        if scraper_telemetry_summary.get("error"):
+            return (
+                "<p class='error-box'>❌ Scraper telemetry failed: "
+                f"{self._escape_html(str(scraper_telemetry_summary.get('error')))}</p>"
+            )
+        steps = scraper_telemetry_summary.get("steps") if isinstance(scraper_telemetry_summary.get("steps"), dict) else {}
+        if not steps:
+            return "<p class='error-box'>❌ No scraper telemetry rows were recorded for this run.</p>"
+
+        current_rows = []
+        for step_name in ("scraper", "fb", "rd_ext", "ebs", "images"):
+            payload = steps.get(step_name)
+            if not payload:
+                continue
+            current_rows.append(
+                "<tr>"
+                f"<td>{self._escape_html(step_name)}</td>"
+                f"<td>{int(payload.get('total_urls', 0) or 0)}</td>"
+                f"<td>{self._escape_html(str(payload.get('access_success_rate_pct', 'N/A')))}%</td>"
+                f"<td>{self._escape_html(str(payload.get('text_extracted_rate_pct', 'N/A')))}%</td>"
+                f"<td>{self._escape_html(str(payload.get('keyword_hit_rate_pct', 'N/A')))}%</td>"
+                f"<td>{self._escape_html(str(payload.get('url_event_hit_rate_pct', 'N/A')))}%</td>"
+                f"<td>{self._escape_html(str(payload.get('extraction_success_rate_pct', 'N/A')))}%</td>"
+                f"<td>{int(payload.get('events_written_total', 0) or 0)}</td>"
+                "</tr>"
+            )
+
+        images_payload = steps.get("images") or {}
+        image_detail_html = ""
+        if images_payload:
+            image_detail_html = (
+                "<h3>Images OCR / Vision Detail</h3>"
+                "<table><tr><th>Metric</th><th>Count</th><th>Rate</th></tr>"
+                f"<tr><td>OCR Attempts</td><td>{int(images_payload.get('ocr_attempted_count', 0) or 0)}</td><td>{self._escape_html(str(images_payload.get('ocr_success_rate_pct', 'N/A')))}%</td></tr>"
+                f"<tr><td>Vision Attempts</td><td>{int(images_payload.get('vision_attempted_count', 0) or 0)}</td><td>{self._escape_html(str(images_payload.get('vision_success_rate_pct', 'N/A')))}%</td></tr>"
+                f"<tr><td>Fallback Used</td><td>{int(images_payload.get('fallback_used_count', 0) or 0)}</td><td>{self._escape_html(str(images_payload.get('fallback_usage_rate_pct', 'N/A')))}%</td></tr>"
+                "</table>"
+            )
+
+        trend_sections = [
+            self._build_multi_metric_trend_svg(
+                title="Scraper Access Success % Trend",
+                days=180,
+                value_format="percent",
+                series=[
+                    {"metric_key": "scraper_scraper_access_success_rate_pct", "label": "scraper", "color": "#1f77b4"},
+                    {"metric_key": "scraper_fb_access_success_rate_pct", "label": "fb", "color": "#ff7f0e"},
+                    {"metric_key": "scraper_rd_ext_access_success_rate_pct", "label": "rd_ext", "color": "#2ca02c"},
+                    {"metric_key": "scraper_ebs_access_success_rate_pct", "label": "ebs", "color": "#d62728"},
+                    {"metric_key": "scraper_images_access_success_rate_pct", "label": "images", "color": "#9467bd"},
+                ],
+            ),
+            self._build_multi_metric_trend_svg(
+                title="Scraper Text Extraction % Trend",
+                days=180,
+                value_format="percent",
+                series=[
+                    {"metric_key": "scraper_scraper_text_extracted_rate_pct", "label": "scraper", "color": "#1f77b4"},
+                    {"metric_key": "scraper_fb_text_extracted_rate_pct", "label": "fb", "color": "#ff7f0e"},
+                    {"metric_key": "scraper_rd_ext_text_extracted_rate_pct", "label": "rd_ext", "color": "#2ca02c"},
+                    {"metric_key": "scraper_ebs_text_extracted_rate_pct", "label": "ebs", "color": "#d62728"},
+                    {"metric_key": "scraper_images_text_extracted_rate_pct", "label": "images", "color": "#9467bd"},
+                ],
+            ),
+            self._build_multi_metric_trend_svg(
+                title="Scraper Keyword Hit % Trend",
+                days=180,
+                value_format="percent",
+                series=[
+                    {"metric_key": "scraper_scraper_keyword_hit_rate_pct", "label": "scraper", "color": "#1f77b4"},
+                    {"metric_key": "scraper_fb_keyword_hit_rate_pct", "label": "fb", "color": "#ff7f0e"},
+                    {"metric_key": "scraper_rd_ext_keyword_hit_rate_pct", "label": "rd_ext", "color": "#2ca02c"},
+                    {"metric_key": "scraper_ebs_keyword_hit_rate_pct", "label": "ebs", "color": "#d62728"},
+                    {"metric_key": "scraper_images_keyword_hit_rate_pct", "label": "images", "color": "#9467bd"},
+                ],
+            ),
+            self._build_multi_metric_trend_svg(
+                title="Scraper Event Extraction Success % Trend",
+                days=180,
+                value_format="percent",
+                series=[
+                    {"metric_key": "scraper_scraper_extraction_success_rate_pct", "label": "scraper", "color": "#1f77b4"},
+                    {"metric_key": "scraper_fb_extraction_success_rate_pct", "label": "fb", "color": "#ff7f0e"},
+                    {"metric_key": "scraper_rd_ext_extraction_success_rate_pct", "label": "rd_ext", "color": "#2ca02c"},
+                    {"metric_key": "scraper_ebs_extraction_success_rate_pct", "label": "ebs", "color": "#d62728"},
+                    {"metric_key": "scraper_images_extraction_success_rate_pct", "label": "images", "color": "#9467bd"},
+                ],
+            ),
+            self._build_multi_metric_trend_svg(
+                title="Images OCR / Vision Success % Trend",
+                days=180,
+                value_format="percent",
+                series=[
+                    {"metric_key": "scraper_images_ocr_success_rate_pct", "label": "images OCR", "color": "#17becf"},
+                    {"metric_key": "scraper_images_vision_success_rate_pct", "label": "images vision", "color": "#bcbd22"},
+                ],
+            ),
+        ]
+
+        return (
+            "<div class='metric-container'>"
+            f"<div class='metric'><div class='metric-value'>{len(steps)}</div><div class='metric-label'>Scrapers Reporting</div></div>"
+            f"<div class='metric'><div class='metric-value'>{self._escape_html(str(scraper_telemetry_summary.get('run_id', '')))}</div><div class='metric-label'>Run ID</div></div>"
+            "</div>"
+            "<h3>Current Run Scraper Telemetry</h3>"
+            "<table><tr><th>Scraper</th><th>Total URLs</th><th>Access %</th><th>Text %</th><th>Keyword %</th><th>URLs With Events %</th><th>Extraction Success %</th><th>Events Written</th></tr>"
+            f"{''.join(current_rows)}"
+            "</table>"
+            f"{image_detail_html}"
+            f"{''.join(trend_sections)}"
+        )
+
     def _should_auto_delete_replay_mismatch(self, comparison: dict) -> bool:
         """
         High-confidence delete condition: baseline row appears unrelated to URL content.
@@ -1911,6 +2144,7 @@ class ValidationTestRunner:
         suspicious_deletes_summary = self._summarize_suspicious_deletes(results.get('timestamp'))
         report_run_id = str(fb_block_summary.get("run_id", "") or "").strip() or self._infer_latest_pipeline_run_id(results.get('timestamp'))
         pipeline_runtime_summary = self._summarize_pipeline_runtime(results.get('timestamp'), report_run_id)
+        scraper_telemetry_summary = self._summarize_scraper_step_telemetry(report_run_id)
         openrouter_cost_summary = self._summarize_openrouter_run_cost(
             report_timestamp=results.get('timestamp'),
             pipeline_runtime=pipeline_runtime_summary,
@@ -2017,6 +2251,11 @@ class ValidationTestRunner:
             field_accuracy_summary=field_accuracy_summary,
             run_delta_summary=run_delta_summary,
         )
+        self._persist_scraper_step_telemetry_metrics(
+            run_id=report_run_id,
+            scraper_telemetry_summary=scraper_telemetry_summary,
+            runtime_summary=runtime_summary,
+        )
         self._persist_validation_artifacts(
             run_id=report_run_id,
             artifacts={
@@ -2032,6 +2271,7 @@ class ValidationTestRunner:
                 "holdout_summary": holdout_summary,
                 "domain_capped_summary": domain_capped_summary,
                 "domain_evaluation_summary": domain_evaluation_summary,
+                "scraper_telemetry_summary": scraper_telemetry_summary,
                 "run_delta_summary": run_delta_summary,
                 "recommendation_plan": recommendation_plan,
                 "codex_review_bundle": codex_review_bundle,
@@ -2103,28 +2343,31 @@ class ValidationTestRunner:
         <h2>0. Trend Dashboard</h2>
         {self._build_top_trend_dashboard_html()}
 
-        <h2>1. Replay Accuracy Row-by-Row</h2>
+        <h2>1. Scraper Telemetry Trends</h2>
+        {self._build_scraper_telemetry_html(scraper_telemetry_summary)}
+
+        <h2>2. Replay Accuracy Row-by-Row</h2>
         {self._build_accuracy_replay_rows_html(accuracy_replay_summary)}
 
-        <h2>2. Completeness KPIs</h2>
+        <h2>3. Completeness KPIs</h2>
         {self._build_completeness_kpis_only_html(control_panel_summary)}
 
-        <h2>3. KPI Scorecard</h2>
+        <h2>4. KPI Scorecard</h2>
         {self._build_phase1_scorecard_html(run_scorecard)}
 
-        <h2>4. Phase 2 Integrity Coverage</h2>
+        <h2>5. Phase 2 Integrity Coverage</h2>
         {self._build_phase2_integrity_html(duplicate_audit_summary, coverage_summary)}
 
-        <h2>5. Phase 3 Honest Evaluation</h2>
+        <h2>6. Phase 3 Honest Evaluation</h2>
         {self._build_phase3_honest_evaluation_html(dev_summary, holdout_summary, domain_capped_summary, run_scorecard.get('guardrails', {}))}
 
-        <h2>6. Domain Evaluation</h2>
+        <h2>7. Domain Evaluation</h2>
         {self._build_domain_evaluation_html(domain_evaluation_summary)}
 
-        <h2>7. Run Comparison</h2>
+        <h2>8. Run Comparison</h2>
         {self._build_run_delta_html(run_delta_summary)}
 
-        <h2>8. Recommendation Plan</h2>
+        <h2>9. Recommendation Plan</h2>
         {self._build_recommendation_plan_html(recommendation_plan)}
 
         <hr style="margin: 40px 0;">

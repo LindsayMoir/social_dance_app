@@ -99,6 +99,58 @@ class EventbriteScraper:
         self.urls_with_found_keywords = 0
         self.events_written_to_db = 0
 
+    def _write_scrape_metric(
+        self,
+        *,
+        link: str,
+        parent_url: str,
+        source: str,
+        keywords: list[str] | str,
+        extraction_attempted: bool,
+        extraction_succeeded: bool,
+        extraction_skipped: bool,
+        decision_reason: str,
+        access_succeeded: bool,
+        text_extracted: bool,
+        keywords_found: bool,
+        events_written: int,
+        links_discovered: int = 0,
+        links_followed: int = 0,
+    ) -> None:
+        """Persist Eventbrite per-URL telemetry into the shared scrape metrics table."""
+        try:
+            self.db_handler.write_url_scrape_metric(
+                {
+                    "run_id": os.getenv("DS_RUN_ID", "na"),
+                    "step_name": os.getenv("DS_STEP_NAME", "ebs"),
+                    "link": link,
+                    "parent_url": parent_url,
+                    "source": source,
+                    "keywords": keywords,
+                    "archetype": "event_detail",
+                    "extraction_attempted": extraction_attempted,
+                    "extraction_succeeded": extraction_succeeded,
+                    "extraction_skipped": extraction_skipped,
+                    "decision_reason": decision_reason,
+                    "handled_by": "ebs.py",
+                    "routing_reason": decision_reason,
+                    "access_succeeded": access_succeeded,
+                    "text_extracted": text_extracted,
+                    "keywords_found": keywords_found,
+                    "events_written": int(events_written or 0),
+                    "ocr_attempted": False,
+                    "ocr_succeeded": False,
+                    "vision_attempted": False,
+                    "vision_succeeded": False,
+                    "fallback_used": False,
+                    "links_discovered": int(links_discovered or 0),
+                    "links_followed": int(links_followed or 0),
+                    "time_stamp": datetime.now(),
+                }
+            )
+        except Exception as exc:
+            logging.warning("EventbriteScraper._write_scrape_metric(): failed for %s: %s", link, exc)
+
     def _is_url_likely_relevant_without_llm(self, event_url: str) -> bool | None:
         """
         Fast URL heuristic for Eventbrite relevance filtering.
@@ -204,6 +256,20 @@ class EventbriteScraper:
                 self.db_handler.write_url_to_db(
                     [event_url, query, source, keywords_list, False, 1, datetime.now(), route.routing_reason]
                 )
+                self._write_scrape_metric(
+                    link=event_url,
+                    parent_url=query,
+                    source=source,
+                    keywords=keywords_list,
+                    extraction_attempted=False,
+                    extraction_succeeded=False,
+                    extraction_skipped=True,
+                    decision_reason=route.routing_reason,
+                    access_succeeded=False,
+                    text_extracted=False,
+                    keywords_found=False,
+                    events_written=0,
+                )
                 continue
 
             if event_url in self.visited_urls:
@@ -241,6 +307,20 @@ class EventbriteScraper:
             # 3) Act accordingly
             if not is_relevant:
                 logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on LLM response.")
+                self._write_scrape_metric(
+                    link=event_url,
+                    parent_url=query,
+                    source=source,
+                    keywords=keywords_list,
+                    extraction_attempted=False,
+                    extraction_succeeded=False,
+                    extraction_skipped=True,
+                    decision_reason="relevance_filtered_out",
+                    access_succeeded=False,
+                    text_extracted=False,
+                    keywords_found=False,
+                    events_written=0,
+                )
                 continue
 
             logging.info(f"def eventbrite_search(): LLM response indicates URL {event_url} is relevant.")
@@ -248,6 +328,20 @@ class EventbriteScraper:
             # Check urls to see if they should be scraped
             if not self.db_handler.should_process_url(event_url):
                 logging.info(f"def eventbrite_search(): Skipping URL {event_url} based on historical relevancy.")
+                self._write_scrape_metric(
+                    link=event_url,
+                    parent_url=query,
+                    source=source,
+                    keywords=keywords_list,
+                    extraction_attempted=False,
+                    extraction_succeeded=False,
+                    extraction_skipped=True,
+                    decision_reason="historical_relevancy_skip",
+                    access_succeeded=False,
+                    text_extracted=False,
+                    keywords_found=False,
+                    events_written=0,
+                )
                 continue
 
             logging.info(f"def eventbrite_search(): Processing URL {event_url}")
@@ -393,6 +487,8 @@ class EventbriteScraper:
             counter (int): Counter for processed events.
         """
         extracted_text = await self.read_extract.extract_event_text(event_url)
+        found_keywords: list[str] = []
+        llm_success = False
 
         if extracted_text:
             self.urls_with_extracted_text += 1  # Count extracted text URLs
@@ -407,6 +503,7 @@ class EventbriteScraper:
                 # Use 'default' prompt for event extraction, regardless of what prompt_type was used for relevance
                 event_extraction_prompt_type = resolve_prompt_type(event_url, fallback_prompt_type='default')
                 response = self.llm_handler.process_llm_response(event_url, parent_url, extracted_text, source, found_keywords, event_extraction_prompt_type)
+                llm_success = bool(response)
 
                 if response:
                     self.events_written_to_db += 1  # Count events written to the database
@@ -414,6 +511,25 @@ class EventbriteScraper:
                 logging.info(f"def process_event(): No keywords found in text for: {event_url}")
         else:
             logging.warning(f"def process_event(): No extracted text for event: {event_url}")
+
+        self._write_scrape_metric(
+            link=event_url,
+            parent_url=parent_url,
+            source=source,
+            keywords=keywords_list,
+            extraction_attempted=True,
+            extraction_succeeded=llm_success,
+            extraction_skipped=False,
+            decision_reason=(
+                "llm_success"
+                if llm_success else
+                ("no_text" if not extracted_text else ("no_keywords" if not found_keywords else "llm_no_events"))
+            ),
+            access_succeeded=bool(extracted_text),
+            text_extracted=bool(extracted_text),
+            keywords_found=bool(found_keywords),
+            events_written=1 if llm_success else 0,
+        )
 
 
     async def driver(self):

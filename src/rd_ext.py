@@ -45,6 +45,59 @@ from secret_paths import get_auth_file
 db_handler = None
 
 
+def _record_rd_ext_scrape_metric(
+    db_handler: DatabaseHandler,
+    *,
+    link: str,
+    parent_url: str,
+    source: str,
+    keywords: list[str] | str,
+    extraction_attempted: bool,
+    extraction_succeeded: bool,
+    extraction_skipped: bool,
+    decision_reason: str,
+    access_succeeded: bool,
+    text_extracted: bool,
+    keywords_found: bool,
+    events_written: int,
+    links_discovered: int = 0,
+    links_followed: int = 0,
+) -> None:
+    """Persist rd_ext per-URL telemetry into the shared URL scrape metrics table."""
+    try:
+        db_handler.write_url_scrape_metric(
+            {
+                "run_id": os.getenv("DS_RUN_ID", "na"),
+                "step_name": os.getenv("DS_STEP_NAME", "rd_ext"),
+                "link": link,
+                "parent_url": parent_url,
+                "source": source,
+                "keywords": keywords,
+                "archetype": "edge_case",
+                "extraction_attempted": extraction_attempted,
+                "extraction_succeeded": extraction_succeeded,
+                "extraction_skipped": extraction_skipped,
+                "decision_reason": decision_reason,
+                "handled_by": "rd_ext.py",
+                "routing_reason": decision_reason,
+                "access_succeeded": access_succeeded,
+                "text_extracted": text_extracted,
+                "keywords_found": keywords_found,
+                "events_written": int(events_written or 0),
+                "ocr_attempted": False,
+                "ocr_succeeded": False,
+                "vision_attempted": False,
+                "vision_succeeded": False,
+                "fallback_used": False,
+                "links_discovered": int(links_discovered or 0),
+                "links_followed": int(links_followed or 0),
+                "time_stamp": datetime.now(),
+            }
+        )
+    except Exception as exc:
+        logging.warning("_record_rd_ext_scrape_metric(): failed for %s: %s", link, exc)
+
+
 def _safe_bool(value: object) -> bool:
     """Coerce config-like boolean values safely."""
     if isinstance(value, bool):
@@ -898,6 +951,7 @@ async def _process_edge_case_urls(
     df: pd.DataFrame,
 ) -> None:
     """Process edge-case URLs with a single shared browser session."""
+    all_keywords = [str(k).strip().lower() for k in (llm_handler.get_keywords() or []) if str(k).strip()]
     await read_extract.init_browser()
     logging.info("run_rd_ext_edge_cases(): Browser initialized once for all URLs")
     try:
@@ -913,6 +967,21 @@ async def _process_edge_case_urls(
             if is_social_media_url(url):
                 logging.info("run_rd_ext_edge_cases(): Skipping social media URL (fb/ig): %s", url)
                 db_handler.write_url_to_db([url, "", source, [], False, 1, datetime.now()])
+                _record_rd_ext_scrape_metric(
+                    db_handler,
+                    link=url,
+                    parent_url="",
+                    source=source,
+                    keywords=keywords,
+                    extraction_attempted=False,
+                    extraction_succeeded=False,
+                    extraction_skipped=True,
+                    decision_reason="social_media_skip",
+                    access_succeeded=False,
+                    text_extracted=False,
+                    keywords_found=False,
+                    events_written=0,
+                )
                 continue
             route = evaluate_step_ownership(url, current_step="rd_ext.py", explicit_edge_case=True)
             if not route.allow:
@@ -923,11 +992,28 @@ async def _process_edge_case_urls(
                     url,
                 )
                 db_handler.write_url_to_db([url, "", source, [], False, 1, datetime.now(), route.routing_reason])
+                _record_rd_ext_scrape_metric(
+                    db_handler,
+                    link=url,
+                    parent_url="",
+                    source=source,
+                    keywords=keywords,
+                    extraction_attempted=False,
+                    extraction_succeeded=False,
+                    extraction_skipped=True,
+                    decision_reason=route.routing_reason,
+                    access_succeeded=False,
+                    text_extracted=False,
+                    keywords_found=False,
+                    events_written=0,
+                )
                 continue
             extracted = await read_extract.extract_from_url(url, multiple_flag)
 
             # If multiple events were found (i.e. extracted is a dict), process each event separately.
             if isinstance(extracted, dict):
+                followed_count = 0
+                successful_events = 0
                 for event_url, text in extracted.items():
                     event_route = evaluate_step_ownership(
                         event_url,
@@ -944,27 +1030,101 @@ async def _process_edge_case_urls(
                         db_handler.write_url_to_db(
                             [event_url, url, source, [], False, 1, datetime.now(), event_route.routing_reason]
                         )
+                        _record_rd_ext_scrape_metric(
+                            db_handler,
+                            link=event_url,
+                            parent_url=url,
+                            source=source,
+                            keywords=keywords,
+                            extraction_attempted=False,
+                            extraction_succeeded=False,
+                            extraction_skipped=True,
+                            decision_reason=event_route.routing_reason,
+                            access_succeeded=False,
+                            text_extracted=False,
+                            keywords_found=False,
+                            events_written=0,
+                        )
                         continue
+                    followed_count += 1
                     parent_url = url
                     prompt_type = resolve_prompt_type(event_url, fallback_prompt_type=url)
-                    llm_handler.process_llm_response(
-                        event_url,
-                        parent_url,
-                        text,
-                        source,
-                        keywords,
-                        prompt_type=prompt_type,
+                    normalized_text = str(text or "")
+                    found_keywords = any(kw in normalized_text.lower() for kw in all_keywords)
+                    llm_success = bool(
+                        llm_handler.process_llm_response(
+                            event_url,
+                            parent_url,
+                            normalized_text,
+                            source,
+                            keywords,
+                            prompt_type=prompt_type,
+                        )
                     )
+                    successful_events += int(llm_success)
+                    _record_rd_ext_scrape_metric(
+                        db_handler,
+                        link=event_url,
+                        parent_url=url,
+                        source=source,
+                        keywords=keywords,
+                        extraction_attempted=True,
+                        extraction_succeeded=llm_success,
+                        extraction_skipped=False,
+                        decision_reason="llm_success" if llm_success else ("no_keywords" if not found_keywords else "llm_no_events"),
+                        access_succeeded=bool(normalized_text),
+                        text_extracted=bool(normalized_text),
+                        keywords_found=found_keywords,
+                        events_written=1 if llm_success else 0,
+                    )
+                _record_rd_ext_scrape_metric(
+                    db_handler,
+                    link=url,
+                    parent_url="",
+                    source=source,
+                    keywords=keywords,
+                    extraction_attempted=True,
+                    extraction_succeeded=successful_events > 0,
+                    extraction_skipped=False,
+                    decision_reason="multi_event_processed" if successful_events > 0 else "multi_event_no_events",
+                    access_succeeded=bool(extracted),
+                    text_extracted=bool(extracted),
+                    keywords_found=successful_events > 0,
+                    events_written=successful_events,
+                    links_discovered=len(extracted),
+                    links_followed=followed_count,
+                )
             else:
                 parent_url = ""
                 prompt_type = resolve_prompt_type(url, fallback_prompt_type=url)
-                llm_handler.process_llm_response(
-                    url,
-                    parent_url,
-                    extracted,
-                    source,
-                    keywords,
-                    prompt_type=prompt_type,
+                normalized_text = str(extracted or "")
+                found_keywords = any(kw in normalized_text.lower() for kw in all_keywords)
+                llm_success = False
+                if normalized_text:
+                    llm_success = bool(
+                        llm_handler.process_llm_response(
+                            url,
+                            parent_url,
+                            normalized_text,
+                            source,
+                            keywords,
+                            prompt_type=prompt_type,
+                        )
+                    )
+                _record_rd_ext_scrape_metric(
+                    db_handler,
+                    link=url,
+                    parent_url="",
+                    source=source,
+                    keywords=keywords,
+                    extraction_attempted=True,
+                    extraction_succeeded=llm_success,
+                    extraction_skipped=False,
+                    decision_reason="llm_success" if llm_success else ("no_text" if not normalized_text else ("no_keywords" if not found_keywords else "llm_no_events")),
+                    access_succeeded=bool(normalized_text),
+                    text_extracted=bool(normalized_text),
+                    keywords_found=found_keywords,
+                    events_written=1 if llm_success else 0,
                 )
     finally:
         await read_extract.close()

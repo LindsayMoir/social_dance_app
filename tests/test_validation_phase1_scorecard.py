@@ -295,6 +295,101 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
     assert all(isinstance(call["window_end"], datetime) for call in fake_db.calls)
 
 
+def test_summarize_scraper_step_telemetry_normalizes_all_scrapers() -> None:
+    runner = _build_runner()
+    fake_db = _FakeDbHandler()
+    runner.db_handler = fake_db
+    fake_db.query_map["FROM url_scrape_metrics"] = [
+        {
+            "step_norm": "scraper",
+            "total_urls": 10,
+            "access_success_count": 9,
+            "text_extracted_count": 8,
+            "keywords_found_count": 6,
+            "extraction_attempted_count": 8,
+            "extraction_success_count": 5,
+            "urls_with_events_count": 5,
+            "events_written_total": 7,
+            "ocr_attempted_count": 0,
+            "ocr_success_count": 0,
+            "vision_attempted_count": 0,
+            "vision_success_count": 0,
+            "fallback_used_count": 0,
+        },
+        {
+            "step_norm": "images",
+            "total_urls": 5,
+            "access_success_count": 4,
+            "text_extracted_count": 3,
+            "keywords_found_count": 2,
+            "extraction_attempted_count": 4,
+            "extraction_success_count": 2,
+            "urls_with_events_count": 2,
+            "events_written_total": 3,
+            "ocr_attempted_count": 4,
+            "ocr_success_count": 3,
+            "vision_attempted_count": 2,
+            "vision_success_count": 1,
+            "fallback_used_count": 2,
+        },
+    ]
+
+    summary = runner._summarize_scraper_step_telemetry("run-telemetry")
+
+    assert summary["available"] is True
+    assert summary["steps"]["scraper"]["access_success_rate_pct"] == 90.0
+    assert summary["steps"]["scraper"]["extraction_success_rate_pct"] == 62.5
+    assert summary["steps"]["images"]["ocr_success_rate_pct"] == 75.0
+    assert summary["steps"]["images"]["vision_success_rate_pct"] == 50.0
+    assert summary["steps"]["images"]["fallback_usage_rate_pct"] == 40.0
+
+
+def test_persist_scraper_step_telemetry_metrics_records_trend_keys() -> None:
+    runner = _build_runner()
+    fake_db = _FakeDbHandler()
+    runner.db_handler = fake_db
+
+    runner._persist_scraper_step_telemetry_metrics(
+        run_id="run-telemetry",
+        runtime_summary={
+            "start_ts": "2026-03-18 10:00:00",
+            "end_ts": "2026-03-18 12:00:00",
+        },
+        scraper_telemetry_summary={
+            "available": True,
+            "steps": {
+                "rd_ext": {
+                    "access_success_rate_pct": 80.0,
+                    "text_extracted_rate_pct": 70.0,
+                    "keyword_hit_rate_pct": 60.0,
+                    "extraction_success_rate_pct": 50.0,
+                    "url_event_hit_rate_pct": 40.0,
+                    "ocr_success_rate_pct": None,
+                    "vision_success_rate_pct": None,
+                    "fallback_usage_rate_pct": None,
+                },
+                "images": {
+                    "access_success_rate_pct": 90.0,
+                    "text_extracted_rate_pct": 85.0,
+                    "keyword_hit_rate_pct": 75.0,
+                    "extraction_success_rate_pct": 65.0,
+                    "url_event_hit_rate_pct": 55.0,
+                    "ocr_success_rate_pct": 88.0,
+                    "vision_success_rate_pct": 44.0,
+                    "fallback_usage_rate_pct": 22.0,
+                },
+            },
+        },
+    )
+
+    metric_keys = {call["metric_key"] for call in fake_db.calls}
+    assert "scraper_rd_ext_access_success_rate_pct" in metric_keys
+    assert "scraper_rd_ext_extraction_success_rate_pct" in metric_keys
+    assert "scraper_images_access_success_rate_pct" in metric_keys
+    assert "scraper_images_ocr_success_rate_pct" in metric_keys
+    assert "scraper_images_vision_success_rate_pct" in metric_keys
+
+
 def test_phase1_artifacts_persist_by_run_id_and_type() -> None:
     runner = _build_runner()
     fake_db = _FakeDbHandler()
