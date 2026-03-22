@@ -161,3 +161,54 @@ def test_validate_facebook_probe_failures_fail_when_enforced(monkeypatch):
     result = cv.validate_facebook(headless=True, check_timeout_seconds=1)
     assert result["valid"] is False
     assert "Facebook group access failed" in (result["error"] or "")
+
+
+def test_validate_facebook_brings_page_to_front_when_headful(monkeypatch):
+    @contextmanager
+    def _noop_headless(_headless):
+        yield
+
+    actions: list[str] = []
+
+    class _DummyPage:
+        url = "https://www.facebook.com/"
+
+        def goto(self, *_args, **_kwargs):
+            actions.append("goto")
+            return None
+
+        def bring_to_front(self):
+            actions.append("bring_to_front")
+            return None
+
+        def wait_for_timeout(self, _ms):
+            actions.append("wait_for_timeout")
+            return None
+
+    class _DummyBrowser:
+        def close(self):
+            return None
+
+    class _DummyPlaywright:
+        def stop(self):
+            return None
+
+    class _DummyScraper:
+        def __init__(self, *args, **kwargs):
+            self.page = _DummyPage()
+            self.browser = _DummyBrowser()
+            self.playwright = _DummyPlaywright()
+            self.config = {"crawling": {"headless": False}}
+
+        def navigate_and_maybe_login(self, _url, max_attempts=1):
+            return True
+
+    monkeypatch.setattr(cv, "_temporary_headless_config", _noop_headless)
+    monkeypatch.setattr(cv, "_load_facebook_group_probe_urls", lambda *_a, **_k: [])
+    monkeypatch.setattr(cv, "config", {"testing": {"validation": {"scraping": {}}}})
+    monkeypatch.setitem(sys.modules, "fb", types.SimpleNamespace(FacebookEventScraper=_DummyScraper))
+
+    result = cv.validate_facebook(headless=False, check_timeout_seconds=1)
+
+    assert result["valid"] is True
+    assert "bring_to_front" in actions

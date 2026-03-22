@@ -324,6 +324,14 @@ def validate_facebook(headless=False, check_timeout_seconds=60):
             # Create Facebook scraper - this automatically calls login_to_facebook()
             # which will open browser if session is invalid
             fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
+            actual_headless = bool(getattr(fb_scraper, "config", {}).get("crawling", {}).get("headless", True))
+            logging.info("validate_facebook(): Facebook scraper launched with headless=%s", actual_headless)
+            if not actual_headless:
+                try:
+                    fb_scraper.page.bring_to_front()
+                    fb_scraper.page.wait_for_timeout(750)
+                except Exception as front_error:
+                    logging.warning("validate_facebook(): Could not bring Facebook page to front: %s", front_error)
 
             # Check if login was successful by navigating to Facebook
             try:

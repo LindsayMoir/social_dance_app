@@ -27,6 +27,7 @@ from datetime import date, datetime, timedelta
 import logging
 import pandas as pd
 import os
+import time
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 import random
@@ -49,6 +50,32 @@ def _safe_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _wait_for_login_completion(
+    page,
+    login_url: str,
+    email_selector: str,
+    pass_selector: str,
+    timeout_ms: int = 30000,
+) -> bool:
+    """Wait for a login flow to leave the login page and hide login controls."""
+    login_base = str(login_url or "").split("?", 1)[0].rstrip("/")
+    deadline = time.monotonic() + max(1, timeout_ms) / 1000.0
+    while time.monotonic() < deadline:
+        current_url = str(getattr(page, "url", "") or "").split("?", 1)[0].rstrip("/")
+        if current_url and current_url != login_base:
+            return True
+        try:
+            email_handle = await page.query_selector(email_selector)
+            pass_handle = await page.query_selector(pass_selector)
+        except Exception:
+            email_handle = None
+            pass_handle = None
+        if not email_handle and not pass_handle:
+            return True
+        await page.wait_for_timeout(1000)
+    return False
 
 
 def is_social_media_url(url: str) -> bool:
@@ -329,7 +356,18 @@ class ReadExtract:
                 "🔒 2FA step: check your email for the code, paste it into the browser’s 2FA field, "
                 "click Continue there, then press Enter here to resume…"
             )
-            await self.page.wait_for_timeout(2000)
+            completed = await _wait_for_login_completion(
+                self.page,
+                login_url=login_url,
+                email_selector=email_selector,
+                pass_selector=pass_selector,
+                timeout_ms=30000,
+            )
+            if not completed:
+                logging.error(
+                    "login_to_website(): Eventbrite login did not finish after manual 2FA confirmation."
+                )
+                return False
 
             # Save session state
             try:
