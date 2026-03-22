@@ -78,6 +78,14 @@ async def _wait_for_login_completion(
     return False
 
 
+def _get_login_probe_url(organization: str, login_url: str) -> str:
+    """Return the best page to probe when checking whether saved auth is reusable."""
+    org = str(organization or "").strip().lower()
+    if org == "eventbrite":
+        return "https://www.eventbrite.com/organizer/home/"
+    return login_url
+
+
 def is_social_media_url(url: str) -> bool:
     """
     Return True for Facebook/Instagram URLs that rd_ext must never crawl.
@@ -279,6 +287,7 @@ class ReadExtract:
         """
         # Use Render secret path if available, otherwise local path
         storage_path = get_auth_file(organization.lower())
+        probe_url = _get_login_probe_url(organization, login_url)
 
         # ──────────── Quick bail if already logged in ────────────
         if self.logged_in:
@@ -289,9 +298,9 @@ class ReadExtract:
         try:
             ctx = await self.browser.new_context(storage_state=storage_path)
             page = await ctx.new_page()
-            await page.goto(login_url, wait_until="domcontentloaded", timeout=20000)
+            await page.goto(probe_url, wait_until="domcontentloaded", timeout=20000)
             # If we land off the login page, session is valid
-            if login_url.split("?")[0] not in page.url:
+            if login_url.split("?")[0].rstrip("/") not in str(page.url or "").split("?", 1)[0].rstrip("/"):
                 self.context = ctx
                 self.page = page
                 self.logged_in = True

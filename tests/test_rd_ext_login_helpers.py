@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from rd_ext import _wait_for_login_completion
+from rd_ext import _get_login_probe_url, _wait_for_login_completion
 
 
 class _FakePage:
@@ -76,3 +76,14 @@ def test_wait_for_login_completion_fails_when_login_controls_persist() -> None:
     )
 
     assert result is False
+
+
+def test_get_login_probe_url_uses_authenticated_eventbrite_target() -> None:
+    assert (
+        _get_login_probe_url("Eventbrite", "https://www.eventbrite.com/signin/")
+        == "https://www.eventbrite.com/organizer/home/"
+    )
+    assert (
+        _get_login_probe_url("Facebook", "https://www.facebook.com/login")
+        == "https://www.facebook.com/login"
+    )
