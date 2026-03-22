@@ -111,6 +111,13 @@ FB_TEMP_BLOCK_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+def _safe_bool(value: object) -> bool:
+    """Coerce config-like boolean values safely."""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def should_use_fb_checkpoint(config_data: dict, is_render: bool) -> bool:
     """
     Decide whether fb.py should read facebook URLs from checkpoint CSV.
@@ -467,12 +474,13 @@ def get_git_revision() -> str:
 class FacebookEventScraper():
     def __init__(self, config_path: str = "config/config.yaml") -> None:
         # Load configuration
-        with open(config_path, 'r') as file:
-            self.config = yaml.safe_load(file)
+        self.config = load_config(config_path)
 
         # Start Playwright
         self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=self.config['crawling']['headless'])
+        self.browser = self.playwright.chromium.launch(
+            headless=_safe_bool(self.config.get('crawling', {}).get('headless', True))
+        )
 
         # Create a single context & page, reusing 'facebook_auth.json'
         # Uses Render Secret Files path if available, otherwise local path

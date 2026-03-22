@@ -1,6 +1,8 @@
+import asyncio
 import sys
 import types
 from contextlib import contextmanager
+import logging
 
 sys.path.insert(0, "src")
 
@@ -212,3 +214,43 @@ def test_validate_facebook_brings_page_to_front_when_headful(monkeypatch):
 
     assert result["valid"] is True
     assert "bring_to_front" in actions
+
+
+def test_validate_instagram_logs_headless_state(monkeypatch, caplog):
+    @contextmanager
+    def _noop_headless(_headless):
+        yield
+
+    class _DummyPage:
+        url = "https://www.instagram.com/bachatavictoria/"
+
+        async def goto(self, *_args, **_kwargs):
+            self.url = "https://www.instagram.com/bachatavictoria/"
+            return None
+
+    class _DummyReadExtract:
+        def __init__(self):
+            self.page = _DummyPage()
+
+        async def close(self):
+            return None
+
+    class _DummyLoop:
+        def run_until_complete(self, awaitable):
+            return asyncio.run(awaitable)
+
+    class _DummyImageScraper:
+        def __init__(self, _config):
+            self.config = {"crawling": {"headless": False}}
+            self.read_extract = _DummyReadExtract()
+            self.loop = _DummyLoop()
+
+    monkeypatch.setattr(cv, "_temporary_headless_config", _noop_headless)
+    monkeypatch.setattr(cv, "load_config", lambda: {"crawling": {"headless": False}})
+    monkeypatch.setitem(sys.modules, "images", types.SimpleNamespace(ImageScraper=_DummyImageScraper))
+
+    with caplog.at_level(logging.INFO):
+        result = cv.validate_instagram(headless=False, check_timeout_seconds=1)
+
+    assert result["valid"] is True
+    assert "Instagram scraper launched with headless=False" in caplog.text

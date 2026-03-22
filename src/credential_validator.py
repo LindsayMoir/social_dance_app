@@ -508,12 +508,23 @@ def validate_instagram(headless=False, check_timeout_seconds=60):
             current_config = load_config()
             image_scraper = ImageScraper(current_config)
             try:
+                actual_headless = bool(
+                    getattr(image_scraper, "config", {}).get("crawling", {}).get("headless", True)
+                )
+                logging.info(
+                    "validate_instagram(): Instagram scraper launched with headless=%s",
+                    actual_headless,
+                )
                 image_scraper.loop.run_until_complete(
                     image_scraper.read_extract.page.goto(
                         "https://www.instagram.com/bachatavictoria/",
                         wait_until="domcontentloaded",
                         timeout=30000,
                     )
+                )
+                logging.info(
+                    "validate_instagram(): Instagram probe final_url=%s",
+                    str(image_scraper.read_extract.page.url),
                 )
                 logged_in = "accounts/login" not in str(image_scraper.read_extract.page.url).lower()
             finally:
