@@ -4571,6 +4571,7 @@ class ValidationTestRunner:
         coverage = (kpis.get("events_coverage") or {}).get("summary", {})
         chatbot = ((kpis.get("chatbot_quality") or {}).get("summary") or {}).get("summary", {})
         holdout = (run_scorecard.get("evaluation_scope") or {}).get("holdout_summary", {})
+        telemetry_integrity = run_scorecard.get("telemetry_integrity", {}) if isinstance(run_scorecard.get("telemetry_integrity"), dict) else {}
         guardrail_specs = [
             (
                 "database_accuracy_min_pct",
@@ -4638,6 +4639,17 @@ class ValidationTestRunner:
         ]
         violations: list[dict[str, Any]] = []
         thresholds: dict[str, float] = {}
+        telemetry_status = str(telemetry_integrity.get("status", "") or "").upper()
+        if telemetry_status and telemetry_status != "PASS":
+            violations.append(
+                {
+                    "metric_key": "phase1_telemetry_integrity",
+                    "actual": telemetry_status,
+                    "threshold": "PASS",
+                    "mode": "equals",
+                    "detail": "Telemetry integrity guardrail failed",
+                }
+            )
         for metric_key, actual_value, threshold, mode, detail in guardrail_specs:
             thresholds[metric_key] = threshold
             if actual_value is None:

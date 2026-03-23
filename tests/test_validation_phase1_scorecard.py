@@ -782,6 +782,24 @@ def test_phase3_holdout_domain_caps_and_guardrails() -> None:
     }
 
 
+def test_phase3_guardrails_fail_when_telemetry_integrity_fails() -> None:
+    runner = _build_runner()
+    run_scorecard = {
+        "kpis": {
+            "database_accuracy": {"summary": {"replay_url_accuracy_pct": 90.0, "severe_duplicate_rate_per_100_events": 0.5, "stale_event_rate_pct": 1.0}},
+            "events_coverage": {"summary": {"watchlist_source_hit_rate_pct": 90.0, "watchlist_event_capture_rate_pct": 90.0}},
+            "chatbot_quality": {"summary": {"summary": {"chatbot_response_within_15s_pct": 95.0, "chatbot_answer_correctness_pct": 90.0, "chatbot_user_visible_error_rate_pct": 1.0}}},
+        },
+        "evaluation_scope": {"holdout_summary": {"replay_url_accuracy_pct": 90.0}},
+        "telemetry_integrity": {"status": "FAIL", "violations": ["step_mismatch:scraper"]},
+    }
+
+    guardrails = runner._evaluate_phase3_guardrails(run_scorecard)
+
+    assert guardrails["status"] == "FAIL"
+    assert any(item["metric_key"] == "phase1_telemetry_integrity" for item in guardrails["violations"])
+
+
 def test_run_delta_summary_compares_previous_run_and_holdout_baseline() -> None:
     runner = _build_runner()
     fake_db = _FakeDbHandler()

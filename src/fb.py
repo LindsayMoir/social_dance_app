@@ -1818,8 +1818,9 @@ class FacebookEventScraper():
             events_df.loc[0, 'url'] = url
 
         # 6) Write events and mark URL
-        db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_found)
-        events_written = int(len(events_df))
+        events_written = int(
+            db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_found)
+        )
         self.events_written_to_db += events_written
         _record_fb_scrape_metric(
             link=url,
@@ -2525,8 +2526,24 @@ class FacebookEventScraper():
                 events_df.loc[0, 'url'] = url
 
             # 6) write events and tally
-            db_handler.write_events_to_db(events_df, url, parent_url, source, found_keywords)
-            self.events_written_to_db += len(events_df)
+            events_written = int(
+                db_handler.write_events_to_db(events_df, url, parent_url, source, found_keywords)
+            )
+            self.events_written_to_db += events_written
+            _record_fb_scrape_metric(
+                link=url,
+                parent_url=parent_url,
+                source=source,
+                keywords=found_keywords,
+                extraction_attempted=True,
+                extraction_succeeded=events_written > 0,
+                extraction_skipped=False,
+                decision_reason="checkpoint_events_written" if events_written > 0 else "checkpoint_no_events",
+                access_succeeded=True,
+                text_extracted=True,
+                keywords_found=bool(found_keywords),
+                events_written=events_written,
+            )
 
         logging.info(f"checkpoint_events(): Completed. Wrote {self.events_written_to_db} events.")
 
