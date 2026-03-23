@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 import os
 import sys
+from types import SimpleNamespace
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 VALIDATION_DIR = os.path.join(TESTS_DIR, "validation")
@@ -239,6 +240,73 @@ def test_build_phase1_telemetry_integrity_summary_uses_db_handler() -> None:
     assert summary["run_id"] == "run-456"
     assert summary["status"] == "FAIL"
     assert summary["violations"] == ["step_mismatch:scraper"]
+
+
+def test_social_replay_preserves_source_url_instead_of_llm_mentioned_url() -> None:
+    runner = _build_runner()
+
+    class _FakeFbScraper:
+        def navigate_and_maybe_login(self, _url: str) -> bool:
+            return True
+
+        def extract_event_text(self, _url: str, assume_navigated: bool = True) -> str:
+            _ = assume_navigated
+            return "poster text"
+
+    runner._get_replay_fb_scraper = lambda: _FakeFbScraper()  # type: ignore[method-assign]
+    runner.llm_handler = SimpleNamespace(
+        generate_prompt=lambda url, text, prompt_type: ("prompt", "event_extraction"),
+        query_llm=lambda url, prompt, schema_type: '{"events":[]}',
+        extract_and_parse_json=lambda response, url, schema_type: [
+            {
+                "event_name": "salsa & bachata party",
+                "start_date": "2026-03-29",
+                "start_time": "13:00:00",
+                "source": "la bodeguita",
+                "location": "grote marktstraat",
+                "url": "https://www.labodeguita.nl",
+            }
+        ],
+    )
+
+    payload = runner._fetch_replay_events_for_social_url("https://www.instagram.com/p/DVn5jSriOv9")
+
+    assert payload["ok"] is True
+    assert payload["events"][0]["url"] == "https://www.instagram.com/p/DVn5jSriOv9"
+    assert payload["events"][0]["raw"]["mentioned_url"] == "https://www.labodeguita.nl"
+
+
+def test_compare_replay_row_rejects_social_url_drift_before_field_mismatch() -> None:
+    runner = _build_runner()
+
+    comparison = runner._compare_replay_row(
+        baseline_row={
+            "event_name": "la bodeguita brings salsa & bachata back to the streets of the hague",
+            "start_date": "2026-03-29",
+            "start_time": "13:00:00",
+            "source": "la bodeguita",
+            "location": "de bijenkorf",
+            "url": "https://www.instagram.com/p/DVn5jSriOv9",
+        },
+        replay_payload={
+            "ok": True,
+            "events": [
+                {
+                    "event_name": "salsa & bachata party",
+                    "start_date": "2026-03-29",
+                    "start_time": "13:00:00",
+                    "source": "la bodeguita",
+                    "location": "grote marktstraat",
+                    "url": "https://www.labodeguita.nl",
+                    "raw": {},
+                }
+            ],
+        },
+        strict_time_match=True,
+    )
+
+    assert comparison["is_match"] is False
+    assert comparison["category"] == "wrong_replay_source_url"
 
 
 def test_phase1_scorecard_metrics_persist_key_trends() -> None:

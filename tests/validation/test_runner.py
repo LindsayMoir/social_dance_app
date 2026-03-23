@@ -1001,6 +1001,10 @@ class ValidationTestRunner:
             for event in parsed:
                 if not isinstance(event, dict):
                     continue
+                event_raw = dict(event)
+                mentioned_url = self._normalize_url_value(event.get("url"))
+                if mentioned_url:
+                    event_raw["mentioned_url"] = mentioned_url
                 normalized_events.append(
                     {
                         "event_name": str(event.get("event_name") or "").strip(),
@@ -1008,8 +1012,8 @@ class ValidationTestRunner:
                         "start_time": self._normalize_time_value(event.get("start_time")),
                         "source": str(event.get("source") or "").strip(),
                         "location": str(event.get("location") or "").strip(),
-                        "url": self._normalize_url_value(event.get("url") or url),
-                        "raw": event,
+                        "url": self._normalize_url_value(url),
+                        "raw": event_raw,
                     }
                 )
             if not normalized_events:
@@ -1208,6 +1212,15 @@ class ValidationTestRunner:
             "dance_style": self._normalize_text_value(best_raw.get("dance_style")),
             "description": self._normalize_text_value(best_raw.get("description")),
         }
+
+        if self._is_social_platform_url(baseline["url"]) and replay["url"] != baseline["url"]:
+            return {
+                "is_match": False,
+                "category": "wrong_replay_source_url",
+                "details": "social replay candidate URL drifted from baseline source URL",
+                "baseline": baseline,
+                "replay": replay,
+            }
 
         duplicate_identity_count = sum(
             1
