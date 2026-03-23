@@ -1052,6 +1052,14 @@ Exit criteria:
 2. all scraper steps write trustworthy event-count telemetry
 3. all delete paths produce normalized delete attribution
 
+Current status:
+1. The Phase 1 code implementation is substantially complete in the repository:
+   `event_write_attribution` and `event_delete_attribution` exist, centralized write/delete attribution paths are implemented, delete reason normalization is in place, the telemetry integrity report exists, and telemetry integrity is wired into validation guardrails.
+2. Phase 1 is not yet operationally complete. Real `pipeline.py` runs are still required to prove the validation and exit criteria.
+3. The remaining work for Phase 1 is run-based verification:
+   `per-step counts reconcile across canonical tables for at least 3 full runs`, duplicate attribution rows do not appear under retry/restart scenarios in practice, all scraper steps show trustworthy live event-count telemetry, and only then should `events_urls_diff.csv` stop being treated as the canonical source.
+4. Until those runs have been reviewed and pass cleanly, Phase 1 should be treated as `implemented, pending operational verification`, not `fully complete`.
+
 ### Phase 2. Decision and LLM Telemetry
 Goal:
 1. enough evidence to tune routing and heuristics automatically
