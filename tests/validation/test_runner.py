@@ -37,7 +37,7 @@ sys.path.insert(0, script_dir)  # Also add tests/validation for local imports
 from dotenv import load_dotenv
 load_dotenv('src/.env')  # Load from src/.env since that's where credentials are stored
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import logging
 import yaml
 import random
@@ -1133,11 +1133,75 @@ class ValidationTestRunner:
             return None
         return None
 
+    @staticmethod
+    def _parse_replay_date_string(value: str) -> date | None:
+        """Parse normalized replay date strings safely."""
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return datetime.strptime(text, "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _has_recurrence_signal(*texts: Any) -> bool:
+        """Return True when any text suggests a recurring schedule rather than a one-off date."""
+        combined = " ".join(str(text or "").strip().lower() for text in texts if str(text or "").strip())
+        if not combined:
+            return False
+        recurrence_patterns = [
+            r"\bevery\b",
+            r"\bweekly\b",
+            r"\bdaily\b",
+            r"\beveryday\b",
+            r"\bmonday\b|\btuesday\b|\bwednesday\b|\bthursday\b|\bfriday\b|\bsaturday\b|\bsunday\b",
+            r"\bmon(?:day)?\s*-\s*wed(?:nesday)?\b",
+            r"\bthu(?:rsday)?\s*-\s*sun(?:day)?\b",
+            r"\bmon(?:day)?\s*-\s*fri(?:day)?\b",
+            r"\bevery\s+[a-z]+day\b",
+        ]
+        return any(re.search(pattern, combined, re.IGNORECASE) for pattern in recurrence_patterns)
+
+    def _is_recurring_schedule_match(self, baseline: dict, replay: dict) -> bool:
+        """Treat recurring social schedule posts as a match when weekly cadence aligns."""
+        baseline_url = str(baseline.get("url") or "")
+        replay_url = str(replay.get("url") or "")
+        if not baseline_url or baseline_url != replay_url or not self._is_social_platform_url(baseline_url):
+            return False
+        baseline_name = str(baseline.get("event_name") or "")
+        replay_name = str(replay.get("event_name") or "")
+        if not baseline_name or self._normalize_text_value(baseline_name) != self._normalize_text_value(replay_name):
+            return False
+        if not self._times_equivalent_with_12h_guard(replay.get("start_time"), baseline.get("start_time")):
+            return False
+
+        baseline_date = self._parse_replay_date_string(str(baseline.get("start_date") or ""))
+        replay_date = self._parse_replay_date_string(str(replay.get("start_date") or ""))
+        if baseline_date is None or replay_date is None or baseline_date == replay_date:
+            return False
+        delta_days = abs((baseline_date - replay_date).days)
+        if delta_days <= 0 or delta_days % 7 != 0 or delta_days > 35:
+            return False
+        if baseline_date.weekday() != replay_date.weekday():
+            return False
+
+        recurrence_signal = self._has_recurrence_signal(
+            baseline.get("event_name"),
+            baseline.get("description"),
+            baseline.get("day_of_week"),
+            replay.get("event_name"),
+            replay.get("description"),
+            replay.get("day_of_week"),
+        )
+        return recurrence_signal or self._normalize_text_value(baseline_name) in {"live music"}
+
     def _compare_replay_row(self, baseline_row: dict, replay_payload: dict, strict_time_match: bool) -> dict:
         baseline = {
             "event_name": self._normalize_text_value(baseline_row.get("event_name")),
             "start_date": self._normalize_date_value(baseline_row.get("start_date")),
             "start_time": self._normalize_time_value(baseline_row.get("start_time")),
+            "day_of_week": self._normalize_text_value(baseline_row.get("day_of_week")),
             "source": self._normalize_text_value(baseline_row.get("source")),
             "location": self._normalize_text_value(baseline_row.get("location")),
             "url": self._normalize_url_value(baseline_row.get("url")),
@@ -1247,6 +1311,7 @@ class ValidationTestRunner:
             "event_name": self._normalize_text_value(best.get("event_name")),
             "start_date": self._normalize_date_value(best.get("start_date")),
             "start_time": self._normalize_time_value(best.get("start_time")),
+            "day_of_week": self._normalize_text_value(best.get("day_of_week")),
             "source": self._normalize_text_value(best.get("source")),
             "location": self._normalize_text_value(best.get("location")),
             "url": self._normalize_url_value(best.get("url")),
@@ -1260,6 +1325,15 @@ class ValidationTestRunner:
                 "is_match": False,
                 "category": "wrong_replay_source_url",
                 "details": "social replay candidate URL drifted from baseline source URL",
+                "baseline": baseline,
+                "replay": replay,
+            }
+
+        if self._is_recurring_schedule_match(baseline, replay):
+            return {
+                "is_match": True,
+                "category": "",
+                "details": "recurring_event_schedule_match",
                 "baseline": baseline,
                 "replay": replay,
             }

@@ -393,6 +393,44 @@ def test_compare_replay_row_prefers_same_page_candidate_with_matching_time() -> 
     assert comparison["replay"]["event_name"] == "sunday blues services"
 
 
+def test_compare_replay_row_accepts_recurring_weekly_social_schedule_shift() -> None:
+    runner = _build_runner()
+
+    comparison = runner._compare_replay_row(
+        baseline_row={
+            "event_name": "live music",
+            "start_date": "2026-03-30",
+            "start_time": "14:00:00",
+            "day_of_week": "Monday",
+            "source": "bin 39: wine bar",
+            "location": "bin 39: wine bar, ca",
+            "url": "https://www.instagram.com/p/DPHME2UEVjy",
+            "description": "Live music Monday-Wednesday 2-5pm Thursday-Sunday 1-7pm",
+        },
+        replay_payload={
+            "ok": True,
+            "events": [
+                {
+                    "event_name": "live music",
+                    "start_date": "2026-03-23",
+                    "start_time": "14:00:00",
+                    "day_of_week": "Monday",
+                    "source": "bin39winebar",
+                    "location": "bin39winebar courtyard",
+                    "url": "https://www.instagram.com/p/DPHME2UEVjy",
+                    "raw": {
+                        "description": "Monday-Wednesday 2-5pm Thursday-Sunday 1-7pm",
+                    },
+                }
+            ],
+        },
+        strict_time_match=True,
+    )
+
+    assert comparison["is_match"] is True
+    assert comparison["details"] == "recurring_event_schedule_match"
+
+
 def test_phase1_scorecard_metrics_persist_key_trends() -> None:
     runner = _build_runner()
     fake_db = _FakeDbHandler()
