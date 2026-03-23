@@ -2358,7 +2358,7 @@ def run_pipeline(start_step: str, end_step: str = None, parallel_crawlers: bool 
             and name == "rd_ext"
             and PARALLEL_CRAWLER_STEPS.issubset(set(selected_names))
         ):
-            print("Running parallel crawler group: rd_ext + ebs + scraper + fb + images")
+            print("Running parallel crawler group: rd_ext.py + ebs.py + scraper.py + fb.py + images.py")
             retry_count = 0
             while retry_count < 3:
                 try:
