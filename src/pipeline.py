@@ -252,7 +252,7 @@ COMMON_CONFIG_UPDATES = {
         "fallback_enabled": True,
         "fallback_provider_order": ["openrouter", "openai", "gemini"],
         "provider_exclusions": ["mistral"],
-        "regular_openai_first_every_n_requests": 2,
+        "regular_openai_first_every_n_requests": 0,
         "spend_money": True,
     }
 }

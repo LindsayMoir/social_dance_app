@@ -147,7 +147,17 @@ llm:
   provider_exclusions:
   - mistral
   provider_exclusions_by_step:
+    images:
+    - openai
+    - mistral
+    rd_ext:
+    - openai
+    - mistral
+    scraper:
+    - openai
+    - mistral
     fb:
+    - openai
     - mistral
   provider_retry_base_delay_seconds: 0.5
   provider_retry_jitter_seconds: 0.3
