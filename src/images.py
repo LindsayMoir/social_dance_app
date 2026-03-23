@@ -1319,6 +1319,11 @@ class ImageScraper:
             parent_url,
             source,
             keywords,
+            write_method="vision_extraction",
+            provider="openai",
+            model=_VISION_MODEL,
+            prompt_type="vision_extraction",
+            decision_reason="vision_success",
         )
         self.logger.info(
             "_process_local_image_path_with_vision(): Vision model wrote %d event(s) for %s",

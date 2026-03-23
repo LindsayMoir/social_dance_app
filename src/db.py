@@ -26,7 +26,7 @@ import requests
 from sqlalchemy import create_engine, MetaData, Table, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import PendingRollbackError, SQLAlchemyError
-from typing import Optional, List, Dict, Any
+from typing import Final, Optional, List, Dict, Any
 from urllib.parse import urlparse
 import sys
 import yaml
@@ -41,6 +41,17 @@ from page_classifier import classify_page
 
 
 class DatabaseHandler():
+    _DELETE_REASON_CODE_MAP: Final[Dict[str, str]] = {
+        "orphaned_address_id_reference": "orphaned_address_id_reference",
+        "exact_time_window_duplicate": "exact_time_window_duplicate",
+        "fuzzy_duplicate_merged": "fuzzy_duplicate_merged",
+        "empty_source_dance_style_url_no_address": "empty_source_dance_style_url_no_address",
+        "outside_bc_filter": "outside_bc_filter",
+        "outside_canada_filter": "outside_canada_filter",
+        "empty_dance_style_url_other_no_location_description": "empty_dance_style_url_other_no_location_description",
+        "manual_delete_by_name_and_start_date": "manual_delete_by_name_and_start_date",
+        "null_start_date_start_time_or_null_start_end_time": "null_start_date_start_time_or_null_start_end_time",
+    }
     _SHOULD_PROCESS_MIN_HIT_RATIO = 0.5
     _SHOULD_PROCESS_MAX_RETRIES_FOR_IRRELEVANT = 2
     _LOW_VALUE_PATH_SEGMENTS = {
@@ -151,6 +162,7 @@ class DatabaseHandler():
         self.metadata.reflect(bind=self.conn)
         self.ensure_urls_decision_reason_column()
         self.ensure_url_scrape_metrics_table()
+        self.ensure_event_attribution_tables()
         self.ensure_validation_metric_tables()
 
         # Get google api key
@@ -288,6 +300,57 @@ class DatabaseHandler():
             logging.info("ensure_url_scrape_metrics_table: ensured url_scrape_metrics exists")
         except Exception as e:
             logging.warning("ensure_url_scrape_metrics_table: could not ensure table (continuing): %s", e)
+
+    def ensure_event_attribution_tables(self) -> None:
+        """Ensure canonical event write/delete attribution tables exist."""
+        create_queries = [
+            """
+            CREATE TABLE IF NOT EXISTS event_write_attribution (
+                attribution_id SERIAL PRIMARY KEY,
+                event_id INTEGER NOT NULL UNIQUE,
+                run_id TEXT,
+                step_name TEXT,
+                url TEXT,
+                parent_url TEXT,
+                source TEXT,
+                write_method TEXT,
+                provider TEXT,
+                model TEXT,
+                prompt_type TEXT,
+                decision_reason TEXT,
+                details_json JSONB,
+                time_stamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS event_delete_attribution (
+                attribution_id SERIAL PRIMARY KEY,
+                event_id INTEGER NOT NULL UNIQUE,
+                run_id TEXT,
+                step_name TEXT,
+                delete_reason_code TEXT NOT NULL,
+                raw_delete_reason TEXT,
+                delete_method TEXT,
+                source_url TEXT,
+                created_by_step TEXT,
+                reason_registered BOOLEAN NOT NULL DEFAULT TRUE,
+                details_json JSONB,
+                time_stamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_event_write_attribution_run_id ON event_write_attribution(run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_event_write_attribution_step_name ON event_write_attribution(step_name)",
+            "CREATE INDEX IF NOT EXISTS idx_event_write_attribution_url ON event_write_attribution(url)",
+            "CREATE INDEX IF NOT EXISTS idx_event_delete_attribution_run_id ON event_delete_attribution(run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_event_delete_attribution_step_name ON event_delete_attribution(step_name)",
+            "CREATE INDEX IF NOT EXISTS idx_event_delete_attribution_reason_code ON event_delete_attribution(delete_reason_code)",
+        ]
+        try:
+            for query in create_queries:
+                self.execute_query(query)
+            logging.info("ensure_event_attribution_tables: ensured canonical event attribution tables exist")
+        except Exception as e:
+            logging.warning("ensure_event_attribution_tables: could not ensure tables (continuing): %s", e)
 
     def ensure_validation_metric_tables(self) -> None:
         """
@@ -1392,6 +1455,228 @@ class DatabaseHandler():
                 e,
             )
 
+    @staticmethod
+    def _current_run_context() -> Dict[str, Optional[str]]:
+        """Return the active run context from environment variables."""
+        run_id = str(os.getenv("DS_RUN_ID", "") or "").strip() or None
+        step_name = str(os.getenv("DS_STEP_NAME", "") or "").strip() or None
+        return {
+            "run_id": run_id,
+            "step_name": step_name,
+        }
+
+    def _normalize_delete_reason_code(self, reason: Any) -> Dict[str, Any]:
+        """Normalize raw delete reasons into a controlled vocabulary."""
+        raw_reason = str(reason or "").strip().lower()
+        if not raw_reason:
+            return {
+                "delete_reason_code": "unregistered_delete_reason",
+                "raw_delete_reason": "",
+                "reason_registered": False,
+            }
+        if raw_reason.startswith("end_date_older_than_") and raw_reason.endswith("_days"):
+            return {
+                "delete_reason_code": "end_date_older_than_days",
+                "raw_delete_reason": raw_reason,
+                "reason_registered": True,
+            }
+        normalized_reason = self._DELETE_REASON_CODE_MAP.get(raw_reason)
+        if normalized_reason:
+            return {
+                "delete_reason_code": normalized_reason,
+                "raw_delete_reason": raw_reason,
+                "reason_registered": True,
+            }
+        logging.warning("_normalize_delete_reason_code: unregistered delete reason=%s", raw_reason)
+        return {
+            "delete_reason_code": "unregistered_delete_reason",
+            "raw_delete_reason": raw_reason,
+            "reason_registered": False,
+        }
+
+    def _lookup_created_by_step(self, event_id: Any) -> Optional[str]:
+        """Look up the writer step for an event prior to deletion."""
+        if event_id is None:
+            return None
+        rows = self.execute_query(
+            """
+            SELECT step_name
+            FROM event_write_attribution
+            WHERE event_id = :event_id
+            LIMIT 1
+            """,
+            {"event_id": int(event_id)},
+        ) or []
+        if not rows:
+            return None
+        row = rows[0]
+        if isinstance(row, tuple):
+            return str(row[0]).strip() if row and row[0] else None
+        if isinstance(row, dict):
+            value = row.get("step_name")
+            return str(value).strip() if value else None
+        return None
+
+    def _write_event_delete_attribution(
+        self,
+        event_row: Dict[str, Any],
+        deletion_source: str,
+        reason: str,
+        extra_context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Persist one canonical delete attribution row."""
+        if not isinstance(event_row, dict):
+            return
+        event_id = event_row.get("event_id")
+        if event_id is None:
+            logging.warning("_write_event_delete_attribution: skipped row with no event_id")
+            return
+
+        run_context = self._current_run_context()
+        normalized_reason = self._normalize_delete_reason_code(reason)
+        params = {
+            "event_id": int(event_id),
+            "run_id": run_context["run_id"],
+            "step_name": run_context["step_name"] or str(deletion_source or "").strip() or None,
+            "delete_reason_code": normalized_reason["delete_reason_code"],
+            "raw_delete_reason": normalized_reason["raw_delete_reason"] or None,
+            "delete_method": str(deletion_source or "").strip() or None,
+            "source_url": str(event_row.get("url") or "").strip() or None,
+            "created_by_step": self._lookup_created_by_step(event_id),
+            "reason_registered": bool(normalized_reason["reason_registered"]),
+            "details_json": json.dumps(extra_context or {}, default=str),
+            "time_stamp": datetime.now(),
+        }
+        query = """
+            INSERT INTO event_delete_attribution (
+                event_id, run_id, step_name, delete_reason_code, raw_delete_reason,
+                delete_method, source_url, created_by_step, reason_registered,
+                details_json, time_stamp
+            ) VALUES (
+                :event_id, :run_id, :step_name, :delete_reason_code, :raw_delete_reason,
+                :delete_method, :source_url, :created_by_step, :reason_registered,
+                CAST(:details_json AS JSONB), :time_stamp
+            )
+            ON CONFLICT (event_id)
+            DO UPDATE SET
+                run_id = EXCLUDED.run_id,
+                step_name = EXCLUDED.step_name,
+                delete_reason_code = EXCLUDED.delete_reason_code,
+                raw_delete_reason = EXCLUDED.raw_delete_reason,
+                delete_method = EXCLUDED.delete_method,
+                source_url = EXCLUDED.source_url,
+                created_by_step = EXCLUDED.created_by_step,
+                reason_registered = EXCLUDED.reason_registered,
+                details_json = EXCLUDED.details_json,
+                time_stamp = EXCLUDED.time_stamp
+        """
+        self.execute_query(query, params)
+
+    def _coerce_event_records_for_insert(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """Convert the sanitized event DataFrame into DB-ready records."""
+        records: List[Dict[str, Any]] = []
+        for raw_record in df.to_dict("records"):
+            record: Dict[str, Any] = {}
+            for key, value in raw_record.items():
+                record[key] = None if pd.isna(value) else value
+            records.append(record)
+        return records
+
+    def _infer_event_write_method(
+        self,
+        url: str,
+        parent_url: str,
+        explicit_write_method: Optional[str] = None,
+        prompt_type: Optional[str] = None,
+    ) -> str:
+        """Infer a stable write method label for canonical attribution."""
+        if explicit_write_method:
+            return str(explicit_write_method).strip()
+        prompt_basis = str(prompt_type or "").strip().lower()
+        if prompt_basis == "vision_extraction":
+            return "vision_extraction"
+        combined = " ".join(part for part in [url, parent_url] if part)
+        if "calendar" in combined.lower():
+            return "google_calendar_fetch"
+        return "llm_extraction"
+
+    def _write_event_write_attribution_rows(
+        self,
+        event_ids: List[int],
+        url: str,
+        parent_url: str,
+        source: str,
+        write_method: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        prompt_type: Optional[str] = None,
+        decision_reason: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Persist canonical event write attribution rows for inserted events."""
+        if not event_ids:
+            return
+        run_context = self._current_run_context()
+        inferred_write_method = self._infer_event_write_method(
+            url=url,
+            parent_url=parent_url,
+            explicit_write_method=write_method,
+            prompt_type=prompt_type,
+        )
+        query = """
+            INSERT INTO event_write_attribution (
+                event_id, run_id, step_name, url, parent_url, source, write_method,
+                provider, model, prompt_type, decision_reason, details_json, time_stamp
+            ) VALUES (
+                :event_id, :run_id, :step_name, :url, :parent_url, :source, :write_method,
+                :provider, :model, :prompt_type, :decision_reason, CAST(:details_json AS JSONB), :time_stamp
+            )
+            ON CONFLICT (event_id)
+            DO UPDATE SET
+                run_id = EXCLUDED.run_id,
+                step_name = EXCLUDED.step_name,
+                url = EXCLUDED.url,
+                parent_url = EXCLUDED.parent_url,
+                source = EXCLUDED.source,
+                write_method = EXCLUDED.write_method,
+                provider = EXCLUDED.provider,
+                model = EXCLUDED.model,
+                prompt_type = EXCLUDED.prompt_type,
+                decision_reason = EXCLUDED.decision_reason,
+                details_json = EXCLUDED.details_json,
+                time_stamp = EXCLUDED.time_stamp
+        """
+        timestamp = datetime.now()
+        serialized_details = json.dumps(details or {}, default=str)
+        for event_id in event_ids:
+            params = {
+                "event_id": int(event_id),
+                "run_id": run_context["run_id"],
+                "step_name": run_context["step_name"],
+                "url": url or None,
+                "parent_url": parent_url or None,
+                "source": source or None,
+                "write_method": inferred_write_method or None,
+                "provider": provider or None,
+                "model": model or None,
+                "prompt_type": prompt_type or None,
+                "decision_reason": decision_reason or None,
+                "details_json": serialized_details,
+                "time_stamp": timestamp,
+            }
+            self.execute_query(query, params)
+
+    def _insert_events_and_return_ids(self, df: pd.DataFrame) -> List[int]:
+        """Insert events and return the inserted event IDs."""
+        records = self._coerce_event_records_for_insert(df)
+        if not records:
+            return []
+        events_table = Table("events", MetaData(), autoload_with=self.conn)
+        insert_stmt = insert(events_table).returning(events_table.c.event_id)
+        with self.conn.begin() as connection:
+            result = connection.execute(insert_stmt, records)
+            return [int(row[0]) for row in result.fetchall()]
+
     def _delete_events_with_audit(
         self,
         delete_sql_without_returning: str,
@@ -1435,6 +1720,12 @@ class DatabaseHandler():
                     extra_context=extra_context,
                 )
                 self._write_deleted_event_to_history(payload)
+                self._write_event_delete_attribution(
+                    event_row=payload,
+                    deletion_source=deletion_source,
+                    reason=reason,
+                    extra_context=extra_context,
+                )
             else:
                 deleted_events.append({"raw": str(payload)})
         if deleted_events:
@@ -2444,7 +2735,21 @@ class DatabaseHandler():
         return formatted
     
 
-    def write_events_to_db(self, df, url, parent_url, source, keywords):
+    def write_events_to_db(
+        self,
+        df,
+        url,
+        parent_url,
+        source,
+        keywords,
+        *,
+        write_method: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        prompt_type: Optional[str] = None,
+        decision_reason: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> int:
         """
         Processes and writes event data to the 'events' table in the database.
         This method performs several data cleaning and transformation steps on the input DataFrame,
@@ -2468,7 +2773,7 @@ class DatabaseHandler():
             - Cleaned data is saved to a CSV file for debugging and then written to the 'events' table in the database.
             - The method logs key actions and outcomes for traceability.
         Returns:
-            None
+            int: Number of events written to the database.
         """
         url = '' if pd.isna(url) else str(url)
         parent_url = '' if pd.isna(parent_url) else str(parent_url)
@@ -2524,7 +2829,7 @@ class DatabaseHandler():
                     retry_exc,
                 )
                 self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
-                return
+                return 0
 
         if 'price' not in df.columns:
             logging.warning("write_events_to_db: 'price' column is missing. Filling with empty string.")
@@ -2548,7 +2853,7 @@ class DatabaseHandler():
             logging.info("write_events_to_db: No events remain after early old-date filtering, skipping address processing.")
             decision_reason = old_only_rejection_reason if rows_before_old_filter > 0 and old_only_rejection_reason else None
             self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now(), decision_reason])
-            return
+            return 0
 
         # Resolve structured addresses using LLM + match/insert logic
         updated_rows = []
@@ -2569,14 +2874,14 @@ class DatabaseHandler():
         if df.empty:
             logging.info("write_events_to_db: No events remain after filtering, skipping write.")
             self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
-            return
+            return 0
 
         # Final type guard before insert to keep address_id nullable-int and text fields scalar.
         df = self._sanitize_events_dataframe_for_insert(df)
         if df.empty:
             logging.info("write_events_to_db: No events remain after type sanitization, skipping write.")
             self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
-            return
+            return 0
 
         # Write debug CSV (only locally, not on Render)
         if os.getenv('RENDER') != 'true':
@@ -2584,9 +2889,25 @@ class DatabaseHandler():
 
         logging.info(f"write_events_to_db: Number of events to write: {len(df)}")
 
-        df.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
+        inserted_event_ids = self._insert_events_and_return_ids(df)
+        self._write_event_write_attribution_rows(
+            event_ids=inserted_event_ids,
+            url=url,
+            parent_url=parent_url,
+            source=source,
+            write_method=write_method,
+            provider=provider,
+            model=model,
+            prompt_type=prompt_type,
+            decision_reason=decision_reason,
+            details=details,
+        )
         self.write_url_to_db([url, parent_url, source, keywords, True, 1, datetime.now()])
-        logging.info("write_events_to_db: Events data written to the 'events' table.")
+        logging.info(
+            "write_events_to_db: Events data written to the 'events' table with %d attribution row(s).",
+            len(inserted_event_ids),
+        )
+        return len(inserted_event_ids)
 
     def _keywords_to_specific_dance_styles(self, keywords: Any) -> str:
         """

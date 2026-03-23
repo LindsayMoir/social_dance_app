@@ -507,7 +507,17 @@ class LLMHandler:
                         except Exception as _e:
                             logging.warning(f"process_llm_response: Failed to apply Detected_Date fill logic: {_e}")
                     events_written = int(len(events_df))
-                    self.db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_list)
+                    self.db_handler.write_events_to_db(
+                        events_df,
+                        url,
+                        parent_url,
+                        source,
+                        keywords_list,
+                        provider=provider,
+                        model=model,
+                        prompt_type=schema_type,
+                        decision_reason="llm_success",
+                    )
                     logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
                     return EventWriteResult(
                         success=True,

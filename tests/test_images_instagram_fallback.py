@@ -765,12 +765,13 @@ def test_process_local_image_path_uses_ocr_first(tmp_path, monkeypatch) -> None:
     written = {}
 
     class _FakeDb:
-        def write_events_to_db(self, events_df, url, parent_url, source, keywords):
+        def write_events_to_db(self, events_df, url, parent_url, source, keywords, **kwargs):
             written["events_df"] = events_df.copy()
             written["url"] = url
             written["parent_url"] = parent_url
             written["source"] = source
             written["keywords"] = keywords
+            written["kwargs"] = kwargs
 
     class _FakeLLM:
         def __init__(self):

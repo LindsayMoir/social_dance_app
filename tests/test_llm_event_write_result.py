@@ -21,7 +21,7 @@ def test_process_llm_response_returns_written_event_count(monkeypatch) -> None:
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
     handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args: writes.append(df.copy())
+        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
     )
 
     monkeypatch.setattr(

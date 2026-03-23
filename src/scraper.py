@@ -1450,7 +1450,15 @@ class EventSpider(scrapy.Spider):
             logging.info(f"def process_calendar_id(): Found {len(events_df)} events for calendar_id: {calendar_id}")
             logging.info(f"def process_calendar_id(): Event columns: {list(events_df.columns)}")
             logging.info(f"def process_calendar_id(): Sample event data:\n{events_df.head(1).to_dict('records')}")
-            db_handler.write_events_to_db(events_df, calendar_id, calendar_url, source, keywords)
+            db_handler.write_events_to_db(
+                events_df,
+                calendar_id,
+                calendar_url,
+                source,
+                keywords,
+                write_method="google_calendar_fetch",
+                decision_reason="google_calendar_direct",
+            )
             return int(len(events_df))
         else:
             logging.warning(f"def process_calendar_id(): No events found for calendar_id: {calendar_id}")
