@@ -41,6 +41,20 @@ from page_classifier import classify_page
 
 
 class DatabaseHandler():
+    _SHOULD_PROCESS_MIN_HIT_RATIO = 0.5
+    _SHOULD_PROCESS_MAX_RETRIES_FOR_IRRELEVANT = 2
+    _LOW_VALUE_PATH_SEGMENTS = {
+        "about",
+        "contact",
+        "faculty",
+        "faq",
+        "staff",
+        "student-wellness",
+        "team",
+        "vocational-division",
+        "open-division",
+        "international-waitlist",
+    }
     _VENUE_TOKEN_STOPWORDS = {
         "the", "and", "of", "in", "at", "on",
         "victoria", "bc", "canada", "ca",
@@ -5271,6 +5285,16 @@ class DatabaseHandler():
             return True
 
         # 3. Last was False → check hit_ratio in self.urls_gb
+        if not last_relevant and self._is_low_value_scrape_path(normalized_url):
+            logging.info(
+                "should_process_url: URL %s skipped due to low-value path after prior irrelevant result.",
+                normalized_url[:100] + "...",
+            )
+            decision = "skip_low_value_path_after_irrelevant"
+            self._record_should_process_decision(decision)
+            self._set_last_should_process_reason(generic_norm, decision)
+            return False
+
         hit_row = self.urls_gb[self.urls_gb['link'] == normalized_url]
 
         if not hit_row.empty:
@@ -5278,13 +5302,20 @@ class DatabaseHandler():
             hit_ratio = hit_row.iloc[0]['hit_ratio']
             crawl_trys = hit_row.iloc[0]['crawl_try']
 
-            if hit_ratio > 0.1 or crawl_trys <= 3:
+            if (
+                hit_ratio >= self._SHOULD_PROCESS_MIN_HIT_RATIO
+                or crawl_trys <= self._SHOULD_PROCESS_MAX_RETRIES_FOR_IRRELEVANT
+            ):
                 logging.info(
                     "should_process_url: URL %s was last seen as not relevant "
-                    "but hit_ratio (%.2f) > 0.1 or crawl_try (%d) ≤ 3, processing it.",
-                    normalized_url[:100] + "...", hit_ratio, crawl_trys
+                    "but hit_ratio (%.2f) >= %.2f or crawl_try (%d) ≤ %d, processing it.",
+                    normalized_url[:100] + "...",
+                    hit_ratio,
+                    self._SHOULD_PROCESS_MIN_HIT_RATIO,
+                    crawl_trys,
+                    self._SHOULD_PROCESS_MAX_RETRIES_FOR_IRRELEVANT,
                 )
-                decision = "process_hit_ratio_or_crawl_try"
+                decision = "process_strong_hit_ratio_or_early_retry"
                 self._record_should_process_decision(decision)
                 self._set_last_should_process_reason(generic_norm, decision)
                 return True
@@ -5295,6 +5326,18 @@ class DatabaseHandler():
         self._record_should_process_decision(decision)
         self._set_last_should_process_reason(generic_norm, decision)
         return False
+
+    @classmethod
+    def _is_low_value_scrape_path(cls, url: str) -> bool:
+        """Return True for path segments that are consistently low-value crawl targets."""
+        try:
+            path = (urlparse(url).path or "").strip("/").lower()
+        except Exception:
+            return False
+        if not path:
+            return False
+        segments = [segment for segment in path.split("/") if segment]
+        return any(segment in cls._LOW_VALUE_PATH_SEGMENTS for segment in segments)
 
 
     def update_day_of_week(self, event_id: int, corrected_day: str) -> bool:

@@ -316,6 +316,27 @@ def should_extract_on_parent_page(archetype: str, url: str, confidence: float = 
     return False
 
 
+def max_links_to_follow_for_page(
+    archetype: str,
+    *,
+    confidence: float,
+    base_limit: int,
+    url: str,
+    is_whitelisted_origin: bool,
+    is_calendar_root: bool,
+) -> int:
+    """Apply smaller crawl fanout on low-confidence, low-value parent pages."""
+    if base_limit <= 0:
+        return 0
+    if is_whitelisted_origin or is_calendar_root or _is_event_detail_url(url):
+        return base_limit
+    if archetype == "incomplete_event":
+        return min(base_limit, 2)
+    if archetype == "simple_page" and confidence < 0.8:
+        return min(base_limit, 3)
+    return min(base_limit, 5)
+
+
 def get_handlers():
     """Initialize and return handlers only when needed."""
     global _handlers_cache
@@ -1042,6 +1063,15 @@ class EventSpider(scrapy.Spider):
             db_handler.write_url_to_db(url_row)
 
         # 5) Filter unwanted links and record them
+        dynamic_link_limit = max_links_to_follow_for_page(
+            page_archetype,
+            confidence=class_decision.confidence,
+            base_limit=int(self.config['crawling']['max_website_urls']),
+            url=url,
+            is_whitelisted_origin=is_whitelisted_origin,
+            is_calendar_root=is_calendar_candidate(url, self.calendar_urls_set),
+        )
+        page_links = prioritize_links_for_crawl(page_links, dynamic_link_limit)
         all_links      = {url} | set(page_links)
         filtered_links = set()
         for link in all_links:

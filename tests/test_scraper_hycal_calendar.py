@@ -2,7 +2,7 @@ import sys
 
 sys.path.insert(0, "src")
 
-from scraper import EventSpider, extract_hycal_proxy_links
+from scraper import EventSpider, extract_hycal_proxy_links, max_links_to_follow_for_page
 
 
 def test_extract_hycal_proxy_links_from_html() -> None:
@@ -76,3 +76,25 @@ def test_extract_calendar_ids_from_hycal_rest_route_proxy_url() -> None:
     )
     ids = spider.extract_calendar_ids(hycal, allow_gmail=True)
     assert ids == ["xyz123@group.calendar.google.com"]
+
+
+def test_max_links_to_follow_for_page_reduces_low_confidence_listing_pages() -> None:
+    assert max_links_to_follow_for_page(
+        "simple_page",
+        confidence=0.55,
+        base_limit=10,
+        url="https://example.com/about/",
+        is_whitelisted_origin=False,
+        is_calendar_root=False,
+    ) == 3
+
+
+def test_max_links_to_follow_for_page_preserves_priority_roots() -> None:
+    assert max_links_to_follow_for_page(
+        "simple_page",
+        confidence=0.40,
+        base_limit=10,
+        url="https://vlda.ca/resources/",
+        is_whitelisted_origin=True,
+        is_calendar_root=False,
+    ) == 10

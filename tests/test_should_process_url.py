@@ -162,3 +162,35 @@ def test_should_not_apply_stale_static_skip_to_instagram_profile_page():
 
     # Profile pages are rolling pages, not static post-detail URLs.
     assert db.should_process_url(url) is True
+
+
+def test_should_skip_low_value_path_after_prior_irrelevant_result():
+    db = DummyDB()
+    url = "https://vaballet.ca/contact/"
+    norm_url = db.normalize_url(url)
+    db.urls_df = pd.DataFrame(
+        [{"link": norm_url, "parent_url": "", "source": "site", "keywords": [], "relevant": False, "crawl_try": 4, "time_stamp": datetime.now()}]
+    )
+    db.urls_gb = pd.DataFrame(
+        [{"link": norm_url, "hit_ratio": 0.9, "crawl_try": 4}]
+    )
+
+    assert db.should_process_url(url) is False
+    counts = db.get_should_process_decision_counts()
+    assert counts.get("skip_low_value_path_after_irrelevant", 0) >= 1
+    assert db.get_should_process_decision_reason(url) == "skip_low_value_path_after_irrelevant"
+
+
+def test_should_skip_irrelevant_url_when_hit_ratio_and_retry_budget_are_weak():
+    db = DummyDB()
+    url = "https://example.com/classes/"
+    norm_url = db.normalize_url(url)
+    db.urls_df = pd.DataFrame(
+        [{"link": norm_url, "parent_url": "", "source": "site", "keywords": [], "relevant": False, "crawl_try": 3, "time_stamp": datetime.now()}]
+    )
+    db.urls_gb = pd.DataFrame(
+        [{"link": norm_url, "hit_ratio": 0.49, "crawl_try": 3}]
+    )
+
+    assert db.should_process_url(url) is False
+    assert db.get_should_process_decision_reason(url) == "skip_default_rules"
