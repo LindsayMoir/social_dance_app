@@ -614,6 +614,26 @@ def test_persist_scraper_step_telemetry_metrics_records_trend_keys() -> None:
     assert "scraper_images_vision_success_rate_pct" in metric_keys
 
 
+def test_build_multi_metric_trend_svg_renders_single_point_series() -> None:
+    runner = _build_runner()
+    runner._load_metric_history = lambda metric_key, days=120: [  # type: ignore[method-assign]
+        {"timestamp": "2026-03-23T05:54:12", "value": 23.6}
+    ]
+
+    html = runner._build_multi_metric_trend_svg(
+        title="Scraper Access Success % Trend",
+        days=180,
+        value_format="percent",
+        series=[
+            {"metric_key": "scraper_ebs_access_success_rate_pct", "label": "ebs", "color": "#d62728"},
+        ],
+    )
+
+    assert "<circle " in html
+    assert "Single run of history; showing point marker only." in html
+    assert "2026-03-23" in html
+
+
 def test_phase1_artifacts_persist_by_run_id_and_type() -> None:
     runner = _build_runner()
     fake_db = _FakeDbHandler()

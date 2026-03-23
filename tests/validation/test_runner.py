@@ -6864,6 +6864,7 @@ class ValidationTestRunner:
             return f"{value:.2f}"
 
         polylines: list[str] = []
+        point_markers: list[str] = []
         legend_items: list[str] = []
         for idx, item in enumerate(prepared_series):
             coords: list[tuple[float, float]] = []
@@ -6876,11 +6877,24 @@ class ValidationTestRunner:
                 f"<polyline points='{polyline}' fill='none' stroke='{self._escape_html(item['color'])}' "
                 f"stroke-width='2.5'/>"
             )
+            for x, y in coords:
+                point_markers.append(
+                    f"<circle cx='{x:.2f}' cy='{y:.2f}' r='3.5' fill='{self._escape_html(item['color'])}' "
+                    f"stroke='#ffffff' stroke-width='1'/>"
+                )
             legend_y = pad_top + 14 + idx * 16
             legend_items.append(
                 f"<line x1='{width - 230}' y1='{legend_y}' x2='{width - 210}' y2='{legend_y}' "
                 f"stroke='{self._escape_html(item['color'])}' stroke-width='2.5'/>"
                 f"<text x='{width - 204}' y='{legend_y + 4}' font-size='11' fill='#444'>{self._escape_html(item['label'])}</text>"
+            )
+
+        sparse_history_note = ""
+        if len(ordered_labels) == 1:
+            sparse_history_note = (
+                f"<text x='{pad_left + 12}' y='{pad_top + 20}' font-size='11' fill='#666'>"
+                "Single run of history; showing point marker only."
+                "</text>"
             )
 
         return (
@@ -6890,7 +6904,9 @@ class ValidationTestRunner:
             f"<line x1='{pad_left}' y1='{pad_top}' x2='{pad_left}' y2='{height - pad_bottom}' stroke='#999'/>"
             f"<line x1='{pad_left}' y1='{height - pad_bottom}' x2='{width - pad_right}' y2='{height - pad_bottom}' stroke='#999'/>"
             f"{''.join(polylines)}"
+            f"{''.join(point_markers)}"
             f"{''.join(legend_items)}"
+            f"{sparse_history_note}"
             f"<text x='6' y='{pad_top + 9}' font-size='11' fill='#666'>{self._escape_html(_fmt(max_v))}</text>"
             f"<text x='6' y='{height - pad_bottom}' font-size='11' fill='#666'>{self._escape_html(_fmt(min_v))}</text>"
             f"<text x='{pad_left}' y='{height - 7}' font-size='11' fill='#666'>{first_label}</text>"
