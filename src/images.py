@@ -279,6 +279,37 @@ def _extract_instagram_search_links(rendered_html: str, page_url: str) -> list[s
     return _dedupe_preserve_order(discovered_links)
 
 
+def _is_keyword_discovered_instagram_target(url: str) -> bool:
+    """Return True only for high-value Instagram targets discovered from keyword search."""
+    candidate = str(url or "").strip()
+    if not candidate or not is_instagram_url(candidate):
+        return False
+    if is_instagram_post_detail_url(candidate):
+        return True
+    parsed = urlparse(candidate)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").strip("/").lower()
+    if not path:
+        return False
+    if host.startswith(("about.instagram.com", "help.instagram.com", "business.instagram.com")):
+        return False
+    disallowed_prefixes = {
+        "about",
+        "accounts",
+        "blog",
+        "careers",
+        "developer",
+        "direct",
+        "explore",
+        "legal",
+        "privacy",
+        "reels",
+        "web",
+    }
+    first_segment = path.split("/", 1)[0]
+    return first_segment not in disallowed_prefixes
+
+
 def _build_image_context_text(
     ocr_text: str,
     parent_url: str,
@@ -645,6 +676,8 @@ class ImageScraper:
                 self._search_instagram_keyword_links_playwright(cleaned_keyword, keyword_limit)
             )
             for link in discovered_links:
+                if not _is_keyword_discovered_instagram_target(link):
+                    continue
                 if link in seen_links:
                     continue
                 seen_links.add(link)

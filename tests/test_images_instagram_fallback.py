@@ -16,6 +16,7 @@ import images
 from images import (
     ImageScraper,
     _build_image_context_text,
+    _is_keyword_discovered_instagram_target,
     _extract_instagram_post_links,
     _extract_instagram_search_links,
     _is_degraded_instagram_profile_text,
@@ -1169,10 +1170,11 @@ def test_get_image_links_adds_instagram_keyword_search_results_with_limits(monke
         if keyword == "bachata":
             return [
                 "https://www.instagram.com/bachatavictoria/",
+                "https://about.instagram.com/blog/",
                 "https://www.instagram.com/p/ABC123/",
             ]
         return [
-            "https://www.instagram.com/salsavictoria/",
+            "https://www.instagram.com/web/lite/",
             "https://www.instagram.com/p/SALSA123/",
         ]
 
@@ -1188,7 +1190,7 @@ def test_get_image_links_adds_instagram_keyword_search_results_with_limits(monke
         "https://www.instagram.com/existing2/",
         "https://www.instagram.com/bachatavictoria/",
         "https://www.instagram.com/p/ABC123/",
-        "https://www.instagram.com/salsavictoria/",
+        "https://www.instagram.com/p/SALSA123/",
     ]
 
 
@@ -1227,6 +1229,14 @@ def test_get_image_links_uses_smallest_page_limit_for_instagram_keyword_search(m
 
     assert search_calls == [("bachata", 2)]
     assert len(df) == 2
+
+
+def test_keyword_discovered_instagram_target_rejects_junk_pages() -> None:
+    assert _is_keyword_discovered_instagram_target("https://www.instagram.com/p/ABC123/") is True
+    assert _is_keyword_discovered_instagram_target("https://www.instagram.com/reel/ABC123/") is True
+    assert _is_keyword_discovered_instagram_target("https://about.instagram.com/blog/") is False
+    assert _is_keyword_discovered_instagram_target("https://www.instagram.com/web/lite/") is False
+    assert _is_keyword_discovered_instagram_target("https://www.instagram.com/reels/") is False
 
 
 def test_process_images_final_refresh_processes_new_urls(monkeypatch) -> None:
