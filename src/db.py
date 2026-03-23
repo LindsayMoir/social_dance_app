@@ -3038,6 +3038,7 @@ class DatabaseHandler():
 
         # Clean day_of_week field to handle compound/invalid values
         df = self._clean_day_of_week_field(df)
+        df = self._align_recurring_weekday_dates(df, url=url)
         # Live-music policy: require explicit dance-style evidence in event text.
         df = self._enforce_live_music_dance_style_policy(df)
 
@@ -3449,6 +3450,129 @@ class DatabaseHandler():
         
         logging.info(f"_clean_day_of_week_field: Made {changes_made} changes to day_of_week values")
         return df
+
+    @staticmethod
+    def _has_recurrence_signal(*texts: Any) -> bool:
+        """Return True when text strongly suggests a recurring schedule."""
+        combined = " ".join(str(text or "") for text in texts).strip().lower()
+        if not combined:
+            return False
+        recurrence_patterns = (
+            r"\bevery\b",
+            r"\bweekly\b",
+            r"\brecurs?\b",
+            r"\beach\b",
+            r"\bmondays?\b",
+            r"\btuesdays?\b",
+            r"\bwednesdays?\b",
+            r"\bthursdays?\b",
+            r"\bfridays?\b",
+            r"\bsaturdays?\b",
+            r"\bsundays?\b",
+        )
+        return any(re.search(pattern, combined, re.IGNORECASE) for pattern in recurrence_patterns)
+
+    @staticmethod
+    def _nearest_weekday_shift(current_date: date, target_weekday_name: str) -> int:
+        """Return the signed day shift needed to align current_date to target weekday."""
+        weekday_lookup = {
+            "monday": 0,
+            "tuesday": 1,
+            "wednesday": 2,
+            "thursday": 3,
+            "friday": 4,
+            "saturday": 5,
+            "sunday": 6,
+        }
+        target = weekday_lookup.get(str(target_weekday_name or "").strip().lower())
+        if target is None:
+            return 0
+        current = current_date.weekday()
+        forward = (target - current) % 7
+        backward = forward - 7
+        return backward if abs(backward) <= abs(forward) else forward
+
+    def _align_recurring_weekday_dates(self, df: pd.DataFrame, url: str) -> pd.DataFrame:
+        """
+        Align recurring event dates to their stated weekday before insert.
+
+        This only applies when a row has recurrence evidence from its text or from
+        repeated event rows in the same write batch. One-off events are left intact.
+        """
+        if df is None or df.empty:
+            return df
+        if "day_of_week" not in df.columns or "start_date" not in df.columns:
+            return df
+
+        working_df = df.copy()
+        recurrence_group_sizes: dict[tuple[str, str, str, str], int] = {}
+        if {"event_name", "start_time", "source"}.issubset(working_df.columns):
+            grouped = (
+                working_df.assign(
+                    _event_key=working_df["event_name"].fillna("").astype(str).str.strip().str.lower(),
+                    _time_key=working_df["start_time"].fillna("").astype(str).str.strip(),
+                    _source_key=working_df["source"].fillna("").astype(str).str.strip().str.lower(),
+                    _dow_key=working_df["day_of_week"].fillna("").astype(str).str.strip().str.lower(),
+                )
+                .groupby(["_event_key", "_time_key", "_source_key", "_dow_key"], dropna=False)
+                .size()
+            )
+            recurrence_group_sizes = {tuple(key): int(size) for key, size in grouped.items()}
+
+        shifts_applied = 0
+        for idx, row in working_df.iterrows():
+            start_date_value = row.get("start_date")
+            if pd.isna(start_date_value) or start_date_value is None:
+                continue
+
+            day_of_week_value = str(row.get("day_of_week", "") or "").strip()
+            if not day_of_week_value:
+                continue
+
+            recurrence_signal = self._has_recurrence_signal(
+                row.get("event_name", ""),
+                row.get("description", ""),
+                row.get("location", ""),
+            )
+            if recurrence_group_sizes:
+                group_key = (
+                    str(row.get("event_name", "") or "").strip().lower(),
+                    str(row.get("start_time", "") or "").strip(),
+                    str(row.get("source", "") or "").strip().lower(),
+                    day_of_week_value.lower(),
+                )
+                recurrence_signal = recurrence_signal or recurrence_group_sizes.get(group_key, 0) > 1
+
+            if not recurrence_signal:
+                continue
+
+            shift_days = self._nearest_weekday_shift(start_date_value, day_of_week_value)
+            if shift_days == 0:
+                continue
+
+            original_start = start_date_value
+            working_df.at[idx, "start_date"] = original_start + timedelta(days=shift_days)
+            end_date_value = row.get("end_date")
+            if pd.notna(end_date_value) and end_date_value is not None:
+                working_df.at[idx, "end_date"] = end_date_value + timedelta(days=shift_days)
+            shifts_applied += 1
+            logging.info(
+                "_align_recurring_weekday_dates: shifted row index=%d url=%s event_name=%s start_date=%s->%s weekday=%s",
+                idx,
+                url,
+                str(row.get("event_name", "") or ""),
+                original_start,
+                working_df.at[idx, "start_date"],
+                day_of_week_value,
+            )
+
+        if shifts_applied:
+            logging.info(
+                "_align_recurring_weekday_dates: aligned %d recurring event date(s) for url=%s",
+                shifts_applied,
+                url,
+            )
+        return working_df
 
     def _enforce_live_music_dance_style_policy(self, df: pd.DataFrame) -> pd.DataFrame:
         """
