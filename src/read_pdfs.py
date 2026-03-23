@@ -2,7 +2,7 @@
 import os
 import io
 import logging
-from datetime import datetime
+from datetime import date, datetime
 
 import pandas as pd
 import pdfplumber
@@ -44,6 +44,35 @@ def get_db_handler() -> DatabaseHandler:
 
 # ── 4) Parser registry decorator ───────────────────────────────────────────────
 PARSER_REGISTRY = {}
+
+
+def _coerce_bool(value: object, default: bool = True) -> bool:
+    """Interpret CSV-style truthy and falsy values safely."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _parse_optional_date(value: object) -> date | None:
+    """Parse a CSV date value into a date, returning None when blank/invalid."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.date()
 
 def register_parser(source_name: str):
     """
@@ -89,6 +118,30 @@ class ReadPDFs:
         self.db = get_db_handler()
         logging.info("DatabaseHandler initialized.")
 
+    @staticmethod
+    def is_pdf_source_active(row: pd.Series, today: date | None = None) -> tuple[bool, str]:
+        """
+        Determine whether a PDF source row is active for the current date.
+
+        Supported optional CSV columns:
+        1. `enabled`
+        2. `active_start_date`
+        3. `active_end_date`
+        """
+        today_value = today or datetime.now().date()
+
+        if not _coerce_bool(row.get("enabled"), default=True):
+            return False, "disabled"
+
+        active_start = _parse_optional_date(row.get("active_start_date"))
+        active_end = _parse_optional_date(row.get("active_end_date"))
+
+        if active_start and today_value < active_start:
+            return False, "before_active_start_date"
+        if active_end and today_value > active_end:
+            return False, "after_active_end_date"
+        return True, "active"
+
 
     def read_write_pdf(self) -> pd.DataFrame:
         file_name = os.path.basename(__file__)
@@ -104,6 +157,16 @@ class ReadPDFs:
             keywords   = row.get('keywords', None)
 
             logging.info(f"read_write_pdf(): [{idx}] source={source}, pdf_url={pdf_url}")
+
+            is_active, active_reason = self.is_pdf_source_active(row)
+            if not is_active:
+                logging.info(
+                    "read_write_pdf(): Skipping inactive seasonal PDF source '%s' (%s): %s",
+                    source,
+                    active_reason,
+                    pdf_url,
+                )
+                continue
 
             # Skip blacklisted
             if any(domain in pdf_url for domain in self.black_list_domains):
