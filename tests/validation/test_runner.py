@@ -1198,7 +1198,49 @@ class ValidationTestRunner:
                 score += 2
             return score
 
-        ranked = sorted(events, key=score_candidate, reverse=True)
+        def is_same_page_candidate(candidate: dict) -> bool:
+            return self._normalize_url_value(candidate.get("url")) == baseline["url"]
+
+        same_page_events = [candidate for candidate in events if isinstance(candidate, dict) and is_same_page_candidate(candidate)]
+        if len(same_page_events) > 1:
+            same_date_candidates = [
+                candidate
+                for candidate in same_page_events
+                if self._normalize_date_value(candidate.get("start_date")) == baseline["start_date"]
+            ]
+            candidate_pool = same_date_candidates or same_page_events
+
+            strong_name_candidates = [
+                candidate
+                for candidate in candidate_pool
+                if (
+                    self._name_similarity(
+                        baseline["event_name"],
+                        self._normalize_text_value(candidate.get("event_name")),
+                    ) >= 0.75
+                    or self._name_contains_variant(
+                        baseline["event_name"],
+                        self._normalize_text_value(candidate.get("event_name")),
+                    )
+                )
+            ]
+            if strong_name_candidates:
+                ranked = sorted(strong_name_candidates, key=score_candidate, reverse=True)
+            else:
+                same_time_candidates = [
+                    candidate
+                    for candidate in candidate_pool
+                    if self._times_equivalent_with_12h_guard(
+                        self._normalize_time_value(candidate.get("start_time")),
+                        baseline["start_time"],
+                    )
+                ]
+                if same_time_candidates:
+                    ranked = sorted(same_time_candidates, key=score_candidate, reverse=True)
+                else:
+                    ranked = sorted(candidate_pool, key=score_candidate, reverse=True)
+        else:
+            ranked = sorted(events, key=score_candidate, reverse=True)
         best = ranked[0]
         best_raw = best.get("raw", {}) if isinstance(best.get("raw"), dict) else {}
         replay = {
@@ -1244,6 +1286,44 @@ class ValidationTestRunner:
         name_contains_variant = self._name_contains_variant(baseline["event_name"], replay["event_name"])
         same_date = replay["start_date"] == baseline["start_date"]
         same_time = self._times_equivalent_with_12h_guard(replay["start_time"], baseline["start_time"])
+
+        # Listing/calendar pages can return many same-URL events. If none of the replayed
+        # candidates are even moderately close by name, do not compare a clearly different
+        # same-page event against the baseline row.
+        best_candidate_name_signal = max(
+            (
+                self._name_similarity(
+                    baseline["event_name"],
+                    self._normalize_text_value(candidate.get("event_name")),
+                )
+                for candidate in events
+                if isinstance(candidate, dict)
+            ),
+            default=0.0,
+        )
+        any_name_variant_signal = any(
+            self._name_contains_variant(
+                baseline["event_name"],
+                self._normalize_text_value(candidate.get("event_name")),
+            )
+            for candidate in events
+            if isinstance(candidate, dict)
+        )
+        if (
+            len(events) > 1
+            and replay["url"] == baseline["url"]
+            and same_date
+            and best_candidate_name_signal < 0.60
+            and not any_name_variant_signal
+        ):
+            return {
+                "is_match": False,
+                "category": "wrong_replay_event_selection",
+                "details": "listing page replay selected a different event from the same source URL",
+                "baseline": baseline,
+                "replay": replay,
+            }
+
         core_match = (
             replay["url"] == baseline["url"]
             and same_date

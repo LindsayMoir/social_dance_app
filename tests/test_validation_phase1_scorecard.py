@@ -309,6 +309,90 @@ def test_compare_replay_row_rejects_social_url_drift_before_field_mismatch() -> 
     assert comparison["category"] == "wrong_replay_source_url"
 
 
+def test_compare_replay_row_rejects_wrong_event_from_same_listing_page() -> None:
+    runner = _build_runner()
+
+    comparison = runner._compare_replay_row(
+        baseline_row={
+            "event_name": "sunday blues services",
+            "start_date": "2026-03-29",
+            "start_time": "16:00:00",
+            "source": "livevictoria.com",
+            "location": "the wicket hall (strathcona hotel)",
+            "url": "https://livevictoria.com/calendar/music&month_limit=4&year_limit=2026",
+        },
+        replay_payload={
+            "ok": True,
+            "events": [
+                {
+                    "event_name": "Flamenco Tablao - March 29, 2026",
+                    "start_date": "2026-03-29",
+                    "start_time": "19:00:00",
+                    "source": "livevictoria.com",
+                    "location": "The Mint",
+                    "url": "https://livevictoria.com/calendar/music&month_limit=4&year_limit=2026",
+                    "raw": {},
+                },
+                {
+                    "event_name": "Victoria Symphony Presents Kluxen & Brantelid",
+                    "start_date": "2026-03-29",
+                    "start_time": "14:30:00",
+                    "source": "livevictoria.com",
+                    "location": "Royal Theatre",
+                    "url": "https://livevictoria.com/calendar/music&month_limit=4&year_limit=2026",
+                    "raw": {},
+                },
+            ],
+        },
+        strict_time_match=True,
+    )
+
+    assert comparison["is_match"] is False
+    assert comparison["category"] == "wrong_replay_event_selection"
+
+
+def test_compare_replay_row_prefers_same_page_candidate_with_matching_time() -> None:
+    runner = _build_runner()
+
+    comparison = runner._compare_replay_row(
+        baseline_row={
+            "event_name": "sunday blues services",
+            "start_date": "2026-03-29",
+            "start_time": "16:00:00",
+            "source": "livevictoria.com",
+            "location": "studio 919",
+            "url": "https://livevictoria.com/calendar/music&month_limit=4&year_limit=2026",
+        },
+        replay_payload={
+            "ok": True,
+            "events": [
+                {
+                    "event_name": "Flamenco Tablao - March 29, 2026",
+                    "start_date": "2026-03-29",
+                    "start_time": "19:00:00",
+                    "source": "livevictoria.com",
+                    "location": "The Mint",
+                    "url": "https://livevictoria.com/calendar/music&month_limit=4&year_limit=2026",
+                    "raw": {},
+                },
+                {
+                    "event_name": "Sunday Blues Services",
+                    "start_date": "2026-03-29",
+                    "start_time": "16:00:00",
+                    "source": "livevictoria.com",
+                    "location": "Studio 919",
+                    "url": "https://livevictoria.com/calendar/music&month_limit=4&year_limit=2026",
+                    "raw": {},
+                },
+            ],
+        },
+        strict_time_match=True,
+    )
+
+    assert comparison["is_match"] is True
+    assert comparison["replay"]["event_name"] == "sunday blues services"
+
+
 def test_phase1_scorecard_metrics_persist_key_trends() -> None:
     runner = _build_runner()
     fake_db = _FakeDbHandler()
