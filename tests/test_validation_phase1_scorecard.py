@@ -18,6 +18,14 @@ class _FakeDbHandler:
         self.calls: list[dict] = []
         self.artifact_calls: list[dict] = []
         self.query_map: dict[str, list[tuple]] = {}
+        self.telemetry_integrity_report: dict = {
+            "available": True,
+            "run_id": "run-123",
+            "status": "PASS",
+            "violations": [],
+            "summary": {"write_attribution_rows": 0},
+            "steps": {},
+        }
 
     def record_metric_observation(self, **kwargs) -> None:
         self.calls.append(kwargs)
@@ -31,6 +39,11 @@ class _FakeDbHandler:
             if key in normalized:
                 return value
         raise AssertionError(normalized)
+
+    def build_phase1_telemetry_integrity_report(self, run_id: str) -> dict:
+        payload = dict(self.telemetry_integrity_report)
+        payload["run_id"] = run_id
+        return payload
 
 
 def _build_runner() -> ValidationTestRunner:
@@ -202,9 +215,30 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["cost_per_inserted_event_usd"] == 0.1
     assert run_scorecard["code_version"] == {"git_commit": "abc123", "branch": "main"}
     assert run_scorecard["scorecard_version"] == "phase4"
+    assert run_scorecard["telemetry_integrity"] == {}
     assert run_scorecard["comparison_summary"] == {}
     assert "top_regressions" not in run_scorecard["recommendations_input"]
     assert run_scorecard["overall_score"]["status"] == "PRELIMINARY"
+
+
+def test_build_phase1_telemetry_integrity_summary_uses_db_handler() -> None:
+    runner = _build_runner()
+    fake_db = _FakeDbHandler()
+    fake_db.telemetry_integrity_report = {
+        "available": True,
+        "run_id": "placeholder",
+        "status": "FAIL",
+        "violations": ["step_mismatch:scraper"],
+        "summary": {"write_attribution_rows": 12},
+        "steps": {"scraper": {"status": "FAIL"}},
+    }
+    runner.db_handler = fake_db
+
+    summary = runner._build_phase1_telemetry_integrity_summary("run-456")
+
+    assert summary["run_id"] == "run-456"
+    assert summary["status"] == "FAIL"
+    assert summary["violations"] == ["step_mismatch:scraper"]
 
 
 def test_phase1_scorecard_metrics_persist_key_trends() -> None:

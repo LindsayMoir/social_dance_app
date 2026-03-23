@@ -111,3 +111,42 @@ def test_write_events_to_db_records_canonical_write_attribution(monkeypatch) -> 
 
     monkeypatch.delenv("DS_RUN_ID", raising=False)
     monkeypatch.delenv("DS_STEP_NAME", raising=False)
+
+
+def test_build_phase1_telemetry_integrity_report_flags_step_mismatch_and_unknown_reason() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    query_results = {
+        "SUM(COALESCE(events_written, 0)) AS metrics_events_written_total": [
+            ("scraper", 5, 2),
+            ("fb", 3, 1),
+        ],
+        "COUNT(*) AS write_attribution_count": [
+            ("scraper", 5, 5),
+            ("fb", 2, 2),
+        ],
+        "COUNT(*) AS delete_attribution_count": [
+            ("scraper", 1, 1),
+        ],
+        "unknown_delete_reason_total": [
+            (7, 7, 1, 1, 1),
+        ],
+    }
+
+    def _exec(query: str, params=None):
+        normalized = " ".join(str(query).split())
+        for key, value in query_results.items():
+            if key in normalized:
+                return value
+        raise AssertionError(normalized)
+
+    handler.execute_query = _exec  # type: ignore[attr-defined]
+
+    report = handler.build_phase1_telemetry_integrity_report("run-123")
+
+    assert report["available"] is True
+    assert report["status"] == "FAIL"
+    assert "step_mismatch:fb:metrics_events=3:write_attribution=2" in report["violations"]
+    assert "unknown_delete_reason_total:1" in report["violations"]
+    assert report["steps"]["scraper"]["status"] == "FAIL"
+    assert report["steps"]["fb"]["status"] == "FAIL"
+    assert report["summary"]["write_attribution_rows"] == 7

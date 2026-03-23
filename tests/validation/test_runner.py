@@ -1438,6 +1438,36 @@ class ValidationTestRunner:
                     window_end=window_end,
                 )
 
+    def _build_phase1_telemetry_integrity_summary(self, run_id: str) -> dict:
+        """Load the canonical Phase 1 telemetry integrity report from the DB layer."""
+        safe_run_id = str(run_id or "").strip()
+        if not safe_run_id:
+            return {"available": False, "run_id": "", "status": "FAIL", "violations": ["missing_run_id"]}
+        if not getattr(self, "db_handler", None) or not hasattr(self.db_handler, "build_phase1_telemetry_integrity_report"):
+            return {
+                "available": False,
+                "run_id": safe_run_id,
+                "status": "FAIL",
+                "violations": ["db_handler_missing_phase1_telemetry_integrity_report"],
+            }
+        try:
+            summary = self.db_handler.build_phase1_telemetry_integrity_report(safe_run_id)
+        except Exception as exc:
+            return {
+                "available": False,
+                "run_id": safe_run_id,
+                "status": "FAIL",
+                "violations": [f"phase1_telemetry_integrity_error:{exc}"],
+            }
+        if not isinstance(summary, dict):
+            return {
+                "available": False,
+                "run_id": safe_run_id,
+                "status": "FAIL",
+                "violations": ["phase1_telemetry_integrity_invalid_payload"],
+            }
+        return summary
+
     def _build_scraper_telemetry_html(self, scraper_telemetry_summary: dict | None) -> str:
         """Render current-run scraper telemetry plus DB-backed trend charts."""
         if not isinstance(scraper_telemetry_summary, dict) or not scraper_telemetry_summary:
@@ -2145,6 +2175,7 @@ class ValidationTestRunner:
         report_run_id = str(fb_block_summary.get("run_id", "") or "").strip() or self._infer_latest_pipeline_run_id(results.get('timestamp'))
         pipeline_runtime_summary = self._summarize_pipeline_runtime(results.get('timestamp'), report_run_id)
         scraper_telemetry_summary = self._summarize_scraper_step_telemetry(report_run_id)
+        telemetry_integrity_summary = self._build_phase1_telemetry_integrity_summary(report_run_id)
         openrouter_cost_summary = self._summarize_openrouter_run_cost(
             report_timestamp=results.get('timestamp'),
             pipeline_runtime=pipeline_runtime_summary,
@@ -2190,6 +2221,7 @@ class ValidationTestRunner:
             dev_summary=dev_summary,
             holdout_summary=holdout_summary,
             domain_capped_summary=domain_capped_summary,
+            telemetry_integrity_summary=telemetry_integrity_summary,
         )
         run_delta_summary = self._build_run_delta_summary(run_scorecard)
         run_scorecard["comparison_summary"] = run_delta_summary
@@ -2272,6 +2304,7 @@ class ValidationTestRunner:
                 "domain_capped_summary": domain_capped_summary,
                 "domain_evaluation_summary": domain_evaluation_summary,
                 "scraper_telemetry_summary": scraper_telemetry_summary,
+                "telemetry_integrity_summary": telemetry_integrity_summary,
                 "run_delta_summary": run_delta_summary,
                 "recommendation_plan": recommendation_plan,
                 "codex_review_bundle": codex_review_bundle,
@@ -8856,6 +8889,7 @@ class ValidationTestRunner:
         dev_summary: dict | None,
         holdout_summary: dict | None,
         domain_capped_summary: dict | None,
+        telemetry_integrity_summary: dict | None = None,
     ) -> dict:
         """Build the canonical scorecard artifact."""
         replay = accuracy_replay if isinstance(accuracy_replay, dict) else {}
@@ -8870,6 +8904,7 @@ class ValidationTestRunner:
         dev_info = dev_summary if isinstance(dev_summary, dict) else {}
         holdout_info = holdout_summary if isinstance(holdout_summary, dict) else {}
         domain_capped_info = domain_capped_summary if isinstance(domain_capped_summary, dict) else {}
+        telemetry_integrity = telemetry_integrity_summary if isinstance(telemetry_integrity_summary, dict) else {}
         dev_urls = load_dev_urls()
 
         replay_url_accuracy_pct = float(replay.get("coverage_accuracy_pct", 0.0) or 0.0)
@@ -9015,6 +9050,7 @@ class ValidationTestRunner:
                 },
             },
             "guardrails": {},
+            "telemetry_integrity": telemetry_integrity,
             "overall_score": {
                 "value": overall_value,
                 "status": "PRELIMINARY",
@@ -9049,9 +9085,11 @@ class ValidationTestRunner:
         chatbot_summary = ((kpis.get("chatbot_quality") or {}).get("summary") or {}).get("summary", {})
         runtime_summary = ((kpis.get("run_time") or {}).get("summary") or {})
         cost_summary = ((kpis.get("run_costs") or {}).get("summary") or {}).get("summary", {})
+        telemetry_integrity = run_scorecard.get("telemetry_integrity", {}) if isinstance(run_scorecard.get("telemetry_integrity"), dict) else {}
         bullet_lines = [
             f"Pipeline duration: {float(runtime_summary.get('pipeline_duration_minutes', 0.0) or 0.0):.2f} minutes",
             f"Total LLM cost: ${float(cost_summary.get('total_usd', 0.0) or 0.0):.4f}",
+            f"Telemetry integrity: {self._escape_html(str(telemetry_integrity.get('status', 'UNKNOWN') or 'UNKNOWN'))}",
         ]
         within_15s = chatbot_summary.get("chatbot_response_within_15s_pct")
         correctness = chatbot_summary.get("chatbot_answer_correctness_pct")

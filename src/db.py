@@ -1677,6 +1677,205 @@ class DatabaseHandler():
             result = connection.execute(insert_stmt, records)
             return [int(row[0]) for row in result.fetchall()]
 
+    @staticmethod
+    def _normalize_telemetry_step_name(step_name: Any) -> str:
+        """Normalize step/file names into one stable telemetry grouping key."""
+        normalized = str(step_name or "").strip().lower()
+        if normalized.endswith(".py"):
+            normalized = normalized[:-3]
+        return normalized
+
+    @staticmethod
+    def _coerce_query_row_to_mapping(row: Any, columns: List[str]) -> Dict[str, Any]:
+        """Convert one DB row into a plain mapping using fallback column names when needed."""
+        if hasattr(row, "_mapping"):
+            return dict(row._mapping)
+        if isinstance(row, dict):
+            return dict(row)
+        if isinstance(row, (tuple, list)):
+            return dict(zip(columns, row))
+        return {}
+
+    def build_phase1_telemetry_integrity_report(self, run_id: str) -> Dict[str, Any]:
+        """
+        Build the canonical Phase 1 telemetry integrity report for one run.
+
+        The report reconciles `url_scrape_metrics`, `event_write_attribution`, and
+        `event_delete_attribution` using normalized step names.
+        """
+        safe_run_id = str(run_id or "").strip()
+        if not safe_run_id:
+            return {
+                "available": False,
+                "run_id": "",
+                "status": "FAIL",
+                "violations": ["missing_run_id"],
+                "summary": {},
+                "steps": {},
+                "reconciliation_queries": [],
+            }
+
+        metrics_query = """
+            SELECT
+                COALESCE(NULLIF(step_name, ''), REPLACE(COALESCE(handled_by, ''), '.py', '')) AS step_norm,
+                SUM(COALESCE(events_written, 0)) AS metrics_events_written_total,
+                SUM(CASE WHEN COALESCE(events_written, 0) > 0 THEN 1 ELSE 0 END) AS metrics_urls_with_events_count
+            FROM url_scrape_metrics
+            WHERE run_id = :run_id
+            GROUP BY 1
+        """
+        write_attr_query = """
+            SELECT
+                COALESCE(NULLIF(step_name, ''), 'unknown') AS step_norm,
+                COUNT(*) AS write_attribution_count,
+                COUNT(DISTINCT event_id) AS distinct_event_id_count
+            FROM event_write_attribution
+            WHERE run_id = :run_id
+            GROUP BY 1
+        """
+        delete_attr_query = """
+            SELECT
+                COALESCE(NULLIF(step_name, ''), REPLACE(COALESCE(created_by_step, ''), '.py', '')) AS step_norm,
+                COUNT(*) AS delete_attribution_count,
+                SUM(CASE WHEN reason_registered THEN 0 ELSE 1 END) AS unknown_delete_reason_count
+            FROM event_delete_attribution
+            WHERE run_id = :run_id
+            GROUP BY 1
+        """
+        duplicate_query = """
+            SELECT
+                (SELECT COUNT(*) FROM event_write_attribution WHERE run_id = :run_id) AS write_rows,
+                (SELECT COUNT(DISTINCT event_id) FROM event_write_attribution WHERE run_id = :run_id) AS write_distinct_events,
+                (SELECT COUNT(*) FROM event_delete_attribution WHERE run_id = :run_id) AS delete_rows,
+                (SELECT COUNT(DISTINCT event_id) FROM event_delete_attribution WHERE run_id = :run_id) AS delete_distinct_events,
+                (SELECT COUNT(*) FROM event_delete_attribution WHERE run_id = :run_id AND NOT reason_registered) AS unknown_delete_reason_total
+        """
+
+        try:
+            metrics_rows = self.execute_query(metrics_query, {"run_id": safe_run_id}) or []
+            write_rows = self.execute_query(write_attr_query, {"run_id": safe_run_id}) or []
+            delete_rows = self.execute_query(delete_attr_query, {"run_id": safe_run_id}) or []
+            duplicate_rows = self.execute_query(duplicate_query, {"run_id": safe_run_id}) or []
+        except Exception as exc:
+            return {
+                "available": False,
+                "run_id": safe_run_id,
+                "status": "FAIL",
+                "violations": [f"query_error:{exc}"],
+                "summary": {},
+                "steps": {},
+                "reconciliation_queries": [
+                    {"name": "metrics_query", "sql": metrics_query.strip()},
+                    {"name": "write_attribution_query", "sql": write_attr_query.strip()},
+                    {"name": "delete_attribution_query", "sql": delete_attr_query.strip()},
+                    {"name": "duplicate_query", "sql": duplicate_query.strip()},
+                ],
+            }
+
+        steps: Dict[str, Dict[str, Any]] = {}
+        for row in metrics_rows:
+            mapping = self._coerce_query_row_to_mapping(
+                row,
+                ["step_norm", "metrics_events_written_total", "metrics_urls_with_events_count"],
+            )
+            step_name = self._normalize_telemetry_step_name(mapping.get("step_norm"))
+            if not step_name:
+                continue
+            steps.setdefault(step_name, {})
+            steps[step_name]["metrics_events_written_total"] = int(mapping.get("metrics_events_written_total", 0) or 0)
+            steps[step_name]["metrics_urls_with_events_count"] = int(mapping.get("metrics_urls_with_events_count", 0) or 0)
+
+        for row in write_rows:
+            mapping = self._coerce_query_row_to_mapping(
+                row,
+                ["step_norm", "write_attribution_count", "distinct_event_id_count"],
+            )
+            step_name = self._normalize_telemetry_step_name(mapping.get("step_norm"))
+            if not step_name:
+                continue
+            steps.setdefault(step_name, {})
+            steps[step_name]["write_attribution_count"] = int(mapping.get("write_attribution_count", 0) or 0)
+            steps[step_name]["write_distinct_event_id_count"] = int(mapping.get("distinct_event_id_count", 0) or 0)
+
+        for row in delete_rows:
+            mapping = self._coerce_query_row_to_mapping(
+                row,
+                ["step_norm", "delete_attribution_count", "unknown_delete_reason_count"],
+            )
+            step_name = self._normalize_telemetry_step_name(mapping.get("step_norm"))
+            if not step_name:
+                continue
+            steps.setdefault(step_name, {})
+            steps[step_name]["delete_attribution_count"] = int(mapping.get("delete_attribution_count", 0) or 0)
+            steps[step_name]["unknown_delete_reason_count"] = int(mapping.get("unknown_delete_reason_count", 0) or 0)
+
+        violations: List[str] = []
+        for step_name, payload in steps.items():
+            metrics_events = int(payload.get("metrics_events_written_total", 0) or 0)
+            write_events = int(payload.get("write_attribution_count", 0) or 0)
+            payload["delta_metrics_vs_write_attribution"] = metrics_events - write_events
+            payload["status"] = "PASS"
+            if metrics_events != write_events:
+                payload["status"] = "FAIL"
+                violations.append(
+                    f"step_mismatch:{step_name}:metrics_events={metrics_events}:write_attribution={write_events}"
+                )
+            if int(payload.get("unknown_delete_reason_count", 0) or 0) > 0:
+                payload["status"] = "FAIL"
+                violations.append(
+                    f"unknown_delete_reasons:{step_name}:{int(payload.get('unknown_delete_reason_count', 0) or 0)}"
+                )
+
+        duplicate_mapping = self._coerce_query_row_to_mapping(
+            duplicate_rows[0] if duplicate_rows else {},
+            [
+                "write_rows",
+                "write_distinct_events",
+                "delete_rows",
+                "delete_distinct_events",
+                "unknown_delete_reason_total",
+            ],
+        )
+        write_rows_total = int(duplicate_mapping.get("write_rows", 0) or 0)
+        write_distinct_total = int(duplicate_mapping.get("write_distinct_events", 0) or 0)
+        delete_rows_total = int(duplicate_mapping.get("delete_rows", 0) or 0)
+        delete_distinct_total = int(duplicate_mapping.get("delete_distinct_events", 0) or 0)
+        unknown_delete_reason_total = int(duplicate_mapping.get("unknown_delete_reason_total", 0) or 0)
+
+        if write_rows_total != write_distinct_total:
+            violations.append(
+                f"duplicate_write_attribution_rows:{write_rows_total - write_distinct_total}"
+            )
+        if delete_rows_total != delete_distinct_total:
+            violations.append(
+                f"duplicate_delete_attribution_rows:{delete_rows_total - delete_distinct_total}"
+            )
+        if unknown_delete_reason_total > 0:
+            violations.append(f"unknown_delete_reason_total:{unknown_delete_reason_total}")
+
+        status = "PASS" if not violations else "FAIL"
+        return {
+            "available": bool(steps or duplicate_rows),
+            "run_id": safe_run_id,
+            "status": status,
+            "violations": violations,
+            "summary": {
+                "steps_with_metrics": len(steps),
+                "write_attribution_rows": write_rows_total,
+                "write_attribution_distinct_event_ids": write_distinct_total,
+                "delete_attribution_rows": delete_rows_total,
+                "delete_attribution_distinct_event_ids": delete_distinct_total,
+                "unknown_delete_reason_total": unknown_delete_reason_total,
+            },
+            "steps": dict(sorted(steps.items())),
+            "reconciliation_queries": [
+                {"name": "metrics_query", "sql": metrics_query.strip()},
+                {"name": "write_attribution_query", "sql": write_attr_query.strip()},
+                {"name": "delete_attribution_query", "sql": delete_attr_query.strip()},
+                {"name": "duplicate_query", "sql": duplicate_query.strip()},
+            ],
+        }
+
     def _delete_events_with_audit(
         self,
         delete_sql_without_returning: str,
