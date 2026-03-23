@@ -944,6 +944,7 @@ class EventSpider(scrapy.Spider):
         if history_reuse.get("reused"):
             time_stamp = datetime.now()
             decision_reason = str(history_reuse.get("reason") or "history_reuse_static_event_detail")
+            history_event_count = int(history_reuse.get("event_count", 0) or 0)
             url_row = [url, "", source, keywords, True, 1, time_stamp, decision_reason]
             db_handler.write_url_to_db(url_row)
             history_features = dict(class_decision.features)
@@ -969,6 +970,7 @@ class EventSpider(scrapy.Spider):
                         "classification_owner_step": class_decision.classification.owner_step,
                         "classification_subtype": class_decision.classification.subtype,
                         "classification_features_json": json.dumps(history_features, default=str),
+                        "events_written": history_event_count,
                         "links_discovered": 0,
                         "links_followed": 0,
                         "time_stamp": time_stamp,
@@ -993,6 +995,7 @@ class EventSpider(scrapy.Spider):
         extraction_succeeded = False
         extraction_skipped = False
         decision_reason = ""
+        events_written = 0
         # build the initial record for this URL
         url_row = [url, parent_url, source, found_keywords, relevant, crawl_try, time_stamp]
 
@@ -1011,10 +1014,18 @@ class EventSpider(scrapy.Spider):
                 archetype_bucket["parent_extraction_attempted"] += 1
                 # Use centralized prompt resolution for consistency across scrapers.
                 prompt_type = resolve_prompt_type(url, fallback_prompt_type="default")
-                llm_status = llm_handler.process_llm_response(url, parent_url, extracted_text, source, keywords, prompt_type)
-                if llm_status:
+                llm_result = llm_handler.process_llm_response(
+                    url,
+                    parent_url,
+                    extracted_text,
+                    source,
+                    keywords,
+                    prompt_type,
+                )
+                if llm_result:
                     extraction_succeeded = True
                     decision_reason = "llm_positive"
+                    events_written += int(getattr(llm_result, "events_written", 1))
                     archetype_bucket["parent_extraction_succeeded"] += 1
                     # mark as relevant
                     url_row[4] = True
@@ -1051,11 +1062,11 @@ class EventSpider(scrapy.Spider):
             if extracted_ids:
                 calendar_ids.update(extracted_ids)
                 continue
-            self.fetch_google_calendar_events(cal_url, url, source, keywords)
+            events_written += self.fetch_google_calendar_events(cal_url, url, source, keywords)
 
         if calendar_ids:
             for calendar_id in sorted(calendar_ids):
-                self.process_calendar_id(calendar_id, response.url, url, source, keywords)
+                events_written += self.process_calendar_id(calendar_id, response.url, url, source, keywords)
 
         if calendar_sources or calendar_ids:
             # mark the page itself as relevant if calendar events fetched
@@ -1122,6 +1133,7 @@ class EventSpider(scrapy.Spider):
                 link_classification = classify_page(url=link)
                 child_time_stamp = datetime.now()
                 child_reason = str(link_reuse.get("reason") or "history_reuse_static_event_detail")
+                child_event_count = int(link_reuse.get("event_count", 0) or 0)
                 self.visited_link.add(link)
                 child_row = [link, url, source, found_keywords, True, 1, child_time_stamp, child_reason]
                 db_handler.write_url_to_db(child_row)
@@ -1146,6 +1158,7 @@ class EventSpider(scrapy.Spider):
                             "classification_owner_step": link_classification.owner_step,
                             "classification_subtype": link_classification.subtype,
                             "classification_features_json": json.dumps({"history_reuse": link_reuse}, default=str),
+                            "events_written": child_event_count,
                             "links_discovered": 0,
                             "links_followed": 0,
                             "time_stamp": child_time_stamp,
@@ -1220,6 +1233,7 @@ class EventSpider(scrapy.Spider):
                     "classification_owner_step": class_decision.classification.owner_step,
                     "classification_subtype": class_decision.classification.subtype,
                     "classification_features_json": json.dumps(class_decision.features),
+                    "events_written": events_written,
                     "links_discovered": len(page_links),
                     "links_followed": links_followed_count,
                     "time_stamp": time_stamp,
@@ -1240,7 +1254,8 @@ class EventSpider(scrapy.Spider):
                 "def fetch_google_calendar_events(): Skipping non-calendar-like URL: %s",
                 calendar_url,
             )
-            return
+            return 0
+        events_written = 0
         for candidate_url in candidate_urls:
             calendar_ids = self.extract_calendar_ids(candidate_url, allow_gmail=True)
             if not calendar_ids:
@@ -1258,7 +1273,8 @@ class EventSpider(scrapy.Spider):
                         )
                         continue
             for calendar_id in calendar_ids:
-                self.process_calendar_id(calendar_id, candidate_url, url, source, keywords)
+                events_written += self.process_calendar_id(calendar_id, candidate_url, url, source, keywords)
+        return events_written
 
 
     @staticmethod
@@ -1420,13 +1436,13 @@ class EventSpider(scrapy.Spider):
                 "def process_calendar_id(): Skipping already processed calendar_id in this run: %s",
                 calendar_id,
             )
-            return
+            return 0
         if calendar_id in self.invalid_calendar_ids:
             logging.info(
                 "def process_calendar_id(): Skipping previously invalid calendar_id: %s",
                 calendar_id,
             )
-            return
+            return 0
         logging.info(f"def process_calendar_id(): Processing calendar_id: {calendar_id} from {calendar_url}")
         events_df = self.get_calendar_events(calendar_id)
         self.processed_calendar_ids.add(calendar_id)
@@ -1435,8 +1451,10 @@ class EventSpider(scrapy.Spider):
             logging.info(f"def process_calendar_id(): Event columns: {list(events_df.columns)}")
             logging.info(f"def process_calendar_id(): Sample event data:\n{events_df.head(1).to_dict('records')}")
             db_handler.write_events_to_db(events_df, calendar_id, calendar_url, source, keywords)
+            return int(len(events_df))
         else:
             logging.warning(f"def process_calendar_id(): No events found for calendar_id: {calendar_id}")
+            return 0
 
 
     def get_calendar_events(self, calendar_id):

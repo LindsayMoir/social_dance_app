@@ -1224,7 +1224,7 @@ class ImageScraper:
         source: str,
         keywords: str,
         page_context_text: str | None = None,
-    ) -> bool:
+    ) -> int:
         """Try multimodal image extraction before falling back to OCR."""
         image_data_url = self._local_image_to_data_url(local_path)
         if not image_data_url:
@@ -1232,7 +1232,7 @@ class ImageScraper:
                 "_process_local_image_path_with_vision(): Unsupported screenshot type for vision path: %s",
                 local_path,
             )
-            return False
+            return 0
 
         prompt_basis_url = canonical_url or parent_url
         vision_context = _build_image_context_text(
@@ -1253,7 +1253,7 @@ class ImageScraper:
                 "_process_local_image_path_with_vision(): Prompt exceeds max length for %s",
                 local_path,
             )
-            return False
+            return 0
 
         openai_model = _VISION_MODEL
         self.logger.info(
@@ -1277,20 +1277,20 @@ class ImageScraper:
                 _VISION_REQUEST_TIMEOUT_SECONDS,
                 local_path,
             )
-            return False
+            return 0
         except Exception:
             self.logger.exception(
                 "_process_local_image_path_with_vision(): Vision query failed for %s",
                 local_path,
             )
-            return False
+            return 0
 
         if not llm_response:
             self.logger.warning(
                 "_process_local_image_path_with_vision(): Vision model returned no response for %s",
                 local_path,
             )
-            return False
+            return 0
 
         parsed_result = self.llm_handler.extract_and_parse_json(llm_response, prompt_basis_url, schema_type)
         if not parsed_result:
@@ -1298,7 +1298,7 @@ class ImageScraper:
                 "_process_local_image_path_with_vision(): Vision model produced no parseable events for %s",
                 local_path,
             )
-            return False
+            return 0
 
         events_df = pd.DataFrame(parsed_result)
         events_df = self.llm_handler._apply_url_context_to_events_df(
@@ -1311,7 +1311,7 @@ class ImageScraper:
                 "_process_local_image_path_with_vision(): Vision model parsed empty events for %s",
                 local_path,
             )
-            return False
+            return 0
 
         self.db_handler.write_events_to_db(
             events_df,
@@ -1325,7 +1325,7 @@ class ImageScraper:
             len(events_df),
             local_path,
         )
-        return True
+        return int(len(events_df))
 
 
     def get_image_links(self) -> pd.DataFrame:
@@ -1651,7 +1651,7 @@ class ImageScraper:
         text = self.ocr_image_to_text(local_path)
         if not text:
             self.logger.info("_process_local_image_path(): No text extracted from screenshot %s", local_path)
-            vision_success = self._process_local_image_path_with_vision(
+            vision_events_written = self._process_local_image_path_with_vision(
                 local_path,
                 canonical_url,
                 parent_url,
@@ -1659,6 +1659,7 @@ class ImageScraper:
                 keywords,
                 page_context_text=page_context_text,
             )
+            vision_success = vision_events_written > 0
             self._record_image_metric(
                 link=canonical_url,
                 parent_url=parent_url,
@@ -1672,7 +1673,7 @@ class ImageScraper:
                 decision_reason="screenshot_empty_ocr",
                 text_extracted=False,
                 keywords_found=False,
-                events_written=1 if vision_success else 0,
+                events_written=vision_events_written,
                 ocr_attempted=ocr_attempted,
                 ocr_succeeded=False,
                 vision_attempted=True,
@@ -1701,7 +1702,7 @@ class ImageScraper:
         found = [kw for kw in self.keywords_list if kw.lower() in llm_text.lower()]
         if not found:
             self.logger.info("_process_local_image_path(): No relevant keywords in screenshot OCR for %s", local_path)
-            vision_success = self._process_local_image_path_with_vision(
+            vision_events_written = self._process_local_image_path_with_vision(
                 local_path,
                 canonical_url,
                 parent_url,
@@ -1709,6 +1710,7 @@ class ImageScraper:
                 keywords,
                 page_context_text=page_context_text,
             )
+            vision_success = vision_events_written > 0
             self._record_image_metric(
                 link=canonical_url,
                 parent_url=parent_url,
@@ -1722,7 +1724,7 @@ class ImageScraper:
                 decision_reason="screenshot_no_keywords",
                 text_extracted=True,
                 keywords_found=False,
-                events_written=1 if vision_success else 0,
+                events_written=vision_events_written,
                 ocr_attempted=ocr_attempted,
                 ocr_succeeded=True,
                 vision_attempted=True,
@@ -1736,7 +1738,7 @@ class ImageScraper:
         prompt_text, schema_type = self.llm_handler.generate_prompt(prompt_basis_url, llm_text, prompt_type)
         if len(prompt_text) > config['crawling']['prompt_max_length']:
             self.logger.warning("_process_local_image_path(): Prompt exceeds maximum length for %s", local_path)
-            vision_success = self._process_local_image_path_with_vision(
+            vision_events_written = self._process_local_image_path_with_vision(
                 local_path,
                 canonical_url,
                 parent_url,
@@ -1744,6 +1746,7 @@ class ImageScraper:
                 keywords,
                 page_context_text=page_context_text,
             )
+            vision_success = vision_events_written > 0
             self._record_image_metric(
                 link=canonical_url,
                 parent_url=parent_url,
@@ -1757,7 +1760,7 @@ class ImageScraper:
                 decision_reason="screenshot_prompt_overflow",
                 text_extracted=True,
                 keywords_found=True,
-                events_written=1 if vision_success else 0,
+                events_written=vision_events_written,
                 ocr_attempted=ocr_attempted,
                 ocr_succeeded=True,
                 vision_attempted=True,
@@ -1766,7 +1769,7 @@ class ImageScraper:
             )
             return vision_success
 
-        status = self.llm_handler.process_llm_response(
+        llm_result = self.llm_handler.process_llm_response(
             prompt_basis_url,
             parent_url,
             llm_text,
@@ -1774,7 +1777,8 @@ class ImageScraper:
             found,
             prompt_type,
         )
-        if status:
+        if llm_result:
+            llm_events_written = int(getattr(llm_result, "events_written", 1))
             self.logger.info("_process_local_image_path(): LLM processing succeeded for screenshot %s", local_path)
             self._record_image_metric(
                 link=canonical_url,
@@ -1789,7 +1793,7 @@ class ImageScraper:
                 decision_reason="screenshot_ocr_llm_success",
                 text_extracted=True,
                 keywords_found=True,
-                events_written=1,
+                events_written=llm_events_written,
                 ocr_attempted=ocr_attempted,
                 ocr_succeeded=True,
                 vision_attempted=False,
@@ -1798,7 +1802,7 @@ class ImageScraper:
             )
             return True
         self.logger.warning("_process_local_image_path(): LLM processing did not produce any events for screenshot %s", local_path)
-        vision_success = self._process_local_image_path_with_vision(
+        vision_events_written = self._process_local_image_path_with_vision(
             local_path,
             canonical_url,
             parent_url,
@@ -1806,6 +1810,7 @@ class ImageScraper:
             keywords,
             page_context_text=page_context_text,
         )
+        vision_success = vision_events_written > 0
         self._record_image_metric(
             link=canonical_url,
             parent_url=parent_url,
@@ -1819,7 +1824,7 @@ class ImageScraper:
             decision_reason="screenshot_ocr_llm_no_events",
             text_extracted=True,
             keywords_found=True,
-            events_written=1 if vision_success else 0,
+            events_written=vision_events_written,
             ocr_attempted=ocr_attempted,
             ocr_succeeded=True,
             vision_attempted=True,
@@ -1955,16 +1960,18 @@ class ImageScraper:
         if not text:
             self.logger.info(f"process_image_url(): No text extracted from {path}, trying vision fallback if allowed.")
             vision_attempted = bool(use_vision_first)
-            vision_success = False
-            if use_vision_first and self._process_local_image_path_with_vision(
+            vision_events_written = 0
+            if use_vision_first:
+                vision_events_written = self._process_local_image_path_with_vision(
                 Path(path),
                 parent_url or image_url,
                 parent_url,
                 source,
                 keywords,
                 page_context_text=page_context_text,
-            ):
-                vision_success = True
+                )
+            vision_success = vision_events_written > 0
+            if vision_success:
                 self.logger.info(
                     "process_image_url(): Vision fallback extraction succeeded for %s after empty OCR",
                     image_url,
@@ -1984,7 +1991,7 @@ class ImageScraper:
                 decision_reason="empty_ocr",
                 text_extracted=False,
                 keywords_found=False,
-                events_written=1 if vision_success else 0,
+                events_written=vision_events_written,
                 ocr_attempted=True,
                 ocr_succeeded=False,
                 vision_attempted=vision_attempted,
@@ -2013,16 +2020,18 @@ class ImageScraper:
         if not found:
             self.logger.info(f"process_image_url(): No relevant keywords in OCR text for {image_url}")
             vision_attempted = bool(use_vision_first)
-            vision_success = False
-            if use_vision_first and self._process_local_image_path_with_vision(
+            vision_events_written = 0
+            if use_vision_first:
+                vision_events_written = self._process_local_image_path_with_vision(
                 Path(path),
                 parent_url or image_url,
                 parent_url,
                 source,
                 keywords,
                 page_context_text=page_context_text,
-            ):
-                vision_success = True
+                )
+            vision_success = vision_events_written > 0
+            if vision_success:
                 self.logger.info(
                     "process_image_url(): Vision fallback extraction succeeded for %s after OCR keyword miss",
                     image_url,
@@ -2042,7 +2051,7 @@ class ImageScraper:
                 decision_reason="ocr_no_keywords",
                 text_extracted=True,
                 keywords_found=False,
-                events_written=1 if vision_success else 0,
+                events_written=vision_events_written,
                 ocr_attempted=True,
                 ocr_succeeded=True,
                 vision_attempted=vision_attempted,
@@ -2059,16 +2068,18 @@ class ImageScraper:
         if len(prompt_text) > config['crawling']['prompt_max_length']:
             logging.warning(f"def process_image_url(): Prompt for URL {image_url} exceeds maximum length. Skipping LLM query.")
             vision_attempted = bool(use_vision_first)
-            vision_success = False
-            if use_vision_first and self._process_local_image_path_with_vision(
+            vision_events_written = 0
+            if use_vision_first:
+                vision_events_written = self._process_local_image_path_with_vision(
                 Path(path),
                 parent_url or image_url,
                 parent_url,
                 source,
                 keywords,
                 page_context_text=page_context_text,
-            ):
-                vision_success = True
+                )
+            vision_success = vision_events_written > 0
+            if vision_success:
                 self.logger.info(
                     "process_image_url(): Vision fallback extraction succeeded for %s after OCR prompt overflow",
                     image_url,
@@ -2086,7 +2097,7 @@ class ImageScraper:
                 decision_reason="ocr_prompt_overflow",
                 text_extracted=True,
                 keywords_found=True,
-                events_written=1 if vision_success else 0,
+                events_written=vision_events_written,
                 ocr_attempted=True,
                 ocr_succeeded=True,
                 vision_attempted=vision_attempted,
@@ -2100,10 +2111,11 @@ class ImageScraper:
             prompt_basis_url,
             image_url,
         )
-        status = self.llm_handler.process_llm_response(
+        llm_result = self.llm_handler.process_llm_response(
             prompt_basis_url, parent_url, llm_text, source, found, prompt_type
         )
-        if status:
+        if llm_result:
+            llm_events_written = int(getattr(llm_result, "events_written", 1))
             self.logger.info(f"process_image_url(): LLM processing succeeded for {image_url}")
             self._record_image_metric(
                 link=image_url,
@@ -2118,7 +2130,7 @@ class ImageScraper:
                 decision_reason="ocr_llm_success",
                 text_extracted=True,
                 keywords_found=True,
-                events_written=1,
+                events_written=llm_events_written,
                 ocr_attempted=True,
                 ocr_succeeded=True,
                 vision_attempted=False,
@@ -2128,16 +2140,18 @@ class ImageScraper:
         else:
             self.logger.warning(f"process_image_url(): LLM processing did not produce any events for {image_url}")
             vision_attempted = bool(use_vision_first)
-            vision_success = False
-            if use_vision_first and self._process_local_image_path_with_vision(
+            vision_events_written = 0
+            if use_vision_first:
+                vision_events_written = self._process_local_image_path_with_vision(
                 Path(path),
                 parent_url or image_url,
                 parent_url,
                 source,
                 keywords,
                 page_context_text=page_context_text,
-            ):
-                vision_success = True
+                )
+            vision_success = vision_events_written > 0
+            if vision_success:
                 self.logger.info(
                     "process_image_url(): Vision fallback extraction succeeded for %s after OCR/LLM miss",
                     image_url,
@@ -2155,7 +2169,7 @@ class ImageScraper:
                 decision_reason="ocr_llm_no_events",
                 text_extracted=True,
                 keywords_found=True,
-                events_written=1 if vision_success else 0,
+                events_written=vision_events_written,
                 ocr_attempted=True,
                 ocr_succeeded=True,
                 vision_attempted=vision_attempted,

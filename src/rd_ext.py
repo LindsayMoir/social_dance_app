@@ -1051,17 +1051,17 @@ async def _process_edge_case_urls(
                     prompt_type = resolve_prompt_type(event_url, fallback_prompt_type=url)
                     normalized_text = str(text or "")
                     found_keywords = any(kw in normalized_text.lower() for kw in all_keywords)
-                    llm_success = bool(
-                        llm_handler.process_llm_response(
-                            event_url,
-                            parent_url,
-                            normalized_text,
-                            source,
-                            keywords,
-                            prompt_type=prompt_type,
-                        )
+                    llm_result = llm_handler.process_llm_response(
+                        event_url,
+                        parent_url,
+                        normalized_text,
+                        source,
+                        keywords,
+                        prompt_type=prompt_type,
                     )
-                    successful_events += int(llm_success)
+                    llm_success = bool(llm_result)
+                    llm_events_written = int(getattr(llm_result, "events_written", int(llm_success)))
+                    successful_events += llm_events_written
                     _record_rd_ext_scrape_metric(
                         db_handler,
                         link=event_url,
@@ -1075,7 +1075,7 @@ async def _process_edge_case_urls(
                         access_succeeded=bool(normalized_text),
                         text_extracted=bool(normalized_text),
                         keywords_found=found_keywords,
-                        events_written=1 if llm_success else 0,
+                        events_written=llm_events_written,
                     )
                 _record_rd_ext_scrape_metric(
                     db_handler,
@@ -1099,18 +1099,18 @@ async def _process_edge_case_urls(
                 prompt_type = resolve_prompt_type(url, fallback_prompt_type=url)
                 normalized_text = str(extracted or "")
                 found_keywords = any(kw in normalized_text.lower() for kw in all_keywords)
-                llm_success = False
+                llm_result = None
                 if normalized_text:
-                    llm_success = bool(
-                        llm_handler.process_llm_response(
-                            url,
-                            parent_url,
-                            normalized_text,
-                            source,
-                            keywords,
-                            prompt_type=prompt_type,
-                        )
+                    llm_result = llm_handler.process_llm_response(
+                        url,
+                        parent_url,
+                        normalized_text,
+                        source,
+                        keywords,
+                        prompt_type=prompt_type,
                     )
+                llm_success = bool(llm_result)
+                events_written = int(getattr(llm_result, "events_written", int(llm_success))) if llm_result else 0
                 _record_rd_ext_scrape_metric(
                     db_handler,
                     link=url,
@@ -1124,7 +1124,7 @@ async def _process_edge_case_urls(
                     access_succeeded=bool(normalized_text),
                     text_extracted=bool(normalized_text),
                     keywords_found=found_keywords,
-                    events_written=1 if llm_success else 0,
+                    events_written=events_written,
                 )
     finally:
         await read_extract.close()

@@ -76,6 +76,7 @@ Note:
       configuration and keys files.
     - Logging should be configured in the main execution context to capture log messages.
 """
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
@@ -100,6 +101,18 @@ import yaml
 from db import DatabaseHandler
 from config_runtime import get_config_path
 from output_paths import codex_review_path
+
+
+@dataclass(frozen=True)
+class EventWriteResult:
+    """Structured event-write outcome for scraper attribution and metrics."""
+
+    success: bool
+    events_written: int = 0
+    decision_reason: str = ""
+
+    def __bool__(self) -> bool:
+        return self.success
 
 
 class LLMHandler:
@@ -278,7 +291,7 @@ class LLMHandler:
         return keywords_list
     
 
-    def process_llm_response(self, url, parent_url, extracted_text, source, keywords_list, prompt_type):
+    def process_llm_response(self, url, parent_url, extracted_text, source, keywords_list, prompt_type) -> EventWriteResult:
         """
         Generate a prompt, query a Language Learning Model (LLM), and process the response for EVENT EXTRACTION.
 
@@ -301,7 +314,8 @@ class LLMHandler:
                 - Must have a non-null schema_type for JSON parsing
                 
         Returns:
-            bool: True if the LLM response is successfully processed and events are written to the database, False otherwise.
+            EventWriteResult: Structured outcome including whether extraction
+            succeeded and how many event rows were written.
         """
         # Generate prompt, query LLM, and process the response.
         prompt_text, schema_type = self.generate_prompt(url, extracted_text, prompt_type)
@@ -379,7 +393,7 @@ class LLMHandler:
                         url,
                         attempt_index,
                     )
-                    return False
+                    return EventWriteResult(success=False, events_written=0, decision_reason="no_events")
                 if len(llm_response) <= min_response_length:
                     self._log_extraction_attempt_result(
                         url=url,
@@ -396,7 +410,7 @@ class LLMHandler:
                         len(llm_response),
                         min_response_length,
                     )
-                    return False
+                    return EventWriteResult(success=False, events_written=0, decision_reason="too_short")
 
                 # Check if this is a schema type that expects JSON parsing
                 if schema_type is None:
@@ -406,7 +420,7 @@ class LLMHandler:
                         "This method is for event extraction, not relevance checking.",
                         url,
                     )
-                    return False
+                    return EventWriteResult(success=False, events_written=0, decision_reason="schema_type_none")
 
                 parsed_result = self.extract_and_parse_json(llm_response, url, schema_type)
 
@@ -492,9 +506,14 @@ class LLMHandler:
                             )
                         except Exception as _e:
                             logging.warning(f"process_llm_response: Failed to apply Detected_Date fill logic: {_e}")
+                    events_written = int(len(events_df))
                     self.db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_list)
                     logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
-                    return True
+                    return EventWriteResult(
+                        success=True,
+                        events_written=events_written,
+                        decision_reason="llm_success",
+                    )
 
                 if attempt_index < len(prompt_attempts):
                     self._log_extraction_attempt_result(
@@ -539,7 +558,7 @@ class LLMHandler:
                     continue
 
         logging.error(f"def process_llm_response: Failed to process LLM response for URL: {url}")
-        return False
+        return EventWriteResult(success=False, events_written=0, decision_reason="hard_failure")
 
     @staticmethod
     def _log_extraction_attempt_result(

@@ -241,13 +241,20 @@ class GmailProcessor:
                 )
                 # Process extracted text with LLMHandler (this will call write_events_to_db)
                 parent_url = 'email inbox'
-                llm_status = self.llm_handler.process_llm_response(email, parent_url, extracted_text, source, keywords, prompt_type)
+                llm_result = self.llm_handler.process_llm_response(
+                    email,
+                    parent_url,
+                    extracted_text,
+                    source,
+                    keywords,
+                    prompt_type,
+                )
 
                 # Get event count after processing this email
                 events_after = db_handler.execute_query("SELECT COUNT(*) FROM events")[0][0]
                 events_added = events_after - events_before
 
-                if llm_status:
+                if llm_result:
                     logging.info(f"def _process_from_gmail(): process_llm_response success for email: {email}")
                     successful_emails.append(email)
                     email_results[email] = events_added

@@ -489,6 +489,7 @@ class EventbriteScraper:
         extracted_text = await self.read_extract.extract_event_text(event_url)
         found_keywords: list[str] = []
         llm_success = False
+        llm_events_written = 0
 
         if extracted_text:
             self.urls_with_extracted_text += 1  # Count extracted text URLs
@@ -502,11 +503,19 @@ class EventbriteScraper:
                 # Process the extracted text with the LLM for event extraction (not relevance checking)
                 # Use 'default' prompt for event extraction, regardless of what prompt_type was used for relevance
                 event_extraction_prompt_type = resolve_prompt_type(event_url, fallback_prompt_type='default')
-                response = self.llm_handler.process_llm_response(event_url, parent_url, extracted_text, source, found_keywords, event_extraction_prompt_type)
-                llm_success = bool(response)
+                llm_result = self.llm_handler.process_llm_response(
+                    event_url,
+                    parent_url,
+                    extracted_text,
+                    source,
+                    found_keywords,
+                    event_extraction_prompt_type,
+                )
+                llm_success = bool(llm_result)
 
-                if response:
-                    self.events_written_to_db += 1  # Count events written to the database
+                llm_events_written = int(getattr(llm_result, "events_written", int(llm_success)))
+                if llm_result:
+                    self.events_written_to_db += llm_events_written
             else:
                 logging.info(f"def process_event(): No keywords found in text for: {event_url}")
         else:
@@ -528,7 +537,7 @@ class EventbriteScraper:
             access_succeeded=bool(extracted_text),
             text_extracted=bool(extracted_text),
             keywords_found=bool(found_keywords),
-            events_written=1 if llm_success else 0,
+            events_written=llm_events_written,
         )
 
 

@@ -118,6 +118,54 @@ def _safe_bool(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _record_fb_scrape_metric(
+    *,
+    link: str,
+    parent_url: str,
+    source: str,
+    keywords: list[str] | str,
+    extraction_attempted: bool,
+    extraction_succeeded: bool,
+    extraction_skipped: bool,
+    decision_reason: str,
+    access_succeeded: bool,
+    text_extracted: bool,
+    keywords_found: bool,
+    events_written: int,
+    archetype: str = "facebook_event",
+) -> None:
+    """Persist Facebook per-URL telemetry into the shared scrape metrics table."""
+    if db_handler is None:
+        return
+    try:
+        db_handler.write_url_scrape_metric(
+            {
+                "run_id": os.getenv("DS_RUN_ID", "na"),
+                "step_name": os.getenv("DS_STEP_NAME", "fb"),
+                "link": link,
+                "parent_url": parent_url,
+                "source": source,
+                "keywords": keywords,
+                "archetype": archetype,
+                "extraction_attempted": extraction_attempted,
+                "extraction_succeeded": extraction_succeeded,
+                "extraction_skipped": extraction_skipped,
+                "decision_reason": decision_reason,
+                "handled_by": "fb.py",
+                "routing_reason": decision_reason,
+                "access_succeeded": access_succeeded,
+                "text_extracted": text_extracted,
+                "keywords_found": keywords_found,
+                "events_written": int(events_written or 0),
+                "links_discovered": 0,
+                "links_followed": 0,
+                "time_stamp": datetime.now(),
+            }
+        )
+    except Exception as exc:
+        logging.warning("_record_fb_scrape_metric(): failed for %s: %s", link, exc)
+
+
 def should_use_fb_checkpoint(config_data: dict, is_render: bool) -> bool:
     """
     Decide whether fb.py should read facebook URLs from checkpoint CSV.
@@ -1581,6 +1629,7 @@ class FacebookEventScraper():
         if history_reuse.get("reused"):
             decision_reason = str(history_reuse.get("reason") or "history_reuse_static_event_detail")
             reused_timestamp = datetime.now()
+            reused_event_count = int(history_reuse.get("event_count", 0) or 0)
             db_handler.write_url_to_db(
                 [url, parent_url, source, keywords, True, 1, reused_timestamp, decision_reason]
             )
@@ -1606,6 +1655,7 @@ class FacebookEventScraper():
                         "classification_owner_step": route_classification.owner_step,
                         "classification_subtype": route_classification.subtype,
                         "classification_features_json": json.dumps({"history_reuse": history_reuse}, default=str),
+                        "events_written": reused_event_count,
                         "links_discovered": 0,
                         "links_followed": 0,
                         "time_stamp": reused_timestamp,
@@ -1613,7 +1663,7 @@ class FacebookEventScraper():
                 )
             except Exception as e:
                 logging.warning("process_fb_url: Failed recording history-reuse metric for %s: %s", url, e)
-            self.events_written_to_db += int(history_reuse.get("event_count", 0) or 0)
+            self.events_written_to_db += reused_event_count
             self.urls_visited.add(url)
             logging.info(
                 "process_fb_url: Reused static event-detail URL from history and skipped navigation: %s (%s)",
@@ -1643,6 +1693,20 @@ class FacebookEventScraper():
         if not extracted_text:
             logging.info(f"process_fb_url: no text for {url}")
             db_handler.write_url_to_db(url_row)
+            _record_fb_scrape_metric(
+                link=url,
+                parent_url=parent_url,
+                source=source,
+                keywords=keywords,
+                extraction_attempted=True,
+                extraction_succeeded=False,
+                extraction_skipped=False,
+                decision_reason="no_text",
+                access_succeeded=True,
+                text_extracted=False,
+                keywords_found=False,
+                events_written=0,
+            )
             return
         self.urls_with_extracted_text += 1
 
@@ -1651,6 +1715,20 @@ class FacebookEventScraper():
         if not keywords_found:
             logging.info(f"process_fb_url: no keywords in {url}")
             db_handler.write_url_to_db(url_row)
+            _record_fb_scrape_metric(
+                link=url,
+                parent_url=parent_url,
+                source=source,
+                keywords=keywords,
+                extraction_attempted=True,
+                extraction_succeeded=False,
+                extraction_skipped=False,
+                decision_reason="no_keywords",
+                access_succeeded=True,
+                text_extracted=True,
+                keywords_found=False,
+                events_written=0,
+            )
             return
         self.urls_with_found_keywords += 1
 
@@ -1659,12 +1737,40 @@ class FacebookEventScraper():
         prompt, schema_type = llm_handler.generate_prompt(url, extracted_text, prompt_type)
         if len(prompt) > config['crawling']['prompt_max_length']:
             logging.warning(f"def process_fb_url(): Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
+            _record_fb_scrape_metric(
+                link=url,
+                parent_url=parent_url,
+                source=source,
+                keywords=keywords_found,
+                extraction_attempted=True,
+                extraction_succeeded=False,
+                extraction_skipped=False,
+                decision_reason="prompt_overflow",
+                access_succeeded=True,
+                text_extracted=True,
+                keywords_found=True,
+                events_written=0,
+            )
             return
         
         llm_response = llm_handler.query_llm(url, prompt, schema_type)
         if not llm_response or "No events found" in llm_response:
             logging.info(f"process_fb_url: LLM no events for {url}")
             db_handler.write_url_to_db(url_row)
+            _record_fb_scrape_metric(
+                link=url,
+                parent_url=parent_url,
+                source=source,
+                keywords=keywords_found,
+                extraction_attempted=True,
+                extraction_succeeded=False,
+                extraction_skipped=False,
+                decision_reason="llm_no_events",
+                access_succeeded=True,
+                text_extracted=True,
+                keywords_found=True,
+                events_written=0,
+            )
             return
 
         # 5) Parse JSON and write to DB
@@ -1672,11 +1778,39 @@ class FacebookEventScraper():
         if not parsed:
             logging.warning(f"process_fb_url: empty LLM response for {url}")
             db_handler.write_url_to_db(url_row)
+            _record_fb_scrape_metric(
+                link=url,
+                parent_url=parent_url,
+                source=source,
+                keywords=keywords_found,
+                extraction_attempted=True,
+                extraction_succeeded=False,
+                extraction_skipped=False,
+                decision_reason="parse_failed",
+                access_succeeded=True,
+                text_extracted=True,
+                keywords_found=True,
+                events_written=0,
+            )
             return
         events_df = pd.DataFrame(parsed)
         if events_df.empty:
             logging.warning(f"process_fb_url: empty DataFrame for {url}")
             db_handler.write_url_to_db(url_row)
+            _record_fb_scrape_metric(
+                link=url,
+                parent_url=parent_url,
+                source=source,
+                keywords=keywords_found,
+                extraction_attempted=True,
+                extraction_succeeded=False,
+                extraction_skipped=False,
+                decision_reason="empty_events_df",
+                access_succeeded=True,
+                text_extracted=True,
+                keywords_found=True,
+                events_written=0,
+            )
             return
 
         # Ensure URL column is populated
@@ -1685,7 +1819,22 @@ class FacebookEventScraper():
 
         # 6) Write events and mark URL
         db_handler.write_events_to_db(events_df, url, parent_url, source, keywords_found)
-        self.events_written_to_db += len(events_df)
+        events_written = int(len(events_df))
+        self.events_written_to_db += events_written
+        _record_fb_scrape_metric(
+            link=url,
+            parent_url=parent_url,
+            source=source,
+            keywords=keywords_found,
+            extraction_attempted=True,
+            extraction_succeeded=True,
+            extraction_skipped=False,
+            decision_reason="llm_success",
+            access_succeeded=True,
+            text_extracted=True,
+            keywords_found=True,
+            events_written=events_written,
+        )
     
 
     def driver_fb_search(self) -> None:
@@ -1741,20 +1890,70 @@ class FacebookEventScraper():
 
                     # Set prompt and process LLM response immediately
                     prompt_type = resolve_prompt_type(url, fallback_prompt_type='fb')
-                    llm_response = llm_handler.process_llm_response(url, parent_url, extracted_text, source, found_keywords, prompt_type)
+                    llm_result = llm_handler.process_llm_response(
+                        url,
+                        parent_url,
+                        extracted_text,
+                        source,
+                        found_keywords,
+                        prompt_type,
+                    )
 
                     # If events were successfully extracted and written to the DB
-                    if llm_response:
-                        self.events_written_to_db += 1
+                    if llm_result:
+                        events_written = int(getattr(llm_result, "events_written", 1))
+                        self.events_written_to_db += events_written
+                        _record_fb_scrape_metric(
+                            link=url,
+                            parent_url=parent_url,
+                            source=source,
+                            keywords=found_keywords,
+                            extraction_attempted=True,
+                            extraction_succeeded=True,
+                            extraction_skipped=False,
+                            decision_reason="llm_success",
+                            access_succeeded=True,
+                            text_extracted=True,
+                            keywords_found=True,
+                            events_written=events_written,
+                        )
                         logging.info(f"def driver_fb_search(): Events successfully written to DB for {url}.")
                     else:
                         logging.warning(f"def driver_fb_search(): No events extracted for {url}.")
                         url_row = [url, parent_url, source, found_keywords, False, 1, datetime.now()]
                         db_handler.write_url_to_db(url_row)
+                        _record_fb_scrape_metric(
+                            link=url,
+                            parent_url=parent_url,
+                            source=source,
+                            keywords=found_keywords,
+                            extraction_attempted=True,
+                            extraction_succeeded=False,
+                            extraction_skipped=False,
+                            decision_reason="llm_no_events",
+                            access_succeeded=True,
+                            text_extracted=True,
+                            keywords_found=True,
+                            events_written=0,
+                        )
                 else:
                     keywords = ''
                     url_row = [url, parent_url, source, keywords, False, 1, datetime.now()]
                     db_handler.write_url_to_db(url_row)
+                    _record_fb_scrape_metric(
+                        link=url,
+                        parent_url=parent_url,
+                        source=source,
+                        keywords=keywords,
+                        extraction_attempted=True,
+                        extraction_succeeded=False,
+                        extraction_skipped=False,
+                        decision_reason="no_keywords",
+                        access_succeeded=True,
+                        text_extracted=True,
+                        keywords_found=False,
+                        events_written=0,
+                    )
                     logging.info(f"def driver_fb_search(): No keywords found in extracted text for URL: {url}.")
 
             # Scrape events with streaming callback (no accumulation)
