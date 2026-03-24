@@ -1496,7 +1496,10 @@ class ValidationTestRunner:
 
         query = """
             SELECT
-                COALESCE(NULLIF(step_name, ''), REPLACE(COALESCE(handled_by, ''), '.py', '')) AS step_norm,
+                COALESCE(
+                    NULLIF(REPLACE(COALESCE(handled_by, ''), '.py', ''), ''),
+                    NULLIF(step_name, '')
+                ) AS step_norm,
                 COUNT(*) AS total_urls,
                 SUM(CASE WHEN access_succeeded THEN 1 ELSE 0 END) AS access_success_count,
                 SUM(CASE WHEN text_extracted THEN 1 ELSE 0 END) AS text_extracted_count,

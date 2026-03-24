@@ -568,6 +568,59 @@ def test_summarize_scraper_step_telemetry_normalizes_all_scrapers() -> None:
     assert summary["steps"]["images"]["fallback_usage_rate_pct"] == 40.0
 
 
+def test_summarize_scraper_step_telemetry_prefers_handled_by_over_pipeline_step() -> None:
+    runner = _build_runner()
+
+    class QueryCapturingDb:
+        def __init__(self) -> None:
+            self.query_text = ""
+
+        def execute_query(self, query, params=None):
+            self.query_text = str(query)
+            return [
+                {
+                    "step_norm": "images",
+                    "total_urls": 5,
+                    "access_success_count": 4,
+                    "text_extracted_count": 3,
+                    "keywords_found_count": 2,
+                    "extraction_attempted_count": 4,
+                    "extraction_success_count": 2,
+                    "urls_with_events_count": 2,
+                    "events_written_total": 3,
+                    "ocr_attempted_count": 4,
+                    "ocr_success_count": 3,
+                    "vision_attempted_count": 2,
+                    "vision_success_count": 1,
+                    "fallback_used_count": 2,
+                },
+                {
+                    "step_norm": "rd_ext",
+                    "total_urls": 7,
+                    "access_success_count": 6,
+                    "text_extracted_count": 6,
+                    "keywords_found_count": 5,
+                    "extraction_attempted_count": 6,
+                    "extraction_success_count": 4,
+                    "urls_with_events_count": 4,
+                    "events_written_total": 9,
+                    "ocr_attempted_count": 0,
+                    "ocr_success_count": 0,
+                    "vision_attempted_count": 0,
+                    "vision_success_count": 0,
+                    "fallback_used_count": 0,
+                },
+            ]
+
+    runner.db_handler = QueryCapturingDb()
+
+    summary = runner._summarize_scraper_step_telemetry("run-telemetry")
+
+    assert "REPLACE(COALESCE(handled_by, ''), '.py', '')" in runner.db_handler.query_text
+    assert summary["steps"]["images"]["total_urls"] == 5
+    assert summary["steps"]["rd_ext"]["total_urls"] == 7
+
+
 def test_persist_scraper_step_telemetry_metrics_records_trend_keys() -> None:
     runner = _build_runner()
     fake_db = _FakeDbHandler()
