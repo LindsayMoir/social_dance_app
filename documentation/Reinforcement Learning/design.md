@@ -186,6 +186,161 @@ When this design is implemented, Codex should be able to answer questions like:
 
 That is the minimum viable foundation for a self-healing loop.
 
+## Recommended First Subsystem
+The first self-improving subsystem should not be the entire application. It should be the page-parsing and parser-routing subsystem.
+
+Rationale:
+1. it is one of the highest-value failure surfaces in the product
+2. it has a relatively clean input-decision-output-evaluation loop
+3. it is much easier to constrain safely than whole-application automation
+4. it directly reduces the amount of human intervention required after each `pipeline.py` run
+
+Scope of the first subsystem:
+1. page classification and archetype assignment
+2. extractor selection, such as `scraper`, `rd_ext`, `images`, or deterministic special-case paths
+3. prompt selection, including URL-specific prompt choice
+4. provider and model routing for extraction attempts
+5. parse confidence estimation and likely-bad-output detection
+6. clustering repeated parsing failures into reusable remediation categories
+7. local fetch-artifact capture for offline parser iteration
+
+This subsystem should be treated as the first practical milestone toward reinforcement-style optimization.
+
+It is intentionally narrower than:
+1. end-to-end autonomous software modification
+2. fully automatic self-healing across the whole pipeline
+3. unconstrained RL over all pipeline decisions
+
+The immediate goal is not "make the whole application self-learning." The immediate goal is:
+1. learn which parsing strategy works best for a given page shape
+2. detect when extraction is probably wrong
+3. reduce silent bad writes
+4. route unfamiliar or low-confidence pages into a structured remediation loop
+5. replay parser changes quickly against locally stored page artifacts instead of repeatedly hitting live URLs
+
+Success criteria for the first subsystem:
+1. fewer human-discovered parsing defects per run
+2. improved replay accuracy on parser-sensitive URLs
+3. fewer invalid rows that are later deleted or remediated
+4. better handling of unfamiliar page shapes without immediate manual coding
+
+Human involvement after each run should therefore focus on:
+1. reviewing prioritized parsing failure clusters rather than raw logs
+2. labeling the failure mode for important mismatches
+3. approving or rejecting narrow remediation proposals
+4. supplying occasional ground-truth correction on new page types
+
+### Local Artifact Corpus For Parser Learning
+This first subsystem should include a local corpus of fetch artifacts so parser work can be iterated quickly and reproducibly without repeatedly scraping live URLs.
+
+Why this is important:
+1. it separates parser quality from network failures, rate limits, and site drift
+2. it makes tight offline iteration possible for parser rules, prompts, replay matching, and routing policies
+3. it creates a stable state snapshot suitable for offline reward modeling and later reinforcement-style learning
+4. it reduces turnaround time when investigating parser regressions
+
+What should be captured:
+1. for static pages: raw response body, final URL, status code, headers, fetch timestamp, and content hash
+2. for JS-rendered pages: rendered HTML after Playwright, original URL, final URL, render timestamp, and content hash
+3. for image-heavy pages: rendered HTML, extracted text, OCR text, image URLs, and stable image hashes or local image artifacts when needed
+4. for social and listing pages: the exact page artifact used for replay comparison, not only the normalized parse output
+
+What should not be assumed:
+1. raw `requests` HTML alone is not sufficient for JS-heavy pages
+2. Beautiful Soup output is not a substitute for storing the original raw or rendered artifact
+3. this corpus should not start as a full capture of every URL; it should start with replay-target URLs, high-value sources, and important failures
+
+Persistence layer:
+1. persist artifact metadata and lookup fields in Postgres
+2. persist large artifact payloads such as raw HTML, rendered HTML, OCR blobs, screenshots, and image binaries on the filesystem first
+3. use `storage_path` in the database to point to the stored payload
+4. only move heavy payloads to object storage later if local volume requires it
+
+Initial capture policy:
+1. always capture artifacts for replay-row failures used in the validation report
+2. capture artifacts for a bounded allowlist of high-value or high-volume domains
+3. capture artifacts for URLs that trigger new mismatch categories or low-confidence parse outcomes
+4. defer full-run broad capture until storage, retention, and deduplication behavior are proven
+
+Operational use:
+1. the validation and replay framework should be able to run against local artifacts instead of live URLs
+2. parser experiments should prefer the local artifact corpus for fast iteration
+3. live fetching should remain available for new discovery and for confirming that a source has materially changed
+
+Success condition:
+1. a parser bug can be reproduced locally from a stored artifact
+2. a proposed parser fix can be tested against that artifact set without re-hitting the source site
+3. the artifact corpus becomes the stable training and evaluation bed for parser-policy improvements
+
+### Artifact Corpus Operating Model
+The artifact corpus should not create a second independent parser stack. It should reuse the same extraction logic as the live scrapers while swapping the fetch source.
+
+Core rule:
+1. same extraction methods, different fetch source
+
+Desired shape:
+1. live path: `url -> fetch/render -> normalize artifact -> extract -> write/score`
+2. offline path: `stored artifact -> normalize artifact -> extract -> score`
+
+Implication:
+1. scraper code should be refactored so fetch/render is injectable
+2. extraction logic should be callable from either a live URL or a stored artifact
+3. artifact replay should not duplicate parsing logic in separate ad hoc scripts
+
+Expected runners and utilities:
+1. artifact capture writer that saves raw or rendered page artifacts during live runs
+2. offline replay runner that loads stored artifacts and calls the same extraction/classification methods used by `rd_ext.py`, `scraper.py`, `fb.py`, and `images.py`
+3. artifact evaluation runner that compares offline extraction output to expected or validated outcomes
+4. targeted experiment runner for bounded slices such as one domain, one mismatch category, or one page archetype
+
+### How This Fits With `pipeline.py`
+The first implementation should not put full offline artifact replay into the main scraping critical path.
+
+Initial integration model:
+1. `pipeline.py` captures artifacts during normal live scraping for selected URLs
+2. validation identifies important parser failures and high-value replay targets
+3. offline replay runs after the scrape, or as a separate validation/post-run workflow, against stored artifacts
+4. the report and later automation consume those offline results
+
+Why this order is preferred:
+1. it keeps production scraping focused on source discovery and insertion
+2. it avoids slowing the main run with large offline experiment loops
+3. it allows parser iteration to happen much more frequently than live scraping
+
+Recommended rollout:
+1. add artifact capture for replay-target URLs, high-value domains, and important failures
+2. refactor one scraper family so extraction can run from stored artifacts
+3. add an offline replay command for that scraper family
+4. surface offline replay results in the validation report
+5. only later consider a bounded `artifact_replay_validation` step in `pipeline.py`
+
+### Parser Workflow Report Follow-Ups
+The validation report should evolve into the operational control surface for this first subsystem. The following report improvements should be treated as planned follow-up work so they are not lost:
+
+1. add direct links from each priority URL row to the relevant replay row number in `comprehensive_test_report.html`
+2. persist the parser-improvement workflow as a JSON artifact, not only as HTML, so Codex and later automation can consume it directly
+3. rank priority URLs by estimated impact, not only by mismatch frequency
+4. include a `fix_owner` field such as `replay_matcher`, `scraper`, `db_write_guard`, or `normalization`
+
+Rationale:
+1. direct links reduce reviewer time spent searching the report
+2. JSON persistence makes the workflow machine-actionable for later automated triage
+3. impact-based ranking is a better prioritization strategy than raw mismatch counts alone
+4. explicit ownership reduces ambiguity about where the next change should be made
+
+Operational intent:
+1. the report should tell the reviewer exactly which URL to inspect first
+2. it should state where the likely fix belongs
+3. it should provide an acceptance test for the next validation-only rerun
+4. it should become progressively more structured until it can drive semi-automated remediation queues
+
+This first subsystem aligns with the broader learning progression below:
+1. evaluator-driven optimization first
+2. offline reward modeling second
+3. constrained policy learning later
+
+It should be considered the recommended first thing to implement after the telemetry foundation is trustworthy enough to support it.
+
 ## Existing Telemetry Baseline
 The current codebase already provides useful building blocks:
 
@@ -274,6 +429,17 @@ Tables:
 1. existing `url_scrape_metrics`
 2. new `url_decision_events`
 3. new `llm_attempt_metrics`
+4. new `fetch_artifacts`
+
+The `fetch_artifacts` layer should preserve the raw or rendered page state that parser decisions operated on.
+
+Purpose:
+1. replay parser decisions against stable local artifacts
+2. distinguish fetch instability from extraction defects
+3. support offline parser evaluation and future RL-style policy learning
+
+Implementation requirement:
+1. `fetch_artifacts` should be paired with extraction interfaces that can consume stored artifacts directly, not only live URLs
 
 ### Layer 3. Event Write and Delete Attribution
 Stores lifecycle evidence for every event row.
@@ -450,6 +616,57 @@ Engineering requirements:
 1. avoid storing full prompts or full responses by default
 2. store prompt hashes, bounded previews, token counts, and derived metadata unless full payload retention is explicitly required
 3. separate raw payload retention from default longitudinal telemetry
+
+### 5a. `fetch_artifacts`
+This table or artifact registry should capture the frozen page state that parser decisions used.
+
+Suggested columns:
+1. `artifact_id`
+2. `run_id`
+3. `step_name`
+4. `url`
+5. `parent_url`
+6. `fetch_method`
+7. `artifact_type`
+8. `original_url`
+9. `final_url`
+10. `http_status`
+11. `content_type`
+12. `fetched_at_utc`
+13. `content_hash`
+14. `storage_path`
+15. `headers_json`
+16. `artifact_meta_json`
+
+`fetch_method` examples:
+1. `requests`
+2. `playwright_render`
+3. `image_download`
+4. `ocr_input`
+
+`artifact_type` examples:
+1. `raw_html`
+2. `rendered_html`
+3. `image_binary`
+4. `ocr_text`
+5. `linked_image_manifest`
+
+Purpose:
+1. reproduce parser defects against a stable local artifact
+2. compare parser or routing variants against the same input
+3. allow offline replay without repeated live fetches
+
+Engineering requirements:
+1. use content hashes to deduplicate identical artifacts
+2. keep large binaries on disk or object storage and persist references in `storage_path`
+3. capture enough metadata to reproduce how the artifact was obtained
+4. support bounded retention so artifact storage does not grow without control
+
+Persistence model:
+1. Postgres is the canonical metadata registry for artifact discovery, provenance, and joins
+2. the filesystem is the initial canonical payload store for heavy artifact bodies
+3. `storage_path` should point to a deterministic local artifact location during the first implementation
+4. object storage is a later optimization, not a prerequisite for the first rollout
 
 ### 6. `event_write_attribution`
 This table is mandatory if the goal is reinforcement-style improvement.
@@ -872,6 +1089,8 @@ Conclusion:
 ## Recommended Learning Progression
 The recommended progression is:
 
+The first applied instance of this progression should be the page-parsing and parser-routing subsystem described above.
+
 ### Stage 1. Evaluator-Driven Optimization
 Use telemetry and scorecards to improve heuristics and code paths manually or with Codex assistance.
 
@@ -1067,26 +1286,32 @@ Goal:
 Tasks:
 1. add `url_decision_events`
 2. add `llm_attempt_metrics`
-3. add cost and latency fields
-4. add policy snapshots
-5. define retention and preview/redaction rules for raw prompt/response telemetry
+3. add `fetch_artifacts` capture for selected parser-learning URLs
+4. add cost and latency fields
+5. add policy snapshots
+6. define retention and preview/redaction rules for raw prompt/response telemetry
+7. add at least one offline replay runner that consumes stored artifacts through shared extraction interfaces
 
 Deliverables:
-1. migrations for `url_decision_events`, `llm_attempt_metrics`, `run_context`, and `run_policy_snapshot`
+1. migrations for `url_decision_events`, `llm_attempt_metrics`, `fetch_artifacts`, `run_context`, and `run_policy_snapshot`
 2. provider-attempt logging in `LLMHandler`
 3. decision logging for `should_process_url`, provider routing, ownership routing, and fanout
-4. persisted resolved runtime config snapshot per run
-5. retention and redaction policy document or section linked from implementation notes
+4. initial artifact storage convention and capture path for selected URLs
+5. one bounded offline replay path for a selected scraper family
+6. persisted resolved runtime config snapshot per run
+7. retention and redaction policy document or section linked from implementation notes
 
 Validation:
 1. provider-attempt counts reconcile with run summaries
 2. latency and cost fields are populated for the majority of LLM attempts
 3. decision rows exist for the major branch points in `scraper.py`, `images.py`, `fb.py`, and `rd_ext.py`
+4. at least one parser defect can be reproduced locally from a stored artifact
 
 Exit criteria:
 1. Codex can query provider/model outcomes without parsing text logs
 2. major routing and fanout decisions are recoverable from structured telemetry
 3. each run has a stable config and policy snapshot
+4. at least one scraper family supports offline artifact replay using shared extraction logic
 
 ### Phase 3. Validation Labels and Reward Signals
 Goal:

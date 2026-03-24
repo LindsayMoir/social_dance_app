@@ -1148,6 +1148,78 @@ def test_recommendation_plan_uses_existing_scorecard_signals() -> None:
     assert "recommended_actions" in recommendation_plan["top_issues"][0]
 
 
+def test_build_parser_improvement_workflow_html_surfaces_ordered_fix_plan() -> None:
+    runner = _build_runner()
+    accuracy_replay_summary = {
+        "rows": [
+            {
+                "is_match": False,
+                "mismatch_category": "wrong_date",
+                "mismatch_details": "core field mismatch",
+                "baseline": {
+                    "event_name": "Sunday Blues Services",
+                    "url": "https://www.debrhymerband.com/shows",
+                },
+                "replay": {
+                    "event_name": "Blues Jam",
+                    "url": "https://www.debrhymerband.com/shows",
+                },
+            },
+            {
+                "is_match": False,
+                "mismatch_category": "wrong_replay_event_selection",
+                "mismatch_details": "listing page chose wrong event",
+                "baseline": {
+                    "event_name": "Sunday Blues Services",
+                    "url": "https://livevictoria.com/calendar/music",
+                },
+                "replay": {
+                    "event_name": "Flamenco Tablao",
+                    "url": "https://livevictoria.com/calendar/music",
+                },
+            },
+        ]
+    }
+    recommendation_plan = {
+        "top_issues": [
+            {"issue_type": "domain_regression", "title": "Investigate replay regression on livevictoria.com"},
+        ]
+    }
+    action_queue = {
+        "items": [
+            {
+                "title": "Fix replay matching for listing pages",
+                "reason": "replay rows are pairing the wrong event from scraper output",
+                "suggested_change": "tighten parser/replay matcher",
+                "acceptance_test": "replay row matches on event_name and time",
+            }
+        ]
+    }
+    domain_evaluation_summary = {
+        "worst_domains": [
+            {"domain": "livevictoria.com"},
+            {"domain": "www.debrhymerband.com"},
+        ]
+    }
+
+    html = runner._build_parser_improvement_workflow_html(
+        accuracy_replay_summary=accuracy_replay_summary,
+        recommendation_plan=recommendation_plan,
+        action_queue=action_queue,
+        domain_evaluation_summary=domain_evaluation_summary,
+    )
+
+    assert "Recommended first self-improving subsystem" in html
+    assert "Ordered Parser Workflow" in html
+    assert "Work parser/replay mismatches before runtime or cost tuning." in html
+    assert "python tests/validation/test_runner.py || true" in html
+    assert "Top Parser Mismatch Categories" in html
+    assert "wrong_replay_event_selection" in html
+    assert "https://livevictoria.com/calendar/music" in html
+    assert "Likely Fix Location" in html
+    assert "Replay matcher in tests/validation/test_runner.py" in html
+
+
 def test_classifier_performance_summary_includes_stage_domain_details() -> None:
     runner = _build_runner()
 
