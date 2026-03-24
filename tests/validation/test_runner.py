@@ -52,6 +52,26 @@ from chatbot_evaluator import (
     ChatbotScorer,
     generate_chatbot_report
 )
+from replay_matcher import ReplayMatcher
+from replay_fetcher import ReplayArtifact, ReplayFetcher
+from parser_workflow import ParserWorkflowRenderer
+from replay_utils import (
+    descriptions_equivalent,
+    extract_replay_links,
+    extract_visible_text_for_replay,
+    is_calendar_event_url,
+    is_placeholder_source,
+    is_social_platform_url,
+    name_contains_variant,
+    name_similarity,
+    normalize_dance_style_tokens,
+    normalize_date_value,
+    normalize_optional_int,
+    normalize_text_value,
+    normalize_time_value,
+    normalize_url_value,
+    times_equivalent_with_12h_guard,
+)
 
 # Import existing utilities
 from classifier_training_queue import (
@@ -111,12 +131,106 @@ class ValidationTestRunner:
         self._replay_fb_scraper = None
         self._replay_fb_module = None
         self._replay_rd_ext_extractor = None
+        self._parser_workflow_renderer = ParserWorkflowRenderer(escape_html=self._escape_html)
+        self._replay_matcher = ReplayMatcher(
+            normalize_text_value=self._normalize_text_value,
+            normalize_date_value=self._normalize_date_value,
+            normalize_time_value=self._normalize_time_value,
+            normalize_url_value=self._normalize_url_value,
+            normalize_optional_int=self._normalize_optional_int,
+            name_similarity=self._name_similarity,
+            name_contains_variant=self._name_contains_variant,
+            times_equivalent_with_12h_guard=self._times_equivalent_with_12h_guard,
+            is_placeholder_source=self._is_placeholder_source,
+            is_calendar_event_url=self._is_calendar_event_url,
+            is_social_platform_url=self._is_social_platform_url,
+            llm_adjudicate_event_match=self._llm_adjudicate_event_match,
+        )
+        self._replay_fetcher = ReplayFetcher(
+            is_social_platform_url=self._is_social_platform_url,
+            extract_visible_text_for_replay=self._extract_visible_text_for_replay,
+            extract_replay_links=self._extract_replay_links,
+            parse_replay_events_from_text=self._parse_replay_events_from_text,
+            fetch_replay_events_via_rd_ext=lambda url: self._fetch_replay_events_via_rd_ext(url),
+            get_replay_fb_scraper=self._get_replay_fb_scraper,
+            normalize_url_value=self._normalize_url_value,
+            normalize_date_value=self._normalize_date_value,
+            normalize_time_value=self._normalize_time_value,
+            resolve_prompt_type=lambda url: resolve_prompt_type(url, fallback_prompt_type="fb"),
+            classify_page=lambda url, visible_text, links: classify_page_with_confidence(
+                url=url,
+                visible_text=visible_text,
+                links=links,
+            ),
+            request_get=lambda *args, **kwargs: requests.get(*args, **kwargs),
+            generate_prompt=lambda url, text, prompt_type: self.llm_handler.generate_prompt(url, text, prompt_type),
+            query_llm=lambda url, prompt, schema_type=None: self.llm_handler.query_llm(url, prompt, schema_type),
+            extract_and_parse_json=lambda response, url, schema_type: self.llm_handler.extract_and_parse_json(response, url, schema_type),
+        )
         self.training_csv_path = os.path.join(repo_root, "ml", "training_data", "original_td.csv")
 
         # Get validation configuration
         self.validation_config = self.config.get('testing', {}).get('validation', {})
 
         logging.info("ValidationTestRunner initialized")
+
+    def _get_parser_workflow_renderer(self) -> ParserWorkflowRenderer:
+        """Lazily initialize helper state for lightweight test fixtures."""
+        renderer = getattr(self, "_parser_workflow_renderer", None)
+        if renderer is None:
+            renderer = ParserWorkflowRenderer(escape_html=self._escape_html)
+            self._parser_workflow_renderer = renderer
+        return renderer
+
+    def _get_replay_matcher(self) -> ReplayMatcher:
+        """Lazily initialize replay matching policy for lightweight test fixtures."""
+        matcher = getattr(self, "_replay_matcher", None)
+        if matcher is None:
+            matcher = ReplayMatcher(
+                normalize_text_value=self._normalize_text_value,
+                normalize_date_value=self._normalize_date_value,
+                normalize_time_value=self._normalize_time_value,
+                normalize_url_value=self._normalize_url_value,
+                normalize_optional_int=self._normalize_optional_int,
+                name_similarity=self._name_similarity,
+                name_contains_variant=self._name_contains_variant,
+                times_equivalent_with_12h_guard=self._times_equivalent_with_12h_guard,
+                is_placeholder_source=self._is_placeholder_source,
+                is_calendar_event_url=self._is_calendar_event_url,
+                is_social_platform_url=self._is_social_platform_url,
+                llm_adjudicate_event_match=self._llm_adjudicate_event_match,
+            )
+            self._replay_matcher = matcher
+        return matcher
+
+    def _get_replay_fetcher(self) -> ReplayFetcher:
+        """Lazily initialize replay acquisition for lightweight test fixtures."""
+        fetcher = getattr(self, "_replay_fetcher", None)
+        if fetcher is None:
+            llm_handler = getattr(self, "llm_handler", None)
+            fetcher = ReplayFetcher(
+                is_social_platform_url=self._is_social_platform_url,
+                extract_visible_text_for_replay=self._extract_visible_text_for_replay,
+                extract_replay_links=self._extract_replay_links,
+                parse_replay_events_from_text=self._parse_replay_events_from_text,
+                fetch_replay_events_via_rd_ext=self._fetch_replay_events_via_rd_ext,
+                get_replay_fb_scraper=self._get_replay_fb_scraper,
+                normalize_url_value=self._normalize_url_value,
+                normalize_date_value=self._normalize_date_value,
+                normalize_time_value=self._normalize_time_value,
+                resolve_prompt_type=lambda url: resolve_prompt_type(url, fallback_prompt_type="fb"),
+                classify_page=lambda url, visible_text, links: classify_page_with_confidence(
+                    url=url,
+                    visible_text=visible_text,
+                    links=links,
+                ),
+                request_get=requests.get,
+                generate_prompt=llm_handler.generate_prompt,
+                query_llm=llm_handler.query_llm,
+                extract_and_parse_json=llm_handler.extract_and_parse_json,
+            )
+            self._replay_fetcher = fetcher
+        return fetcher
 
     @staticmethod
     def _is_clarification_candidate_question(question_text: str) -> bool:
@@ -591,40 +705,19 @@ class ValidationTestRunner:
 
     @staticmethod
     def _normalize_text_value(value: Any) -> str:
-        text = str(value or "").strip().lower()
-        if text in {"", "none", "null", "nan", "<na>"}:
-            return ""
-        return re.sub(r"\s+", " ", text)
+        return normalize_text_value(value)
 
     @staticmethod
     def _normalize_optional_int(value: Any) -> int | None:
-        try:
-            if value is None or str(value).strip() == "":
-                return None
-            coerced = int(value)
-            return coerced if coerced > 0 else None
-        except (TypeError, ValueError):
-            return None
+        return normalize_optional_int(value)
 
     @staticmethod
     def _normalize_dance_style_tokens(value: Any) -> tuple[str, ...]:
-        text = str(value or "").strip().lower()
-        if not text:
-            return tuple()
-        text = text.replace("&", ",").replace("/", ",")
-        parts = [re.sub(r"\s+", " ", token).strip() for token in text.split(",")]
-        normalized = sorted({token for token in parts if token})
-        return tuple(normalized)
+        return normalize_dance_style_tokens(value)
 
     @staticmethod
     def _descriptions_equivalent(baseline_description: str, replay_description: str) -> bool:
-        if not baseline_description or not replay_description:
-            return False
-        if baseline_description == replay_description:
-            return True
-        if baseline_description in replay_description or replay_description in baseline_description:
-            return True
-        return SequenceMatcher(None, baseline_description, replay_description).ratio() >= 0.85
+        return descriptions_equivalent(baseline_description, replay_description)
 
     def _resolve_replay_address_id(self, replay_row: dict) -> int | None:
         """Resolve replay location text to an existing address_id without invoking LLM paths."""
@@ -651,112 +744,42 @@ class ValidationTestRunner:
 
     @staticmethod
     def _name_similarity(a: str, b: str) -> float:
-        return SequenceMatcher(None, str(a or ""), str(b or "")).ratio()
+        return name_similarity(a, b)
 
     @staticmethod
     def _name_contains_variant(a: str, b: str) -> bool:
-        aa = re.sub(r"\s+", " ", str(a or "").strip().lower())
-        bb = re.sub(r"\s+", " ", str(b or "").strip().lower())
-        if not aa or not bb:
-            return False
-        if aa in bb or bb in aa:
-            return True
-        aa_base = aa.split("@", 1)[0].strip()
-        bb_base = bb.split("@", 1)[0].strip()
-        if aa_base and bb_base and (aa_base in bb_base or bb_base in aa_base):
-            return True
-        return False
+        return name_contains_variant(a, b)
 
     @staticmethod
     def _is_placeholder_source(value: str) -> bool:
-        normalized = str(value or "").strip().lower()
-        return normalized in {"", "unknown", "none", "null", "extracted_text", "extracted text", "text extracted"}
+        return is_placeholder_source(value)
 
     @staticmethod
     def _is_calendar_event_url(url: str) -> bool:
-        return is_google_calendar_like_url(url)
+        return is_calendar_event_url(url)
 
     @staticmethod
     def _normalize_url_value(value: Any) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        try:
-            parsed = urlparse(text)
-            scheme = (parsed.scheme or "https").lower()
-            netloc = (parsed.netloc or "").lower()
-            path = (parsed.path or "").rstrip("/")
-            return urlunparse((scheme, netloc, path, "", parsed.query, ""))
-        except Exception:
-            return text.lower().rstrip("/")
+        return normalize_url_value(value)
 
     @staticmethod
     def _normalize_date_value(value: Any) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        try:
-            return datetime.fromisoformat(text).date().isoformat()
-        except Exception:
-            return text[:10]
+        return normalize_date_value(value)
 
     @staticmethod
     def _normalize_time_value(value: Any) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        # Handle explicit 12-hour clock representations first.
-        for fmt in ("%I:%M:%S %p", "%I:%M %p"):
-            try:
-                parsed = datetime.strptime(text[:11] if fmt == "%I:%M:%S %p" else text[:8], fmt)
-                return parsed.strftime("%H:%M:%S")
-            except Exception:
-                continue
-        for fmt in ("%H:%M:%S", "%H:%M"):
-            try:
-                parsed = datetime.strptime(text[:8], fmt) if fmt == "%H:%M:%S" else datetime.strptime(text[:5], fmt)
-                return parsed.strftime("%H:%M:%S")
-            except Exception:
-                continue
-        return text
+        return normalize_time_value(value)
 
     @staticmethod
     def _times_equivalent_with_12h_guard(left: str, right: str) -> bool:
-        if not left or not right:
-            return left == right
-        if left == right:
-            return True
-        try:
-            lt = datetime.strptime(left[:8], "%H:%M:%S")
-            rt = datetime.strptime(right[:8], "%H:%M:%S")
-            diff = abs((lt - rt).total_seconds())
-            # Catch common 12h-vs-24h normalization drift (e.g., 02:00 vs 14:00).
-            return diff in {12 * 3600}
-        except Exception:
-            return False
+        return times_equivalent_with_12h_guard(left, right)
 
     @staticmethod
     def _is_social_platform_url(url: str) -> bool:
-        return is_social_url(url)
+        return is_social_platform_url(url)
 
     def _extract_visible_text_for_replay(self, html: str) -> str:
-        if not html:
-            return ""
-        try:
-            soup = BeautifulSoup(html, "html.parser")
-            for tag in soup(["script", "style", "noscript", "template", "svg"]):
-                tag.decompose()
-            for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
-                comment.extract()
-            main_node = soup.select_one("main, article, [role='main'], .event, .event-content")
-            text_chunks: list[str] = []
-            if main_node is not None:
-                text_chunks.append(" ".join(main_node.stripped_strings))
-            text_chunks.append(" ".join(soup.stripped_strings))
-            visible = " ".join(chunk for chunk in text_chunks if chunk).strip()
-            return visible[:20000]
-        except Exception:
-            return str(html or "")[:20000]
+        return extract_visible_text_for_replay(html)
 
     def _get_replay_fb_scraper(self):
         """
@@ -822,23 +845,7 @@ class ValidationTestRunner:
         """
         Extract normalized href targets from replay HTML for classifier/routing use.
         """
-        if not html:
-            return []
-        try:
-            soup = BeautifulSoup(html, "html.parser")
-        except Exception:
-            return []
-        links: list[str] = []
-        for node in soup.find_all("a", href=True):
-            href = str(node.get("href") or "").strip()
-            if not href:
-                continue
-            if href.startswith("/"):
-                href = urljoin(url, href)
-            elif not href.startswith("http"):
-                href = urljoin(url, href)
-            links.append(href)
-        return links
+        return extract_replay_links(url, html)
 
     def _parse_replay_events_from_text(self, source_url: str, extracted_text: str, replay_url: str | None = None) -> list[dict]:
         """
@@ -933,151 +940,18 @@ class ValidationTestRunner:
         """
         Replay fetch for Facebook/Instagram URLs via fb.py methods.
         """
-        fb_scraper = self._get_replay_fb_scraper()
-        if fb_scraper is None:
-            return {
-                "ok": False,
-                "category": "social_platform_scraper_init_failed",
-                "details": "fb.py scraper unavailable for replay",
-                "events": [],
-            }
-
-        try:
-            if not fb_scraper.navigate_and_maybe_login(url):
-                reason = "navigation_failed"
-                try:
-                    reason = str(fb_scraper._get_last_access_reason(url))
-                except Exception:
-                    pass
-                return {
-                    "ok": False,
-                    "category": "url_unreachable_replay",
-                    "details": f"social_access_failed:{reason}",
-                    "events": [],
-                }
-
-            extracted_text = fb_scraper.extract_event_text(url, assume_navigated=True)
-            if not extracted_text:
-                return {
-                    "ok": False,
-                    "category": "no_event_extracted_replay",
-                    "details": "social_no_text",
-                    "events": [],
-                }
-
-            # For non-event Facebook pages, try fb.py's relevance slicer first.
-            if "facebook.com" in str(url).lower() and "/events/" not in str(url).lower():
-                try:
-                    relevant = fb_scraper.extract_relevant_text(extracted_text, url)
-                    if relevant:
-                        extracted_text = relevant
-                except Exception:
-                    pass
-
-            prompt_type = resolve_prompt_type(url, fallback_prompt_type="fb")
-            prompt, schema_type = self.llm_handler.generate_prompt(url, extracted_text, prompt_type)
-            if schema_type is None:
-                prompt, schema_type = self.llm_handler.generate_prompt(url, extracted_text, "default")
-            if schema_type is None:
-                return {"ok": False, "category": "parser_or_llm_failure", "details": "missing_schema_type", "events": []}
-
-            parsed = None
-            last_llm_error = ""
-            for _attempt in range(1, 3):
-                llm_response = self.llm_handler.query_llm(url, prompt, schema_type)
-                if not llm_response:
-                    last_llm_error = "empty_llm_response"
-                    continue
-                parsed = self.llm_handler.extract_and_parse_json(llm_response, url, schema_type)
-                if parsed:
-                    break
-                last_llm_error = "parsed_empty"
-
-            if not parsed:
-                category = "no_event_extracted_replay" if last_llm_error == "parsed_empty" else "parser_or_llm_failure"
-                return {"ok": False, "category": category, "details": last_llm_error or "llm_failed", "events": []}
-
-            normalized_events: list[dict] = []
-            for event in parsed:
-                if not isinstance(event, dict):
-                    continue
-                event_raw = dict(event)
-                mentioned_url = self._normalize_url_value(event.get("url"))
-                if mentioned_url:
-                    event_raw["mentioned_url"] = mentioned_url
-                normalized_events.append(
-                    {
-                        "event_name": str(event.get("event_name") or "").strip(),
-                        "start_date": self._normalize_date_value(event.get("start_date")),
-                        "start_time": self._normalize_time_value(event.get("start_time")),
-                        "source": str(event.get("source") or "").strip(),
-                        "location": str(event.get("location") or "").strip(),
-                        "url": self._normalize_url_value(url),
-                        "raw": event_raw,
-                    }
-                )
-            if not normalized_events:
-                return {"ok": False, "category": "no_event_extracted_replay", "details": "no_normalized_events", "events": []}
-            return {"ok": True, "category": "", "details": "", "events": normalized_events}
-        except Exception as e:
-            return {
-                "ok": False,
-                "category": "parser_or_llm_failure",
-                "details": f"social_replay_exception:{e}",
-                "events": [],
-            }
+        return self._get_replay_fetcher().fetch_replay_events_for_social_url(url)
 
     def _fetch_replay_events_for_url(self, url: str) -> dict:
-        if self._is_social_platform_url(url):
-            return self._fetch_replay_events_for_social_url(url)
+        return self._get_replay_fetcher().fetch_replay_events_for_url(url)
 
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            )
-        }
-        response = None
-        last_request_error = ""
-        for _attempt in range(1, 4):
-            try:
-                candidate = requests.get(url, timeout=25, headers=headers)
-                if candidate.status_code < 400:
-                    response = candidate
-                    break
-                last_request_error = f"http_status={candidate.status_code}"
-            except Exception as e:
-                last_request_error = str(e)
-        if response is None:
-            return {
-                "ok": False,
-                "category": "url_unreachable_replay",
-                "details": last_request_error or "request_failed",
-                "events": [],
-            }
+    def _build_live_replay_artifact(self, url: str) -> ReplayArtifact | None:
+        """Normalize a live replay fetch into an artifact before extraction."""
+        return self._get_replay_fetcher().build_live_replay_artifact(url)
 
-        extracted_text = self._extract_visible_text_for_replay(response.text)
-        if not extracted_text:
-            return {"ok": False, "category": "no_event_extracted_replay", "details": "no_visible_text", "events": []}
-
-        replay_links = self._extract_replay_links(url, response.text)
-        try:
-            class_decision = classify_page_with_confidence(
-                url=url,
-                visible_text=extracted_text,
-                links=replay_links,
-            )
-        except Exception:
-            class_decision = {}
-        if str((class_decision or {}).get("owner_step") or "").strip().lower() == "rd_ext.py":
-            rd_ext_payload = self._fetch_replay_events_via_rd_ext(url)
-            if rd_ext_payload.get("ok"):
-                return rd_ext_payload
-
-        normalized_events = self._parse_replay_events_from_text(source_url=url, extracted_text=extracted_text)
-        if not normalized_events:
-            return {"ok": False, "category": "no_event_extracted_replay", "details": "no_normalized_events", "events": []}
-        return {"ok": True, "category": "", "details": "", "events": normalized_events}
+    def _extract_replay_events_from_artifact(self, artifact: ReplayArtifact) -> dict:
+        """Extract replay events from a normalized replay artifact."""
+        return self._get_replay_fetcher().extract_replay_events_from_artifact(artifact)
 
     def _llm_adjudicate_event_match(self, baseline: dict, replay: dict) -> tuple[bool, str]:
         """
@@ -1136,326 +1010,23 @@ class ValidationTestRunner:
     @staticmethod
     def _parse_replay_date_string(value: str) -> date | None:
         """Parse normalized replay date strings safely."""
-        text = str(value or "").strip()
-        if not text:
-            return None
-        try:
-            return datetime.strptime(text, "%Y-%m-%d").date()
-        except Exception:
-            return None
+        return ReplayMatcher.parse_replay_date_string(value)
 
     @staticmethod
     def _has_recurrence_signal(*texts: Any) -> bool:
         """Return True when any text suggests a recurring schedule rather than a one-off date."""
-        combined = " ".join(str(text or "").strip().lower() for text in texts if str(text or "").strip())
-        if not combined:
-            return False
-        recurrence_patterns = [
-            r"\bevery\b",
-            r"\bweekly\b",
-            r"\bdaily\b",
-            r"\beveryday\b",
-            r"\bmonday\b|\btuesday\b|\bwednesday\b|\bthursday\b|\bfriday\b|\bsaturday\b|\bsunday\b",
-            r"\bmon(?:day)?\s*-\s*wed(?:nesday)?\b",
-            r"\bthu(?:rsday)?\s*-\s*sun(?:day)?\b",
-            r"\bmon(?:day)?\s*-\s*fri(?:day)?\b",
-            r"\bevery\s+[a-z]+day\b",
-        ]
-        return any(re.search(pattern, combined, re.IGNORECASE) for pattern in recurrence_patterns)
+        return ReplayMatcher.has_recurrence_signal(*texts)
 
     def _is_recurring_schedule_match(self, baseline: dict, replay: dict) -> bool:
         """Treat recurring social schedule posts as a match when weekly cadence aligns."""
-        baseline_url = str(baseline.get("url") or "")
-        replay_url = str(replay.get("url") or "")
-        if not baseline_url or baseline_url != replay_url or not self._is_social_platform_url(baseline_url):
-            return False
-        baseline_name = str(baseline.get("event_name") or "")
-        replay_name = str(replay.get("event_name") or "")
-        if not baseline_name or self._normalize_text_value(baseline_name) != self._normalize_text_value(replay_name):
-            return False
-        if not self._times_equivalent_with_12h_guard(replay.get("start_time"), baseline.get("start_time")):
-            return False
-
-        baseline_date = self._parse_replay_date_string(str(baseline.get("start_date") or ""))
-        replay_date = self._parse_replay_date_string(str(replay.get("start_date") or ""))
-        if baseline_date is None or replay_date is None or baseline_date == replay_date:
-            return False
-        delta_days = abs((baseline_date - replay_date).days)
-        if delta_days <= 0 or delta_days % 7 != 0 or delta_days > 35:
-            return False
-        if baseline_date.weekday() != replay_date.weekday():
-            return False
-
-        recurrence_signal = self._has_recurrence_signal(
-            baseline.get("event_name"),
-            baseline.get("description"),
-            baseline.get("day_of_week"),
-            replay.get("event_name"),
-            replay.get("description"),
-            replay.get("day_of_week"),
-        )
-        return recurrence_signal or self._normalize_text_value(baseline_name) in {"live music"}
+        return self._get_replay_matcher().is_recurring_schedule_match(baseline, replay)
 
     def _compare_replay_row(self, baseline_row: dict, replay_payload: dict, strict_time_match: bool) -> dict:
-        baseline = {
-            "event_name": self._normalize_text_value(baseline_row.get("event_name")),
-            "start_date": self._normalize_date_value(baseline_row.get("start_date")),
-            "start_time": self._normalize_time_value(baseline_row.get("start_time")),
-            "day_of_week": self._normalize_text_value(baseline_row.get("day_of_week")),
-            "source": self._normalize_text_value(baseline_row.get("source")),
-            "location": self._normalize_text_value(baseline_row.get("location")),
-            "url": self._normalize_url_value(baseline_row.get("url")),
-            "address_id": self._normalize_optional_int(baseline_row.get("address_id")),
-            "dance_style": self._normalize_text_value(baseline_row.get("dance_style")),
-            "description": self._normalize_text_value(baseline_row.get("description")),
-        }
-
-        if not baseline["url"]:
-            return {
-                "is_match": False,
-                "category": "missing_url_baseline",
-                "details": "baseline row has empty URL",
-                "baseline": baseline,
-                "replay": {},
-            }
-
-        if self._is_calendar_event_url(baseline["url"]):
-            return {
-                "is_match": True,
-                "category": "",
-                "details": "calendar_event_auto_true",
-                "baseline": baseline,
-                "replay": {},
-            }
-
-        if not replay_payload.get("ok"):
-            return {
-                "is_match": False,
-                "category": str(replay_payload.get("category") or "parser_or_llm_failure"),
-                "details": str(replay_payload.get("details") or "replay failed"),
-                "baseline": baseline,
-                "replay": {},
-            }
-
-        events = replay_payload.get("events", []) or []
-        if not events:
-            return {
-                "is_match": False,
-                "category": "no_event_extracted_replay",
-                "details": "replay returned zero events",
-                "baseline": baseline,
-                "replay": {},
-            }
-
-        def score_candidate(candidate: dict) -> int:
-            score = 0
-            if self._normalize_text_value(candidate.get("event_name")) == baseline["event_name"]:
-                score += 4
-            if self._normalize_date_value(candidate.get("start_date")) == baseline["start_date"]:
-                score += 4
-            if self._normalize_url_value(candidate.get("url")) == baseline["url"]:
-                score += 3
-            if self._normalize_text_value(candidate.get("source")) == baseline["source"]:
-                score += 2
-            cand_time = self._normalize_time_value(candidate.get("start_time"))
-            if cand_time and baseline["start_time"] and cand_time == baseline["start_time"]:
-                score += 2
-            return score
-
-        def is_same_page_candidate(candidate: dict) -> bool:
-            return self._normalize_url_value(candidate.get("url")) == baseline["url"]
-
-        same_page_events = [candidate for candidate in events if isinstance(candidate, dict) and is_same_page_candidate(candidate)]
-        if len(same_page_events) > 1:
-            same_date_candidates = [
-                candidate
-                for candidate in same_page_events
-                if self._normalize_date_value(candidate.get("start_date")) == baseline["start_date"]
-            ]
-            candidate_pool = same_date_candidates or same_page_events
-
-            strong_name_candidates = [
-                candidate
-                for candidate in candidate_pool
-                if (
-                    self._name_similarity(
-                        baseline["event_name"],
-                        self._normalize_text_value(candidate.get("event_name")),
-                    ) >= 0.75
-                    or self._name_contains_variant(
-                        baseline["event_name"],
-                        self._normalize_text_value(candidate.get("event_name")),
-                    )
-                )
-            ]
-            if strong_name_candidates:
-                ranked = sorted(strong_name_candidates, key=score_candidate, reverse=True)
-            else:
-                same_time_candidates = [
-                    candidate
-                    for candidate in candidate_pool
-                    if self._times_equivalent_with_12h_guard(
-                        self._normalize_time_value(candidate.get("start_time")),
-                        baseline["start_time"],
-                    )
-                ]
-                if same_time_candidates:
-                    ranked = sorted(same_time_candidates, key=score_candidate, reverse=True)
-                else:
-                    ranked = sorted(candidate_pool, key=score_candidate, reverse=True)
-        else:
-            ranked = sorted(events, key=score_candidate, reverse=True)
-        best = ranked[0]
-        best_raw = best.get("raw", {}) if isinstance(best.get("raw"), dict) else {}
-        replay = {
-            "event_name": self._normalize_text_value(best.get("event_name")),
-            "start_date": self._normalize_date_value(best.get("start_date")),
-            "start_time": self._normalize_time_value(best.get("start_time")),
-            "day_of_week": self._normalize_text_value(best.get("day_of_week")),
-            "source": self._normalize_text_value(best.get("source")),
-            "location": self._normalize_text_value(best.get("location")),
-            "url": self._normalize_url_value(best.get("url")),
-            "address_id": self._normalize_optional_int(best_raw.get("address_id")),
-            "dance_style": self._normalize_text_value(best_raw.get("dance_style")),
-            "description": self._normalize_text_value(best_raw.get("description")),
-        }
-
-        if self._is_social_platform_url(baseline["url"]) and replay["url"] != baseline["url"]:
-            return {
-                "is_match": False,
-                "category": "wrong_replay_source_url",
-                "details": "social replay candidate URL drifted from baseline source URL",
-                "baseline": baseline,
-                "replay": replay,
-            }
-
-        if self._is_recurring_schedule_match(baseline, replay):
-            return {
-                "is_match": True,
-                "category": "",
-                "details": "recurring_event_schedule_match",
-                "baseline": baseline,
-                "replay": replay,
-            }
-
-        duplicate_identity_count = sum(
-            1
-            for candidate in events
-            if (
-                self._normalize_text_value(candidate.get("event_name")) == baseline["event_name"]
-                and self._normalize_date_value(candidate.get("start_date")) == baseline["start_date"]
-                and self._normalize_time_value(candidate.get("start_time")) == baseline["start_time"]
-            )
+        return self._get_replay_matcher().compare_replay_row(
+            baseline_row=baseline_row,
+            replay_payload=replay_payload,
+            strict_time_match=strict_time_match,
         )
-        if duplicate_identity_count > 1:
-            return {
-                "is_match": False,
-                "category": "duplicate_event_identity",
-                "details": f"replay produced {duplicate_identity_count} duplicates for identity keys",
-                "baseline": baseline,
-                "replay": replay,
-            }
-
-        name_similarity = self._name_similarity(baseline["event_name"], replay["event_name"])
-        name_contains_variant = self._name_contains_variant(baseline["event_name"], replay["event_name"])
-        same_date = replay["start_date"] == baseline["start_date"]
-        same_time = self._times_equivalent_with_12h_guard(replay["start_time"], baseline["start_time"])
-
-        # Listing/calendar pages can return many same-URL events. If none of the replayed
-        # candidates are even moderately close by name, do not compare a clearly different
-        # same-page event against the baseline row.
-        best_candidate_name_signal = max(
-            (
-                self._name_similarity(
-                    baseline["event_name"],
-                    self._normalize_text_value(candidate.get("event_name")),
-                )
-                for candidate in events
-                if isinstance(candidate, dict)
-            ),
-            default=0.0,
-        )
-        any_name_variant_signal = any(
-            self._name_contains_variant(
-                baseline["event_name"],
-                self._normalize_text_value(candidate.get("event_name")),
-            )
-            for candidate in events
-            if isinstance(candidate, dict)
-        )
-        if (
-            len(events) > 1
-            and replay["url"] == baseline["url"]
-            and same_date
-            and best_candidate_name_signal < 0.60
-            and not any_name_variant_signal
-        ):
-            return {
-                "is_match": False,
-                "category": "wrong_replay_event_selection",
-                "details": "listing page replay selected a different event from the same source URL",
-                "baseline": baseline,
-                "replay": replay,
-            }
-
-        core_match = (
-            replay["url"] == baseline["url"]
-            and same_date
-            and (name_similarity >= 0.90 or name_contains_variant)
-        )
-        if strict_time_match:
-            core_match = core_match and same_time
-
-        if core_match:
-            return {
-                "is_match": True,
-                "category": "",
-                "details": "baseline and replay match on strict core fields",
-                "baseline": baseline,
-                "replay": replay,
-            }
-
-        # Ambiguous differences: ask LLM to adjudicate.
-        # This intentionally allows URL/source drift if event identity is otherwise strong.
-        if (
-            same_date
-            and ((not strict_time_match) or same_time)
-            and (name_similarity >= 0.75 or name_contains_variant)
-        ):
-            llm_same, llm_reason = self._llm_adjudicate_event_match(baseline, replay)
-            if llm_same:
-                return {
-                    "is_match": True,
-                    "category": "",
-                    "details": f"llm_adjudicated_match:{llm_reason}",
-                    "baseline": baseline,
-                    "replay": replay,
-                }
-
-        if replay["start_date"] != baseline["start_date"]:
-            category = "wrong_date"
-        elif strict_time_match and replay["start_time"] != baseline["start_time"]:
-            category = "wrong_time"
-        elif baseline["location"] and replay["location"] and replay["location"] != baseline["location"]:
-            category = "wrong_location_or_address"
-        elif (
-            replay["source"] != baseline["source"]
-            and not self._is_placeholder_source(replay["source"])
-            and not self._is_placeholder_source(baseline["source"])
-        ):
-            category = "wrong_source"
-        elif name_similarity < 0.60:
-            category = "content_drift_major"
-        else:
-            category = "other_mismatch"
-
-        return {
-            "is_match": False,
-            "category": category,
-            "details": "core field mismatch",
-            "baseline": baseline,
-            "replay": replay,
-        }
 
     def _load_metric_history(self, metric_key: str, days: int = 90) -> list[dict]:
         cutoff = datetime.now() - timedelta(days=max(1, int(days or 90)))
@@ -4178,78 +3749,7 @@ class ValidationTestRunner:
 
     def _replay_mismatch_guidance(self, category: str) -> dict[str, str]:
         """Map replay mismatch categories to concrete remediation guidance."""
-        normalized = str(category or "").strip().lower()
-        guidance_map = {
-            "wrong_date": {
-                "what_to_do": "Fix date extraction before changing runtime or model routing.",
-                "how_to_do": "Open the failed source URL, compare the source text with the Original/Re-scraped rows, then tighten the scraper/prompt or recurring-date guard in the source write path if the weekday/date pair is inconsistent.",
-                "where_to_change": "Original scraper/prompt or shared DB write guard",
-                "acceptance_test": "The targeted replay row matches on start_date in the next validation report.",
-            },
-            "wrong_time": {
-                "what_to_do": "Fix time parsing and listing-page event selection.",
-                "how_to_do": "Inspect the source page for multiple events on the same date. If the wrong row was selected, tighten replay matching in tests/validation/test_runner.py. If the source was parsed incorrectly, tighten the scraper or prompt time extraction path.",
-                "where_to_change": "Replay matcher first for listing pages; otherwise original scraper/prompt",
-                "acceptance_test": "The targeted replay row matches on start_time in the next validation report.",
-            },
-            "wrong_location_or_address": {
-                "what_to_do": "Fix venue/address resolution using explicit venue tokens before fuzzy matching.",
-                "how_to_do": "Compare the venue text on the page with the stored location. Tighten the scraper or DB normalization rule so explicit venue names win over weak address inference.",
-                "where_to_change": "Original scraper normalization or DB venue/address resolver",
-                "acceptance_test": "The targeted replay row matches on location in the next validation report.",
-            },
-            "wrong_source": {
-                "what_to_do": "Fix source attribution before adding new extraction logic.",
-                "how_to_do": "Review how the source field was assigned for the failed URL and tighten source ownership logic so the domain or named source is preserved through write.",
-                "where_to_change": "Original scraper/source attribution path",
-                "acceptance_test": "The targeted replay row keeps the expected source value in the next validation report.",
-            },
-            "no_event_extracted_replay": {
-                "what_to_do": "Add or tighten a deterministic parser fallback for this page shape.",
-                "how_to_do": "Open the failed URL and classify the page type. If the page is low-text, add a site-specific parser, link-follow fallback, or OCR/vision fallback before expanding model usage.",
-                "where_to_change": "Original scraper for that page type or fallback extraction path",
-                "acceptance_test": "The failed URL produces at least one replay candidate event on the next validation run.",
-            },
-            "wrong_replay_event_selection": {
-                "what_to_do": "Tighten multi-event listing-page replay matching before touching source scrapers.",
-                "how_to_do": "Adjust tests/validation/test_runner.py so same-page replay candidates must match on event_name or start_time after date, instead of allowing a same-date wrong event to win.",
-                "where_to_change": "Replay matcher in tests/validation/test_runner.py",
-                "acceptance_test": "The replay matcher picks the correct event from the same page URL in the next validation report.",
-            },
-            "wrong_replay_source_url": {
-                "what_to_do": "Preserve the replay source URL and stop cross-domain drift during comparison.",
-                "how_to_do": "Keep the original replay page URL as the comparison key and store any mentioned external URL separately, so social posts cannot be compared against a different website URL.",
-                "where_to_change": "Replay fetch/matcher in tests/validation/test_runner.py",
-                "acceptance_test": "The replay row keeps the baseline source URL and no longer fails due to cross-domain drift.",
-            },
-            "duplicate_event_identity": {
-                "what_to_do": "Strengthen duplicate identity keys for this source pattern.",
-                "how_to_do": "Review how repeated events from the same source are keyed and tighten identity on URL plus normalized event_name, start_date, and start_time before insert.",
-                "where_to_change": "Dedup identity/write path",
-                "acceptance_test": "The duplicated replay failure no longer appears and duplicate rate does not increase in the next run.",
-            },
-            "missing_url_baseline": {
-                "what_to_do": "Fix empty source URL persistence before doing parser work.",
-                "how_to_do": "Trace the write path for the failed row and enforce a non-empty normalized URL before the event is inserted.",
-                "where_to_change": "Original write path before DB insert",
-                "acceptance_test": "The baseline row has a non-empty URL and replay can fetch it on the next validation run.",
-            },
-            "url_unreachable_replay": {
-                "what_to_do": "Treat this as a source availability issue, not a parser issue.",
-                "how_to_do": "Retry the URL manually, then decide whether the source is dead, blocked, or needs retry/backoff logic. Do not tune parsers until the source is reachable.",
-                "where_to_change": "Source availability/retry handling, not parser logic",
-                "acceptance_test": "The replay URL becomes reachable or is explicitly classified as a bad source.",
-            },
-        }
-        return guidance_map.get(
-            normalized,
-            {
-                "what_to_do": "Review this replay mismatch and apply the narrowest deterministic fix first.",
-                "how_to_do": "Open the failed URL, compare the source content with the Original/Re-scraped rows, then decide whether the bug is in the source scraper, the DB write guard, or the replay matcher.",
-                "where_to_change": "Determine whether the source scraper, replay matcher, or DB write guard is responsible",
-                "acceptance_test": "The targeted mismatch category count decreases in the next validation report.",
-            },
-        )
+        return self._get_parser_workflow_renderer().guidance_for_category(category)
 
     def _build_parser_improvement_workflow_html(
         self,
@@ -4259,167 +3759,11 @@ class ValidationTestRunner:
         domain_evaluation_summary: dict | None,
     ) -> str:
         """Render an ordered parser-first remediation workflow for the HTML report."""
-        if not isinstance(accuracy_replay_summary, dict) or accuracy_replay_summary.get("error"):
-            return "<p class='error-box'>❌ Parser remediation workflow unavailable because replay accuracy data is unavailable.</p>"
-
-        replay_rows = accuracy_replay_summary.get("rows", []) if isinstance(accuracy_replay_summary.get("rows"), list) else []
-        parser_categories = {
-            "wrong_date",
-            "wrong_time",
-            "wrong_location_or_address",
-            "wrong_source",
-            "no_event_extracted_replay",
-            "wrong_replay_event_selection",
-            "wrong_replay_source_url",
-            "duplicate_event_identity",
-            "missing_url_baseline",
-            "url_unreachable_replay",
-        }
-        failed_rows: list[dict[str, Any]] = []
-        for row in replay_rows:
-            if not isinstance(row, dict) or bool(row.get("is_match")):
-                continue
-            category = str(row.get("mismatch_category") or "").strip()
-            if category not in parser_categories:
-                continue
-            failed_rows.append(row)
-
-        if not failed_rows:
-            return (
-                "<p>✅ No parser-first replay mismatches are currently queued. "
-                "Work the broader recommendation plan only after the next run creates fresh parser evidence.</p>"
-            )
-
-        category_counts = Counter(str(row.get("mismatch_category") or "").strip() for row in failed_rows)
-        dominant_category = next(iter(category_counts.most_common(1)), ("", 0))[0]
-        dominant_guidance = self._replay_mismatch_guidance(dominant_category)
-
-        category_rows = ""
-        for category, count in category_counts.most_common(5):
-            guidance = self._replay_mismatch_guidance(category)
-            category_rows += (
-                "<tr>"
-                f"<td>{self._escape_html(category)}</td>"
-                f"<td>{count}</td>"
-                f"<td>{self._escape_html(guidance['what_to_do'])}</td>"
-                f"<td>{self._escape_html(guidance['where_to_change'])}</td>"
-                f"<td>{self._escape_html(guidance['how_to_do'])}</td>"
-                f"<td>{self._escape_html(guidance['acceptance_test'])}</td>"
-                "</tr>"
-            )
-
-        priority_rows = ""
-        seen_urls: set[str] = set()
-        sorted_failed_rows = sorted(
-            failed_rows,
-            key=lambda item: (
-                -int(category_counts.get(str(item.get("mismatch_category") or "").strip(), 0)),
-                str(((item.get("baseline") or {}) if isinstance(item.get("baseline"), dict) else {}).get("url") or ""),
-            ),
-        )
-        for index, row in enumerate(sorted_failed_rows, start=1):
-            baseline = row.get("baseline", {}) if isinstance(row.get("baseline"), dict) else {}
-            replay = row.get("replay", {}) if isinstance(row.get("replay"), dict) else {}
-            baseline_url = str(baseline.get("url", "") or "").strip()
-            if not baseline_url or baseline_url in seen_urls:
-                continue
-            seen_urls.add(baseline_url)
-            category = str(row.get("mismatch_category") or "").strip()
-            guidance = self._replay_mismatch_guidance(category)
-            priority_rows += (
-                "<tr>"
-                f"<td>{len(seen_urls)}</td>"
-                f"<td>{self._escape_html(category)}</td>"
-                f"<td>{self._escape_html(str(baseline.get('event_name', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(baseline.get('url', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(replay.get('event_name', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('mismatch_details', '') or ''))}</td>"
-                f"<td>{self._escape_html(guidance['where_to_change'])}</td>"
-                f"<td>{self._escape_html(guidance['what_to_do'])}</td>"
-                "</tr>"
-            )
-            if len(seen_urls) >= 5:
-                break
-
-        if not priority_rows:
-            priority_rows = "<tr><td colspan='7'>No priority parser URLs available.</td></tr>"
-
-        parser_recommendations = []
-        top_issues = recommendation_plan.get("top_issues", []) if isinstance(recommendation_plan, dict) else []
-        for item in top_issues:
-            if not isinstance(item, dict):
-                continue
-            issue_type = str(item.get("issue_type") or "").strip()
-            if issue_type in {"domain_regression", "classifier_regression", "coverage_gap", "guardrail_violation"}:
-                parser_recommendations.append(str(item.get("title") or "").strip())
-        queued_actions = []
-        action_items = action_queue.get("items", []) if isinstance(action_queue, dict) else []
-        for item in action_items:
-            if not isinstance(item, dict):
-                continue
-            reason_text = " ".join(
-                str(item.get(key) or "").lower() for key in ("title", "reason", "suggested_change", "acceptance_test")
-            )
-            if any(token in reason_text for token in ("parser", "replay", "scraper", "domain", "classifier")):
-                queued_actions.append(str(item.get("title") or "").strip())
-
-        worst_domains = []
-        if isinstance(domain_evaluation_summary, dict):
-            worst_domains = domain_evaluation_summary.get("worst_domains", []) if isinstance(domain_evaluation_summary.get("worst_domains"), list) else []
-        worst_domain_text = ", ".join(
-            self._escape_html(str(item.get("domain") or "")) for item in worst_domains[:3] if isinstance(item, dict)
-        ) or "n/a"
-        parser_recommendation_text = "<br>".join(
-            self._escape_html(text) for text in parser_recommendations[:3] if text
-        ) or "Use the mismatch category table below to drive the next fix."
-        queued_action_text = "<br>".join(
-            self._escape_html(text) for text in queued_actions[:3] if text
-        ) or "No parser-specific action queue entries yet."
-
-        ordered_steps_html = (
-            "<table><tr><th>Order</th><th>What To Do</th><th>How To Do It</th><th>Done When</th></tr>"
-            "<tr>"
-            "<td>1</td>"
-            "<td>Work parser/replay mismatches before runtime or cost tuning.</td>"
-            f"<td>Start with the dominant mismatch category for this run: <strong>{self._escape_html(dominant_category)}</strong>. {self._escape_html(dominant_guidance['how_to_do'])}</td>"
-            f"<td>{self._escape_html(dominant_guidance['acceptance_test'])}</td>"
-            "</tr>"
-            "<tr>"
-            "<td>2</td>"
-            "<td>Inspect the exact failed source URLs.</td>"
-            "<td>Use the Priority URLs table below. Open the source page, compare the Original and Re-scraped rows, and decide whether the defect is in the original scraper, the DB write guard, or the replay matcher.</td>"
-            "<td>You can point to the exact bad field and the exact code path that produced it.</td>"
-            "</tr>"
-            "<tr>"
-            "<td>3</td>"
-            "<td>Apply the smallest deterministic fix first.</td>"
-            "<td>If the wrong event was selected from a listing page or the replay URL drifted, fix tests/validation/test_runner.py. If the original row was wrong, fix the scraper/prompt or the shared DB write guard instead of broadening model usage.</td>"
-            "<td>The targeted row becomes correct without introducing broader behavior changes.</td>"
-            "</tr>"
-            "<tr>"
-            "<td>4</td>"
-            "<td>Re-run validation only.</td>"
-            "<td>Run <code>set -a; source src/.env; set +a; python tests/validation/test_runner.py || true</code> and inspect the same rows again.</td>"
-            "<td>The targeted row disappears or the mismatch category count decreases, and no new guardrail regression appears.</td>"
-            "</tr>"
-            "</table>"
-        )
-
-        return (
-            "<p><strong>Recommended first self-improving subsystem:</strong> page parsing and parser routing. "
-            "Use this section after each <code>pipeline.py</code> run to decide what to fix first, how to fix it, "
-            "and how to verify the change before moving on.</p>"
-            "<p><strong>Focus signals:</strong> worst replay domains: "
-            f"{worst_domain_text}.<br><strong>Current parser-related recommendation plan items:</strong><br>{parser_recommendation_text}"
-            f"<br><strong>Current queued actions:</strong><br>{queued_action_text}</p>"
-            "<h3>Ordered Parser Workflow</h3>"
-            f"{ordered_steps_html}"
-            "<h3>Top Parser Mismatch Categories</h3>"
-            "<table><tr><th>Mismatch Category</th><th>Count</th><th>What To Do</th><th>Likely Fix Location</th><th>How To Do It</th><th>Acceptance Test</th></tr>"
-            f"{category_rows}</table>"
-            "<h3>Priority URLs To Inspect First</h3>"
-            "<table><tr><th>Priority</th><th>Mismatch Category</th><th>Original Event</th><th>Source URL</th><th>Re-scraped Event</th><th>Mismatch Details</th><th>Likely Fix Location</th><th>Next Fix</th></tr>"
-            f"{priority_rows}</table>"
+        return self._get_parser_workflow_renderer().build_parser_improvement_workflow_html(
+            accuracy_replay_summary=accuracy_replay_summary,
+            recommendation_plan=recommendation_plan,
+            action_queue=action_queue,
+            domain_evaluation_summary=domain_evaluation_summary,
         )
 
     def _build_recommendations_input(

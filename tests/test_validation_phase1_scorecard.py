@@ -12,6 +12,7 @@ if VALIDATION_DIR not in sys.path:
 
 import test_runner as validation_test_runner
 from test_runner import ValidationTestRunner
+from replay_fetcher import ReplayArtifact
 
 
 class _FakeDbHandler:
@@ -1453,4 +1454,46 @@ def test_fetch_replay_events_for_url_uses_rd_ext_for_listing_pages(monkeypatch) 
     assert payload["details"] == "rd_ext_replay"
     assert payload["events"][0]["start_date"] == "2026-03-23"
     assert payload["events"][0]["url"] == "https://loftpubvictoria.com/events"
+    assert payload["events"][0]["raw"]["replay_child_url"] == "https://loftpubvictoria.com/events/2026-03-23/"
+
+
+def test_extract_replay_events_from_artifact_uses_same_rd_ext_routing() -> None:
+    runner = _build_runner()
+    runner.llm_handler = SimpleNamespace(
+        generate_prompt=lambda url, text, prompt_type: ("prompt", "schema"),
+        query_llm=lambda url, prompt, schema_type=None: "",
+        extract_and_parse_json=lambda response, url, schema_type: [],
+    )
+    runner._fetch_replay_events_via_rd_ext = lambda url: {
+        "ok": True,
+        "category": "",
+        "details": "rd_ext_replay",
+        "events": [
+            {
+                "event_name": "Bill Francis – Story & Song",
+                "start_date": "2026-03-23",
+                "start_time": "17:30:00",
+                "source": "The Loft Pub Victoria",
+                "location": "The Loft Pub Victoria",
+                "url": "https://loftpubvictoria.com/events",
+                "raw": {"replay_child_url": "https://loftpubvictoria.com/events/2026-03-23/"},
+            }
+        ],
+    }
+    artifact = ReplayArtifact(
+        source_url="https://loftpubvictoria.com/events",
+        fetch_method="requests",
+        artifact_type="raw_html",
+        body_text='<html><body><a href="/events/2026-03-23/">Bill Francis</a></body></html>',
+        links=["https://loftpubvictoria.com/events/2026-03-23/"],
+    )
+    original_classifier = validation_test_runner.classify_page_with_confidence
+    validation_test_runner.classify_page_with_confidence = lambda **kwargs: {"owner_step": "rd_ext.py"}
+    try:
+        payload = runner._extract_replay_events_from_artifact(artifact)
+    finally:
+        validation_test_runner.classify_page_with_confidence = original_classifier
+
+    assert payload["ok"] is True
+    assert payload["details"] == "rd_ext_replay"
     assert payload["events"][0]["raw"]["replay_child_url"] == "https://loftpubvictoria.com/events/2026-03-23/"

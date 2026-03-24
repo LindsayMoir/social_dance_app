@@ -314,6 +314,13 @@ Recommended rollout:
 4. surface offline replay results in the validation report
 5. only later consider a bounded `artifact_replay_validation` step in `pipeline.py`
 
+Current implementation status:
+1. the validation/replay code has been partially refactored toward this target shape
+2. parser workflow guidance, replay matching policy, replay acquisition, and replay normalization utilities have been separated into dedicated helper modules rather than living only in `tests/validation/test_runner.py`
+3. replay acquisition now includes a normalized replay-artifact boundary so live URL replay follows `url -> fetch -> normalize artifact -> extract`
+4. this is preparatory architecture only; it does not yet implement persisted `fetch_artifacts` capture or a stored-artifact loader
+5. Phase 1 remains the active operational gate because real `pipeline.py` runs are still required before this repository should treat Phase 1 as complete
+
 ### Parser Workflow Report Follow-Ups
 The validation report should evolve into the operational control surface for this first subsystem. The following report improvements should be treated as planned follow-up work so they are not lost:
 
@@ -1312,6 +1319,12 @@ Exit criteria:
 2. major routing and fanout decisions are recoverable from structured telemetry
 3. each run has a stable config and policy snapshot
 4. at least one scraper family supports offline artifact replay using shared extraction logic
+
+Current status:
+1. structural replay refactoring has started and now supports a normalized artifact boundary in the validation/replay layer
+2. this partially advances Deliverable 5 and Exit criterion 4 at the code-structure level, but not at the operational level
+3. `fetch_artifacts` persistence, artifact storage conventions, and stored-artifact replay are still not implemented end-to-end
+4. because Phase 1 is still pending operational verification, Phase 2 should be treated as `early architectural preparation`, not `in implementation completion`
 
 ### Phase 3. Validation Labels and Reward Signals
 Goal:
