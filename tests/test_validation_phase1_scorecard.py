@@ -214,7 +214,6 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert run_scorecard["code_version"] == {"git_commit": "abc123", "branch": "main"}
     assert run_scorecard["scorecard_version"] == "phase4"
     assert run_scorecard["telemetry_integrity"] == {}
-    assert run_scorecard["comparison_summary"] == {}
     assert "top_regressions" not in run_scorecard["recommendations_input"]
     assert run_scorecard["overall_score"]["status"] == "PRELIMINARY"
 
@@ -710,10 +709,6 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
             "dance_style_pct": 76.0,
             "description_pct": 64.0,
         },
-        run_delta_summary={
-            "previous_run": {"summary": {"delta_overall_score": 1.5}},
-            "holdout_baseline": {"summary": {"delta_holdout_replay_url_accuracy_pct": 2.0}},
-        },
     )
 
     metric_keys = [call["metric_key"] for call in fake_db.calls]
@@ -738,8 +733,6 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
         "field_accuracy_address_id_pct",
         "field_accuracy_dance_style_pct",
         "field_accuracy_description_pct",
-        "overall_score_delta_vs_previous_run",
-        "holdout_replay_url_accuracy_delta_vs_baseline",
     ]
     assert all(call["run_id"] == "run-456" for call in fake_db.calls)
     assert all(isinstance(call["window_end"], datetime) for call in fake_db.calls)
@@ -1183,14 +1176,12 @@ def test_domain_evaluation_and_codex_review_bundle() -> None:
         holdout_summary={"replay_url_accuracy_pct": 70.0},
         domain_capped_summary={"replay_url_accuracy_pct": 75.0},
         domain_evaluation_summary=domain_summary,
-        run_delta_summary={"previous_run": {"available": True}},
         recommendation_plan=recommendation_plan,
     )
     assert bundle["bundle_version"] == "v1"
     assert bundle["run_id"] == "run-123"
     assert bundle["artifacts"]["domain_evaluation_summary"]["domain_count"] == 3
     assert bundle["artifacts"]["dev_summary"]["replay_url_accuracy_pct"] == 66.0
-    assert bundle["artifacts"]["run_delta_summary"]["previous_run"]["available"] is True
     assert bundle["artifacts"]["recommendation_plan"]["plan_version"] == "v1"
 
 
@@ -1372,10 +1363,6 @@ def test_recommendation_plan_uses_existing_scorecard_signals() -> None:
         },
         domain_evaluation_summary={
             "worst_domains": [{"domain": "bad.example.org", "replay_url_accuracy_pct": 25.0}],
-        },
-        run_delta_summary={
-            "previous_run": {"top_regressions": [{"label": "Overall Score", "delta": -3.0}]},
-            "holdout_baseline": {"top_regressions": [{"label": "Holdout Replay URL Accuracy %", "delta": -5.0}]},
         },
     )
     assert recommendation_plan["plan_version"] == "v1"

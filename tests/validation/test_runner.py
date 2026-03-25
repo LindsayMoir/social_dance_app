@@ -2013,12 +2013,6 @@ class ValidationTestRunner:
             domain_capped_summary=domain_capped_summary,
             telemetry_integrity_summary=telemetry_integrity_summary,
         )
-        run_delta_summary = self._build_run_delta_summary(run_scorecard)
-        run_scorecard["comparison_summary"] = run_delta_summary
-        previous_run_delta = ((run_delta_summary.get("previous_run") or {}).get("summary") or {}).get("delta_overall_score")
-        holdout_baseline_delta = ((run_delta_summary.get("holdout_baseline") or {}).get("summary") or {}).get("delta_holdout_replay_url_accuracy_pct")
-        run_scorecard["overall_score"]["vs_previous_run"] = previous_run_delta
-        run_scorecard["overall_score"]["vs_holdout_baseline"] = holdout_baseline_delta
         run_scorecard["guardrails"] = self._evaluate_phase3_guardrails(run_scorecard)
         run_scorecard["recommendations_input"] = self._build_recommendations_input(
             run_scorecard=run_scorecard,
@@ -2028,7 +2022,6 @@ class ValidationTestRunner:
             runtime_summary=runtime_summary,
             llm_cost_summary=llm_cost_summary,
             domain_evaluation_summary=domain_evaluation_summary,
-            run_delta_summary=run_delta_summary,
         )
         recommendation_plan = self._build_recommendation_plan(
             run_scorecard=run_scorecard,
@@ -2038,7 +2031,6 @@ class ValidationTestRunner:
             runtime_summary=runtime_summary,
             llm_cost_summary=llm_cost_summary,
             domain_evaluation_summary=domain_evaluation_summary,
-            run_delta_summary=run_delta_summary,
         )
         codex_review_bundle = self._build_codex_review_bundle(
             run_scorecard=run_scorecard,
@@ -2049,7 +2041,6 @@ class ValidationTestRunner:
             holdout_summary=holdout_summary,
             domain_capped_summary=domain_capped_summary,
             domain_evaluation_summary=domain_evaluation_summary,
-            run_delta_summary=run_delta_summary,
             recommendation_plan=recommendation_plan,
         )
         if run_scorecard["guardrails"]["status"] == "PASS" and run_scorecard.get("overall_score", {}).get("value") is not None:
@@ -2067,7 +2058,6 @@ class ValidationTestRunner:
             domain_capped_summary=domain_capped_summary,
             event_data_quality_summary=event_data_quality_summary,
             field_accuracy_summary=field_accuracy_summary,
-            run_delta_summary=run_delta_summary,
         )
         self._persist_scraper_step_telemetry_metrics(
             run_id=report_run_id,
@@ -2090,7 +2080,6 @@ class ValidationTestRunner:
                 "domain_evaluation_summary": domain_evaluation_summary,
                 "scraper_telemetry_summary": scraper_telemetry_summary,
                 "telemetry_integrity_summary": telemetry_integrity_summary,
-                "run_delta_summary": run_delta_summary,
                 "recommendation_plan": recommendation_plan,
                 "codex_review_bundle": codex_review_bundle,
             },
@@ -2182,13 +2171,10 @@ class ValidationTestRunner:
         <h2>7. Domain Evaluation</h2>
         {self._build_domain_evaluation_html(domain_evaluation_summary)}
 
-        <h2>8. Run Comparison</h2>
-        {self._build_run_delta_html(run_delta_summary)}
-
-        <h2>9. Parser Improvement Workflow</h2>
+        <h2>8. Parser Improvement Workflow</h2>
         {self._build_parser_improvement_workflow_html(accuracy_replay_summary, recommendation_plan, action_queue, domain_evaluation_summary)}
 
-        <h2>10. Recommendation Plan</h2>
+        <h2>9. Recommendation Plan</h2>
         {self._build_recommendation_plan_html(recommendation_plan)}
 
         <hr style="margin: 40px 0;">
@@ -2264,9 +2250,6 @@ class ValidationTestRunner:
         domain_evaluation_summary_path = codex_review_path('domain_evaluation_summary.json')
         with open(domain_evaluation_summary_path, 'w', encoding='utf-8') as f:
             json.dump(domain_evaluation_summary, f, indent=2)
-        run_delta_summary_path = codex_review_path('run_delta_summary.json')
-        with open(run_delta_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(run_delta_summary, f, indent=2)
         recommendation_plan_path = codex_review_path('recommendation_plan.json')
         with open(recommendation_plan_path, 'w', encoding='utf-8') as f:
             json.dump(recommendation_plan, f, indent=2)
@@ -2327,7 +2310,6 @@ class ValidationTestRunner:
         logging.info(f"Holdout summary saved: {holdout_summary_path}")
         logging.info(f"Domain-capped summary saved: {domain_capped_summary_path}")
         logging.info(f"Domain evaluation summary saved: {domain_evaluation_summary_path}")
-        logging.info(f"Run delta summary saved: {run_delta_summary_path}")
         logging.info(f"Recommendation plan saved: {recommendation_plan_path}")
         logging.info(f"Run scorecard saved: {run_scorecard_path}")
         logging.info(f"Codex review bundle saved: {codex_review_bundle_path}")
@@ -3473,7 +3455,6 @@ class ValidationTestRunner:
         runtime_summary: dict,
         llm_cost_summary: dict,
         domain_evaluation_summary: dict,
-        run_delta_summary: dict,
     ) -> dict:
         """Build a structured recommendation plan artifact from existing evaluation signals."""
         recommendations_input = self._build_recommendations_input(
@@ -3484,7 +3465,6 @@ class ValidationTestRunner:
             runtime_summary=runtime_summary,
             llm_cost_summary=llm_cost_summary,
             domain_evaluation_summary=domain_evaluation_summary,
-            run_delta_summary=run_delta_summary,
         )
         issues: list[dict[str, Any]] = []
         for detail in recommendations_input.get("top_regressions", [])[:3]:
@@ -3682,7 +3662,6 @@ class ValidationTestRunner:
         runtime_summary: dict,
         llm_cost_summary: dict,
         domain_evaluation_summary: dict,
-        run_delta_summary: dict,
     ) -> dict:
         """Build a structured recommendations_input section for Codex review."""
         guardrails = run_scorecard.get("guardrails", {}) if isinstance(run_scorecard.get("guardrails"), dict) else {}
@@ -3713,8 +3692,6 @@ class ValidationTestRunner:
         coverage_gaps = coverage_summary.get("missed_sources", []) if isinstance(coverage_summary.get("missed_sources"), list) else []
         domain_regressions = domain_evaluation_summary.get("worst_domains", []) if isinstance(domain_evaluation_summary.get("worst_domains"), list) else []
         dev_info = dev_summary if isinstance(dev_summary, dict) else {}
-        previous_run_regressions = (((run_delta_summary.get("previous_run") or {}).get("top_regressions")) or []) if isinstance(run_delta_summary, dict) else []
-        holdout_baseline_regressions = (((run_delta_summary.get("holdout_baseline") or {}).get("top_regressions")) or []) if isinstance(run_delta_summary, dict) else []
         bottlenecks = []
         for span in runtime_summary.get("step_spans", []) if isinstance(runtime_summary.get("step_spans"), list) else []:
             if not isinstance(span, dict):
@@ -3733,8 +3710,6 @@ class ValidationTestRunner:
             "runtime_bottlenecks": bottlenecks[:5],
             "coverage_gaps": coverage_gaps[:5],
             "domain_regressions": domain_regressions[:5],
-            "previous_run_regressions": previous_run_regressions[:5],
-            "holdout_baseline_regressions": holdout_baseline_regressions[:5],
             "dev_replay_summary": {
                 "replay_url_accuracy_pct": dev_info.get("replay_url_accuracy_pct"),
                 "matched_urls": dev_info.get("matched_urls"),
@@ -3755,7 +3730,6 @@ class ValidationTestRunner:
         holdout_summary: dict,
         domain_capped_summary: dict,
         domain_evaluation_summary: dict,
-        run_delta_summary: dict,
         recommendation_plan: dict,
     ) -> dict:
         """Build a stable machine-readable review bundle for Codex analysis."""
@@ -3775,7 +3749,6 @@ class ValidationTestRunner:
                 "holdout_summary": holdout_summary,
                 "domain_capped_summary": domain_capped_summary,
                 "domain_evaluation_summary": domain_evaluation_summary,
-                "run_delta_summary": run_delta_summary,
                 "recommendation_plan": recommendation_plan,
             },
         }
@@ -8413,7 +8386,6 @@ class ValidationTestRunner:
         domain_capped_summary: dict | None = None,
         event_data_quality_summary: dict | None = None,
         field_accuracy_summary: dict | None = None,
-        run_delta_summary: dict | None = None,
     ) -> None:
         """Persist key Phase 1 metrics for trend reporting."""
         if not getattr(self, "db_handler", None) or not hasattr(self.db_handler, "record_metric_observation"):
@@ -8463,9 +8435,6 @@ class ValidationTestRunner:
         domain_capped_info = domain_capped_summary if isinstance(domain_capped_summary, dict) else {}
         event_data_quality = event_data_quality_summary if isinstance(event_data_quality_summary, dict) else {}
         field_accuracy = field_accuracy_summary if isinstance(field_accuracy_summary, dict) else {}
-        run_delta_info = run_delta_summary if isinstance(run_delta_summary, dict) else {}
-        previous_run_info = run_delta_info.get("previous_run", {}) if isinstance(run_delta_info.get("previous_run"), dict) else {}
-        holdout_baseline_info = run_delta_info.get("holdout_baseline", {}) if isinstance(run_delta_info.get("holdout_baseline"), dict) else {}
         metric_specs.extend(
             [
                 (
@@ -8571,20 +8540,6 @@ class ValidationTestRunner:
                     field_accuracy.get("description_pct"),
                     "percent",
                     "Replay field accuracy: description",
-                    True,
-                ),
-                (
-                    "overall_score_delta_vs_previous_run",
-                    (previous_run_info.get("summary") or {}).get("delta_overall_score") if isinstance(previous_run_info.get("summary"), dict) else None,
-                    "points",
-                    "Phase 4 comparison: overall score delta versus previous run",
-                    True,
-                ),
-                (
-                    "holdout_replay_url_accuracy_delta_vs_baseline",
-                    (holdout_baseline_info.get("summary") or {}).get("delta_holdout_replay_url_accuracy_pct") if isinstance(holdout_baseline_info.get("summary"), dict) else None,
-                    "percent",
-                    "Phase 4 comparison: holdout replay URL accuracy delta versus prior holdout baseline",
                     True,
                 ),
             ]
