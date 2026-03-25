@@ -9,3 +9,15 @@ https://www.debrhymerband.com/shows,True,Live music/events page reserved for hol
 https://jazzvictoria.ca/jazzfest-home/,True,Festival source reserved for holdout
 https://thedukesaloon.com/events/,True,Venue events page reserved for holdout
 https://sundayafternoonsalsa.com/,True,Community dance source reserved for holdout
+https://loftpubvictoria.com/events/list/,True,Holdout website listing page from current events corpus
+https://dancevictoria.com/events/list/?shortcode=13dba00b,True,Holdout arts organization event listing page
+https://alces.world/event/victoria-kizomba-social-winter-series-4/2026-03-28/,True,Holdout event-detail page for non-dev website parser coverage
+https://calientedance.com/event/saturdaymar/,True,Holdout event-detail page for Caliente site coverage separate from dev
+https://www.facebook.com/events/1024182725709172/,True,Holdout Facebook event page for honest replay evaluation
+https://www.facebook.com/events/1134059235338445/,True,Holdout Facebook event page for honest replay evaluation
+https://www.facebook.com/events/1262755451978554/,True,Holdout Facebook event page for honest replay evaluation
+https://www.facebook.com/events/1359582535780646/,True,Holdout Facebook event page for honest replay evaluation
+https://www.eventbrite.ca/e/salsa-date-night-tickets-1984096373664?aff=ebdssbdestsearch,True,Holdout Eventbrite detail page for honest replay evaluation
+https://www.eventbrite.ca/e/salsabor-rowing-club-tickets-1983335215018?aff=ebdssbdestsearch,True,Holdout Eventbrite detail page for honest replay evaluation
+https://www.instagram.com/p/DIw1OBcN5ow/,True,Holdout Instagram post for image/social replay evaluation
+https://www.instagram.com/p/DIlqcN4S8Ph/,True,Holdout Instagram post for image/social replay evaluation
