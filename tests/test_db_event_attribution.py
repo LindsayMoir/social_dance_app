@@ -224,3 +224,41 @@ def test_build_phase1_telemetry_integrity_report_flags_step_mismatch_and_unknown
     assert report["steps"]["scraper"]["status"] == "FAIL"
     assert report["steps"]["fb"]["status"] == "FAIL"
     assert report["summary"]["write_attribution_rows"] == 7
+
+
+def test_build_phase1_telemetry_integrity_report_prefers_handled_by_over_pipeline_step() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    query_results = {
+        "SUM(COALESCE(events_written, 0)) AS metrics_events_written_total": [
+            ("images", 10, 3),
+            ("rd_ext", 4, 2),
+        ],
+        "COUNT(*) AS write_attribution_count": [
+            ("images", 10, 10),
+            ("rd_ext", 4, 4),
+        ],
+        "COUNT(*) AS delete_attribution_count": [],
+        "unknown_delete_reason_total": [
+            (14, 14, 0, 0, 0),
+        ],
+    }
+
+    def _exec(query: str, params=None):
+        normalized = " ".join(str(query).split())
+        if "REPLACE(COALESCE(handled_by, ''), '.py', '')" in normalized:
+            return query_results["SUM(COALESCE(events_written, 0)) AS metrics_events_written_total"]
+        for key, value in query_results.items():
+            if key in normalized:
+                return value
+        raise AssertionError(normalized)
+
+    handler.execute_query = _exec  # type: ignore[attr-defined]
+
+    report = handler.build_phase1_telemetry_integrity_report("run-456")
+
+    assert report["status"] == "PASS"
+    assert report["violations"] == []
+    assert report["steps"]["images"]["metrics_events_written_total"] == 10
+    assert report["steps"]["images"]["write_attribution_count"] == 10
+    assert report["steps"]["rd_ext"]["metrics_events_written_total"] == 4
+    assert report["steps"]["rd_ext"]["write_attribution_count"] == 4

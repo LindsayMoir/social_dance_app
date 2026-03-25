@@ -1728,7 +1728,10 @@ class DatabaseHandler():
 
         metrics_query = """
             SELECT
-                COALESCE(NULLIF(step_name, ''), REPLACE(COALESCE(handled_by, ''), '.py', '')) AS step_norm,
+                COALESCE(
+                    NULLIF(REPLACE(COALESCE(handled_by, ''), '.py', ''), ''),
+                    NULLIF(step_name, '')
+                ) AS step_norm,
                 SUM(COALESCE(events_written, 0)) AS metrics_events_written_total,
                 SUM(CASE WHEN COALESCE(events_written, 0) > 0 THEN 1 ELSE 0 END) AS metrics_urls_with_events_count
             FROM url_scrape_metrics
