@@ -42,6 +42,7 @@ import logging
 import yaml
 import random
 import requests
+import pandas as pd
 from bs4 import BeautifulSoup, Comment
 
 # Import validation modules
@@ -94,6 +95,9 @@ from output_paths import (
 from page_classifier import (
     classify_page_with_confidence,
     is_email_like_input,
+    is_eventbrite_event_detail_url,
+    is_eventbrite_organizer_url,
+    is_eventbrite_url,
     is_google_calendar_like_url,
     is_social_url,
     resolve_prompt_type,
@@ -131,6 +135,7 @@ class ValidationTestRunner:
         self._replay_fb_scraper = None
         self._replay_fb_module = None
         self._replay_rd_ext_extractor = None
+        self._replay_image_scraper = None
         self._parser_workflow_renderer = ParserWorkflowRenderer(escape_html=self._escape_html)
         self._replay_matcher = ReplayMatcher(
             normalize_text_value=self._normalize_text_value,
@@ -148,11 +153,15 @@ class ValidationTestRunner:
         )
         self._replay_fetcher = ReplayFetcher(
             is_social_platform_url=self._is_social_platform_url,
+            is_eventbrite_url=is_eventbrite_url,
+            is_eventbrite_event_detail_url=is_eventbrite_event_detail_url,
+            is_eventbrite_organizer_url=is_eventbrite_organizer_url,
             extract_visible_text_for_replay=self._extract_visible_text_for_replay,
             extract_replay_links=self._extract_replay_links,
             parse_replay_events_from_text=self._parse_replay_events_from_text,
             fetch_replay_events_via_rd_ext=lambda url: self._fetch_replay_events_via_rd_ext(url),
             get_replay_fb_scraper=self._get_replay_fb_scraper,
+            fetch_replay_events_for_instagram_image_url=lambda url: self._fetch_replay_events_for_instagram_image_url(url),
             normalize_url_value=self._normalize_url_value,
             normalize_date_value=self._normalize_date_value,
             normalize_time_value=self._normalize_time_value,
@@ -210,11 +219,15 @@ class ValidationTestRunner:
             llm_handler = getattr(self, "llm_handler", None)
             fetcher = ReplayFetcher(
                 is_social_platform_url=self._is_social_platform_url,
+                is_eventbrite_url=is_eventbrite_url,
+                is_eventbrite_event_detail_url=is_eventbrite_event_detail_url,
+                is_eventbrite_organizer_url=is_eventbrite_organizer_url,
                 extract_visible_text_for_replay=self._extract_visible_text_for_replay,
                 extract_replay_links=self._extract_replay_links,
                 parse_replay_events_from_text=self._parse_replay_events_from_text,
                 fetch_replay_events_via_rd_ext=self._fetch_replay_events_via_rd_ext,
                 get_replay_fb_scraper=self._get_replay_fb_scraper,
+                fetch_replay_events_for_instagram_image_url=self._fetch_replay_events_for_instagram_image_url,
                 normalize_url_value=self._normalize_url_value,
                 normalize_date_value=self._normalize_date_value,
                 normalize_time_value=self._normalize_time_value,
@@ -545,6 +558,7 @@ class ValidationTestRunner:
         logging.info("=" * 80)
         self._close_replay_fb_scraper()
         self._close_replay_rd_ext_extractor()
+        self._close_replay_image_scraper()
 
         return results
 
@@ -840,6 +854,31 @@ class ValidationTestRunner:
         except Exception as e:
             logging.warning("Replay rd_ext shutdown failed: %s", e)
 
+    def _get_replay_image_scraper(self):
+        """Lazily initialize images.py scraper for replay of Instagram image child URLs."""
+        scraper = getattr(self, "_replay_image_scraper", None)
+        if scraper is not None:
+            return scraper
+        try:
+            import images as images_module
+
+            self._replay_image_scraper = images_module.ImageScraper(self.config)
+            return self._replay_image_scraper
+        except Exception as e:
+            logging.warning("Replay images.py initialization failed: %s", e)
+            self._replay_image_scraper = None
+            return None
+
+    def _close_replay_image_scraper(self) -> None:
+        scraper = getattr(self, "_replay_image_scraper", None)
+        self._replay_image_scraper = None
+        if scraper is None:
+            return
+        try:
+            scraper.loop.run_until_complete(scraper.read_extract.close())
+        except Exception as e:
+            logging.warning("Replay images.py shutdown failed: %s", e)
+
     @staticmethod
     def _extract_replay_links(url: str, html: str) -> list[str]:
         """
@@ -941,6 +980,18 @@ class ValidationTestRunner:
         Replay fetch for Facebook/Instagram URLs via fb.py methods.
         """
         return self._get_replay_fetcher().fetch_replay_events_for_social_url(url)
+
+    def _fetch_replay_events_for_instagram_image_url(self, url: str) -> dict:
+        """Replay one synthetic Instagram image child URL via images.py OCR/vision extraction."""
+        image_scraper = self._get_replay_image_scraper()
+        if image_scraper is None:
+            return {
+                "ok": False,
+                "category": "social_platform_scraper_init_failed",
+                "details": "images.py scraper unavailable for replay",
+                "events": [],
+            }
+        return image_scraper.fetch_replay_events_for_image_replay_url(url)
 
     def _fetch_replay_events_for_url(self, url: str) -> dict:
         return self._get_replay_fetcher().fetch_replay_events_for_url(url)
@@ -1938,7 +1989,6 @@ class ValidationTestRunner:
             chatbot_performance=chatbot_performance_summary,
             chatbot_testing=results.get('chatbot_testing'),
         )
-        duplicate_audit_summary = self._summarize_duplicate_audit()
         event_data_quality_summary = self._summarize_event_data_quality()
         field_accuracy_summary = self._summarize_field_accuracy(accuracy_replay_summary)
         coverage_summary = self._summarize_coverage_watchlist()
@@ -1955,7 +2005,6 @@ class ValidationTestRunner:
             llm_cost_summary=llm_cost_summary,
             chatbot_quality_summary=chatbot_quality_summary,
             classifier_performance_summary=classifier_performance_summary,
-            duplicate_summary=duplicate_audit_summary,
             event_data_quality_summary=event_data_quality_summary,
             field_accuracy_summary=field_accuracy_summary,
             coverage_summary=coverage_summary,
@@ -1973,7 +2022,6 @@ class ValidationTestRunner:
         run_scorecard["guardrails"] = self._evaluate_phase3_guardrails(run_scorecard)
         run_scorecard["recommendations_input"] = self._build_recommendations_input(
             run_scorecard=run_scorecard,
-            duplicate_summary=duplicate_audit_summary,
             coverage_summary=coverage_summary,
             dev_summary=dev_summary,
             classifier_performance_summary=classifier_performance_summary,
@@ -1985,7 +2033,6 @@ class ValidationTestRunner:
         recommendation_plan = self._build_recommendation_plan(
             run_scorecard=run_scorecard,
             classifier_performance_summary=classifier_performance_summary,
-            duplicate_summary=duplicate_audit_summary,
             coverage_summary=coverage_summary,
             dev_summary=dev_summary,
             runtime_summary=runtime_summary,
@@ -1997,7 +2044,6 @@ class ValidationTestRunner:
             run_scorecard=run_scorecard,
             accuracy_replay_summary=accuracy_replay_summary,
             classifier_performance_summary=classifier_performance_summary,
-            duplicate_summary=duplicate_audit_summary,
             coverage_summary=coverage_summary,
             dev_summary=dev_summary,
             holdout_summary=holdout_summary,
@@ -2015,7 +2061,6 @@ class ValidationTestRunner:
             runtime_summary=runtime_summary,
             llm_cost_summary=llm_cost_summary,
             chatbot_quality_summary=chatbot_quality_summary,
-            duplicate_summary=duplicate_audit_summary,
             coverage_summary=coverage_summary,
             dev_summary=dev_summary,
             holdout_summary=holdout_summary,
@@ -2036,7 +2081,6 @@ class ValidationTestRunner:
                 "runtime_summary": runtime_summary,
                 "llm_cost_summary": llm_cost_summary,
                 "chatbot_quality_summary": chatbot_quality_summary,
-                "duplicate_audit_summary": duplicate_audit_summary,
                 "event_data_quality_summary": event_data_quality_summary,
                 "field_accuracy_summary": field_accuracy_summary,
                 "coverage_summary": coverage_summary,
@@ -2130,7 +2174,7 @@ class ValidationTestRunner:
         {self._build_phase1_scorecard_html(run_scorecard)}
 
         <h2>5. Phase 2 Integrity Coverage</h2>
-        {self._build_phase2_integrity_html(duplicate_audit_summary, coverage_summary)}
+        {self._build_phase2_integrity_html(coverage_summary)}
 
         <h2>6. Phase 3 Honest Evaluation</h2>
         {self._build_phase3_honest_evaluation_html(dev_summary, holdout_summary, domain_capped_summary, run_scorecard.get('guardrails', {}))}
@@ -2199,9 +2243,6 @@ class ValidationTestRunner:
         chatbot_quality_summary_path = chatbot_path('chatbot_quality_summary.json')
         with open(chatbot_quality_summary_path, 'w', encoding='utf-8') as f:
             json.dump(chatbot_quality_summary, f, indent=2)
-        duplicate_audit_summary_path = duplicates_path('duplicate_audit_summary.json')
-        with open(duplicate_audit_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(duplicate_audit_summary, f, indent=2)
         event_data_quality_summary_path = codex_review_path('event_data_quality_summary.json')
         with open(event_data_quality_summary_path, 'w', encoding='utf-8') as f:
             json.dump(event_data_quality_summary, f, indent=2)
@@ -2279,7 +2320,6 @@ class ValidationTestRunner:
         logging.info(f"Runtime summary saved: {runtime_summary_path}")
         logging.info(f"LLM cost summary saved: {llm_cost_summary_path}")
         logging.info(f"Chatbot quality summary saved: {chatbot_quality_summary_path}")
-        logging.info(f"Duplicate audit summary saved: {duplicate_audit_summary_path}")
         logging.info(f"Event data quality summary saved: {event_data_quality_summary_path}")
         logging.info(f"Field accuracy summary saved: {field_accuracy_summary_path}")
         logging.info(f"Coverage summary saved: {coverage_summary_path}")
@@ -2788,9 +2828,13 @@ class ValidationTestRunner:
         """Build a scraping validator instance for shared URL/watchlist checks."""
         return ScrapingValidator(self.db_handler, self.config)
 
+    def _resolve_repo_path(self, *parts: str) -> str:
+        """Resolve a repository-relative path independently of the process cwd."""
+        return os.path.join(repo_root, *parts)
+
     def _load_coverage_watchlist_rows(self) -> tuple[list[dict[str, Any]], str]:
         """Load curated coverage watchlist rows, falling back to important-url seed files."""
-        watchlist_path = os.path.join("data", "watchlists", "coverage_watchlist.csv")
+        watchlist_path = self._resolve_repo_path("data", "watchlists", "coverage_watchlist.csv")
         candidate_frames: list[pd.DataFrame] = []
         source_label = "coverage_watchlist_csv"
 
@@ -2805,8 +2849,8 @@ class ValidationTestRunner:
         if not candidate_frames:
             source_label = "fallback_whitelist_edge_cases"
             fallback_paths = [
-                ("data/urls/aaa_urls.csv", "high"),
-                ("data/other/edge_cases.csv", "medium"),
+                (self._resolve_repo_path("data", "urls", "aaa_urls.csv"), "high"),
+                (self._resolve_repo_path("data", "other", "edge_cases.csv"), "medium"),
             ]
             for path, priority in fallback_paths:
                 if not os.path.exists(path):
@@ -2862,7 +2906,7 @@ class ValidationTestRunner:
 
     def _load_manual_coverage_audit_rows(self) -> tuple[list[dict[str, Any]], str]:
         """Load the periodic manual coverage audit set."""
-        audit_path = os.path.join("data", "evaluation", "manual_coverage_audit.csv")
+        audit_path = self._resolve_repo_path("data", "evaluation", "manual_coverage_audit.csv")
         if not os.path.exists(audit_path):
             return [], "manual_coverage_audit_missing"
         try:
@@ -3104,118 +3148,6 @@ class ValidationTestRunner:
         )
         return summary
 
-    def _summarize_duplicate_audit(self) -> dict:
-        """Summarize duplicate patterns in the current events table."""
-        summary = {
-            "available": False,
-            "total_events": 0,
-            "duplicate_clusters_count": 0,
-            "duplicate_rows": 0,
-            "duplicate_rate_per_100_events": None,
-            "severe_duplicate_clusters_count": 0,
-            "severe_duplicate_rows": 0,
-            "severe_duplicate_rate_per_100_events": None,
-            "top_duplicate_domains": [],
-            "sample_duplicate_clusters": [],
-            "error": "",
-        }
-        try:
-            total_rows = self.db_handler.execute_query("SELECT COUNT(*) FROM events") or []
-            total_events = int(total_rows[0][0]) if total_rows else 0
-            summary["total_events"] = total_events
-            if total_events <= 0:
-                summary["available"] = True
-                return summary
-
-            duplicate_rows = self.db_handler.execute_query(
-                """
-                SELECT
-                    COALESCE(NULLIF(TRIM(url), ''), '(no url)') AS url,
-                    COALESCE(NULLIF(TRIM(event_name), ''), '(no event name)') AS event_name,
-                    start_date,
-                    COALESCE(start_time::text, '') AS start_time_text,
-                    COUNT(*) AS row_count
-                FROM events
-                GROUP BY 1, 2, 3, 4
-                HAVING COUNT(*) > 1
-                ORDER BY row_count DESC, event_name ASC
-                LIMIT 100
-                """
-            ) or []
-
-            severe_rows = self.db_handler.execute_query(
-                """
-                SELECT
-                    COALESCE(NULLIF(TRIM(event_name), ''), '(no event name)') AS event_name,
-                    start_date,
-                    COALESCE(start_time::text, '') AS start_time_text,
-                    COALESCE(address_id, 0) AS address_id_key,
-                    COUNT(*) AS row_count,
-                    COUNT(DISTINCT COALESCE(NULLIF(TRIM(url), ''), '(no url)')) AS distinct_urls
-                FROM events
-                GROUP BY 1, 2, 3, 4
-                HAVING COUNT(*) > 1
-                   AND COUNT(DISTINCT COALESCE(NULLIF(TRIM(url), ''), '(no url)')) > 1
-                ORDER BY row_count DESC, event_name ASC
-                LIMIT 100
-                """
-            ) or []
-        except Exception as e:
-            summary["error"] = f"duplicate audit query failed: {e}"
-            return summary
-
-        duplicate_clusters_count = len(duplicate_rows)
-        duplicate_row_excess = sum(max(int(row[4]) - 1, 0) for row in duplicate_rows)
-        severe_clusters_count = len(severe_rows)
-        severe_row_excess = sum(max(int(row[4]) - 1, 0) for row in severe_rows)
-
-        domain_counts: Counter[str] = Counter()
-        sample_clusters: list[dict[str, Any]] = []
-        for row in duplicate_rows[:15]:
-            url = str(row[0] or "")
-            domain = urlparse(url).netloc.lower() if url and url != "(no url)" else "(no url)"
-            domain_counts.update([domain])
-            sample_clusters.append(
-                {
-                    "kind": "exact_key_duplicate",
-                    "url": url,
-                    "event_name": str(row[1] or ""),
-                    "start_date": str(row[2] or ""),
-                    "start_time": str(row[3] or ""),
-                    "row_count": int(row[4] or 0),
-                }
-            )
-        for row in severe_rows[:10]:
-            sample_clusters.append(
-                {
-                    "kind": "cross_url_same_event",
-                    "event_name": str(row[0] or ""),
-                    "start_date": str(row[1] or ""),
-                    "start_time": str(row[2] or ""),
-                    "address_id": int(row[3] or 0),
-                    "row_count": int(row[4] or 0),
-                    "distinct_urls": int(row[5] or 0),
-                }
-            )
-
-        summary.update(
-            {
-                "available": True,
-                "duplicate_clusters_count": duplicate_clusters_count,
-                "duplicate_rows": duplicate_row_excess,
-                "duplicate_rate_per_100_events": round((duplicate_row_excess / total_events) * 100.0, 2),
-                "severe_duplicate_clusters_count": severe_clusters_count,
-                "severe_duplicate_rows": severe_row_excess,
-                "severe_duplicate_rate_per_100_events": round((severe_row_excess / total_events) * 100.0, 2),
-                "top_duplicate_domains": [
-                    {"domain": domain, "cluster_count": count}
-                    for domain, count in domain_counts.most_common(10)
-                ],
-                "sample_duplicate_clusters": sample_clusters,
-            }
-        )
-        return summary
-
     def _summarize_event_data_quality(self) -> dict:
         """Summarize stale and invalid event rates from the current events table."""
         summary = {
@@ -3365,17 +3297,13 @@ class ValidationTestRunner:
             },
         }
 
-    def _build_phase2_integrity_html(self, duplicate_summary: dict, coverage_summary: dict) -> str:
-        """Render a compact Phase 2 integrity section for duplicates and watchlist coverage."""
-        dup_rate = duplicate_summary.get("duplicate_rate_per_100_events")
-        severe_rate = duplicate_summary.get("severe_duplicate_rate_per_100_events")
+    def _build_phase2_integrity_html(self, coverage_summary: dict) -> str:
+        """Render a compact Phase 2 integrity section for watchlist and manual-audit coverage."""
         source_hit = coverage_summary.get("source_hit_rate_pct")
         event_hit = coverage_summary.get("event_capture_rate_pct")
         manual_missed = coverage_summary.get("missed_event_rate_manual_audit_pct")
         html = "<div class='metric-container'>"
         cards = [
-            ("Duplicate Rate /100", dup_rate),
-            ("Severe Duplicates /100", severe_rate),
             ("Watchlist Source Hit %", source_hit),
             ("Watchlist Event Capture %", event_hit),
             ("Manual Audit Missed %", manual_missed),
@@ -3391,8 +3319,9 @@ class ValidationTestRunner:
         html += "</div>"
         html += (
             f"<p><strong>Coverage watchlist source:</strong> {self._escape_html(str(coverage_summary.get('watchlist_source', '')))}</p>"
-            f"<p><strong>Duplicate clusters:</strong> {int(duplicate_summary.get('duplicate_clusters_count', 0) or 0)}; "
-            f"<strong>Severe clusters:</strong> {int(duplicate_summary.get('severe_duplicate_clusters_count', 0) or 0)}</p>"
+            f"<p><strong>Watchlist rows:</strong> {int(coverage_summary.get('watchlist_rows_total', 0) or 0)}; "
+            f"<strong>Sources hit:</strong> {int(coverage_summary.get('sources_hit', 0) or 0)}; "
+            f"<strong>Event capture hits:</strong> {int(coverage_summary.get('event_capture_hits', 0) or 0)}</p>"
         )
         return html
 
@@ -3539,7 +3468,6 @@ class ValidationTestRunner:
         *,
         run_scorecard: dict,
         classifier_performance_summary: dict,
-        duplicate_summary: dict,
         coverage_summary: dict,
         dev_summary: dict,
         runtime_summary: dict,
@@ -3550,7 +3478,6 @@ class ValidationTestRunner:
         """Build a structured recommendation plan artifact from existing evaluation signals."""
         recommendations_input = self._build_recommendations_input(
             run_scorecard=run_scorecard,
-            duplicate_summary=duplicate_summary,
             coverage_summary=coverage_summary,
             dev_summary=dev_summary,
             classifier_performance_summary=classifier_performance_summary,
@@ -3576,27 +3503,6 @@ class ValidationTestRunner:
                     ],
                     "expected_kpi_impact": self._classify_recommendation_expected_impact("guardrail_violation"),
                     "confidence": "high",
-                    "regression_risk": "medium",
-                }
-            )
-        for item in recommendations_input.get("duplicate_hotspots", [])[:1]:
-            if not isinstance(item, dict):
-                continue
-            issues.append(
-                {
-                    "issue_type": "duplicate_hotspot",
-                    "title": f"Reduce duplicates on {item.get('domain', '(unknown domain)')}",
-                    "evidence": item,
-                    "likely_root_causes": [
-                        "Dedup keys are too weak for this source pattern.",
-                        "The same logical event is entering the pipeline through multiple URLs.",
-                    ],
-                    "recommended_actions": [
-                        "Tighten duplicate matching for this domain's recurring event shape.",
-                        "Add a domain-specific duplicate guard or normalization rule if the pattern is stable.",
-                    ],
-                    "expected_kpi_impact": self._classify_recommendation_expected_impact("duplicate_hotspot"),
-                    "confidence": "medium",
                     "regression_risk": "medium",
                 }
             )
@@ -3770,7 +3676,6 @@ class ValidationTestRunner:
         self,
         *,
         run_scorecard: dict,
-        duplicate_summary: dict,
         coverage_summary: dict,
         dev_summary: dict,
         classifier_performance_summary: dict,
@@ -3805,7 +3710,6 @@ class ValidationTestRunner:
                 }
             )
 
-        duplicate_hotspots = duplicate_summary.get("top_duplicate_domains", []) if isinstance(duplicate_summary.get("top_duplicate_domains"), list) else []
         coverage_gaps = coverage_summary.get("missed_sources", []) if isinstance(coverage_summary.get("missed_sources"), list) else []
         domain_regressions = domain_evaluation_summary.get("worst_domains", []) if isinstance(domain_evaluation_summary.get("worst_domains"), list) else []
         dev_info = dev_summary if isinstance(dev_summary, dict) else {}
@@ -3827,7 +3731,6 @@ class ValidationTestRunner:
             "top_regressions": top_regressions,
             "largest_cost_deltas": largest_cost_deltas[:5],
             "runtime_bottlenecks": bottlenecks[:5],
-            "duplicate_hotspots": duplicate_hotspots[:5],
             "coverage_gaps": coverage_gaps[:5],
             "domain_regressions": domain_regressions[:5],
             "previous_run_regressions": previous_run_regressions[:5],
@@ -3847,7 +3750,6 @@ class ValidationTestRunner:
         run_scorecard: dict,
         accuracy_replay_summary: dict,
         classifier_performance_summary: dict,
-        duplicate_summary: dict,
         coverage_summary: dict,
         dev_summary: dict,
         holdout_summary: dict,
@@ -3868,7 +3770,6 @@ class ValidationTestRunner:
                 "run_scorecard": run_scorecard,
                 "accuracy_replay_summary": accuracy_replay_summary,
                 "classifier_performance_summary": classifier_performance_summary,
-                "duplicate_audit_summary": duplicate_summary,
                 "coverage_summary": coverage_summary,
                 "dev_summary": dev_summary,
                 "holdout_summary": holdout_summary,
@@ -3927,6 +3828,95 @@ class ValidationTestRunner:
             payload.setdefault("run_id", str(row[0] or ""))
             artifacts.append(payload)
         return artifacts
+
+    def _get_runtime_30d_baseline_hours(
+        self,
+        *,
+        report_timestamp: str | None,
+        exclude_run_id: str | None = None,
+        lookback_days: int = 30,
+        limit: int = 120,
+    ) -> dict[str, Any]:
+        """Return the average runtime hours from recent run-scorecard artifacts within the lookback window."""
+        baseline = {
+            "available": False,
+            "average_runtime_hours": None,
+            "runs_used": 0,
+            "lookback_days": int(lookback_days or 30),
+        }
+        reference_ts = self._parse_iso_datetime(str(report_timestamp or "") or "") or datetime.now()
+        cutoff = reference_ts - timedelta(days=max(1, int(lookback_days or 30)))
+        artifacts = self._load_recent_validation_artifacts(
+            artifact_type="run_scorecard",
+            limit=max(1, int(limit or 1)),
+            exclude_run_id=str(exclude_run_id or "").strip() or None,
+        )
+        runtime_values: list[float] = []
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            artifact_ts = self._parse_iso_datetime(str(artifact.get("run_timestamp_utc", "") or ""))
+            if artifact_ts is None or artifact_ts < cutoff or artifact_ts > reference_ts:
+                continue
+            runtime_summary = artifact.get("kpis", {}).get("run_time", {}).get("summary", {})
+            try:
+                runtime_hours = runtime_summary.get("pipeline_duration_hours")
+                if runtime_hours is None:
+                    runtime_minutes = runtime_summary.get("pipeline_duration_minutes")
+                    runtime_hours = (float(runtime_minutes) / 60.0) if runtime_minutes is not None else None
+                if runtime_hours is None:
+                    continue
+                runtime_values.append(float(runtime_hours))
+            except Exception:
+                continue
+        if runtime_values:
+            baseline["available"] = True
+            baseline["average_runtime_hours"] = round(sum(runtime_values) / len(runtime_values), 4)
+            baseline["runs_used"] = len(runtime_values)
+        return baseline
+
+    def _get_run_cost_30d_baseline_usd(
+        self,
+        *,
+        report_timestamp: str | None,
+        exclude_run_id: str | None = None,
+        lookback_days: int = 30,
+        limit: int = 120,
+    ) -> dict[str, Any]:
+        """Return the average total run cost in USD from recent run-scorecard artifacts within the lookback window."""
+        baseline = {
+            "available": False,
+            "average_total_usd": None,
+            "runs_used": 0,
+            "lookback_days": int(lookback_days or 30),
+        }
+        reference_ts = self._parse_iso_datetime(str(report_timestamp or "") or "") or datetime.now()
+        cutoff = reference_ts - timedelta(days=max(1, int(lookback_days or 30)))
+        artifacts = self._load_recent_validation_artifacts(
+            artifact_type="run_scorecard",
+            limit=max(1, int(limit or 1)),
+            exclude_run_id=str(exclude_run_id or "").strip() or None,
+        )
+        cost_values: list[float] = []
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            artifact_ts = self._parse_iso_datetime(str(artifact.get("run_timestamp_utc", "") or ""))
+            if artifact_ts is None or artifact_ts < cutoff or artifact_ts > reference_ts:
+                continue
+            cost_summary = (((artifact.get("kpis") or {}).get("run_costs") or {}).get("summary") or {}).get("summary", {})
+            try:
+                total_usd = cost_summary.get("total_usd")
+                if total_usd is None:
+                    continue
+                cost_values.append(float(total_usd))
+            except Exception:
+                continue
+        if cost_values:
+            baseline["available"] = True
+            baseline["average_total_usd"] = round(sum(cost_values) / len(cost_values), 6)
+            baseline["runs_used"] = len(cost_values)
+        return baseline
 
     def _get_code_version_info(self) -> dict[str, str]:
         """Return lightweight Git provenance for the current working tree when available."""
@@ -3999,8 +3989,6 @@ class ValidationTestRunner:
         return [
             {"metric_key": "overall_score", "label": "Overall Score", "value": (run_scorecard.get("overall_score") or {}).get("value"), "higher_is_better": True},
             {"metric_key": "replay_url_accuracy_pct", "label": "Replay URL Accuracy %", "value": db_accuracy.get("replay_url_accuracy_pct"), "higher_is_better": True},
-            {"metric_key": "duplicate_rate_per_100_events", "label": "Duplicate Rate / 100 Events", "value": db_accuracy.get("duplicate_rate_per_100_events"), "higher_is_better": False},
-            {"metric_key": "severe_duplicate_rate_per_100_events", "label": "Severe Duplicate Rate / 100 Events", "value": db_accuracy.get("severe_duplicate_rate_per_100_events"), "higher_is_better": False},
             {"metric_key": "invalid_event_rate_pct", "label": "Invalid Event Rate %", "value": db_accuracy.get("invalid_event_rate_pct"), "higher_is_better": False},
             {"metric_key": "stale_event_rate_pct", "label": "Stale Event Rate %", "value": db_accuracy.get("stale_event_rate_pct"), "higher_is_better": False},
             {"metric_key": "watchlist_source_hit_rate_pct", "label": "Watchlist Source Hit Rate %", "value": coverage.get("watchlist_source_hit_rate_pct"), "higher_is_better": True},
@@ -4363,13 +4351,6 @@ class ValidationTestRunner:
                 65.0,
                 "min",
                 "Watchlist event capture rate below minimum",
-            ),
-            (
-                "severe_duplicate_rate_max_per_100_events",
-                db_accuracy.get("severe_duplicate_rate_per_100_events"),
-                2.0,
-                "max",
-                "Severe duplicate rate above maximum",
             ),
             (
                 "stale_event_rate_max_pct",
@@ -5878,9 +5859,7 @@ class ValidationTestRunner:
         })
 
         trend_alert_status = "PASS"
-        if critical_alert_count > max_critical_alerts_fail:
-            trend_alert_status = "FAIL"
-        elif warning_alert_count > max_warning_alerts_warn:
+        if critical_alert_count > max_critical_alerts_fail or warning_alert_count > max_warning_alerts_warn:
             trend_alert_status = "WARN"
         completeness_checks.append({
             "name": "Top-Source Trend Alerts",
@@ -5894,7 +5873,10 @@ class ValidationTestRunner:
                 f"warning={warning_alert_count - max_warning_alerts_warn:+d}"
             ),
             "status": trend_alert_status,
-            "details": f"history_runs_used={int(trend_monitoring.get('history_runs_used', 0) or 0)}",
+            "details": (
+                f"history_runs_used={int(trend_monitoring.get('history_runs_used', 0) or 0)}; "
+                "advisory only unless corroborated by missing required sources or another completeness failure."
+            ),
         })
 
         if top_10_percentage is None:
@@ -8425,7 +8407,6 @@ class ValidationTestRunner:
         runtime_summary: dict,
         llm_cost_summary: dict,
         chatbot_quality_summary: dict,
-        duplicate_summary: dict | None = None,
         coverage_summary: dict | None = None,
         dev_summary: dict | None = None,
         holdout_summary: dict | None = None,
@@ -8476,7 +8457,6 @@ class ValidationTestRunner:
                 False,
             ),
         ]
-        duplicate_info = duplicate_summary if isinstance(duplicate_summary, dict) else {}
         coverage_info = coverage_summary if isinstance(coverage_summary, dict) else {}
         dev_info = dev_summary if isinstance(dev_summary, dict) else {}
         holdout_info = holdout_summary if isinstance(holdout_summary, dict) else {}
@@ -8488,20 +8468,6 @@ class ValidationTestRunner:
         holdout_baseline_info = run_delta_info.get("holdout_baseline", {}) if isinstance(run_delta_info.get("holdout_baseline"), dict) else {}
         metric_specs.extend(
             [
-                (
-                    "duplicate_rate_per_100_events",
-                    duplicate_info.get("duplicate_rate_per_100_events"),
-                    "count_per_100",
-                    "Phase 2 integrity: duplicate excess rows per 100 events",
-                    False,
-                ),
-                (
-                    "severe_duplicate_rate_per_100_events",
-                    duplicate_info.get("severe_duplicate_rate_per_100_events"),
-                    "count_per_100",
-                    "Phase 2 integrity: severe duplicate excess rows per 100 events",
-                    False,
-                ),
                 (
                     "coverage_watchlist_source_hit_rate_pct",
                     coverage_info.get("source_hit_rate_pct"),
@@ -8673,7 +8639,6 @@ class ValidationTestRunner:
         llm_cost_summary: dict,
         chatbot_quality_summary: dict,
         classifier_performance_summary: dict | None,
-        duplicate_summary: dict | None,
         event_data_quality_summary: dict | None,
         field_accuracy_summary: dict | None,
         coverage_summary: dict | None,
@@ -8688,7 +8653,6 @@ class ValidationTestRunner:
         scraping_summary = scraping.get("summary", {}) if isinstance(scraping.get("summary"), dict) else {}
         source_distribution = scraping.get("source_distribution", {}) if isinstance(scraping.get("source_distribution"), dict) else {}
         classifier = classifier_performance_summary if isinstance(classifier_performance_summary, dict) else {}
-        duplicate_info = duplicate_summary if isinstance(duplicate_summary, dict) else {}
         event_data_quality = event_data_quality_summary if isinstance(event_data_quality_summary, dict) else {}
         field_accuracy = field_accuracy_summary if isinstance(field_accuracy_summary, dict) else {}
         coverage_info = coverage_summary if isinstance(coverage_summary, dict) else {}
@@ -8702,8 +8666,12 @@ class ValidationTestRunner:
         replay_row_accuracy_pct = float(replay.get("replay_accuracy_pct", 0.0) or 0.0)
         database_accuracy_score = round(replay_url_accuracy_pct, 2) if replay_url_accuracy_pct else None
 
-        total_important_urls = int(scraping_summary.get("important_urls_checked", 0) or 0)
-        failed_urls = int(scraping_summary.get("failed_count", 0) or 0)
+        total_important_urls = int(
+            scraping_summary.get("total_important_urls", scraping_summary.get("important_urls_checked", 0)) or 0
+        )
+        failed_urls = int(
+            scraping_summary.get("total_failures", scraping_summary.get("failed_count", 0)) or 0
+        )
         events_coverage_score = None
         if total_important_urls > 0:
             events_coverage_score = round(((total_important_urls - failed_urls) / total_important_urls) * 100.0, 2)
@@ -8717,10 +8685,20 @@ class ValidationTestRunner:
                 events_coverage_score = 50.0
 
         runtime_minutes = runtime_summary.get("pipeline_duration_minutes")
+        runtime_hours = runtime_summary.get("pipeline_duration_hours")
         total_classified_urls = int(classifier.get("total_classified_urls", 0) or 0)
         total_events = int(event_data_quality.get("total_events", 0) or 0)
+        runtime_baseline = self._get_runtime_30d_baseline_hours(
+            report_timestamp=report_timestamp,
+            exclude_run_id=run_id,
+        )
         runtime_score = None
-        if runtime_minutes is not None:
+        if runtime_hours is not None and runtime_baseline.get("available") and runtime_baseline.get("average_runtime_hours"):
+            baseline_hours = float(runtime_baseline["average_runtime_hours"])
+            current_runtime_hours = float(runtime_hours)
+            if current_runtime_hours >= 0:
+                runtime_score = round((current_runtime_hours / baseline_hours) * 100.0, 2)
+        elif runtime_minutes is not None:
             runtime_score = max(0.0, round(100.0 - float(runtime_minutes) / 6.0, 2))
 
         total_cost_usd = ((llm_cost_summary.get("summary") or {}).get("total_usd") if isinstance(llm_cost_summary.get("summary"), dict) else None)
@@ -8734,8 +8712,21 @@ class ValidationTestRunner:
             if total_cost_usd is not None and total_events > 0
             else None
         )
+        run_cost_baseline = self._get_run_cost_30d_baseline_usd(
+            report_timestamp=report_timestamp,
+            exclude_run_id=run_id,
+        )
         run_cost_score = None
-        if total_cost_usd is not None:
+        if (
+            total_cost_usd is not None
+            and run_cost_baseline.get("available")
+            and run_cost_baseline.get("average_total_usd") not in (None, 0, 0.0)
+        ):
+            run_cost_score = round(
+                (float(total_cost_usd) / float(run_cost_baseline["average_total_usd"])) * 100.0,
+                2,
+            )
+        elif total_cost_usd is not None:
             run_cost_score = max(0.0, round(100.0 - (float(total_cost_usd) * 5.0), 2))
 
         chatbot_score = ((chatbot_quality_summary.get("summary") or {}).get("chatbot_answer_correctness_pct") if isinstance(chatbot_quality_summary.get("summary"), dict) else None)
@@ -8777,8 +8768,6 @@ class ValidationTestRunner:
                         "total_rows": int(replay.get("total_rows", 0) or 0),
                         "true_count": int(replay.get("true_count", 0) or 0),
                         "false_count": int(replay.get("false_count", 0) or 0),
-                        "duplicate_rate_per_100_events": duplicate_info.get("duplicate_rate_per_100_events"),
-                        "severe_duplicate_rate_per_100_events": duplicate_info.get("severe_duplicate_rate_per_100_events"),
                         "invalid_event_rate_pct": event_data_quality.get("invalid_event_rate_pct"),
                         "stale_event_rate_pct": event_data_quality.get("stale_event_rate_pct"),
                         "classifier_effect": {
@@ -8812,6 +8801,15 @@ class ValidationTestRunner:
                     "score": runtime_score,
                     "summary": {
                         **runtime_summary,
+                        "baseline_30d_average_runtime_hours": runtime_baseline.get("average_runtime_hours"),
+                        "baseline_30d_runs_used": int(runtime_baseline.get("runs_used", 0) or 0),
+                        "runtime_vs_30d_average_pct": (
+                            round((float(runtime_hours) / float(runtime_baseline["average_runtime_hours"])) * 100.0, 2)
+                            if runtime_hours is not None
+                            and runtime_baseline.get("available")
+                            and runtime_baseline.get("average_runtime_hours")
+                            else None
+                        ),
                         "urls_processed_per_minute": (
                             round(total_classified_urls / float(runtime_minutes), 4)
                             if runtime_minutes not in (None, 0, 0.0) and total_classified_urls > 0
@@ -8830,6 +8828,15 @@ class ValidationTestRunner:
                         **llm_cost_summary,
                         "summary": {
                             **((llm_cost_summary.get("summary") or {}) if isinstance(llm_cost_summary.get("summary"), dict) else {}),
+                            "baseline_30d_average_total_usd": run_cost_baseline.get("average_total_usd"),
+                            "baseline_30d_runs_used": int(run_cost_baseline.get("runs_used", 0) or 0),
+                            "cost_vs_30d_average_pct": (
+                                round((float(total_cost_usd) / float(run_cost_baseline["average_total_usd"])) * 100.0, 2)
+                                if total_cost_usd is not None
+                                and run_cost_baseline.get("available")
+                                and run_cost_baseline.get("average_total_usd") not in (None, 0, 0.0)
+                                else None
+                            ),
                             "cost_per_processed_url_usd": cost_per_processed_url_usd,
                             "cost_per_inserted_event_usd": cost_per_inserted_event_usd,
                         },
@@ -8888,11 +8895,6 @@ class ValidationTestRunner:
         domain_capped_summary = (run_scorecard.get("evaluation_scope") or {}).get("domain_capped_summary", {})
         if within_15s is not None:
             bullet_lines.append(f"Chatbot within 15s: {float(within_15s):.2f}%")
-        if correctness is not None:
-            bullet_lines.append(f"Chatbot correctness: {float(correctness):.2f}%")
-        holdout_accuracy = holdout_summary.get("replay_url_accuracy_pct")
-        if holdout_accuracy is not None:
-            bullet_lines.append(f"Holdout replay URL accuracy: {float(holdout_accuracy):.2f}%")
         domain_capped_accuracy = domain_capped_summary.get("replay_url_accuracy_pct")
         if domain_capped_accuracy is not None:
             bullet_lines.append(f"Domain-capped replay URL accuracy: {float(domain_capped_accuracy):.2f}%")
@@ -10704,6 +10706,42 @@ class ValidationTestRunner:
                     html += "</ul>"
                 if cat.get('recommendation'):
                     html += f"<p><strong>Recommendation:</strong> {cat['recommendation']}</p>"
+
+        review_rows = chatbot_data.get("review_rows") if isinstance(chatbot_data, dict) else None
+        if isinstance(review_rows, list) and review_rows:
+            html += (
+                "<h3>Row-by-Row Chatbot Scoring</h3>"
+                "<table><tr>"
+                "<th>#</th><th>Question</th><th>Generated SQL</th><th>Score</th>"
+                "<th>Scorer Reasoning</th><th>Criteria Missed</th><th>SQL Issues</th>"
+                "</tr>"
+            )
+            for idx, row in enumerate(review_rows, start=1):
+                question = self._escape_html(str(row.get("question", "") or ""))
+                sql_query = self._escape_html(str(row.get("sql_query", "") or ""))
+                reasoning = self._escape_html(str(row.get("reasoning", "") or ""))
+                criteria_missed = ", ".join(str(item) for item in (row.get("criteria_missed") or []) if str(item).strip())
+                sql_issues = ", ".join(str(item) for item in (row.get("sql_issues") or []) if str(item).strip())
+                score_value = row.get("score")
+                try:
+                    score_num = float(score_value)
+                    row_class = " class=\"problematic\"" if score_num < 90.0 else ""
+                    score_text = f"{score_num:.1f}"
+                except Exception:
+                    row_class = ""
+                    score_text = self._escape_html(str(score_value or ""))
+                html += (
+                    f"<tr{row_class}>"
+                    f"<td>{idx}</td>"
+                    f"<td>{question}</td>"
+                    f"<td><pre style=\"white-space: pre-wrap; background:#f8f9fa; padding:8px; border-radius:4px; border:1px solid #eee;\"><code>{sql_query}</code></pre></td>"
+                    f"<td>{score_text}</td>"
+                    f"<td>{reasoning}</td>"
+                    f"<td>{self._escape_html(criteria_missed)}</td>"
+                    f"<td>{self._escape_html(sql_issues)}</td>"
+                    "</tr>"
+                )
+            html += "</table>"
 
         return html
 

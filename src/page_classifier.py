@@ -14,6 +14,7 @@ from page_classifier_ml import predict_page_classifier_labels
 
 _FB_EVENT_RE = re.compile(r"/events/(\d+)")
 _EB_TICKET_RE = re.compile(r"-tickets-(\d+)")
+_EB_ORGANIZER_RE = re.compile(r"^/o/[^/]+/?$")
 _EMAIL_INPUT_RE = re.compile(r"^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$", re.IGNORECASE)
 
 
@@ -109,6 +110,16 @@ def is_eventbrite_event_detail_url(url: str) -> bool:
     except Exception:
         return False
     return _EB_TICKET_RE.search(path) is not None
+
+
+def is_eventbrite_organizer_url(url: str) -> bool:
+    if not is_eventbrite_url(url):
+        return False
+    try:
+        path = (urlparse(_safe_url(url)).path or "")
+    except Exception:
+        return False
+    return _EB_ORGANIZER_RE.search(path) is not None
 
 
 def is_google_calendar_like_url(url: str) -> bool:
@@ -272,6 +283,18 @@ def classify_page(
             subtype="eventbrite_event_detail",
         )
 
+    if is_eventbrite_organizer_url(url):
+        return PageClassification(
+            url=url,
+            archetype="incomplete_event",
+            owner_step="ebs.py",
+            prompt_type=url,
+            is_social=False,
+            is_calendar=False,
+            is_event_detail=False,
+            subtype="eventbrite_organizer",
+        )
+
     if is_event_detail_url(url):
         return PageClassification(
             url=url,
@@ -347,6 +370,7 @@ def classify_page_with_confidence(
         "instagram_post_detail",
         "social_listing_or_profile",
         "eventbrite_event_detail",
+        "eventbrite_organizer",
         "event_detail",
     }
     if base.subtype in deterministic_subtypes:

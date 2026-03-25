@@ -1820,6 +1820,24 @@ def generate_chatbot_report(scored_results: List[dict], output_dir: str = 'outpu
             }
         },
         'category_breakdown': category_stats,
+        'review_rows': [
+            {
+                'question': r.get('question', ''),
+                'category': r.get('category', ''),
+                'interpretation': r.get('interpretation', ''),
+                'sql_query': r.get('sql_query', 'N/A'),
+                'score': (r.get('evaluation') or {}).get('score', 0),
+                'reasoning': (r.get('evaluation') or {}).get('reasoning', ''),
+                'criteria_matched': list((r.get('evaluation') or {}).get('criteria_matched', []) or []),
+                'criteria_missed': list((r.get('evaluation') or {}).get('criteria_missed', []) or []),
+                'sql_issues': list((r.get('evaluation') or {}).get('sql_issues', []) or []),
+                'interpretation_score': ((r.get('evaluation') or {}).get('interpretation_evaluation', {}) or {}).get('score'),
+                'interpretation_issues': list((((r.get('evaluation') or {}).get('interpretation_evaluation', {}) or {}).get('issues', []) or [])),
+                'execution_success': bool(r.get('execution_success', False)),
+                'result_count': int(r.get('result_count', 0) or 0),
+            }
+            for r in scored_results
+        ],
         'problematic_questions': problematic[:20],  # Limit to first 20
         'problem_categories': problem_categories,
         'problem_category_regression_cases': [

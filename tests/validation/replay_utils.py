@@ -96,7 +96,8 @@ def normalize_url_value(value: Any) -> str:
         scheme = (parsed.scheme or "https").lower()
         netloc = (parsed.netloc or "").lower()
         path = (parsed.path or "").rstrip("/")
-        return urlunparse((scheme, netloc, path, "", parsed.query, ""))
+        fragment = parsed.fragment if str(parsed.fragment or "").startswith("image=") else ""
+        return urlunparse((scheme, netloc, path, "", parsed.query, fragment))
     except Exception:
         return text.lower().rstrip("/")
 

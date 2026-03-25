@@ -8,6 +8,7 @@ from fb import FacebookEventScraper
 from fb import canonicalize_facebook_url, is_facebook_login_redirect, is_non_content_facebook_url
 from fb import extract_facebook_event_links_from_html
 from fb import sanitize_facebook_seed_urls
+from fb import partition_facebook_seed_urls_for_processing
 from fb import classify_facebook_access_state
 from fb import diagnose_facebook_access
 import pandas as pd
@@ -324,6 +325,44 @@ def test_driver_fb_urls_logs_stale_skip_reason_to_urls_table(monkeypatch):
         and row[7] == "skip_stale_facebook_event_detail"
         for row in dummy_db.rows
     )
+
+
+def test_partition_facebook_seed_urls_prefilters_low_yield_event_details():
+    df = pd.DataFrame(
+        [
+            {
+                "link": "https://www.facebook.com/events/1018836737121988/",
+                "parent_url": "",
+                "source": "Test Source",
+                "keywords": "salsa",
+            },
+            {
+                "link": "https://www.facebook.com/groups/1634269246863069/",
+                "parent_url": "",
+                "source": "Victoria Kizomba Lovers Group",
+                "keywords": "kizomba",
+            },
+        ]
+    )
+
+    kept_df, skipped_rows, stats = partition_facebook_seed_urls_for_processing(
+        df,
+        should_process_url=lambda url: "/groups/" in url,
+        get_should_process_decision_reason=lambda _url: "skip_stale_facebook_event_detail",
+    )
+
+    assert kept_df["link"].tolist() == ["https://www.facebook.com/groups/1634269246863069/"]
+    assert skipped_rows == [
+        {
+            "link": "https://www.facebook.com/events/1018836737121988/",
+            "parent_url": "",
+            "source": "Test Source",
+            "keywords": "salsa",
+            "decision_reason": "skip_stale_facebook_event_detail",
+        }
+    ]
+    assert stats["kept_rows"] == 1
+    assert stats["skipped_stale_event_detail_rows"] == 1
 
 
 def test_temp_block_policy_first_strike_waits_and_continues(monkeypatch):

@@ -1,6 +1,7 @@
 # pipeline.py
 
 import argparse
+import csv
 import copy
 import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -94,6 +95,8 @@ _TRANSIENT_DB_ERROR_MARKERS = (
 )
 CHATBOT_METRICS_SYNC_LOG_PATH = os.path.join(log_dir, "chatbot_metrics_sync_log.txt")
 RUN_SCORECARD_PATH = codex_review_path("run_scorecard.json")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MANUAL_COVERAGE_AUDIT_PATH = os.path.join(REPO_ROOT, "data", "evaluation", "manual_coverage_audit.csv")
 
 
 def _is_transient_database_error(message: str) -> bool:
@@ -132,6 +135,77 @@ def _load_run_scorecard() -> dict:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def refresh_manual_coverage_audit_csv(
+    sample_size: int = 100,
+    output_path: str | None = None,
+    db_handler=None,
+) -> dict:
+    """Replace the manual coverage audit CSV with a fresh near-future sample from current events."""
+    from db import DatabaseHandler
+
+    safe_sample_size = max(1, int(sample_size or 1))
+    safe_output_path = output_path or MANUAL_COVERAGE_AUDIT_PATH
+    handler = db_handler if db_handler is not None else DatabaseHandler(cfg)
+    rows = handler.execute_query(
+        """
+        SELECT
+            COALESCE(NULLIF(TRIM(source), ''), COALESCE(NULLIF(TRIM(location), ''), NULLIF(TRIM(url), ''))) AS source_name,
+            url,
+            event_name,
+            start_date
+        FROM events
+        WHERE start_date IS NOT NULL
+          AND start_date >= CURRENT_DATE + INTERVAL '7 days'
+          AND start_date <= CURRENT_DATE + INTERVAL '21 days'
+          AND COALESCE(NULLIF(TRIM(url), ''), '') <> ''
+          AND COALESCE(NULLIF(TRIM(event_name), ''), '') <> ''
+        ORDER BY random()
+        LIMIT :limit
+        """,
+        {"limit": safe_sample_size},
+    ) or []
+    fieldnames = [
+        "source_name",
+        "source_url",
+        "event_name",
+        "start_date",
+        "expected_present",
+        "active",
+        "notes",
+    ]
+    generated_on = datetime.datetime.now().date().isoformat()
+    normalized_rows: list[dict[str, str]] = []
+    for source_name, source_url, event_name, start_date in rows:
+        normalized_rows.append(
+            {
+                "source_name": str(source_name or source_url or "").strip(),
+                "source_url": str(source_url or "").strip(),
+                "event_name": str(event_name or "").strip(),
+                "start_date": str(start_date or "").strip(),
+                "expected_present": "True",
+                "active": "True",
+                "notes": f"Auto-generated from current events table on {generated_on} after copy_dev_to_prod (start_date +7d to +21d window)",
+            }
+        )
+
+    os.makedirs(os.path.dirname(safe_output_path), exist_ok=True)
+    with open(safe_output_path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(normalized_rows)
+
+    logger.info(
+        "refresh_manual_coverage_audit_csv(): wrote %s rows to %s",
+        len(normalized_rows),
+        safe_output_path,
+    )
+    return {
+        "output_path": safe_output_path,
+        "rows_written": len(normalized_rows),
+        "sample_size_requested": safe_sample_size,
+    }
 
 
 def _scorecard_guardrails_allow(action: str) -> bool:
@@ -1946,6 +2020,14 @@ def copy_dev_db_to_prod_db_step():
     logger.info(f"def copy_dev_db_to_prod_db_step(): ✓ Table copy to production completed! Copied tables: {REQUIRED_TABLES}")
     return True
 
+
+@flow(name="Refresh Manual Coverage Audit Step")
+def manual_coverage_audit_refresh_step():
+    """Refresh the manual coverage audit CSV from a random sample of current events."""
+    result = refresh_manual_coverage_audit_csv(sample_size=100)
+    logger.info("manual_coverage_audit_refresh_step(): result=%s", result)
+    return True
+
 # ------------------------
 # STUB FOR TEXT MESSAGING
 # ------------------------
@@ -2316,6 +2398,7 @@ PIPELINE_STEPS = [
     ("remediation_planner", remediation_planner_step),  # Read-only plan from reliability artifacts
     ("classifier_training_promotion", classifier_training_promotion_step),  # Promote safe replay candidates into training data
     ("copy_dev_to_prod", copy_dev_db_to_prod_db_step),
+    ("refresh_manual_coverage_audit", manual_coverage_audit_refresh_step),
     ("sync_render_chatbot_metrics", sync_render_chatbot_metrics_step),
 ]
 

@@ -39,6 +39,17 @@ from evaluation_holdout import is_holdout_url
 from output_paths import duplicates_path, events_path
 from page_classifier import classify_page
 
+_US_STATE_OR_TERRITORY_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+        "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+        "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+        "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+        "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+        "DC", "PR", "VI", "GU", "AS", "MP",
+    }
+)
+
 
 class DatabaseHandler():
     _DELETE_REASON_CODE_MAP: Final[Dict[str, str]] = {
@@ -2489,6 +2500,54 @@ class DatabaseHandler():
         """
         pattern = r'^[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d$'
         return bool(re.match(pattern, postal_code.strip()))
+
+    def extract_us_postal_code(self, location_str: str) -> str | None:
+        """
+        Extract a likely US ZIP code only when accompanied by a strong US-address signal.
+        """
+        text = str(location_str or "").strip()
+        if not text:
+            return None
+        normalized = re.sub(r"\s+", " ", text.upper())
+        state_codes = "|".join(sorted(_US_STATE_OR_TERRITORY_CODES))
+        state_zip_match = re.search(rf"\b(?:{state_codes})\b[\s,]+(\d{{5}}(?:-\d{{4}})?)\b", normalized)
+        if state_zip_match:
+            return state_zip_match.group(1)
+        country_zip_match = re.search(
+            r"\b(?:USA|U\.S\.A\.|UNITED STATES|UNITED STATES OF AMERICA)\b.*?\b(\d{5}(?:-\d{4})?)\b",
+            normalized,
+        )
+        if country_zip_match:
+            return country_zip_match.group(1)
+        return None
+
+    def _drop_us_postal_code_events(self, df: pd.DataFrame, *, context: str) -> pd.DataFrame:
+        """Drop rows that clearly describe US addresses so they never reach event insertion."""
+        if df.empty:
+            return df
+        working_df = df.copy()
+
+        def _row_has_us_address_signal(row: pd.Series) -> bool:
+            postal_code = str(row.get("postal_code") or "").strip()
+            if postal_code and re.fullmatch(r"\d{5}(?:-\d{4})?", postal_code):
+                province_or_state = str(row.get("province_or_state") or "").strip().upper()
+                country_id = str(row.get("country_id") or "").strip().upper()
+                if province_or_state in _US_STATE_OR_TERRITORY_CODES or country_id in {"US", "USA", "UNITED STATES"}:
+                    return True
+            return self.extract_us_postal_code(str(row.get("location") or "")) is not None
+
+        disqualify_mask = working_df.apply(_row_has_us_address_signal, axis=1)
+        disqualified_count = int(disqualify_mask.sum())
+        if not disqualified_count:
+            return working_df
+        sample_locations = working_df.loc[disqualify_mask, "location"].astype(str).head(3).tolist()
+        logging.warning(
+            "_drop_us_postal_code_events: Dropping %d event(s) during %s due to US ZIP/location signals. samples=%s",
+            disqualified_count,
+            context,
+            sample_locations,
+        )
+        return working_df.loc[~disqualify_mask].reset_index(drop=True)
     
 
     def populate_from_db_or_fallback(self, location_str, postal_code):
@@ -3044,6 +3103,11 @@ class DatabaseHandler():
 
         # Basic location cleanup
         df = self.clean_up_address_basic(df)
+        df = self._drop_us_postal_code_events(df, context="pre_address")
+        if df.empty:
+            logging.info("write_events_to_db: No events remain after US ZIP pre-filter, skipping address processing.")
+            self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now(), "us_postal_code_location"])
+            return 0
 
         # Drop old events before expensive address resolution.
         rows_before_old_filter = len(df)
@@ -3067,6 +3131,11 @@ class DatabaseHandler():
             updated_rows.append(updated_event)
 
         logging.info(f"write_events_to_db: Address processing complete for {len(updated_rows)} events.")
+        df = self._drop_us_postal_code_events(df, context="post_address")
+        if df.empty:
+            logging.info("write_events_to_db: No events remain after US ZIP post-filter, skipping write.")
+            self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now(), "us_postal_code_location"])
+            return 0
 
         # Remove rows that are incomplete after address normalization.
         df = self._filter_events(df, apply_date_filter=False)
@@ -5526,8 +5595,9 @@ class DatabaseHandler():
                 e,
             )
         sanitized = self._sanitize_events_dataframe_for_insert(pd.DataFrame([event_payload]))
+        sanitized = self._drop_us_postal_code_events(sanitized, context="history_reuse")
         if sanitized.empty:
-            return {"reused": False, "reason": "history_payload_sanitized_empty"}
+            return {"reused": False, "reason": "history_payload_disqualified"}
 
         sanitized.to_sql('events', self.conn, if_exists='append', index=False, method='multi')
         return {

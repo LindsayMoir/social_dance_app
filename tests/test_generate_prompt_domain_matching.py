@@ -63,8 +63,10 @@ class TestGeneratePromptDomainMatching(unittest.TestCase):
             }
         }
         
-        # Create LLMHandler instance with mocked config
-        self.llm_handler = LLMHandler(self.mock_config)
+        # Create lightweight LLMHandler instance with mocked config.
+        self.llm_handler = LLMHandler.__new__(LLMHandler)
+        self.llm_handler.config = self.mock_config
+        self.llm_handler._missing_prompt_types_logged = set()
     
     def tearDown(self):
         """Clean up temporary files."""
@@ -128,6 +130,25 @@ class TestGeneratePromptDomainMatching(unittest.TestCase):
         # The key test is that it matches via domain, not fallback to default warning
         self.assertIn("Default prompt content", prompt)
         self.assertEqual(schema, 'event_extraction')
+
+    def test_www_variant_matches_non_www_domain_config(self):
+        """Test that www/non-www hostname differences still resolve the configured prompt."""
+        self.mock_config["prompts"]["bardandbanker.com"] = {
+            "file": self.domain_prompt_file,
+            "schema": "event_extraction",
+        }
+        self.llm_handler = LLMHandler.__new__(LLMHandler)
+        self.llm_handler.config = self.mock_config
+        self.llm_handler._missing_prompt_types_logged = set()
+
+        prompt, schema = self.llm_handler.generate_prompt(
+            "https://www.bardandbanker.com/live-music",
+            "Sample extracted text",
+            "https://www.bardandbanker.com/live-music",
+        )
+
+        self.assertIn("Domain-specific prompt content", prompt)
+        self.assertEqual(schema, "event_extraction")
     
     def test_malformed_url_fallback(self):
         """Test that malformed URLs fall back to default."""
@@ -151,9 +172,13 @@ class TestGeneratePromptDomainMatching(unittest.TestCase):
         
         self.llm_handler.generate_prompt(url, extracted_text, prompt_type)
         
-        # Should log domain-based config usage
-        mock_info.assert_any_call("def generate_prompt(): Using domain-based config for 'loftpubvictoria.com'")
-        
+        # Should log prompt resolution without emitting a warning.
+        mock_info.assert_any_call(
+            "def generate_prompt(): Resolved prompt type '%s' via '%s'",
+            "https://loftpubvictoria.com/events/month/",
+            "loftpubvictoria.com",
+        )
+
         # Should not log warning since domain match was found
         mock_warning.assert_not_called()
     
@@ -167,7 +192,29 @@ class TestGeneratePromptDomainMatching(unittest.TestCase):
         self.llm_handler.generate_prompt(url, extracted_text, prompt_type)
         
         # Should log warning for fallback to default
-        mock_warning.assert_called_with("def generate_prompt(): Prompt type 'https://unknown-domain.com/some/page' not found, using default")
+        mock_warning.assert_called_with(
+            "def generate_prompt(): Prompt type '%s' not found, using default",
+            "https://unknown-domain.com/some/page",
+        )
+
+    @patch('logging.warning')
+    def test_warning_for_unknown_domain_is_logged_once_per_domain(self, mock_warning):
+        """Repeated URL misses on the same domain should not spam warnings."""
+        self.llm_handler.generate_prompt(
+            "https://unknown-domain.com/one",
+            "Sample extracted text",
+            "https://unknown-domain.com/one",
+        )
+        self.llm_handler.generate_prompt(
+            "https://unknown-domain.com/two",
+            "Sample extracted text",
+            "https://unknown-domain.com/two",
+        )
+
+        mock_warning.assert_called_once_with(
+            "def generate_prompt(): Prompt type '%s' not found, using default",
+            "https://unknown-domain.com/one",
+        )
 
 
 if __name__ == '__main__':

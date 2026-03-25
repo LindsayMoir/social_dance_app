@@ -10,6 +10,7 @@ VALIDATION_DIR = os.path.join(TESTS_DIR, "validation")
 if VALIDATION_DIR not in sys.path:
     sys.path.insert(0, VALIDATION_DIR)
 
+from chatbot_evaluator import generate_chatbot_report
 import test_runner as validation_test_runner
 from test_runner import ValidationTestRunner
 from replay_fetcher import ReplayArtifact
@@ -154,10 +155,6 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
             "stage_counts": {"rule": 6, "ml": 2},
             "stage_details": [{"stage": "rule", "replay_url_accuracy_pct": 80.0}],
         },
-        duplicate_summary={
-            "duplicate_rate_per_100_events": 4.5,
-            "severe_duplicate_rate_per_100_events": 1.5,
-        },
         event_data_quality_summary={
             "invalid_event_rate_pct": 1.25,
             "stale_event_rate_pct": 2.5,
@@ -194,7 +191,6 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert run_scorecard["kpis"]["database_accuracy"]["score"] == 82.5
     assert run_scorecard["kpis"]["events_coverage"]["score"] == 85.0
     assert run_scorecard["kpis"]["chatbot_quality"]["score"] == 88.0
-    assert run_scorecard["kpis"]["database_accuracy"]["summary"]["duplicate_rate_per_100_events"] == 4.5
     assert run_scorecard["kpis"]["database_accuracy"]["summary"]["invalid_event_rate_pct"] == 1.25
     assert run_scorecard["kpis"]["database_accuracy"]["summary"]["stale_event_rate_pct"] == 2.5
     assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["date_pct"] == 90.0
@@ -243,6 +239,209 @@ def test_build_phase1_telemetry_integrity_summary_uses_db_handler() -> None:
     assert summary["violations"] == ["step_mismatch:scraper"]
 
 
+def test_phase1_scorecard_events_coverage_uses_scraping_summary_field_names() -> None:
+    runner = _build_runner()
+    runner._get_code_version_info = lambda: {"git_commit": "abc123", "branch": "main"}  # type: ignore[method-assign]
+
+    run_scorecard = runner._build_phase1_run_scorecard(
+        run_id="run-coverage",
+        report_timestamp="2026-03-18T12:00:00",
+        accuracy_replay={},
+        scraping_results={
+            "summary": {
+                "total_important_urls": 20,
+                "total_failures": 5,
+                "whitelist_failures": 1,
+                "edge_case_failures": 2,
+            },
+            "source_distribution": {"status": "PASS"},
+        },
+        runtime_summary={},
+        llm_cost_summary={},
+        chatbot_quality_summary={},
+        classifier_performance_summary={},
+        event_data_quality_summary={},
+        field_accuracy_summary={},
+        coverage_summary={},
+        dev_summary={},
+        holdout_summary={},
+        domain_capped_summary={},
+    )
+
+    assert run_scorecard["kpis"]["events_coverage"]["score"] == 75.0
+    assert run_scorecard["kpis"]["events_coverage"]["summary"]["important_urls_checked"] == 20
+    assert run_scorecard["kpis"]["events_coverage"]["summary"]["failed_urls"] == 5
+
+
+def test_phase1_scorecard_runtime_uses_30d_average_baseline() -> None:
+    runner = _build_runner()
+    runner._get_code_version_info = lambda: {"git_commit": "abc123", "branch": "main"}  # type: ignore[method-assign]
+    runner._get_runtime_30d_baseline_hours = lambda **kwargs: {  # type: ignore[method-assign]
+        "available": True,
+        "average_runtime_hours": 4.0,
+        "runs_used": 6,
+        "lookback_days": 30,
+    }
+
+    run_scorecard = runner._build_phase1_run_scorecard(
+        run_id="run-runtime",
+        report_timestamp="2026-03-18T12:00:00",
+        accuracy_replay={},
+        scraping_results={},
+        runtime_summary={
+            "pipeline_duration_hours": 5.0,
+            "pipeline_duration_minutes": 300.0,
+        },
+        llm_cost_summary={},
+        chatbot_quality_summary={},
+        classifier_performance_summary={},
+        event_data_quality_summary={},
+        field_accuracy_summary={},
+        coverage_summary={},
+        dev_summary={},
+        holdout_summary={},
+        domain_capped_summary={},
+    )
+
+    assert run_scorecard["kpis"]["run_time"]["score"] == 125.0
+    assert run_scorecard["kpis"]["run_time"]["summary"]["baseline_30d_average_runtime_hours"] == 4.0
+    assert run_scorecard["kpis"]["run_time"]["summary"]["baseline_30d_runs_used"] == 6
+    assert run_scorecard["kpis"]["run_time"]["summary"]["runtime_vs_30d_average_pct"] == 125.0
+
+
+def test_phase1_scorecard_run_cost_uses_30d_average_baseline() -> None:
+    runner = _build_runner()
+    runner._get_code_version_info = lambda: {"git_commit": "abc123", "branch": "main"}  # type: ignore[method-assign]
+    runner._get_run_cost_30d_baseline_usd = lambda **kwargs: {  # type: ignore[method-assign]
+        "available": True,
+        "average_total_usd": 2.0,
+        "runs_used": 8,
+        "lookback_days": 30,
+    }
+
+    run_scorecard = runner._build_phase1_run_scorecard(
+        run_id="run-cost",
+        report_timestamp="2026-03-18T12:00:00",
+        accuracy_replay={},
+        scraping_results={},
+        runtime_summary={},
+        llm_cost_summary={"summary": {"total_usd": 1.61}},
+        chatbot_quality_summary={},
+        classifier_performance_summary={},
+        event_data_quality_summary={},
+        field_accuracy_summary={},
+        coverage_summary={},
+        dev_summary={},
+        holdout_summary={},
+        domain_capped_summary={},
+    )
+
+    assert run_scorecard["kpis"]["run_costs"]["score"] == 80.5
+    assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["baseline_30d_average_total_usd"] == 2.0
+    assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["baseline_30d_runs_used"] == 8
+    assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["cost_vs_30d_average_pct"] == 80.5
+
+
+def test_generate_chatbot_report_includes_review_rows() -> None:
+    report = generate_chatbot_report(
+        [
+            {
+                "question": "Where can I find beginner tango classes?",
+                "category": "classes",
+                "interpretation": "Looking for beginner tango classes.",
+                "sql_query": "SELECT * FROM events WHERE dance_style ILIKE '%tango%'",
+                "execution_success": True,
+                "result_count": 3,
+                "evaluation": {
+                    "score": 88,
+                    "reasoning": "Missed the default social-dance filter.",
+                    "criteria_matched": ["dance_style"],
+                    "criteria_missed": ["timeframe"],
+                    "sql_issues": ["missing default filter"],
+                    "interpretation_evaluation": {
+                        "score": 90,
+                        "issues": ["minor ambiguity"],
+                        "passed": True,
+                    },
+                },
+            }
+        ],
+        output_dir="output",
+    )
+
+    assert len(report["review_rows"]) == 1
+    assert report["review_rows"][0]["question"] == "Where can I find beginner tango classes?"
+    assert report["review_rows"][0]["score"] == 88
+    assert report["review_rows"][0]["criteria_missed"] == ["timeframe"]
+    assert report["review_rows"][0]["sql_issues"] == ["missing default filter"]
+
+
+def test_build_chatbot_html_includes_row_by_row_scoring_table() -> None:
+    runner = _build_runner()
+    html = runner._build_chatbot_html(
+        {
+            "summary": {
+                "total_tests": 1,
+                "average_score": 88.0,
+                "execution_success_rate": 1.0,
+                "score_distribution": {
+                    "excellent (90-100)": 0,
+                    "good (70-89)": 1,
+                    "fair (50-69)": 0,
+                    "poor (<50)": 0,
+                },
+            },
+            "review_rows": [
+                {
+                    "question": "Where can I find beginner tango classes?",
+                    "sql_query": "SELECT * FROM events WHERE dance_style ILIKE '%tango%'",
+                    "score": 88,
+                    "reasoning": "Missed the default social-dance filter.",
+                    "criteria_missed": ["timeframe"],
+                    "sql_issues": ["missing default filter"],
+                }
+            ],
+        }
+    )
+
+    assert "Row-by-Row Chatbot Scoring" in html
+    assert "Where can I find beginner tango classes?" in html
+    assert "Missed the default social-dance filter." in html
+    assert "missing default filter" in html
+
+
+def test_build_phase1_scorecard_html_omits_redundant_summary_bullets() -> None:
+    runner = _build_runner()
+    html = runner._build_phase1_scorecard_html(
+        {
+            "overall_score": {"status": "FAIL"},
+            "guardrails": {"status": "FAIL"},
+            "kpis": {
+                "run_time": {"summary": {"pipeline_duration_minutes": 339.57}},
+                "run_costs": {"summary": {"summary": {"total_usd": 1.6115}}},
+                "chatbot_quality": {
+                    "summary": {
+                        "summary": {
+                            "chatbot_response_within_15s_pct": 91.0,
+                            "chatbot_answer_correctness_pct": 93.0,
+                        }
+                    }
+                },
+            },
+            "telemetry_integrity": {"status": "FAIL"},
+            "evaluation_scope": {
+                "holdout_summary": {"replay_url_accuracy_pct": 100.0},
+                "domain_capped_summary": {"replay_url_accuracy_pct": 66.67},
+            },
+        }
+    )
+
+    assert "Chatbot within 15s: 91.00%" in html
+    assert "Domain-capped replay URL accuracy: 66.67%" in html
+    assert "Chatbot correctness" not in html
+    assert "Holdout replay URL accuracy" not in html
+
+
 def test_social_replay_preserves_source_url_instead_of_llm_mentioned_url() -> None:
     runner = _build_runner()
 
@@ -275,6 +474,38 @@ def test_social_replay_preserves_source_url_instead_of_llm_mentioned_url() -> No
     assert payload["ok"] is True
     assert payload["events"][0]["url"] == "https://www.instagram.com/p/DVn5jSriOv9"
     assert payload["events"][0]["raw"]["mentioned_url"] == "https://www.labodeguita.nl"
+
+
+def test_social_replay_routes_instagram_image_child_url_to_image_replay_helper() -> None:
+    runner = _build_runner()
+    child_url = "https://www.instagram.com/p/DVZsZicAc9y#image=abc123"
+    runner.llm_handler = SimpleNamespace(
+        generate_prompt=lambda url, text, prompt_type: ("prompt", "event_extraction"),
+        query_llm=lambda url, prompt, schema_type=None: "",
+        extract_and_parse_json=lambda response, url, schema_type: [],
+    )
+    runner._fetch_replay_events_for_instagram_image_url = lambda url: {
+        "ok": True,
+        "category": "",
+        "details": "instagram_image_replay",
+        "events": [
+            {
+                "event_name": "Country Wednesdays",
+                "start_date": "2026-03-25",
+                "start_time": "18:30:00",
+                "source": "The Valencia Club",
+                "location": "2162 Taylor Rd, Penryn, CA 95663",
+                "url": url,
+                "raw": {},
+            }
+        ],
+    }
+
+    payload = runner._fetch_replay_events_for_social_url(child_url)
+
+    assert payload["ok"] is True
+    assert payload["details"] == "instagram_image_replay"
+    assert payload["events"][0]["url"] == child_url
 
 
 def test_compare_replay_row_rejects_social_url_drift_before_field_mismatch() -> None:
@@ -452,10 +683,6 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
                 "chatbot_p95_latency_seconds": 13.4,
             }
         },
-        duplicate_summary={
-            "duplicate_rate_per_100_events": 3.2,
-            "severe_duplicate_rate_per_100_events": 1.1,
-        },
         coverage_summary={
             "source_hit_rate_pct": 84.0,
             "event_capture_rate_pct": 72.0,
@@ -496,8 +723,6 @@ def test_phase1_scorecard_metrics_persist_key_trends() -> None:
         "phase1_chatbot_response_within_15s_pct",
         "phase1_chatbot_answer_correctness_pct",
         "phase1_chatbot_p95_latency_seconds",
-        "duplicate_rate_per_100_events",
-        "severe_duplicate_rate_per_100_events",
         "coverage_watchlist_source_hit_rate_pct",
         "coverage_watchlist_event_capture_rate_pct",
         "missed_event_rate_manual_audit_pct",
@@ -709,31 +934,8 @@ def test_phase1_artifacts_persist_by_run_id_and_type() -> None:
     assert all(call["run_id"] == "run-789" for call in fake_db.artifact_calls)
 
 
-def test_phase2_duplicate_and_coverage_summaries() -> None:
+def test_phase2_coverage_summary_uses_watchlist_and_manual_audit() -> None:
     runner = _build_runner()
-
-    class DuplicateDb:
-        def execute_query(self, query, params=None):
-            q = " ".join(str(query).split())
-            if "SELECT COUNT(*) FROM events" in q:
-                return [(20,)]
-            if "GROUP BY 1, 2, 3, 4 HAVING COUNT(*) > 1 ORDER BY row_count DESC" in q:
-                return [
-                    ("https://example.com/a", "Friday Salsa", "2026-03-20", "19:00:00", 3),
-                    ("https://example.com/b", "Sunday Swing", "2026-03-22", "18:00:00", 2),
-                ]
-            if "COUNT(DISTINCT COALESCE(NULLIF(TRIM(url), ''), '(no url)')) > 1" in q:
-                return [
-                    ("Friday Salsa", "2026-03-20", "19:00:00", 10, 2, 2),
-                ]
-            raise AssertionError(q)
-
-    runner.db_handler = DuplicateDb()
-    duplicate_summary = runner._summarize_duplicate_audit()
-    assert duplicate_summary["duplicate_clusters_count"] == 2
-    assert duplicate_summary["duplicate_rows"] == 3
-    assert duplicate_summary["duplicate_rate_per_100_events"] == 15.0
-    assert duplicate_summary["severe_duplicate_rate_per_100_events"] == 5.0
 
     class FakeValidator:
         days_back = 7
@@ -828,6 +1030,46 @@ def test_manual_coverage_audit_summary() -> None:
     assert summary["captured_count"] == 1
     assert summary["missed_count"] == 1
     assert summary["missed_event_rate_manual_audit_pct"] == 50.0
+
+
+def test_load_coverage_watchlist_rows_uses_repo_root_not_cwd(tmp_path, monkeypatch) -> None:
+    runner = _build_runner()
+    watchlists_dir = tmp_path / "data" / "watchlists"
+    watchlists_dir.mkdir(parents=True)
+    (watchlists_dir / "coverage_watchlist.csv").write_text(
+        "source_name,source_url,source_type,priority,expected_frequency,coverage_region,active\n"
+        "Test Source,https://example.com,venue_site,high,weekly,Greater Victoria,true\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(validation_test_runner, "repo_root", str(tmp_path))
+    monkeypatch.chdir("/tmp")
+
+    rows, source_label = runner._load_coverage_watchlist_rows()
+
+    assert source_label == "coverage_watchlist_csv"
+    assert len(rows) == 1
+    assert rows[0]["source_url"] == "https://example.com"
+
+
+def test_load_manual_coverage_audit_rows_uses_repo_root_not_cwd(tmp_path, monkeypatch) -> None:
+    runner = _build_runner()
+    evaluation_dir = tmp_path / "data" / "evaluation"
+    evaluation_dir.mkdir(parents=True)
+    (evaluation_dir / "manual_coverage_audit.csv").write_text(
+        "source_name,source_url,event_name,start_date,expected_present,active,notes\n"
+        "Audit Source,https://example.com,Friday Social,2026-04-10,true,true,ok\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(validation_test_runner, "repo_root", str(tmp_path))
+    monkeypatch.chdir("/tmp")
+
+    rows, source_label = runner._load_manual_coverage_audit_rows()
+
+    assert source_label == "manual_coverage_audit_csv"
+    assert len(rows) == 1
+    assert rows[0]["event_name"] == "Friday Social"
 
 
 def test_new_source_discovery_summary() -> None:
@@ -936,7 +1178,6 @@ def test_domain_evaluation_and_codex_review_bundle() -> None:
         run_scorecard=run_scorecard,
         accuracy_replay_summary=accuracy_replay,
         classifier_performance_summary={"status": "OK"},
-        duplicate_summary={"duplicate_rate_per_100_events": 2.0},
         coverage_summary={"source_hit_rate_pct": 80.0},
         dev_summary={"replay_url_accuracy_pct": 66.0},
         holdout_summary={"replay_url_accuracy_pct": 70.0},
@@ -1023,7 +1264,6 @@ def test_phase3_holdout_domain_caps_and_guardrails() -> None:
         llm_cost_summary={"summary": {"total_usd": 4.0}},
         chatbot_quality_summary={"summary": {"chatbot_response_within_15s_pct": 85.0, "chatbot_answer_correctness_pct": 80.0, "chatbot_user_visible_error_rate_pct": 5.0}},
         classifier_performance_summary={},
-        duplicate_summary={"duplicate_rate_per_100_events": 3.0, "severe_duplicate_rate_per_100_events": 2.5},
         event_data_quality_summary={"invalid_event_rate_pct": 2.0, "stale_event_rate_pct": 6.0, "total_events": 50},
         field_accuracy_summary={"date_pct": 70.0, "time_pct": 60.0, "location_pct": 50.0, "source_pct": 80.0},
         coverage_summary={"source_hit_rate_pct": 55.0, "event_capture_rate_pct": 40.0, "watchlist_source": "test"},
@@ -1038,7 +1278,6 @@ def test_phase3_holdout_domain_caps_and_guardrails() -> None:
         "holdout_replay_url_accuracy_min_pct",
         "coverage_watchlist_source_hit_rate_min_pct",
         "events_coverage_min_pct",
-        "severe_duplicate_rate_max_per_100_events",
         "stale_event_rate_max_pct",
         "chatbot_response_within_15s_min_pct",
         "chatbot_answer_correctness_min_pct",
@@ -1050,7 +1289,7 @@ def test_phase3_guardrails_fail_when_telemetry_integrity_fails() -> None:
     runner = _build_runner()
     run_scorecard = {
         "kpis": {
-            "database_accuracy": {"summary": {"replay_url_accuracy_pct": 90.0, "severe_duplicate_rate_per_100_events": 0.5, "stale_event_rate_pct": 1.0}},
+            "database_accuracy": {"summary": {"replay_url_accuracy_pct": 90.0, "stale_event_rate_pct": 1.0}},
             "events_coverage": {"summary": {"watchlist_source_hit_rate_pct": 90.0, "watchlist_event_capture_rate_pct": 90.0}},
             "chatbot_quality": {"summary": {"summary": {"chatbot_response_within_15s_pct": 95.0, "chatbot_answer_correctness_pct": 90.0, "chatbot_user_visible_error_rate_pct": 1.0}}},
         },
@@ -1076,7 +1315,7 @@ def test_run_delta_summary_compares_previous_run_and_holdout_baseline() -> None:
                 "overall_score": {"value": 80.0},
                 "evaluation_scope": {"dev_summary": {"replay_url_accuracy_pct": 72.0}, "holdout_summary": {"replay_url_accuracy_pct": 74.0}},
                 "kpis": {
-                    "database_accuracy": {"summary": {"replay_url_accuracy_pct": 81.0, "duplicate_rate_per_100_events": 5.0}},
+                    "database_accuracy": {"summary": {"replay_url_accuracy_pct": 81.0}},
                     "events_coverage": {"summary": {"watchlist_source_hit_rate_pct": 70.0, "watchlist_event_capture_rate_pct": 66.0, "missed_event_rate_manual_audit_pct": 18.0}},
                     "run_time": {"summary": {"pipeline_duration_minutes": 180.0, "urls_processed_per_minute": 0.05, "events_inserted_per_minute": 0.2}},
                     "run_costs": {"summary": {"summary": {"total_usd": 5.0, "cost_per_processed_url_usd": 0.4, "cost_per_inserted_event_usd": 0.1}}},
@@ -1092,7 +1331,7 @@ def test_run_delta_summary_compares_previous_run_and_holdout_baseline() -> None:
         "overall_score": {"value": 84.5},
         "evaluation_scope": {"dev_summary": {"replay_url_accuracy_pct": 76.0}, "holdout_summary": {"replay_url_accuracy_pct": 78.0}},
         "kpis": {
-            "database_accuracy": {"summary": {"replay_url_accuracy_pct": 84.0, "duplicate_rate_per_100_events": 4.0}},
+            "database_accuracy": {"summary": {"replay_url_accuracy_pct": 84.0}},
             "events_coverage": {"summary": {"watchlist_source_hit_rate_pct": 75.0, "watchlist_event_capture_rate_pct": 68.0, "missed_event_rate_manual_audit_pct": 12.0}},
             "run_time": {"summary": {"pipeline_duration_minutes": 160.0, "urls_processed_per_minute": 0.06, "events_inserted_per_minute": 0.25}},
             "run_costs": {"summary": {"summary": {"total_usd": 4.0, "cost_per_processed_url_usd": 0.3, "cost_per_inserted_event_usd": 0.09}}},
@@ -1120,9 +1359,6 @@ def test_recommendation_plan_uses_existing_scorecard_signals() -> None:
         run_scorecard=run_scorecard,
         classifier_performance_summary={
             "stage_details": [{"stage": "ml", "replay_url_accuracy_pct": 60.0, "replay_url_count": 8}],
-        },
-        duplicate_summary={
-            "top_duplicate_domains": [{"domain": "dup.example.org", "duplicate_groups": 3}],
         },
         coverage_summary={
             "missed_sources": [{"source_name": "Watchlist Venue", "source_url": "https://venue.example.org"}],
@@ -1497,3 +1733,51 @@ def test_extract_replay_events_from_artifact_uses_same_rd_ext_routing() -> None:
     assert payload["ok"] is True
     assert payload["details"] == "rd_ext_replay"
     assert payload["events"][0]["raw"]["replay_child_url"] == "https://loftpubvictoria.com/events/2026-03-23/"
+
+
+def test_fetch_replay_events_for_eventbrite_organizer_follows_detail_links(monkeypatch) -> None:
+    runner = _build_runner()
+    organizer_url = "https://www.eventbrite.ca/o/silent-dj-victoria-31599471691"
+    detail_url = "https://www.eventbrite.ca/e/full-pink-moon-circle-beach-dance-tickets-9876543210"
+
+    class FakeResponse:
+        def __init__(self, url: str, text: str) -> None:
+            self.url = url
+            self.text = text
+            self.status_code = 200
+
+    def fake_get(url: str, *args, **kwargs):
+        if url == organizer_url:
+            return FakeResponse(
+                organizer_url,
+                f'<html><body><a href="{detail_url}">Full PINK MOON Circle & Beach-dance</a></body></html>',
+            )
+        if url == detail_url:
+            return FakeResponse(
+                detail_url,
+                "<html><body>Full PINK MOON Circle & Beach-dance Wed, Apr 1, 7:30 PM South end of Willows Beach</body></html>",
+            )
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr(validation_test_runner.requests, "get", fake_get)
+    runner.llm_handler = SimpleNamespace(
+        generate_prompt=lambda url, text, prompt_type: ("prompt", "event_extraction"),
+        query_llm=lambda url, prompt, schema_type=None: '{"events":[]}',
+        extract_and_parse_json=lambda response, url, schema_type: [
+            {
+                "event_name": "full pink moon circle & beach-dance",
+                "start_date": "2026-04-01",
+                "start_time": "19:30:00",
+                "source": "eventbrite - silent dj victoria",
+                "location": "willows, victoria, bc",
+                "url": detail_url,
+            }
+        ] if url == detail_url else [],
+    )
+
+    payload = runner._fetch_replay_events_for_url(organizer_url)
+
+    assert payload["ok"] is True
+    assert payload["details"] == "eventbrite_organizer_detail_replay"
+    assert payload["events"][0]["url"] == organizer_url
+    assert payload["events"][0]["raw"]["replay_child_url"] == detail_url

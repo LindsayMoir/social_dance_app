@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,9 @@ class ReplayFetcher:
     """Fetch and normalize replay events using injected fetch, parse, and routing helpers."""
 
     is_social_platform_url: Callable[[str], bool]
+    is_eventbrite_url: Callable[[str], bool]
+    is_eventbrite_event_detail_url: Callable[[str], bool]
+    is_eventbrite_organizer_url: Callable[[str], bool]
     extract_visible_text_for_replay: Callable[[str], str]
     extract_replay_links: Callable[[str, str], list[str]]
     parse_replay_events_from_text: Callable[[str, str, str | None], list[dict[str, Any]]]
@@ -40,6 +44,104 @@ class ReplayFetcher:
     generate_prompt: Callable[[str, str, str], tuple[str, str | None]]
     query_llm: Callable[[str, str, str | None], Any]
     extract_and_parse_json: Callable[[Any, str, str | None], Any]
+    fetch_replay_events_for_instagram_image_url: Callable[[str], dict[str, Any]] | None = None
+
+    def _normalize_replay_event_rows(
+        self,
+        events: list[dict[str, Any]],
+        *,
+        canonical_url: str,
+        child_url: str | None = None,
+    ) -> list[dict[str, Any]]:
+        normalized_events: list[dict[str, Any]] = []
+        for event in events or []:
+            if not isinstance(event, dict):
+                continue
+            event_raw = dict(event)
+            mentioned_url = self.normalize_url_value(event.get("url"))
+            if mentioned_url:
+                event_raw["mentioned_url"] = mentioned_url
+            if child_url:
+                event_raw["replay_child_url"] = self.normalize_url_value(child_url)
+            normalized_events.append(
+                {
+                    "event_name": str(event.get("event_name") or "").strip(),
+                    "start_date": self.normalize_date_value(event.get("start_date")),
+                    "start_time": self.normalize_time_value(event.get("start_time")),
+                    "source": str(event.get("source") or "").strip(),
+                    "location": str(event.get("location") or "").strip(),
+                    "url": self.normalize_url_value(canonical_url),
+                    "raw": event_raw,
+                }
+            )
+        return normalized_events
+
+    def _parse_replay_events_from_url(
+        self,
+        *,
+        url: str,
+        parent_url: str | None = None,
+    ) -> dict[str, Any]:
+        artifact = self.build_live_replay_artifact(url)
+        if artifact is None or not artifact.body_text:
+            return {
+                "ok": False,
+                "category": "url_unreachable_replay",
+                "details": str((artifact.metadata if artifact else {}).get("request_error") or "request_failed"),
+                "events": [],
+            }
+
+        extracted_text = self.extract_visible_text_for_replay(artifact.body_text)
+        if not extracted_text:
+            return {"ok": False, "category": "no_event_extracted_replay", "details": "no_visible_text", "events": []}
+
+        normalized_events = self.parse_replay_events_from_text(
+            source_url=url,
+            extracted_text=extracted_text,
+            replay_url=parent_url or url,
+        )
+        normalized_events = self._normalize_replay_event_rows(
+            normalized_events,
+            canonical_url=parent_url or url,
+            child_url=url if parent_url else None,
+        )
+        if not normalized_events:
+            return {"ok": False, "category": "no_event_extracted_replay", "details": "no_normalized_events", "events": []}
+        return {"ok": True, "category": "", "details": "", "events": normalized_events}
+
+    def _fetch_replay_events_for_eventbrite_organizer_url(self, url: str) -> dict[str, Any]:
+        organizer_artifact = self.build_live_replay_artifact(url)
+        if organizer_artifact is None or not organizer_artifact.body_text:
+            return {
+                "ok": False,
+                "category": "url_unreachable_replay",
+                "details": str((organizer_artifact.metadata if organizer_artifact else {}).get("request_error") or "request_failed"),
+                "events": [],
+            }
+
+        event_links: list[str] = []
+        seen_links: set[str] = set()
+        for candidate in organizer_artifact.links:
+            normalized = self.normalize_url_value(candidate)
+            if not normalized or normalized in seen_links:
+                continue
+            if not self.is_eventbrite_event_detail_url(normalized):
+                continue
+            seen_links.add(normalized)
+            event_links.append(normalized)
+
+        if not event_links:
+            return {"ok": False, "category": "no_event_extracted_replay", "details": "eventbrite_organizer_no_event_links", "events": []}
+
+        all_events: list[dict[str, Any]] = []
+        for event_url in event_links:
+            payload = self._parse_replay_events_from_url(url=event_url, parent_url=url)
+            if payload.get("ok"):
+                all_events.extend(payload.get("events") or [])
+
+        if not all_events:
+            return {"ok": False, "category": "no_event_extracted_replay", "details": "no_normalized_events", "events": []}
+        return {"ok": True, "category": "", "details": "eventbrite_organizer_detail_replay", "events": all_events}
 
     def build_live_replay_artifact(self, url: str) -> ReplayArtifact | None:
         """Fetch a live URL and normalize the response into a replay artifact."""
@@ -114,6 +216,14 @@ class ReplayFetcher:
 
     def fetch_replay_events_for_social_url(self, url: str) -> dict[str, Any]:
         """Replay fetch for Facebook and Instagram URLs via fb.py methods."""
+        parsed_url = urlparse(str(url or "").strip())
+        if (
+            "instagram.com" in str(parsed_url.netloc or "").lower()
+            and str(parsed_url.fragment or "").startswith("image=")
+            and self.fetch_replay_events_for_instagram_image_url is not None
+        ):
+            return self.fetch_replay_events_for_instagram_image_url(url)
+
         fb_scraper = self.get_replay_fb_scraper()
         if fb_scraper is None:
             return {
@@ -177,25 +287,7 @@ class ReplayFetcher:
                 category = "no_event_extracted_replay" if last_llm_error == "parsed_empty" else "parser_or_llm_failure"
                 return {"ok": False, "category": category, "details": last_llm_error or "llm_failed", "events": []}
 
-            normalized_events: list[dict[str, Any]] = []
-            for event in parsed:
-                if not isinstance(event, dict):
-                    continue
-                event_raw = dict(event)
-                mentioned_url = self.normalize_url_value(event.get("url"))
-                if mentioned_url:
-                    event_raw["mentioned_url"] = mentioned_url
-                normalized_events.append(
-                    {
-                        "event_name": str(event.get("event_name") or "").strip(),
-                        "start_date": self.normalize_date_value(event.get("start_date")),
-                        "start_time": self.normalize_time_value(event.get("start_time")),
-                        "source": str(event.get("source") or "").strip(),
-                        "location": str(event.get("location") or "").strip(),
-                        "url": self.normalize_url_value(url),
-                        "raw": event_raw,
-                    }
-                )
+            normalized_events = self._normalize_replay_event_rows(parsed, canonical_url=url)
             if not normalized_events:
                 return {"ok": False, "category": "no_event_extracted_replay", "details": "no_normalized_events", "events": []}
             return {"ok": True, "category": "", "details": "", "events": normalized_events}
@@ -211,6 +303,8 @@ class ReplayFetcher:
         """Fetch replay events for a URL using platform-specific or generic extraction."""
         if self.is_social_platform_url(url):
             return self.fetch_replay_events_for_social_url(url)
+        if self.is_eventbrite_organizer_url(url):
+            return self._fetch_replay_events_for_eventbrite_organizer_url(url)
 
         artifact = self.build_live_replay_artifact(url)
         if artifact is None or not artifact.body_text:

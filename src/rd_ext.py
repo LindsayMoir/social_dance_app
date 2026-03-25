@@ -45,6 +45,24 @@ from secret_paths import get_auth_file
 db_handler = None
 
 
+def is_calendar_export_url(url: str) -> bool:
+    """Return True for feed/export links that should not be fetched as event pages."""
+    raw = str(url or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return False
+    if (parsed.scheme or "").lower() == "webcal":
+        return True
+    path_low = (parsed.path or "").lower()
+    query_low = (parsed.query or "").lower()
+    if path_low.endswith(".ics"):
+        return True
+    return any(token in query_low for token in ("ical=1", "outlook-ical=1", "outlook_ical=1", "webcal="))
+
+
 def _record_rd_ext_scrape_metric(
     db_handler: DatabaseHandler,
     *,
@@ -747,7 +765,7 @@ class ReadExtract:
                 continue
             # Skip calendar/ICS feeds
             # e.g., query params outlook-ical, webcal links, .ics endpoints
-            if 'ical' in parsed.query.lower() or parsed.path.lower().endswith('.ics'):
+            if is_calendar_export_url(abs_url):
                 logging.info(f"Skipping calendar feed link: {abs_url}")
                 continue
             found.add(abs_url)
@@ -810,6 +828,13 @@ class ReadExtract:
                     if is_social_media_url(href):
                         logging.info(
                             "extract_calendar_events(%s): Skipping social media event URL (fb/ig): %s",
+                            venue_name,
+                            href,
+                        )
+                        continue
+                    if is_calendar_export_url(href):
+                        logging.info(
+                            "extract_calendar_events(%s): Skipping calendar export link: %s",
                             venue_name,
                             href,
                         )

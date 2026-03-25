@@ -35,3 +35,18 @@ def test_sanitize_fb_text_prefers_date_near_last_title_occurrence() -> None:
     cleaned = sanitize_facebook_event_text_for_extraction(raw)
     assert "Wednesday 24 December 2025 from 19:30-19:31" in cleaned
     assert "Saturday 21 March 2026 from 20:00-23:59" not in cleaned
+
+
+def test_sanitize_fb_text_drops_relative_today_when_absolute_header_exists() -> None:
+    raw = (
+        "(2) WoW Dance Co Tuesday Night WCS Dance | Facebook "
+        "Today from 19:30-21:45 WoW Dance Co Tuesday Night WCS Dance "
+        "Eastern Star Hall Chapters No 5 & No 17 "
+        "24 Tuesday 24 March 2026 from 19:30-21:45 "
+        "WoW Dance Co Tuesday Night WCS Dance "
+        "Eastern Star Hall Chapters No 5 & No 17 "
+        "Details Victoria, British Columbia "
+    )
+    cleaned = sanitize_facebook_event_text_for_extraction(raw)
+    assert "Tuesday 24 March 2026 from 19:30-21:45" in cleaned
+    assert "Today from 19:30-21:45" not in cleaned

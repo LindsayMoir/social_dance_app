@@ -92,6 +92,30 @@ def test_maybe_reuse_static_event_detail_from_history_respects_rescrape_window(m
     assert called["count"] == 0
 
 
+def test_maybe_reuse_static_event_detail_from_history_rejects_us_zip_rows(monkeypatch) -> None:
+    url = "https://www.facebook.com/events/1234567890123456/"
+    db = _HistoryReuseDB({url: [_history_row(url, date.today() + timedelta(days=10))]})
+    called = {"count": 0}
+
+    def _refresh_address(event_payload):
+        refreshed = dict(event_payload)
+        refreshed["address_id"] = 42
+        refreshed["location"] = "2162 Taylor Rd, Penryn, CA 95663"
+        return refreshed
+
+    def _capture_to_sql(self, name, con, if_exists="append", index=False, method=None):
+        called["count"] += 1
+
+    db.process_event_address = _refresh_address
+    monkeypatch.setattr(pd.DataFrame, "to_sql", _capture_to_sql, raising=True)
+
+    result = db.maybe_reuse_static_event_detail_from_history(url=url, rescrape_window_days=7)
+
+    assert result["reused"] is False
+    assert result["reason"] == "history_payload_disqualified"
+    assert called["count"] == 0
+
+
 def test_process_fb_url_reuses_history_before_navigation(monkeypatch) -> None:
     class DummyDB:
         def __init__(self) -> None:

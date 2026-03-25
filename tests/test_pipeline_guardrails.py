@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
+import os
+import sys
+
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.join(os.path.dirname(TESTS_DIR), "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 import pipeline
 
@@ -156,3 +164,41 @@ def test_log_copy_dev_to_prod_evaluation_warnings_does_not_raise(tmp_path, monke
 
 def test_parallel_crawler_group_includes_images() -> None:
     assert pipeline.PARALLEL_CRAWLER_STEPS == {"rd_ext", "ebs", "scraper", "fb", "images"}
+
+
+def test_refresh_manual_coverage_audit_csv_rewrites_file(tmp_path) -> None:
+    output_path = tmp_path / "manual_coverage_audit.csv"
+
+    class _FakeDbHandler:
+        def execute_query(self, query, params=None):
+            query_text = str(query)
+            assert "FROM events" in query_text
+            assert "CURRENT_DATE + INTERVAL '7 days'" in query_text
+            assert "CURRENT_DATE + INTERVAL '21 days'" in query_text
+            assert params == {"limit": 2}
+            return [
+                ("Source A", "https://example.com/a", "Friday Social", "2026-04-10"),
+                ("Source B", "https://example.com/b", "Saturday Salsa", "2026-04-11"),
+            ]
+
+    result = pipeline.refresh_manual_coverage_audit_csv(
+        sample_size=2,
+        output_path=str(output_path),
+        db_handler=_FakeDbHandler(),
+    )
+
+    assert result["rows_written"] == 2
+    with output_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 2
+    assert rows[0]["source_name"] == "Source A"
+    assert rows[0]["expected_present"] == "True"
+    assert rows[0]["active"] == "True"
+    assert "Auto-generated from current events table" in rows[0]["notes"]
+    assert "+7d to +21d window" in rows[0]["notes"]
+
+
+def test_pipeline_steps_refresh_manual_coverage_audit_after_copy_dev_to_prod() -> None:
+    step_names = [name for name, _ in pipeline.PIPELINE_STEPS]
+    copy_index = step_names.index("copy_dev_to_prod")
+    assert step_names[copy_index + 1] == "refresh_manual_coverage_audit"

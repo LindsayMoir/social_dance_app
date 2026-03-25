@@ -1,6 +1,27 @@
 url,active,notes
-https://www.bardandbanker.com/live-music,True,Dev evaluation source for iterative checks
-https://www.facebook.com/groups/cubansalsaclub/,True,Dev social source for iterative checks
-https://www.eventbrite.ca/o/victoria-latin-dance-association-123456789,True,Dev event source for iterative checks
-https://www.hermannsjazz.com/events,True,Dev venue/events source for iterative checks
-https://www.victoriaswingdance.com/calendar,True,Dev dance calendar source for iterative checks
+https://www.bardandbanker.com/live-music,True,Dev website source for recurring venue/event page checks
+https://www.hermannsjazz.com/events,True,Dev website source for venue events page checks
+https://www.irishtimespub.ca/live-music,True,Dev website source for live-music listing checks
+https://www.victoriaswingdance.com/calendar,True,Dev website source for dance calendar checks
+https://alivetangovictoria.ca/,True,Dev website source for small organization site checks
+https://latindancecanada.com/,True,Dev organization source for community dance coverage checks
+https://calientedance.com/classes/,True,Dev website source for class-listing checks
+https://www.facebook.com/groups/cubansalsaclub/,True,Dev Facebook group source for iterative social checks
+https://www.facebook.com/groups/wowdanceco/,True,Dev Facebook group source for recurring dance community checks
+https://www.facebook.com/groups/1634269246863069/,True,Dev Facebook group source for parser coverage checks
+https://www.facebook.com/groups/265269613666246/,True,Dev Facebook group source for parser coverage checks
+https://www.facebook.com/groups/3158235040/,True,Dev Facebook group source for parser coverage checks
+https://www.facebook.com/groups/895697871649474/,True,Dev Facebook group source for parser coverage checks
+https://www.facebook.com/groups/264289526206205/,True,Dev Facebook group source for parser coverage checks
+https://www.facebook.com/groups/841245344232320/,True,Dev Facebook group source for parser coverage checks
+https://www.facebook.com/p/Sebastian-y-Hannah-61574884540532/,True,Dev Facebook page source for page/post extraction checks
+https://www.instagram.com/bachatavictoria/,True,Dev Instagram profile source for social/image coverage checks
+https://www.eventbrite.ca/o/victoria-latin-dance-association-123456789,True,Dev Eventbrite organizer source for listing/detail replay checks
+https://www.eventbrite.ca/o/silent-dj-victoria-31599471691,True,Dev Eventbrite organizer source for organizer replay regression checks
+https://www.instagram.com/p/DVn5jSriOv9,True,Dev Instagram post for image replay checks
+https://www.instagram.com/p/DV7TkC6gVvP/,True,Dev Instagram post for social/image replay checks
+https://www.facebook.com/events/2033778288016088,True,Dev Facebook event page for replay regression checks
+https://www.facebook.com/events/1277266781161941/,True,Dev Facebook event page for recurring social replay checks
+https://www.instagram.com/p/DVZsZicAc9y,True,Dev Instagram multi-image post for image-child replay checks
+https://www.instagram.com/p/DPHME2UEVjy,True,Dev Instagram post for replay/matcher regression checks
+https://www.facebook.com/events/1620472779268654,True,Dev Facebook event page for absolute-date replay checks

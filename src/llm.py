@@ -178,6 +178,7 @@ class LLMHandler:
         self.openrouter_cooldown_seconds = int(llm_config.get("openrouter_cooldown_seconds", 300) or 300)
         self.openrouter_cooldown_until = None
         self.self_healing_enabled = bool(llm_config.get("self_healing_enabled", True))
+        self._missing_prompt_types_logged: set[str] = set()
         self.provider_retry_max_attempts = int(llm_config.get("provider_retry_max_attempts", 2) or 2)
         self.provider_retry_base_delay_seconds = float(llm_config.get("provider_retry_base_delay_seconds", 0.5) or 0.5)
         self.provider_retry_jitter_seconds = float(llm_config.get("provider_retry_jitter_seconds", 0.3) or 0.3)
@@ -702,6 +703,14 @@ class LLMHandler:
             logging.warning("extract_and_parse_json(): Failed to write parse artifact: %s", artifact_error)
 
     @staticmethod
+    def _normalize_prompt_host(host: str) -> str:
+        """Normalize prompt hostnames so `www.` variants share the same config key."""
+        normalized = str(host or "").strip().lower()
+        if normalized.startswith("www."):
+            normalized = normalized[4:]
+        return normalized
+
+    @staticmethod
     def _resolve_prompt_config(
         prompts_config: dict,
         prompt_type: str,
@@ -723,9 +732,12 @@ class LLMHandler:
             parsed_prompt_type = None
 
         if parsed_prompt_type and parsed_prompt_type.netloc:
-            domain = parsed_prompt_type.netloc
+            domain = str(parsed_prompt_type.netloc or "").lower()
+            normalized_domain = LLMHandler._normalize_prompt_host(domain)
             if domain in prompts_config:
                 return prompts_config[domain], domain
+            if normalized_domain in prompts_config:
+                return prompts_config[normalized_domain], normalized_domain
 
             normalized_target = prompt_type.rstrip("/")
             best_match_key = ""
@@ -736,7 +748,8 @@ class LLMHandler:
                     continue
                 if not parsed_key.netloc:
                     continue
-                if parsed_key.netloc != domain:
+                key_domain = LLMHandler._normalize_prompt_host(parsed_key.netloc)
+                if key_domain != normalized_domain:
                     continue
                 normalized_key = key.rstrip("/")
                 if (
@@ -789,10 +802,23 @@ class LLMHandler:
             fallback_key="default",
         )
         if resolved_prompt_key == "default" and prompt_type != "default":
-            logging.warning(
-                "def generate_prompt(): Prompt type '%s' not found, using default",
-                prompt_type,
-            )
+            missing_prompt_keys = getattr(self, "_missing_prompt_types_logged", None)
+            if missing_prompt_keys is None:
+                missing_prompt_keys = set()
+                self._missing_prompt_types_logged = missing_prompt_keys
+            warning_key = str(prompt_type)
+            try:
+                parsed_prompt_type = urlparse(str(prompt_type or ""))
+            except Exception:
+                parsed_prompt_type = None
+            if parsed_prompt_type and parsed_prompt_type.netloc:
+                warning_key = f"domain:{self._normalize_prompt_host(parsed_prompt_type.netloc)}"
+            if warning_key not in missing_prompt_keys:
+                logging.warning(
+                    "def generate_prompt(): Prompt type '%s' not found, using default",
+                    prompt_type,
+                )
+                missing_prompt_keys.add(warning_key)
         elif resolved_prompt_key != prompt_type:
             logging.info(
                 "def generate_prompt(): Resolved prompt type '%s' via '%s'",

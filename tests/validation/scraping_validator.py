@@ -12,7 +12,7 @@ Author: Claude Code
 Version: 1.0.0
 """
 
-from datetime import datetime
+from datetime import date, datetime
 import json
 import logging
 import os
@@ -85,6 +85,55 @@ class ScrapingValidator:
             if path and path not in files and os.path.exists(path):
                 files.append(path)
         return files
+
+    def _get_required_sources_for_distribution(self, today: date | None = None) -> List[str]:
+        """
+        Return the active required sources for source-distribution completeness checks.
+
+        Seasonal PDF-backed sources are only required while their configured active
+        window is open. This prevents known off-season sources from appearing under
+        missing required resources.
+        """
+        required_sources = [
+            'Salsa Caliente',
+            'Victoria Summer Music',
+            'Victoria Latin Dance Association',
+            'WCS Lessons, Social Dances, and Conventions – BC Swing Dance',
+            'Red Hot Swing',
+            'Eventbrite',
+            'The Loft Pub Victoria',
+        ]
+
+        pdf_sources_file = self.scraping_config.get('pdf_sources_file', 'data/other/pdfs.csv')
+        if not pdf_sources_file or not os.path.exists(pdf_sources_file):
+            return required_sources
+
+        try:
+            from read_pdfs import ReadPDFs
+
+            pdf_sources = pd.read_csv(pdf_sources_file, dtype=str).fillna("")
+            seasonal_status = {}
+            today_value = today or datetime.now().date()
+            for _, row in pdf_sources.iterrows():
+                source_name = str(row.get("source", "") or "").strip()
+                if not source_name:
+                    continue
+                is_active, _reason = ReadPDFs.is_pdf_source_active(row, today=today_value)
+                seasonal_status[source_name] = is_active
+
+            filtered_sources = []
+            for source_name in required_sources:
+                if source_name in seasonal_status and not seasonal_status[source_name]:
+                    logging.info(
+                        "check_source_distribution: excluding inactive seasonal source from required set: %s",
+                        source_name,
+                    )
+                    continue
+                filtered_sources.append(source_name)
+            return filtered_sources
+        except Exception as exc:
+            logging.warning("check_source_distribution: seasonal source filtering unavailable: %s", exc)
+            return required_sources
 
     def _normalize_link_variants(self, u: str) -> List[str]:
         """Build URL variants for robust link matching."""
@@ -975,15 +1024,7 @@ class ScrapingValidator:
         try:
             # Critical sources that MUST be present in database (presence check only)
             # These are major event providers - if missing, scraping failed
-            REQUIRED_SOURCES = [
-                'Salsa Caliente',
-                'Victoria Summer Music',
-                'Victoria Latin Dance Association',
-                'WCS Lessons, Social Dances, and Conventions – BC Swing Dance',
-                'Red Hot Swing',
-                'Eventbrite',
-                'The Loft Pub Victoria'
-            ]
+            REQUIRED_SOURCES = self._get_required_sources_for_distribution()
 
             EXPECTED_TOTAL_EVENTS = (1000, 2000)  # Reasonable range for total events
 

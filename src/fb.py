@@ -285,6 +285,25 @@ def sanitize_facebook_event_text_for_extraction(raw_text: str) -> str:
     # Normalize whitespace first for stable marker matching.
     cleaned = re.sub(r"\s+", " ", text)
 
+    absolute_date_pattern = re.compile(
+        r"\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+"
+        r"\d{1,2}\s+[A-Za-z]+\s+\d{4}\s+from\s+"
+        r"\d{1,2}:\d{2}(?:\s*[APMapm]{2})?(?:\s*-\s*\d{1,2}:\d{2}(?:\s*[APMapm]{2})?)?",
+        re.IGNORECASE,
+    )
+    relative_date_pattern = re.compile(
+        r"\b(?:Today|Tomorrow|Yesterday)\s+from\s+"
+        r"\d{1,2}:\d{2}(?:\s*[APMapm]{2})?(?:\s*-\s*\d{1,2}:\d{2}(?:\s*[APMapm]{2})?)?",
+        re.IGNORECASE,
+    )
+
+    # Facebook event pages often render both a relative badge ("Today from ...")
+    # and the absolute event header ("Tuesday 24 March 2026 from ..."). When both
+    # exist, keep the absolute header and remove the ambiguous relative one.
+    if absolute_date_pattern.search(cleaned):
+        cleaned = relative_date_pattern.sub("", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
     # Extract likely event title from header page-title prefix.
     title = ""
     title_match = re.search(r"^\(\d+\+\)\s*(.*?)\s+\|\s*Facebook", cleaned, flags=re.IGNORECASE)
@@ -309,13 +328,9 @@ def sanitize_facebook_event_text_for_extraction(raw_text: str) -> str:
         if len(title_positions) >= 2:
             last_title_idx = title_positions[-1]
             # Prefer date token nearest to the final title occurrence.
-            date_pattern = re.compile(
-                r"(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+\d{1,2}\s+[A-Za-z]+\s+\d{4}\s+from\s+\d{1,2}:\d{2}(?:-\d{1,2}:\d{2})?",
-                re.IGNORECASE,
-            )
             nearest_date_start = None
             nearest_distance = None
-            for match in date_pattern.finditer(cleaned):
+            for match in absolute_date_pattern.finditer(cleaned):
                 if match.start() <= last_title_idx:
                     distance = last_title_idx - match.start()
                     if nearest_distance is None or distance < nearest_distance:
@@ -503,6 +518,65 @@ def sanitize_facebook_seed_urls(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     stats["duplicate_rows_dropped"] = before_dedup - len(cleaned)
     stats["output_rows"] = len(cleaned)
     return cleaned, stats
+
+
+def partition_facebook_seed_urls_for_processing(
+    df: pd.DataFrame,
+    *,
+    should_process_url,
+    get_should_process_decision_reason,
+) -> tuple[pd.DataFrame, list[dict[str, str]], dict[str, int]]:
+    """
+    Pre-filter stale Facebook event-detail seed URLs before the expensive driver loop.
+
+    This keeps group/page seeds intact while removing low-yield event-detail rows that
+    `should_process_url()` already knows should be skipped.
+    """
+    if df.empty:
+        return df.copy(), [], {
+            "kept_rows": 0,
+            "skipped_stale_event_detail_rows": 0,
+            "skipped_rejected_old_event_detail_rows": 0,
+        }
+
+    skipped_rows: list[dict[str, str]] = []
+    kept_indices: list[int] = []
+    stats = {
+        "kept_rows": 0,
+        "skipped_stale_event_detail_rows": 0,
+        "skipped_rejected_old_event_detail_rows": 0,
+    }
+
+    for idx, row in df.iterrows():
+        raw_link = str(row.get("link", "") or "").strip()
+        normalized_link = canonicalize_facebook_url(raw_link)
+        if not is_facebook_event_detail_url(normalized_link):
+            kept_indices.append(idx)
+            continue
+        if should_process_url(normalized_link):
+            kept_indices.append(idx)
+            continue
+        decision_reason = str(get_should_process_decision_reason(normalized_link) or "")
+        if decision_reason == "skip_stale_facebook_event_detail":
+            stats["skipped_stale_event_detail_rows"] += 1
+        elif decision_reason == "skip_rejected_old_facebook_event_detail":
+            stats["skipped_rejected_old_event_detail_rows"] += 1
+        else:
+            kept_indices.append(idx)
+            continue
+        skipped_rows.append(
+            {
+                "link": normalized_link,
+                "parent_url": str(row.get("parent_url", "") or ""),
+                "source": str(row.get("source", "") or ""),
+                "keywords": str(row.get("keywords", "") or ""),
+                "decision_reason": decision_reason,
+            }
+        )
+
+    kept_df = df.iloc[kept_indices].copy() if kept_indices else df.iloc[0:0].copy()
+    stats["kept_rows"] = int(len(kept_df))
+    return kept_df, skipped_rows, stats
 
 
 def get_git_revision() -> str:
@@ -2018,6 +2092,32 @@ class FacebookEventScraper():
             seed_stats["empty_rows_dropped"],
             seed_stats["duplicate_rows_dropped"],
         )
+        decision_reason_getter = getattr(db_handler, "get_should_process_decision_reason", lambda _url: None)
+        fb_urls_df, prefetched_skip_rows, seed_filter_stats = partition_facebook_seed_urls_for_processing(
+            fb_urls_df,
+            should_process_url=db_handler.should_process_url,
+            get_should_process_decision_reason=decision_reason_getter,
+        )
+        if prefetched_skip_rows:
+            for skipped_row in prefetched_skip_rows:
+                db_handler.write_url_to_db(
+                    [
+                        skipped_row["link"],
+                        skipped_row["parent_url"],
+                        skipped_row["source"],
+                        skipped_row["keywords"],
+                        False,
+                        1,
+                        datetime.now(),
+                        skipped_row["decision_reason"],
+                    ]
+                )
+            logging.info(
+                "def driver_fb_urls(): Prefiltered low-yield event-detail seeds: kept=%d stale_skips=%d rejected_old_skips=%d",
+                seed_filter_stats["kept_rows"],
+                seed_filter_stats["skipped_stale_event_detail_rows"],
+                seed_filter_stats["skipped_rejected_old_event_detail_rows"],
+            )
 
         # 2) Add checkpoint columns
         fb_urls_df['processed'] = False

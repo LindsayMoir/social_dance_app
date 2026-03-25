@@ -1250,6 +1250,12 @@ class EventSpider(scrapy.Spider):
         logging.info(f"def fetch_google_calendar_events(): Inputs - calendar_url: {calendar_url}, URL: {url}, source: {source}, keywords: {keywords}")
         candidate_urls = self._expand_calendar_url_candidates(calendar_url)
         if not candidate_urls:
+            if self._is_unsupported_google_calendar_candidate(calendar_url):
+                logging.info(
+                    "def fetch_google_calendar_events(): Skipping unsupported Google Calendar share URL: %s",
+                    calendar_url,
+                )
+                return 0
             logging.info(
                 "def fetch_google_calendar_events(): Skipping non-calendar-like URL: %s",
                 calendar_url,
@@ -1308,6 +1314,29 @@ class EventSpider(scrapy.Spider):
         )
 
     @staticmethod
+    def _is_unsupported_google_calendar_candidate(candidate_url: str) -> bool:
+        """Return True for Google Calendar share URLs that do not contain a reusable calendar ID."""
+        raw = str(candidate_url or "").strip()
+        if not raw:
+            return False
+        try:
+            parsed = urlparse(raw)
+        except Exception:
+            return False
+        path_low = (parsed.path or "").lower()
+        query_map = parse_qs(parsed.query or "")
+        action = str(query_map.get("action", [""])[0] or "").lower()
+        cid_values = [unquote(str(value or "")).lower() for value in query_map.get("cid", [])]
+        if path_low.endswith("/calendar/event") and action == "template":
+            return True
+        if path_low.endswith("/calendar/render") and any(
+            value.startswith(("webcal:", "webcals:", "http://", "https://"))
+            for value in cid_values
+        ):
+            return True
+        return False
+
+    @staticmethod
     def _extract_hycal_embedded_urls(candidate_url: str) -> list[str]:
         """
         Extract embedded calendar URLs from HyCal proxy endpoint query params.
@@ -1346,10 +1375,10 @@ class EventSpider(scrapy.Spider):
         if not base:
             return []
         candidates: list[str] = []
-        if self._is_google_calendar_like_url(base):
+        if self._is_google_calendar_like_url(base) and not self._is_unsupported_google_calendar_candidate(base):
             candidates.append(base)
         for embedded in self._extract_hycal_embedded_urls(base):
-            if self._is_google_calendar_like_url(embedded):
+            if self._is_google_calendar_like_url(embedded) and not self._is_unsupported_google_calendar_candidate(embedded):
                 candidates.append(embedded)
 
         unique: list[str] = []

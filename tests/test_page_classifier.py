@@ -41,6 +41,13 @@ def test_classify_eventbrite_detail_owned_by_ebs() -> None:
     assert c.is_event_detail is True
 
 
+def test_classify_eventbrite_organizer_owned_by_ebs() -> None:
+    c = classify_page(url="https://www.eventbrite.ca/o/silent-dj-victoria-31599471691")
+    assert c.owner_step == "ebs.py"
+    assert c.subtype == "eventbrite_organizer"
+    assert c.is_event_detail is False
+
+
 def test_resolve_prompt_type_defaults_to_url_or_fb() -> None:
     assert resolve_prompt_type("https://www.facebook.com/events/123") == "fb"
     assert resolve_prompt_type("https://example.com/events/foo", fallback_prompt_type="default").startswith("https://")

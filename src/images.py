@@ -5,6 +5,7 @@ import asyncio
 import base64
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+import hashlib
 import json
 import logging
 import os
@@ -13,7 +14,7 @@ import time
 import random
 import re
 from datetime import datetime
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import quote_plus, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
 from io import BytesIO
@@ -81,6 +82,20 @@ _INSTAGRAM_DEGRADED_SHELL_TOKENS = (
 _VISION_MODEL = "gpt-4.1-mini"
 _VISION_REQUEST_TIMEOUT_SECONDS = 12
 _INSTAGRAM_MANUAL_RECOVERY_TIMEOUT_SECONDS = 180
+_IMAGE_REPLAY_FRAGMENT_KEY = "image"
+_INSTAGRAM_DYNAMIC_MEDIA_QUERY_PARAMS = frozenset(
+    {
+        "_nc_gid",
+        "_nc_ohc",
+        "_nc_oc",
+        "oh",
+        "oe",
+        "_nc_zt",
+        "_nc_ad",
+        "_nc_cid",
+        "ccb",
+    }
+)
 
 
 def _safe_bool(value: object) -> bool:
@@ -248,6 +263,47 @@ def _dedupe_preserve_order(urls: list[str]) -> list[str]:
         seen.add(candidate)
         deduped.append(candidate)
     return deduped
+
+
+def _normalize_instagram_media_identity_url(image_url: str) -> str:
+    """Strip CDN cache-buster params so one Instagram poster image has one stable identity."""
+    raw = str(image_url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    query_pairs: list[str] = []
+    for chunk in (parsed.query or "").split("&"):
+        if not chunk:
+            continue
+        key = chunk.split("=", 1)[0]
+        if key in _INSTAGRAM_DYNAMIC_MEDIA_QUERY_PARAMS:
+            continue
+        query_pairs.append(chunk)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "&".join(query_pairs), ""))
+
+
+def build_image_replay_url(parent_url: str, image_url: str) -> str:
+    """Build a stable per-image replay URL anchored to the parent post/page URL."""
+    base_parent = str(parent_url or "").strip() or str(image_url or "").strip()
+    parsed_parent = urlparse(base_parent)
+    parent_without_fragment = urlunparse(
+        (parsed_parent.scheme, parsed_parent.netloc, parsed_parent.path, parsed_parent.params, parsed_parent.query, "")
+    )
+    normalized_image = _normalize_instagram_media_identity_url(image_url)
+    digest = hashlib.sha1(normalized_image.encode("utf-8")).hexdigest()[:12]
+    return f"{parent_without_fragment}#{_IMAGE_REPLAY_FRAGMENT_KEY}={digest}"
+
+
+def is_image_replay_url(url: str) -> bool:
+    """Return True when URL points to a synthetic per-image replay child URL."""
+    parsed = urlparse(str(url or "").strip())
+    return bool(parsed.fragment.startswith(f"{_IMAGE_REPLAY_FRAGMENT_KEY}="))
+
+
+def strip_image_replay_fragment(url: str) -> str:
+    """Remove synthetic image replay fragment and return the parent page URL."""
+    parsed = urlparse(str(url or "").strip())
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, parsed.query, ""))
 
 
 def _is_instagram_profile_candidate(url: str) -> bool:
@@ -1628,6 +1684,7 @@ class ImageScraper:
                 keywords,
                 page_context_text=text,
                 use_vision_first=use_vision_first,
+                canonical_event_url=build_image_replay_url(page_url, src),
             )
         if not selected_imgs and is_instagram_url(page_url):
             screenshot_path = self.loop.run_until_complete(self._capture_page_screenshot(page_url))
@@ -1847,6 +1904,7 @@ class ImageScraper:
         keywords: str,
         page_context_text: str | None = None,
         use_vision_first: bool = True,
+        canonical_event_url: str | None = None,
     ) -> None:
         """
         Processes an image URL by downloading the image, extracting text using OCR, 
@@ -1865,25 +1923,30 @@ class ImageScraper:
             - Searches for keywords in the extracted text.
             - If keywords are found, generates a prompt and processes the response using the LLM handler.
         """
-        self.logger.info(f"process_image_url(): Starting processing for {image_url}")
+        event_url = str(canonical_event_url or image_url).strip() or image_url
+        self.logger.info(
+            "process_image_url(): Starting processing for %s (event_url=%s)",
+            image_url,
+            event_url,
+        )
 
         # Instantiate url_row
-        url_row = (image_url, parent_url, source, keywords, False, 1, datetime.now())
+        url_row = (event_url, parent_url, source, keywords, False, 1, datetime.now())
 
         # Skip if already visited
-        if image_url in self.urls_visited:
-            self.logger.info(f"process_image_url(): Already visited {image_url}, skipping.")
+        if event_url in self.urls_visited:
+            self.logger.info(f"process_image_url(): Already visited {event_url}, skipping.")
             return
-        self.urls_visited.add(image_url)
-        self.logger.info(f"process_image_url(): Marked {image_url} as visited.")
+        self.urls_visited.add(event_url)
+        self.logger.info(f"process_image_url(): Marked {event_url} as visited.")
 
         # Skip if events already exist
-        if self.db_handler.check_image_events_exist(image_url):
-            self.logger.info(f"process_image_url(): Events already exist for {image_url}, skipping OCR.")
-            url_row = (image_url, parent_url, source, keywords, True, 1, datetime.now())
+        if self.db_handler.check_image_events_exist(event_url):
+            self.logger.info(f"process_image_url(): Events already exist for {event_url}, skipping OCR.")
+            url_row = (event_url, parent_url, source, keywords, True, 1, datetime.now())
             self.db_handler.write_url_to_db(url_row)
             self._record_image_metric(
-                link=image_url,
+                link=event_url,
                 parent_url=parent_url,
                 source=source,
                 keywords=keywords,
@@ -1905,11 +1968,11 @@ class ImageScraper:
             return
         
         # Check and see if we should process this url
-        if not self.db_handler.should_process_url(image_url):
-            self.logger.info(f"process_image_url(): should_process_url for {image_url}, returned False.")
+        if not self.db_handler.should_process_url(event_url):
+            self.logger.info(f"process_image_url(): should_process_url for {event_url}, returned False.")
             self.db_handler.write_url_to_db(url_row)
             self._record_image_metric(
-                link=image_url,
+                link=event_url,
                 parent_url=parent_url,
                 source=source,
                 keywords=keywords,
@@ -1979,12 +2042,12 @@ class ImageScraper:
             if vision_success:
                 self.logger.info(
                     "process_image_url(): Vision fallback extraction succeeded for %s after empty OCR",
-                    image_url,
+                    event_url,
                 )
             else:
                 self.db_handler.write_url_to_db(url_row)
             self._record_image_metric(
-                link=image_url,
+                link=event_url,
                 parent_url=parent_url,
                 source=source,
                 keywords=keywords,
@@ -2039,12 +2102,12 @@ class ImageScraper:
             if vision_success:
                 self.logger.info(
                     "process_image_url(): Vision fallback extraction succeeded for %s after OCR keyword miss",
-                    image_url,
+                    event_url,
                 )
             else:
                 self.db_handler.write_url_to_db(url_row)
             self._record_image_metric(
-                link=image_url,
+                link=event_url,
                 parent_url=parent_url,
                 source=source,
                 keywords=keywords,
@@ -2071,13 +2134,13 @@ class ImageScraper:
         prompt_type = resolve_prompt_type(prompt_basis_url, fallback_prompt_type='default')
         prompt_text, schema_type = self.llm_handler.generate_prompt(prompt_basis_url, llm_text, prompt_type)
         if len(prompt_text) > config['crawling']['prompt_max_length']:
-            logging.warning(f"def process_image_url(): Prompt for URL {image_url} exceeds maximum length. Skipping LLM query.")
+            logging.warning(f"def process_image_url(): Prompt for URL {event_url} exceeds maximum length. Skipping LLM query.")
             vision_attempted = bool(use_vision_first)
             vision_events_written = 0
             if use_vision_first:
                 vision_events_written = self._process_local_image_path_with_vision(
                 Path(path),
-                parent_url or image_url,
+                event_url,
                 parent_url,
                 source,
                 keywords,
@@ -2087,10 +2150,10 @@ class ImageScraper:
             if vision_success:
                 self.logger.info(
                     "process_image_url(): Vision fallback extraction succeeded for %s after OCR prompt overflow",
-                    image_url,
+                    event_url,
                 )
             self._record_image_metric(
-                link=image_url,
+                link=event_url,
                 parent_url=parent_url,
                 source=source,
                 keywords=keywords,
@@ -2114,16 +2177,16 @@ class ImageScraper:
         self.logger.info(
             "process_image_url(): Generated prompt using basis_url=%s for image_url=%s",
             prompt_basis_url,
-            image_url,
+            event_url,
         )
         llm_result = self.llm_handler.process_llm_response(
-            prompt_basis_url, parent_url, llm_text, source, found, prompt_type
+            event_url, parent_url, llm_text, source, found, prompt_type
         )
         if llm_result:
             llm_events_written = int(getattr(llm_result, "events_written", 1))
-            self.logger.info(f"process_image_url(): LLM processing succeeded for {image_url}")
+            self.logger.info(f"process_image_url(): LLM processing succeeded for {event_url}")
             self._record_image_metric(
-                link=image_url,
+                link=event_url,
                 parent_url=parent_url,
                 source=source,
                 keywords=keywords,
@@ -2143,13 +2206,13 @@ class ImageScraper:
                 fallback_used=False,
             )
         else:
-            self.logger.warning(f"process_image_url(): LLM processing did not produce any events for {image_url}")
+            self.logger.warning(f"process_image_url(): LLM processing did not produce any events for {event_url}")
             vision_attempted = bool(use_vision_first)
             vision_events_written = 0
             if use_vision_first:
                 vision_events_written = self._process_local_image_path_with_vision(
                 Path(path),
-                parent_url or image_url,
+                event_url,
                 parent_url,
                 source,
                 keywords,
@@ -2159,10 +2222,10 @@ class ImageScraper:
             if vision_success:
                 self.logger.info(
                     "process_image_url(): Vision fallback extraction succeeded for %s after OCR/LLM miss",
-                    image_url,
+                    event_url,
                 )
             self._record_image_metric(
-                link=image_url,
+                link=event_url,
                 parent_url=parent_url,
                 source=source,
                 keywords=keywords,
@@ -2181,6 +2244,131 @@ class ImageScraper:
                 vision_succeeded=vision_success,
                 fallback_used=vision_attempted,
             )
+
+    def _normalize_replay_events(self, parsed_result: list[dict], canonical_url: str) -> list[dict]:
+        """Normalize parsed image events into replay-row shape without DB writes."""
+        normalized_events: list[dict] = []
+        for event in parsed_result or []:
+            if not isinstance(event, dict):
+                continue
+            event_raw = dict(event)
+            mentioned_url = str(event.get("url") or "").strip()
+            if mentioned_url:
+                event_raw["mentioned_url"] = mentioned_url
+            normalized_events.append(
+                {
+                    "event_name": str(event.get("event_name") or "").strip(),
+                    "start_date": str(event.get("start_date") or "").strip()[:10],
+                    "start_time": str(event.get("start_time") or "").strip(),
+                    "source": str(event.get("source") or "").strip(),
+                    "location": str(event.get("location") or "").strip(),
+                    "url": canonical_url,
+                    "raw": event_raw,
+                }
+            )
+        return normalized_events
+
+    def _parse_replay_events_from_local_image(
+        self,
+        *,
+        local_path: Path,
+        canonical_url: str,
+        parent_url: str,
+        source: str,
+        page_context_text: str | None = None,
+    ) -> list[dict]:
+        """Run OCR-first replay extraction for one local image without writing to the database."""
+        text = self.ocr_image_to_text(local_path)
+        if text:
+            det_date, det_dow = detect_date_from_image(local_path)
+            if det_date and det_dow:
+                text = f"Detected_Date: {det_date}\nDetected_Day: {det_dow}\n{text}"
+            llm_text = _build_image_context_text(
+                ocr_text=text,
+                parent_url=parent_url,
+                source=source,
+                page_context_text=page_context_text,
+            )
+            prompt_type = resolve_prompt_type(parent_url or canonical_url, fallback_prompt_type="default")
+            prompt_text, schema_type = self.llm_handler.generate_prompt(parent_url or canonical_url, llm_text, prompt_type)
+            if schema_type:
+                llm_response = self.llm_handler.query_llm(canonical_url, prompt_text, schema_type)
+                parsed_result = self.llm_handler.extract_and_parse_json(llm_response, canonical_url, schema_type)
+                normalized_events = self._normalize_replay_events(parsed_result or [], canonical_url)
+                if normalized_events:
+                    return normalized_events
+
+        image_data_url = self._local_image_to_data_url(local_path)
+        if not image_data_url:
+            return []
+        vision_context = _build_image_context_text(
+            ocr_text="Use the screenshot image as the primary source of truth.",
+            parent_url=parent_url,
+            source=source,
+            page_context_text=page_context_text,
+        )
+        prompt_type = resolve_prompt_type(parent_url or canonical_url, fallback_prompt_type="default")
+        prompt_text, schema_type = self.llm_handler.generate_prompt(parent_url or canonical_url, vision_context, prompt_type)
+        if not schema_type:
+            return []
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    self.llm_handler.query_openai,
+                    prompt_text,
+                    _VISION_MODEL,
+                    image_data_url,
+                    schema_type,
+                )
+                llm_response = future.result(timeout=_VISION_REQUEST_TIMEOUT_SECONDS)
+        except Exception:
+            return []
+        parsed_result = self.llm_handler.extract_and_parse_json(llm_response, canonical_url, schema_type)
+        return self._normalize_replay_events(parsed_result or [], canonical_url)
+
+    def fetch_replay_events_for_image_replay_url(self, replay_url: str) -> dict:
+        """Replay one Instagram image child URL by re-targeting the specific poster image."""
+        canonical_url = str(replay_url or "").strip()
+        parent_url = strip_image_replay_fragment(canonical_url)
+        page_text = self._extract_dynamic_page_text(parent_url) or ""
+        rendered_html = self.loop.run_until_complete(self.read_extract.page.content())
+        image_urls = _extract_rankable_image_urls(rendered_html, parent_url)
+        target_image_url = ""
+        for image_url in image_urls:
+            if build_image_replay_url(parent_url, image_url) == canonical_url:
+                target_image_url = image_url
+                break
+        if not target_image_url:
+            return {
+                "ok": False,
+                "category": "no_event_extracted_replay",
+                "details": "instagram_image_not_found",
+                "events": [],
+            }
+        local_path = self.download_image(target_image_url)
+        if not local_path:
+            return {
+                "ok": False,
+                "category": "url_unreachable_replay",
+                "details": "instagram_image_download_failed",
+                "events": [],
+            }
+        source = (urlparse(parent_url).netloc or "instagram").strip()
+        normalized_events = self._parse_replay_events_from_local_image(
+            local_path=Path(local_path),
+            canonical_url=canonical_url,
+            parent_url=parent_url,
+            source=source,
+            page_context_text=page_text,
+        )
+        if not normalized_events:
+            return {
+                "ok": False,
+                "category": "no_event_extracted_replay",
+                "details": "instagram_image_replay_no_events",
+                "events": [],
+            }
+        return {"ok": True, "category": "", "details": "instagram_image_replay", "events": normalized_events}
 
 
     def process_images(self) -> None:

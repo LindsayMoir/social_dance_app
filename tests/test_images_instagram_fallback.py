@@ -25,6 +25,9 @@ from images import (
     _looks_like_authenticated_instagram_profile,
     _safe_screenshot_stem,
     _score_image_candidate,
+    build_image_replay_url,
+    is_image_replay_url,
+    strip_image_replay_fragment,
 )
 
 
@@ -333,7 +336,7 @@ def test_process_webpage_url_expands_instagram_posts_before_page_images(monkeypa
     def _process_post(url, parent, source, keywords):
         called_posts.append((url, parent, source, keywords))
 
-    def _process_image(url, parent, source, keywords):
+    def _process_image(url, parent, source, keywords, **_kwargs):
         called_images.append((url, parent, source, keywords))
 
     scraper.process_image_url = _process_image
@@ -407,7 +410,7 @@ def test_process_webpage_url_uses_playwright_post_fallback_when_html_has_no_post
     def _process_post(url, parent, source, keywords):
         called_posts.append((url, parent, source, keywords))
 
-    def _process_image(url, parent, source, keywords):
+    def _process_image(url, parent, source, keywords, **_kwargs):
         called_images.append((url, parent, source, keywords))
 
     scraper.process_image_url = _process_image
@@ -1036,10 +1039,18 @@ def test_process_webpage_url_ranks_instagram_images_and_skips_ui_assets(monkeypa
     scraper.read_extract.page.request = SimpleNamespace(get=_request_get)
     monkeypatch.setattr(images, "Image", SimpleNamespace(open=_fake_open))
 
-    called_images: list[tuple[str, str, str, str, str | None, bool]] = []
+    called_images: list[tuple[str, str, str, str, str | None, bool, str | None]] = []
 
-    def _process_image(url, parent, source, keywords, page_context_text=None, use_vision_first=True):
-        called_images.append((url, parent, source, keywords, page_context_text, use_vision_first))
+    def _process_image(
+        url,
+        parent,
+        source,
+        keywords,
+        page_context_text=None,
+        use_vision_first=True,
+        canonical_event_url=None,
+    ):
+        called_images.append((url, parent, source, keywords, page_context_text, use_vision_first, canonical_event_url))
 
     scraper.process_image_url = _process_image
 
@@ -1056,6 +1067,31 @@ def test_process_webpage_url_ranks_instagram_images_and_skips_ui_assets(monkeypa
         "https://instagram.fcxh2-1.fna.fbcdn.net/v/t51.82787-15/poster2.jpg",
     }
     assert all("static.cdninstagram.com" not in row[0] for row in called_images)
+    assert {
+        row[6] for row in called_images
+    } == {
+        build_image_replay_url(
+            "https://www.instagram.com/p/POST001/",
+            "https://instagram.fcxh2-1.fna.fbcdn.net/v/t51.82787-15/poster1.jpg",
+        ),
+        build_image_replay_url(
+            "https://www.instagram.com/p/POST001/",
+            "https://instagram.fcxh2-1.fna.fbcdn.net/v/t51.82787-15/poster2.jpg",
+        ),
+    }
+
+
+def test_build_image_replay_url_is_stable_for_same_instagram_media_identity() -> None:
+    parent_url = "https://www.instagram.com/p/DVZsZicAc9y/"
+    url1 = "https://scontent.cdninstagram.com/v/t51.71878-15/poster.jpg?stp=dst-jpg&_nc_gid=abc&oe=123&ig_cache_key=stable"
+    url2 = "https://scontent.cdninstagram.com/v/t51.71878-15/poster.jpg?stp=dst-jpg&_nc_gid=xyz&oe=456&ig_cache_key=stable"
+
+    replay_url1 = build_image_replay_url(parent_url, url1)
+    replay_url2 = build_image_replay_url(parent_url, url2)
+
+    assert replay_url1 == replay_url2
+    assert is_image_replay_url(replay_url1) is True
+    assert strip_image_replay_fragment(replay_url1) == parent_url
 
 
 def test_process_webpage_url_hard_caps_processed_images_at_five(monkeypatch) -> None:
