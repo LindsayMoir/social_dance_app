@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import logging
 import os
 import json
+import re
 import uuid
 from sqlalchemy import create_engine, text
 
@@ -97,6 +98,7 @@ CHATBOT_METRICS_SYNC_LOG_PATH = os.path.join(log_dir, "chatbot_metrics_sync_log.
 RUN_SCORECARD_PATH = codex_review_path("run_scorecard.json")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANUAL_COVERAGE_AUDIT_PATH = os.path.join(REPO_ROOT, "data", "evaluation", "manual_coverage_audit.csv")
+_LOG_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 
 
 def _is_transient_database_error(message: str) -> bool:
@@ -125,6 +127,43 @@ def _append_chatbot_sync_log(event: str, details: dict | None = None, level: str
                 fh.write(serialized)
     except Exception as e:
         logger.warning("_append_chatbot_sync_log(): failed to append diagnostic log: %s", e)
+
+
+def _derive_log_archive_timestamp(logs_dir: str) -> str:
+    """Return an archive folder timestamp derived from existing step logs when possible."""
+    candidate_names = [
+        "credential_validator_log.txt",
+        "pipeline_log.txt",
+    ]
+    try:
+        available_names = sorted(
+            name
+            for name in os.listdir(logs_dir)
+            if name.endswith(".log") or name.endswith(".txt")
+        )
+    except Exception:
+        available_names = []
+
+    for name in available_names:
+        if name not in candidate_names:
+            candidate_names.append(name)
+
+    for filename in candidate_names:
+        path = os.path.join(logs_dir, filename)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    match = _LOG_TIMESTAMP_RE.match(line.strip())
+                    if not match:
+                        continue
+                    parsed = datetime.datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+                    return parsed.strftime("%Y%m%d_%H%M%S")
+        except Exception as exc:
+            logger.warning("_derive_log_archive_timestamp(): failed to read %s: %s", path, exc)
+
+    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def _load_run_scorecard() -> dict:
@@ -522,21 +561,20 @@ def credential_validation_step():
 @task
 def copy_log_files():
     """Move all log files to a timestamped folder in logs directory."""
-    # Create timestamp for folder name
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    archive_folder = f"logs/logs_{timestamp}"
-    
-    # Create the archive folder
-    os.makedirs(archive_folder, exist_ok=True)
-    os.environ["DS_LOG_ARCHIVE_DIR"] = archive_folder
-    logger.info(f"def copy_log_files(): Created archive folder: {archive_folder}")
-    
-    # Get all log files from logs directory
     logs_dir = "logs"
     if not os.path.exists(logs_dir):
         logger.warning(f"def copy_log_files(): Logs directory {logs_dir} does not exist.")
         return True
-    
+
+    timestamp = _derive_log_archive_timestamp(logs_dir)
+    archive_folder = f"logs/logs_{timestamp}"
+
+    # Create the archive folder
+    os.makedirs(archive_folder, exist_ok=True)
+    os.environ["DS_LOG_ARCHIVE_DIR"] = archive_folder
+    logger.info(f"def copy_log_files(): Created archive folder: {archive_folder}")
+
+    # Get all log files from logs directory
     log_files_moved = 0
     for filename in os.listdir(logs_dir):
         if filename.endswith('.log') or filename.endswith('.txt'):

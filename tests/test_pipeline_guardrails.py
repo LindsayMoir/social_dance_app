@@ -198,6 +198,37 @@ def test_refresh_manual_coverage_audit_csv_rewrites_file(tmp_path) -> None:
     assert "+7d to +21d window" in rows[0]["notes"]
 
 
+def test_derive_log_archive_timestamp_prefers_credential_validator_log(tmp_path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "credential_validator_log.txt").write_text(
+        "2026-03-24 14:30:20 - INFO - credential validation started\n"
+        "2026-03-24 14:30:25 - INFO - credential validation finished\n",
+        encoding="utf-8",
+    )
+    (logs_dir / "pipeline_log.txt").write_text(
+        "2026-03-24 14:30:55 - INFO - pipeline started\n",
+        encoding="utf-8",
+    )
+
+    timestamp = pipeline._derive_log_archive_timestamp(str(logs_dir))
+
+    assert timestamp == "20260324_143020"
+
+
+def test_derive_log_archive_timestamp_falls_back_to_first_available_log(tmp_path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "scraper_log.txt").write_text(
+        "2026-03-22 19:36:32 - INFO - scraper started\n",
+        encoding="utf-8",
+    )
+
+    timestamp = pipeline._derive_log_archive_timestamp(str(logs_dir))
+
+    assert timestamp == "20260322_193632"
+
+
 def test_pipeline_steps_refresh_manual_coverage_audit_after_copy_dev_to_prod() -> None:
     step_names = [name for name, _ in pipeline.PIPELINE_STEPS]
     copy_index = step_names.index("copy_dev_to_prod")
