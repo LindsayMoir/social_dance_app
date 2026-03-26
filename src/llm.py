@@ -213,6 +213,15 @@ class LLMHandler:
         }
         self.FIELD_RE = re.compile(r'^\s*"(?P<key>[^"]+)"\s*:\s*(?P<raw>.*)$')
 
+    @staticmethod
+    def _is_url_prompt_type(prompt_type: object) -> bool:
+        """Return True when the prompt type is URL-like."""
+        try:
+            parsed = urlparse(str(prompt_type or ""))
+        except Exception:
+            return False
+        return bool(parsed.netloc)
+
 
     def driver(self, url, search_term, extracted_text, source, keywords_list):
         """
@@ -490,7 +499,14 @@ class LLMHandler:
                             recurrence_skip_count = int((~parsed_nonempty & recurrence_guard).sum())
 
                             if conflict_count > 0:
-                                logging.warning(
+                                conflict_log = logging.warning
+                                try:
+                                    host = (urlparse(str(url or "")).netloc or "").lower()
+                                except Exception:
+                                    host = ""
+                                if "instagram.com" in host:
+                                    conflict_log = logging.info
+                                conflict_log(
                                     "process_llm_response: detected_date_conflict url=%s detected_date=%s conflicts=%d",
                                     url,
                                     detected_date,
@@ -814,7 +830,8 @@ class LLMHandler:
             if parsed_prompt_type and parsed_prompt_type.netloc:
                 warning_key = f"domain:{self._normalize_prompt_host(parsed_prompt_type.netloc)}"
             if warning_key not in missing_prompt_keys:
-                logging.warning(
+                log_fn = logging.info if self._is_url_prompt_type(prompt_type) else logging.warning
+                log_fn(
                     "def generate_prompt(): Prompt type '%s' not found, using default",
                     prompt_type,
                 )

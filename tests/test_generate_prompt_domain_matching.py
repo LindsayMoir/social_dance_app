@@ -182,24 +182,26 @@ class TestGeneratePromptDomainMatching(unittest.TestCase):
         # Should not log warning since domain match was found
         mock_warning.assert_not_called()
     
+    @patch('logging.info')
     @patch('logging.warning')
-    def test_warning_for_unknown_domain(self, mock_warning):
-        """Test that warning is logged for unknown domains."""
+    def test_unknown_url_domain_falls_back_to_default_without_warning(self, mock_warning, mock_info):
+        """Unknown URL prompt types should fall back quietly because default prompts are expected."""
         url = "https://unknown-domain.com/some/page"
         prompt_type = "https://unknown-domain.com/some/page"
         extracted_text = "Sample extracted text"
         
         self.llm_handler.generate_prompt(url, extracted_text, prompt_type)
         
-        # Should log warning for fallback to default
-        mock_warning.assert_called_with(
+        mock_warning.assert_not_called()
+        mock_info.assert_any_call(
             "def generate_prompt(): Prompt type '%s' not found, using default",
             "https://unknown-domain.com/some/page",
         )
 
     @patch('logging.warning')
-    def test_warning_for_unknown_domain_is_logged_once_per_domain(self, mock_warning):
-        """Repeated URL misses on the same domain should not spam warnings."""
+    @patch('logging.info')
+    def test_unknown_url_domain_is_logged_once_per_domain(self, mock_info, mock_warning):
+        """Repeated URL misses on the same domain should not spam fallback logs."""
         self.llm_handler.generate_prompt(
             "https://unknown-domain.com/one",
             "Sample extracted text",
@@ -211,9 +213,24 @@ class TestGeneratePromptDomainMatching(unittest.TestCase):
             "https://unknown-domain.com/two",
         )
 
-        mock_warning.assert_called_once_with(
+        mock_warning.assert_not_called()
+        mock_info.assert_any_call(
             "def generate_prompt(): Prompt type '%s' not found, using default",
             "https://unknown-domain.com/one",
+        )
+
+    @patch('logging.warning')
+    def test_warning_for_unknown_non_url_prompt_type(self, mock_warning):
+        """Non-URL prompt keys should still warn when they are misconfigured."""
+        self.llm_handler.generate_prompt(
+            "https://example.com/some/page",
+            "Sample extracted text",
+            "missing_prompt_key",
+        )
+
+        mock_warning.assert_called_once_with(
+            "def generate_prompt(): Prompt type '%s' not found, using default",
+            "missing_prompt_key",
         )
 
 

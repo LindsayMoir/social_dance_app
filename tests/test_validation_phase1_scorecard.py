@@ -127,8 +127,9 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert chatbot_quality_summary["summary"]["chatbot_response_within_15s_pct"] == 90.0
     assert chatbot_quality_summary["summary"]["chatbot_answer_correctness_pct"] == 88.0
     assert chatbot_quality_summary["summary"]["chatbot_sql_validity_pct"] == 95.0
-    assert chatbot_quality_summary["summary"]["chatbot_hallucination_rate_pct"] == 25.0
-    assert chatbot_quality_summary["summary"]["chatbot_fallback_rate_pct"] == 20.0
+    assert chatbot_quality_summary["summary"]["chatbot_hallucination_rate_pct"] == 5.0
+    assert chatbot_quality_summary["summary"]["chatbot_fallback_rate_pct"] is None
+    assert chatbot_quality_summary["summary"]["chatbot_confirm_request_share_pct"] == 20.0
     assert chatbot_quality_summary["summary"]["chatbot_p95_latency_seconds"] == 14.2
     assert chatbot_quality_summary["summary"]["chatbot_user_visible_error_rate_pct"] == 10.0
 
@@ -176,6 +177,12 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
             "new_source_discovery_count": 4,
             "watchlist_source": "coverage_watchlist_csv",
         },
+        scraper_telemetry_summary={
+            "available": True,
+            "steps": {
+                "scraper": {"access_attempted_count": 8, "events_written_total": 40},
+            },
+        },
         dev_summary=dev_summary,
         holdout_summary={
             "available": True,
@@ -186,6 +193,9 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
             "available": True,
             "per_domain_cap": 3,
             "replay_url_accuracy_pct": 75.0,
+        },
+        telemetry_integrity_summary={
+            "summary": {"write_attribution_distinct_event_ids": 40},
         },
     )
     assert run_scorecard["kpis"]["database_accuracy"]["score"] == 82.5
@@ -208,12 +218,15 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert run_scorecard["evaluation_scope"]["dev_version"] == "v1"
     assert run_scorecard["evaluation_scope"]["dev_summary"]["replay_url_accuracy_pct"] == 50.0
     assert run_scorecard["kpis"]["events_coverage"]["summary"]["dev_replay_url_accuracy_pct"] == 50.0
-    assert run_scorecard["kpis"]["run_time"]["summary"]["urls_processed_per_minute"] == 0.0667
-    assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["cost_per_processed_url_usd"] == 0.5
-    assert run_scorecard["kpis"]["run_costs"]["summary"]["summary"]["cost_per_inserted_event_usd"] == 0.1
+    assert run_scorecard["kpis"]["run_time"]["summary"]["run_processed_url_count"] == 8
+    assert run_scorecard["kpis"]["run_time"]["summary"]["run_inserted_event_count"] == 40
+    assert "urls_processed_per_minute" not in run_scorecard["kpis"]["run_time"]["summary"]
+    assert "events_inserted_per_minute" not in run_scorecard["kpis"]["run_time"]["summary"]
+    assert "cost_per_processed_url_usd" not in run_scorecard["kpis"]["run_costs"]["summary"]["summary"]
+    assert "cost_per_inserted_event_usd" not in run_scorecard["kpis"]["run_costs"]["summary"]["summary"]
     assert run_scorecard["code_version"] == {"git_commit": "abc123", "branch": "main"}
     assert run_scorecard["scorecard_version"] == "phase4"
-    assert run_scorecard["telemetry_integrity"] == {}
+    assert run_scorecard["telemetry_integrity"] == {"summary": {"write_attribution_distinct_event_ids": 40}}
     assert "top_regressions" not in run_scorecard["recommendations_input"]
     assert run_scorecard["overall_score"]["status"] == "PRELIMINARY"
 
@@ -262,6 +275,7 @@ def test_phase1_scorecard_events_coverage_uses_scraping_summary_field_names() ->
         event_data_quality_summary={},
         field_accuracy_summary={},
         coverage_summary={},
+        scraper_telemetry_summary={},
         dev_summary={},
         holdout_summary={},
         domain_capped_summary={},
@@ -297,6 +311,7 @@ def test_phase1_scorecard_runtime_uses_30d_average_baseline() -> None:
         event_data_quality_summary={},
         field_accuracy_summary={},
         coverage_summary={},
+        scraper_telemetry_summary={},
         dev_summary={},
         holdout_summary={},
         domain_capped_summary={},
@@ -330,6 +345,7 @@ def test_phase1_scorecard_run_cost_uses_30d_average_baseline() -> None:
         event_data_quality_summary={},
         field_accuracy_summary={},
         coverage_summary={},
+        scraper_telemetry_summary={},
         dev_summary={},
         holdout_summary={},
         domain_capped_summary={},
@@ -439,6 +455,135 @@ def test_build_phase1_scorecard_html_omits_redundant_summary_bullets() -> None:
     assert "Domain-capped replay URL accuracy: 66.67%" in html
     assert "Chatbot correctness" not in html
     assert "Holdout replay URL accuracy" not in html
+
+
+def test_build_top_trend_dashboard_separates_classifier_usage_from_accuracy() -> None:
+    runner = _build_runner()
+
+    def _fake_metric_trend_svg(**kwargs):
+        return f"<section>{kwargs['title']}</section>"
+
+    def _fake_multi_metric_trend_svg(**kwargs):
+        return f"<section>{kwargs['title']}</section>"
+
+    runner._build_metric_trend_svg = _fake_metric_trend_svg  # type: ignore[method-assign]
+    runner._build_multi_metric_trend_svg = _fake_multi_metric_trend_svg  # type: ignore[method-assign]
+
+    html = runner._build_top_trend_dashboard_html()
+
+    assert "Classifier Usage" in html
+    assert "Classifier Replay Accuracy" in html
+    assert "Classifier Trends" not in html
+
+
+def test_build_metric_trend_svg_includes_textual_explanation() -> None:
+    runner = _build_runner()
+    runner._load_metric_history = lambda metric_key, days=90: [  # type: ignore[method-assign]
+        {"timestamp": "2026-03-20T10:00:00", "value": 70.0},
+        {"timestamp": "2026-03-24T10:00:00", "value": 75.0},
+    ]
+
+    html = runner._build_metric_trend_svg(
+        metric_key="validation_replay_accuracy_pct",
+        title="Accuracy Trend (DB persisted metric_observations)",
+        days=180,
+        value_format="percent",
+    )
+
+    assert "This graph shows" in html
+    assert "validation_replay_accuracy_pct" in html
+    assert "75.0%" in html
+    assert "increased by 5.0%" in html
+
+
+def test_build_multi_metric_trend_svg_includes_textual_explanation() -> None:
+    runner = _build_runner()
+
+    history = {
+        "classifier_ml_usage_pct": [
+            {"timestamp": "2026-03-20T10:00:00", "value": 12.0},
+            {"timestamp": "2026-03-24T10:00:00", "value": 15.0},
+        ],
+        "classifier_rule_replay_url_accuracy_pct": [
+            {"timestamp": "2026-03-20T10:00:00", "value": 88.0},
+            {"timestamp": "2026-03-24T10:00:00", "value": 82.0},
+        ],
+    }
+    runner._load_metric_history = lambda metric_key, days=90: history.get(metric_key, [])  # type: ignore[method-assign]
+
+    html = runner._build_multi_metric_trend_svg(
+        title="Classifier Replay Accuracy",
+        days=180,
+        value_format="percent",
+        series=[
+            {
+                "metric_key": "classifier_ml_usage_pct",
+                "label": "ML Usage %",
+                "color": "#d94841",
+            },
+            {
+                "metric_key": "classifier_rule_replay_url_accuracy_pct",
+                "label": "Rule Replay URL Accuracy %",
+                "color": "#2ca02c",
+            },
+        ],
+    )
+
+    assert "This graph compares related metrics" in html
+    assert "ML Usage %: 15.0%" in html
+    assert "Rule Replay URL Accuracy %: 82.0%" in html
+    assert "increased by 3.0%" in html
+    assert "decreased by 6.0%" in html
+
+
+def test_build_runtime_step_breakdown_html_limits_to_seven_rows() -> None:
+    runner = _build_runner()
+
+    html = runner._build_runtime_step_breakdown_html(
+        {
+            "step_spans": [
+                {"log_file": "scraper_log.txt", "duration_minutes": 19.12},
+                {"log_file": "fb_log.txt", "duration_minutes": 18.0},
+                {"log_file": "images_log.txt", "duration_minutes": 17.0},
+                {"log_file": "rd_ext_log.txt", "duration_minutes": 16.0},
+                {"log_file": "ebs_log.txt", "duration_minutes": 15.0},
+                {"log_file": "emails_log.txt", "duration_minutes": 14.0},
+                {"log_file": "gs_log.txt", "duration_minutes": 13.0},
+                {"log_file": "read_pdfs_log.txt", "duration_minutes": 12.0},
+            ]
+        }
+    )
+
+    assert "<th>Step</th><th>Run Time</th>" in html
+    assert "scraper" in html
+    assert "gs" in html
+    assert "read_pdfs" not in html
+
+
+def test_build_top_trend_dashboard_includes_runtime_step_breakdown() -> None:
+    runner = _build_runner()
+
+    def _fake_metric_trend_svg(**kwargs):
+        return f"<section>{kwargs['title']}</section>"
+
+    def _fake_multi_metric_trend_svg(**kwargs):
+        return f"<section>{kwargs['title']}</section>"
+
+    runner._build_metric_trend_svg = _fake_metric_trend_svg  # type: ignore[method-assign]
+    runner._build_multi_metric_trend_svg = _fake_multi_metric_trend_svg  # type: ignore[method-assign]
+
+    html = runner._build_top_trend_dashboard_html(
+        {
+            "step_spans": [
+                {"log_file": "scraper_log.txt", "duration_minutes": 19.12},
+                {"log_file": "fb_log.txt", "duration_minutes": 18.0},
+            ]
+        }
+    )
+
+    assert "Current-run step timings below are based on per-log-file spans" in html
+    assert "<th>Step</th><th>Run Time</th>" in html
+    assert "scraper" in html
 
 
 def test_social_replay_preserves_source_url_instead_of_llm_mentioned_url() -> None:
@@ -746,6 +891,7 @@ def test_summarize_scraper_step_telemetry_normalizes_all_scrapers() -> None:
         {
             "step_norm": "scraper",
             "total_urls": 10,
+            "access_attempted_count": 9,
             "access_success_count": 9,
             "text_extracted_count": 8,
             "keywords_found_count": 6,
@@ -762,6 +908,7 @@ def test_summarize_scraper_step_telemetry_normalizes_all_scrapers() -> None:
         {
             "step_norm": "images",
             "total_urls": 5,
+            "access_attempted_count": 4,
             "access_success_count": 4,
             "text_extracted_count": 3,
             "keywords_found_count": 2,
@@ -780,11 +927,15 @@ def test_summarize_scraper_step_telemetry_normalizes_all_scrapers() -> None:
     summary = runner._summarize_scraper_step_telemetry("run-telemetry")
 
     assert summary["available"] is True
-    assert summary["steps"]["scraper"]["access_success_rate_pct"] == 90.0
+    assert summary["steps"]["scraper"]["access_success_rate_pct"] == 100.0
+    assert summary["steps"]["scraper"]["text_extracted_rate_pct"] == 88.89
+    assert summary["steps"]["scraper"]["keyword_hit_rate_pct"] == 75.0
     assert summary["steps"]["scraper"]["extraction_success_rate_pct"] == 62.5
+    assert summary["steps"]["images"]["text_extracted_rate_pct"] == 75.0
+    assert summary["steps"]["images"]["keyword_hit_rate_pct"] == 66.67
     assert summary["steps"]["images"]["ocr_success_rate_pct"] == 75.0
     assert summary["steps"]["images"]["vision_success_rate_pct"] == 50.0
-    assert summary["steps"]["images"]["fallback_usage_rate_pct"] == 40.0
+    assert summary["steps"]["images"]["fallback_usage_rate_pct"] == 50.0
 
 
 def test_summarize_scraper_step_telemetry_prefers_handled_by_over_pipeline_step() -> None:
@@ -800,6 +951,7 @@ def test_summarize_scraper_step_telemetry_prefers_handled_by_over_pipeline_step(
                 {
                     "step_norm": "images",
                     "total_urls": 5,
+                    "access_attempted_count": 4,
                     "access_success_count": 4,
                     "text_extracted_count": 3,
                     "keywords_found_count": 2,
@@ -816,6 +968,7 @@ def test_summarize_scraper_step_telemetry_prefers_handled_by_over_pipeline_step(
                 {
                     "step_norm": "rd_ext",
                     "total_urls": 7,
+                    "access_attempted_count": 6,
                     "access_success_count": 6,
                     "text_extracted_count": 6,
                     "keywords_found_count": 5,
@@ -1258,6 +1411,7 @@ def test_phase3_holdout_domain_caps_and_guardrails() -> None:
         event_data_quality_summary={"invalid_event_rate_pct": 2.0, "stale_event_rate_pct": 6.0, "total_events": 50},
         field_accuracy_summary={"date_pct": 70.0, "time_pct": 60.0, "location_pct": 50.0, "source_pct": 80.0},
         coverage_summary={"source_hit_rate_pct": 55.0, "event_capture_rate_pct": 40.0, "watchlist_source": "test"},
+        scraper_telemetry_summary={},
         dev_summary=dev_summary,
         holdout_summary=holdout_summary,
         domain_capped_summary=domain_capped_summary,
@@ -1308,8 +1462,8 @@ def test_run_delta_summary_compares_previous_run_and_holdout_baseline() -> None:
                 "kpis": {
                     "database_accuracy": {"summary": {"replay_url_accuracy_pct": 81.0}},
                     "events_coverage": {"summary": {"watchlist_source_hit_rate_pct": 70.0, "watchlist_event_capture_rate_pct": 66.0, "missed_event_rate_manual_audit_pct": 18.0}},
-                    "run_time": {"summary": {"pipeline_duration_minutes": 180.0, "urls_processed_per_minute": 0.05, "events_inserted_per_minute": 0.2}},
-                    "run_costs": {"summary": {"summary": {"total_usd": 5.0, "cost_per_processed_url_usd": 0.4, "cost_per_inserted_event_usd": 0.1}}},
+                    "run_time": {"summary": {"pipeline_duration_minutes": 180.0, "run_processed_url_count": 9, "run_inserted_event_count": 36}},
+                    "run_costs": {"summary": {"summary": {"total_usd": 5.0}}},
                     "chatbot_quality": {"summary": {"summary": {"chatbot_response_within_15s_pct": 85.0, "chatbot_answer_correctness_pct": 82.0}}}
                 }
             }""",
@@ -1324,8 +1478,8 @@ def test_run_delta_summary_compares_previous_run_and_holdout_baseline() -> None:
         "kpis": {
             "database_accuracy": {"summary": {"replay_url_accuracy_pct": 84.0}},
             "events_coverage": {"summary": {"watchlist_source_hit_rate_pct": 75.0, "watchlist_event_capture_rate_pct": 68.0, "missed_event_rate_manual_audit_pct": 12.0}},
-            "run_time": {"summary": {"pipeline_duration_minutes": 160.0, "urls_processed_per_minute": 0.06, "events_inserted_per_minute": 0.25}},
-            "run_costs": {"summary": {"summary": {"total_usd": 4.0, "cost_per_processed_url_usd": 0.3, "cost_per_inserted_event_usd": 0.09}}},
+            "run_time": {"summary": {"pipeline_duration_minutes": 160.0, "run_processed_url_count": 12, "run_inserted_event_count": 40}},
+            "run_costs": {"summary": {"summary": {"total_usd": 4.0}}},
             "chatbot_quality": {"summary": {"summary": {"chatbot_response_within_15s_pct": 90.0, "chatbot_answer_correctness_pct": 88.0}}},
         },
     }

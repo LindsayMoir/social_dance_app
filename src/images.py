@@ -544,6 +544,30 @@ class ImageScraper:
         text = " ".join(soup.get_text(separator=" ").split())
         return text or None
 
+    def _fetch_page_response(self, page_url: str, timeout_seconds: int = 10) -> requests.Response | None:
+        """Fetch one page with a narrow retry for transient DNS/connection failures."""
+        attempts = 2
+        for attempt in range(1, attempts + 1):
+            try:
+                response = requests.get(page_url, timeout=timeout_seconds)
+                response.raise_for_status()
+                return response
+            except requests.exceptions.RequestException as exc:
+                message = str(exc)
+                is_transient_dns = "Temporary failure in name resolution" in message or "NameResolutionError" in message
+                if attempt < attempts and is_transient_dns:
+                    self.logger.warning(
+                        "_fetch_page_response(): transient fetch failure for %s on attempt %d/%d: %s",
+                        page_url,
+                        attempt,
+                        attempts,
+                        exc,
+                    )
+                    time.sleep(1.0)
+                    continue
+                self.logger.error("process_webpage_url(): Failed to fetch %s: %s", page_url, exc)
+                return None
+
     async def _extract_instagram_post_links_playwright(
         self,
         page_url: str,
@@ -1500,11 +1524,8 @@ class ImageScraper:
         prefiltered_img_urls: list[str] = []
         skip_profile_llm = False
 
-        try:
-            resp = requests.get(page_url, timeout=10)
-            resp.raise_for_status()
-        except Exception as e:
-            self.logger.error(f"process_webpage_url(): Failed to fetch {page_url}: {e}")
+        resp = self._fetch_page_response(page_url, timeout_seconds=10)
+        if resp is None:
             self.db_handler.write_url_to_db(url_row)
             return
 
@@ -1951,6 +1972,7 @@ class ImageScraper:
                 source=source,
                 keywords=keywords,
                 archetype="image_url",
+                access_attempted=False,
                 access_succeeded=True,
                 extraction_attempted=False,
                 extraction_succeeded=False,
@@ -1977,6 +1999,7 @@ class ImageScraper:
                 source=source,
                 keywords=keywords,
                 archetype="image_url",
+                access_attempted=False,
                 access_succeeded=False,
                 extraction_attempted=False,
                 extraction_succeeded=False,
@@ -2477,6 +2500,7 @@ class ImageScraper:
         source: str,
         keywords: str | list[str],
         archetype: str,
+        access_attempted: bool = True,
         access_succeeded: bool,
         extraction_attempted: bool,
         extraction_succeeded: bool,
@@ -2494,6 +2518,7 @@ class ImageScraper:
         """Persist image-stage telemetry and update per-run counters."""
         self._ensure_image_telemetry_state()
         self.telemetry_counts["total_urls"] += 1
+        self.telemetry_counts["access_attempted"] += int(access_attempted)
         self.telemetry_counts["access_succeeded"] += int(access_succeeded)
         self.telemetry_counts["text_extracted"] += int(text_extracted)
         self.telemetry_counts["keywords_found"] += int(keywords_found)
@@ -2521,6 +2546,7 @@ class ImageScraper:
                     "decision_reason": decision_reason,
                     "handled_by": "images.py",
                     "routing_reason": decision_reason,
+                    "access_attempted": access_attempted,
                     "access_succeeded": access_succeeded,
                     "text_extracted": text_extracted,
                     "keywords_found": keywords_found,
@@ -2559,18 +2585,20 @@ class ImageScraper:
                 return "N/A"
             return f"{value / denominator:.1%} ({value}/{denominator})"
 
+        access_attempted = int(self.telemetry_counts.get("access_attempted", 0) or 0)
         ocr_attempted = int(self.telemetry_counts.get("ocr_attempted", 0) or 0)
         vision_attempted = int(self.telemetry_counts.get("vision_attempted", 0) or 0)
+        text_extracted = int(self.telemetry_counts.get("text_extracted", 0) or 0)
         self.logger.info("IMAGES SCRAPER SUMMARY")
-        self.logger.info("  URL access success rate: %s", _rate("access_succeeded", total_urls))
-        self.logger.info("  Text extracted rate: %s", _rate("text_extracted", total_urls))
-        self.logger.info("  Keyword hit rate: %s", _rate("keywords_found", total_urls))
-        self.logger.info("  Event extraction success rate: %s", _rate("urls_with_events", total_urls))
+        self.logger.info("  URL access success rate: %s", _rate("access_succeeded", access_attempted))
+        self.logger.info("  Text extracted rate: %s", _rate("text_extracted", access_attempted))
+        self.logger.info("  Keyword hit rate: %s", _rate("keywords_found", text_extracted))
+        self.logger.info("  Event extraction success rate: %s", _rate("urls_with_events", access_attempted))
         self.logger.info("  OCR success rate: %s", _rate("ocr_succeeded", ocr_attempted))
         self.logger.info("  Vision success rate: %s", _rate("vision_succeeded", vision_attempted))
         self.logger.info(
             "  Vision fallback usage rate: %s",
-            _rate("fallback_used", total_urls),
+            _rate("fallback_used", access_attempted),
         )
 
 

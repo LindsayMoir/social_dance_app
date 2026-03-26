@@ -1352,6 +1352,9 @@ class DeduplicationHandler:
             # Keep row eligible, but strongly discourage choosing noisy location text as canonical.
             score -= 5
 
+        if DatabaseHandler._source_matches_event_url(row.get('source'), row.get('url')):
+            score += 2
+
         if pd.notnull(row['address_id']):
             score += 1
             matching_address = address_df[address_df['address_id'] == row['address_id']]

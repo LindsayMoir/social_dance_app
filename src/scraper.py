@@ -622,6 +622,27 @@ class EventSpider(scrapy.Spider):
                 else:
                     self.domain_exception_failure_counts[domain] += 1
             self._record_domain_transient_failure(req_url, str(failure.value) if getattr(failure, "value", None) else str(failure))
+            if request and not bool(request.meta.get("ds_extended_retry")):
+                retry_meta = dict(request.meta)
+                retry_meta["ds_extended_retry"] = True
+                retry_meta["download_timeout"] = max(
+                    int(retry_meta.get("download_timeout", 0) or 0),
+                    self.scraper_priority_download_timeout_seconds,
+                )
+                retry_meta["retry_times"] = max(
+                    int(retry_meta.get("retry_times", 0) or 0),
+                    self.scraper_priority_retry_times,
+                )
+                logging.info(
+                    "handle_request_error(): scheduling one extended retry for %s with timeout=%ss",
+                    req_url,
+                    retry_meta["download_timeout"],
+                )
+                return request.replace(
+                    dont_filter=True,
+                    priority=int(getattr(request, "priority", 0) or 0) + 100,
+                    meta=retry_meta,
+                )
         else:
             logging.warning("handle_request_error(): Non-transient request failure for %s: %s", req_url, failure)
 
@@ -803,6 +824,7 @@ class EventSpider(scrapy.Spider):
                         "decision_reason": "non_text_response",
                         "handled_by": "scraper.py",
                         "routing_reason": "non_text_response",
+                        "access_attempted": False,
                         "classification_confidence": None,
                         "classification_stage": "non_text",
                         "classification_features_json": None,
@@ -965,6 +987,7 @@ class EventSpider(scrapy.Spider):
                         "decision_reason": decision_reason,
                         "handled_by": "scraper.py",
                         "routing_reason": decision_reason,
+                        "access_attempted": False,
                         "classification_confidence": 1.0,
                         "classification_stage": "history_reuse",
                         "classification_owner_step": class_decision.classification.owner_step,
@@ -1153,6 +1176,7 @@ class EventSpider(scrapy.Spider):
                             "decision_reason": child_reason,
                             "handled_by": "scraper.py",
                             "routing_reason": child_reason,
+                            "access_attempted": False,
                             "classification_confidence": 1.0,
                             "classification_stage": "history_reuse",
                             "classification_owner_step": link_classification.owner_step,
@@ -1228,6 +1252,8 @@ class EventSpider(scrapy.Spider):
                     "decision_reason": decision_reason or "unknown",
                     "handled_by": "scraper.py",
                     "routing_reason": decision_reason or "unknown",
+                    "access_attempted": True,
+                    "access_succeeded": True,
                     "classification_confidence": class_decision.confidence,
                     "classification_stage": class_decision.stage,
                     "classification_owner_step": class_decision.classification.owner_step,
@@ -1324,11 +1350,16 @@ class EventSpider(scrapy.Spider):
         except Exception:
             return False
         path_low = (parsed.path or "").lower()
+        host_low = (parsed.netloc or "").lower()
         query_map = parse_qs(parsed.query or "")
         action = str(query_map.get("action", [""])[0] or "").lower()
+        continue_values = [unquote(str(value or "")).lower() for value in query_map.get("continue", [])]
         cid_values = [unquote(str(value or "")).lower() for value in query_map.get("cid", [])]
         if path_low.endswith("/calendar/event") and action == "template":
             return True
+        if host_low == "accounts.google.com" and path_low.startswith("/servicelogin"):
+            if any("calendar.google.com/calendar" in value for value in continue_values):
+                return True
         if path_low.endswith("/calendar/render") and any(
             value.startswith(("webcal:", "webcals:", "http://", "https://"))
             for value in cid_values

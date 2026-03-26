@@ -124,6 +124,7 @@ def _record_fb_scrape_metric(
     parent_url: str,
     source: str,
     keywords: list[str] | str,
+    access_attempted: bool,
     extraction_attempted: bool,
     extraction_succeeded: bool,
     extraction_skipped: bool,
@@ -153,6 +154,7 @@ def _record_fb_scrape_metric(
                 "decision_reason": decision_reason,
                 "handled_by": "fb.py",
                 "routing_reason": decision_reason,
+                "access_attempted": access_attempted,
                 "access_succeeded": access_succeeded,
                 "text_extracted": text_extracted,
                 "keywords_found": keywords_found,
@@ -1405,7 +1407,11 @@ class FacebookEventScraper():
             reason=reason,
         )
         if state != "ok":
-            logging.warning(
+            log_fn = logging.warning
+            norm_url_low = norm_url.lower()
+            if reason == "private_or_unavailable_content" and "/posts/" in norm_url_low and norm_url_low.rstrip("/").endswith("/events"):
+                log_fn = logging.info
+            log_fn(
                 "extract_event_links(): access not ok for %s (state=%s reason=%s)",
                 norm_url,
                 state,
@@ -1751,6 +1757,22 @@ class FacebookEventScraper():
             reason = self._get_last_access_reason(url)
             logging.info("process_fb_url: cannot access %s (reason=%s)", url, reason)
             db_handler.write_url_to_db(url_row)
+            _record_fb_scrape_metric(
+                link=url,
+                parent_url=parent_url,
+                source=source,
+                keywords=keywords,
+                access_attempted=True,
+                extraction_attempted=False,
+                extraction_succeeded=False,
+                extraction_skipped=False,
+                decision_reason=str(reason or "access_failed"),
+                access_succeeded=False,
+                text_extracted=False,
+                keywords_found=False,
+                events_written=0,
+                archetype=route.classification.archetype,
+            )
             return
 
         # Initialize tracking
@@ -1772,6 +1794,7 @@ class FacebookEventScraper():
                 parent_url=parent_url,
                 source=source,
                 keywords=keywords,
+                access_attempted=True,
                 extraction_attempted=True,
                 extraction_succeeded=False,
                 extraction_skipped=False,
@@ -1794,6 +1817,7 @@ class FacebookEventScraper():
                 parent_url=parent_url,
                 source=source,
                 keywords=keywords,
+                access_attempted=True,
                 extraction_attempted=True,
                 extraction_succeeded=False,
                 extraction_skipped=False,
@@ -1816,6 +1840,7 @@ class FacebookEventScraper():
                 parent_url=parent_url,
                 source=source,
                 keywords=keywords_found,
+                access_attempted=True,
                 extraction_attempted=True,
                 extraction_succeeded=False,
                 extraction_skipped=False,
@@ -1836,6 +1861,7 @@ class FacebookEventScraper():
                 parent_url=parent_url,
                 source=source,
                 keywords=keywords_found,
+                access_attempted=True,
                 extraction_attempted=True,
                 extraction_succeeded=False,
                 extraction_skipped=False,
@@ -1857,6 +1883,7 @@ class FacebookEventScraper():
                 parent_url=parent_url,
                 source=source,
                 keywords=keywords_found,
+                access_attempted=True,
                 extraction_attempted=True,
                 extraction_succeeded=False,
                 extraction_skipped=False,
@@ -1901,6 +1928,7 @@ class FacebookEventScraper():
             parent_url=parent_url,
             source=source,
             keywords=keywords_found,
+            access_attempted=True,
             extraction_attempted=True,
             extraction_succeeded=True,
             extraction_skipped=False,
@@ -1983,6 +2011,7 @@ class FacebookEventScraper():
                             parent_url=parent_url,
                             source=source,
                             keywords=found_keywords,
+                            access_attempted=True,
                             extraction_attempted=True,
                             extraction_succeeded=True,
                             extraction_skipped=False,
@@ -2002,6 +2031,7 @@ class FacebookEventScraper():
                             parent_url=parent_url,
                             source=source,
                             keywords=found_keywords,
+                            access_attempted=True,
                             extraction_attempted=True,
                             extraction_succeeded=False,
                             extraction_skipped=False,
@@ -2020,6 +2050,7 @@ class FacebookEventScraper():
                         parent_url=parent_url,
                         source=source,
                         keywords=keywords,
+                        access_attempted=True,
                         extraction_attempted=True,
                         extraction_succeeded=False,
                         extraction_skipped=False,
@@ -2635,6 +2666,7 @@ class FacebookEventScraper():
                 parent_url=parent_url,
                 source=source,
                 keywords=found_keywords,
+                access_attempted=True,
                 extraction_attempted=True,
                 extraction_succeeded=events_written > 0,
                 extraction_skipped=False,

@@ -32,6 +32,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 from playwright.sync_api import sync_playwright
 import random
 from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, unquote
 import yaml
 
 from config_runtime import get_config_path, load_config
@@ -58,7 +59,17 @@ def is_calendar_export_url(url: str) -> bool:
         return True
     path_low = (parsed.path or "").lower()
     query_low = (parsed.query or "").lower()
+    query_map = parse_qs(parsed.query or "")
+    action = str(query_map.get("action", [""])[0] or "").lower()
+    cid_values = [unquote(str(value or "")).lower() for value in query_map.get("cid", [])]
     if path_low.endswith(".ics"):
+        return True
+    if path_low.endswith("/calendar/event") and action == "template":
+        return True
+    if path_low.endswith("/calendar/render") and any(
+        value.startswith(("webcal:", "webcals:", "http://", "https://"))
+        for value in cid_values
+    ):
         return True
     return any(token in query_low for token in ("ical=1", "outlook-ical=1", "outlook_ical=1", "webcal="))
 
@@ -70,6 +81,7 @@ def _record_rd_ext_scrape_metric(
     parent_url: str,
     source: str,
     keywords: list[str] | str,
+    access_attempted: bool,
     extraction_attempted: bool,
     extraction_succeeded: bool,
     extraction_skipped: bool,
@@ -98,6 +110,7 @@ def _record_rd_ext_scrape_metric(
                 "decision_reason": decision_reason,
                 "handled_by": "rd_ext.py",
                 "routing_reason": decision_reason,
+                "access_attempted": access_attempted,
                 "access_succeeded": access_succeeded,
                 "text_extracted": text_extracted,
                 "keywords_found": keywords_found,
@@ -998,6 +1011,7 @@ async def _process_edge_case_urls(
                     parent_url="",
                     source=source,
                     keywords=keywords,
+                    access_attempted=False,
                     extraction_attempted=False,
                     extraction_succeeded=False,
                     extraction_skipped=True,
@@ -1023,6 +1037,7 @@ async def _process_edge_case_urls(
                     parent_url="",
                     source=source,
                     keywords=keywords,
+                    access_attempted=False,
                     extraction_attempted=False,
                     extraction_succeeded=False,
                     extraction_skipped=True,
@@ -1061,6 +1076,7 @@ async def _process_edge_case_urls(
                             parent_url=url,
                             source=source,
                             keywords=keywords,
+                            access_attempted=False,
                             extraction_attempted=False,
                             extraction_succeeded=False,
                             extraction_skipped=True,
@@ -1093,6 +1109,7 @@ async def _process_edge_case_urls(
                         parent_url=url,
                         source=source,
                         keywords=keywords,
+                        access_attempted=True,
                         extraction_attempted=True,
                         extraction_succeeded=llm_success,
                         extraction_skipped=False,
@@ -1108,6 +1125,7 @@ async def _process_edge_case_urls(
                     parent_url="",
                     source=source,
                     keywords=keywords,
+                    access_attempted=True,
                     extraction_attempted=True,
                     extraction_succeeded=successful_events > 0,
                     extraction_skipped=False,
@@ -1142,6 +1160,7 @@ async def _process_edge_case_urls(
                     parent_url="",
                     source=source,
                     keywords=keywords,
+                    access_attempted=True,
                     extraction_attempted=True,
                     extraction_succeeded=llm_success,
                     extraction_skipped=False,

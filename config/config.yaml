@@ -279,8 +279,17 @@ prompts:
   default:
     file: prompts/default.txt
     schema: event_extraction
+  dancevictoria.com:
+    file: prompts/default.txt
+    schema: event_extraction
   djdancingdean:
     file: prompts/djdancingdean_prompt.txt
+    schema: event_extraction
+  eventbrite.ca:
+    file: prompts/default.txt
+    schema: event_extraction
+  eventbrite.com:
+    file: prompts/default.txt
     schema: event_extraction
   event_name_location_fix:
     file: prompts/event_name_location_fix.txt
@@ -294,6 +303,9 @@ prompts:
   https://gotothecoda.com/calendar:
     file: prompts/calendar_venues.txt
     schema: event_extraction
+  gotothecoda.com:
+    file: prompts/calendar_venues.txt
+    schema: event_extraction
   https://loftpubvictoria.com/events/month/:
     file: prompts/calendar_venues.txt
     schema: event_extraction
@@ -303,8 +315,26 @@ prompts:
   https://vbds.org/other-dancing-opportunities/:
     file: prompts/default.txt
     schema: event_extraction
+  latindancecanada.com:
+    file: prompts/default.txt
+    schema: event_extraction
+  calientedance.com:
+    file: prompts/default.txt
+    schema: event_extraction
+  redhotswing.com:
+    file: prompts/default.txt
+    schema: event_extraction
+  alivetangovictoria.ca:
+    file: prompts/default.txt
+    schema: event_extraction
   https://www.bardandbanker.com/live-music:
     file: prompts/bard_and_banker_prompt.txt
+    schema: event_extraction
+  bcswingdance.ca:
+    file: prompts/default.txt
+    schema: event_extraction
+  vlda.ca:
+    file: prompts/default.txt
     schema: event_extraction
   https://www.debrhymerband.com/shows:
     file: prompts/deb_rhymer_prompt.txt

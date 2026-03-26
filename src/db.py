@@ -83,6 +83,7 @@ class DatabaseHandler():
         "venue", "club", "dance", "studio", "society", "association", "group",
         "hall", "center", "centre",
     }
+    _stale_raw_location_warnings: Final[set[tuple[str, int | None, str]]] = set()
     _DANCE_STYLE_TOKENS = {
         "argentine tango",
         "tango",
@@ -263,6 +264,7 @@ class DatabaseHandler():
                 classification_owner_step TEXT,
                 classification_subtype TEXT,
                 classification_features_json TEXT,
+                access_attempted BOOLEAN,
                 access_succeeded BOOLEAN,
                 text_extracted BOOLEAN,
                 keywords_found BOOLEAN,
@@ -290,6 +292,7 @@ class DatabaseHandler():
             self.execute_query(
                 "ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS classification_features_json TEXT"
             )
+            self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS access_attempted BOOLEAN")
             self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS access_succeeded BOOLEAN")
             self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS text_extracted BOOLEAN")
             self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS keywords_found BOOLEAN")
@@ -2072,6 +2075,7 @@ class DatabaseHandler():
             "classification_features_json": (
                 str(metric.get("classification_features_json", "") or "").strip() or None
             ),
+            "access_attempted": bool(metric.get("access_attempted", False)),
             "access_succeeded": bool(metric.get("access_succeeded", False)),
             "text_extracted": bool(metric.get("text_extracted", False)),
             "keywords_found": bool(metric.get("keywords_found", False)),
@@ -3246,6 +3250,23 @@ class DatabaseHandler():
         except Exception:
             return ""
 
+    @staticmethod
+    def _normalize_source_url_affinity_text(value: Any) -> str:
+        """Normalize text for lightweight source-to-URL affinity checks."""
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        return re.sub(r"[^a-z0-9]+", "", text)
+
+    @classmethod
+    def _source_matches_event_url(cls, source: Any, url: Any) -> bool:
+        """Return True when the declared source clearly matches the event URL host label."""
+        source_norm = cls._normalize_source_url_affinity_text(source)
+        url_source_norm = cls._normalize_source_url_affinity_text(cls._source_from_url(str(url or "")))
+        if not source_norm or not url_source_norm:
+            return False
+        return source_norm == url_source_norm or source_norm in url_source_norm or url_source_norm in source_norm
+
     def _resolve_event_source_label(self, source: Any, url: str, parent_url: str) -> str:
         """
         Resolve canonical source label for event writes.
@@ -4419,12 +4440,15 @@ class DatabaseHandler():
             if result:
                 address_id, building_name = result[0]
                 if building_name and not self._has_meaningful_token_overlap(raw_location, building_name):
-                    logging.warning(
-                        "lookup_raw_location: Ignoring stale/mismatched cache mapping '%s' -> address_id=%s (%s)",
-                        raw_location,
-                        address_id,
-                        building_name,
-                    )
+                    warning_key = (str(raw_location), int(address_id) if address_id is not None else None, str(building_name))
+                    if warning_key not in self._stale_raw_location_warnings:
+                        logging.warning(
+                            "lookup_raw_location: Ignoring stale/mismatched cache mapping '%s' -> address_id=%s (%s)",
+                            raw_location,
+                            address_id,
+                            building_name,
+                        )
+                        self._stale_raw_location_warnings.add(warning_key)
                     try:
                         self.execute_query(
                             "DELETE FROM raw_locations WHERE raw_location = :raw_location",
@@ -4620,9 +4644,10 @@ class DatabaseHandler():
     def decide_preferred_row(self, row1, row2):
         """
         Determines the preferred row between two given rows based on the following criteria:
-            1. Prefer the row with a non-empty 'url' field.
-            2. If both or neither have a 'url', prefer the row with more filled (non-empty) columns, excluding 'event_id'.
-            3. If still tied, prefer the row with the most recent 'time_stamp'.
+            1. Prefer the row whose declared source clearly matches its own URL host.
+            2. Otherwise prefer the row with a non-empty 'url' field.
+            3. If both or neither have a 'url', prefer the row with more filled (non-empty) columns, excluding 'event_id'.
+            4. If still tied, prefer the row with the most recent 'time_stamp'.
         Args:
             row1 (pandas.Series): The first row to compare.
             row2 (pandas.Series): The second row to compare.
@@ -4630,6 +4655,13 @@ class DatabaseHandler():
                 preferred_row (pandas.Series): The row selected as preferred based on the criteria.
                 other_row (pandas.Series): The other row that was not preferred.
         """
+        row1_source_matches_url = self._source_matches_event_url(row1.get('source'), row1.get('url'))
+        row2_source_matches_url = self._source_matches_event_url(row2.get('source'), row2.get('url'))
+        if row1_source_matches_url and not row2_source_matches_url:
+            return row1, row2
+        if row2_source_matches_url and not row1_source_matches_url:
+            return row2, row1
+
         # Prefer row with URL
         if row1['url'] and not row2['url']:
             return row1, row2

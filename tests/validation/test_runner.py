@@ -1123,6 +1123,7 @@ class ValidationTestRunner:
                     NULLIF(step_name, '')
                 ) AS step_norm,
                 COUNT(*) AS total_urls,
+                SUM(CASE WHEN access_attempted THEN 1 ELSE 0 END) AS access_attempted_count,
                 SUM(CASE WHEN access_succeeded THEN 1 ELSE 0 END) AS access_success_count,
                 SUM(CASE WHEN text_extracted THEN 1 ELSE 0 END) AS text_extracted_count,
                 SUM(CASE WHEN keywords_found THEN 1 ELSE 0 END) AS keywords_found_count,
@@ -1151,6 +1152,7 @@ class ValidationTestRunner:
             if not step_name:
                 continue
             total_urls = int(mapping.get("total_urls", 0) or 0)
+            access_attempted_count = int(mapping.get("access_attempted_count", 0) or 0)
             extraction_attempted_count = int(mapping.get("extraction_attempted_count", 0) or 0)
             ocr_attempted_count = int(mapping.get("ocr_attempted_count", 0) or 0)
             vision_attempted_count = int(mapping.get("vision_attempted_count", 0) or 0)
@@ -1162,6 +1164,7 @@ class ValidationTestRunner:
 
             steps[step_name] = {
                 "total_urls": total_urls,
+                "access_attempted_count": access_attempted_count,
                 "access_success_count": int(mapping.get("access_success_count", 0) or 0),
                 "text_extracted_count": int(mapping.get("text_extracted_count", 0) or 0),
                 "keywords_found_count": int(mapping.get("keywords_found_count", 0) or 0),
@@ -1174,14 +1177,14 @@ class ValidationTestRunner:
                 "vision_attempted_count": vision_attempted_count,
                 "vision_success_count": int(mapping.get("vision_success_count", 0) or 0),
                 "fallback_used_count": int(mapping.get("fallback_used_count", 0) or 0),
-                "access_success_rate_pct": _pct("access_success_count", total_urls),
-                "text_extracted_rate_pct": _pct("text_extracted_count", total_urls),
-                "keyword_hit_rate_pct": _pct("keywords_found_count", total_urls),
+                "access_success_rate_pct": _pct("access_success_count", access_attempted_count),
+                "text_extracted_rate_pct": _pct("text_extracted_count", access_attempted_count),
+                "keyword_hit_rate_pct": _pct("keywords_found_count", int(mapping.get("text_extracted_count", 0) or 0)),
                 "extraction_success_rate_pct": _pct("extraction_success_count", extraction_attempted_count),
-                "url_event_hit_rate_pct": _pct("urls_with_events_count", total_urls),
+                "url_event_hit_rate_pct": _pct("urls_with_events_count", access_attempted_count),
                 "ocr_success_rate_pct": _pct("ocr_success_count", ocr_attempted_count),
                 "vision_success_rate_pct": _pct("vision_success_count", vision_attempted_count),
-                "fallback_usage_rate_pct": _pct("fallback_used_count", total_urls),
+                "fallback_usage_rate_pct": _pct("fallback_used_count", access_attempted_count),
             }
 
         return {
@@ -1206,13 +1209,13 @@ class ValidationTestRunner:
         window_end = self._parse_iso_datetime(str(runtime_summary.get("end_ts", "") or "")) or datetime.now()
         description_map = {
             "access_success_rate_pct": ("percentage of scraper URLs reached successfully", True),
-            "text_extracted_rate_pct": ("percentage of scraper URLs yielding extracted text", True),
-            "keyword_hit_rate_pct": ("percentage of scraper URLs containing target keywords", True),
+            "text_extracted_rate_pct": ("percentage of attempted scraper URLs yielding extracted text", True),
+            "keyword_hit_rate_pct": ("percentage of text-extracted scraper URLs containing target keywords", True),
             "extraction_success_rate_pct": ("percentage of attempted scraper URLs producing extracted events", True),
-            "url_event_hit_rate_pct": ("percentage of scraper URLs yielding at least one event", True),
+            "url_event_hit_rate_pct": ("percentage of attempted scraper URLs yielding at least one event", True),
             "ocr_success_rate_pct": ("percentage of OCR attempts succeeding", True),
             "vision_success_rate_pct": ("percentage of vision attempts succeeding", True),
-            "fallback_usage_rate_pct": ("percentage of scraper URLs using fallback logic", False),
+            "fallback_usage_rate_pct": ("percentage of attempted scraper URLs using fallback logic", False),
         }
         for step_name, payload in (scraper_telemetry_summary.get("steps") or {}).items():
             for metric_name, (description_suffix, higher_is_better) in description_map.items():
@@ -1282,6 +1285,7 @@ class ValidationTestRunner:
                 "<tr>"
                 f"<td>{self._escape_html(step_name)}</td>"
                 f"<td>{int(payload.get('total_urls', 0) or 0)}</td>"
+                f"<td>{int(payload.get('access_attempted_count', 0) or 0)}</td>"
                 f"<td>{self._escape_html(str(payload.get('access_success_rate_pct', 'N/A')))}%</td>"
                 f"<td>{self._escape_html(str(payload.get('text_extracted_rate_pct', 'N/A')))}%</td>"
                 f"<td>{self._escape_html(str(payload.get('keyword_hit_rate_pct', 'N/A')))}%</td>"
@@ -1369,7 +1373,7 @@ class ValidationTestRunner:
             f"<div class='metric'><div class='metric-value'>{self._escape_html(str(scraper_telemetry_summary.get('run_id', '')))}</div><div class='metric-label'>Run ID</div></div>"
             "</div>"
             "<h3>Current Run Scraper Telemetry</h3>"
-            "<table><tr><th>Scraper</th><th>Total URLs</th><th>Access %</th><th>Text %</th><th>Keyword %</th><th>URLs With Events %</th><th>Extraction Success %</th><th>Events Written</th></tr>"
+            "<table><tr><th>Scraper</th><th>Total URLs</th><th>Access Attempts</th><th>Access %</th><th>Text %</th><th>Keyword %</th><th>URLs With Events %</th><th>Extraction Success %</th><th>Events Written</th></tr>"
             f"{''.join(current_rows)}"
             "</table>"
             f"{image_detail_html}"
@@ -2008,6 +2012,7 @@ class ValidationTestRunner:
             event_data_quality_summary=event_data_quality_summary,
             field_accuracy_summary=field_accuracy_summary,
             coverage_summary=coverage_summary,
+            scraper_telemetry_summary=scraper_telemetry_summary,
             dev_summary=dev_summary,
             holdout_summary=holdout_summary,
             domain_capped_summary=domain_capped_summary,
@@ -2148,7 +2153,7 @@ class ValidationTestRunner:
         </p>
 
         <h2>0. Trend Dashboard</h2>
-        {self._build_top_trend_dashboard_html()}
+        {self._build_top_trend_dashboard_html(runtime_summary)}
 
         <h2>1. Scraper Telemetry Trends</h2>
         {self._build_scraper_telemetry_html(scraper_telemetry_summary)}
@@ -3968,11 +3973,9 @@ class ValidationTestRunner:
             {"metric_key": "watchlist_event_capture_rate_pct", "label": "Watchlist Event Capture Rate %", "value": coverage.get("watchlist_event_capture_rate_pct"), "higher_is_better": True},
             {"metric_key": "missed_event_rate_manual_audit_pct", "label": "Manual Audit Missed Event Rate %", "value": coverage.get("missed_event_rate_manual_audit_pct"), "higher_is_better": False},
             {"metric_key": "pipeline_duration_minutes", "label": "Pipeline Duration Minutes", "value": runtime.get("pipeline_duration_minutes"), "higher_is_better": False},
-            {"metric_key": "urls_processed_per_minute", "label": "URLs Processed / Minute", "value": runtime.get("urls_processed_per_minute"), "higher_is_better": True},
-            {"metric_key": "events_inserted_per_minute", "label": "Events Inserted / Minute", "value": runtime.get("events_inserted_per_minute"), "higher_is_better": True},
+            {"metric_key": "run_processed_url_count", "label": "Processed URLs", "value": runtime.get("run_processed_url_count"), "higher_is_better": True},
+            {"metric_key": "run_inserted_event_count", "label": "Events Inserted", "value": runtime.get("run_inserted_event_count"), "higher_is_better": True},
             {"metric_key": "total_llm_cost_usd", "label": "Total LLM Cost USD", "value": cost_summary.get("total_usd"), "higher_is_better": False},
-            {"metric_key": "cost_per_processed_url_usd", "label": "Cost / Processed URL USD", "value": cost_summary.get("cost_per_processed_url_usd"), "higher_is_better": False},
-            {"metric_key": "cost_per_inserted_event_usd", "label": "Cost / Inserted Event USD", "value": cost_summary.get("cost_per_inserted_event_usd"), "higher_is_better": False},
             {"metric_key": "chatbot_response_within_15s_pct", "label": "Chatbot <=15s %", "value": chatbot.get("chatbot_response_within_15s_pct"), "higher_is_better": True},
             {"metric_key": "chatbot_answer_correctness_pct", "label": "Chatbot Correctness %", "value": chatbot.get("chatbot_answer_correctness_pct"), "higher_is_better": True},
             {"metric_key": "dev_replay_url_accuracy_pct", "label": "Dev Replay URL Accuracy %", "value": dev.get("replay_url_accuracy_pct"), "higher_is_better": True},
@@ -6323,6 +6326,14 @@ class ValidationTestRunner:
                 return f"{int(round(value))}"
             return f"{value:.2f}"
 
+        summary_html = self._build_single_metric_trend_summary_html(
+            title=title,
+            metric_key=metric_key,
+            points=points,
+            days=days,
+            value_format=value_format,
+        )
+
         return (
             f"<h3>{self._escape_html(title)}</h3>"
             f"<svg width='{width}' height='{height}' viewBox='0 0 {width} {height}' role='img' aria-label='{self._escape_html(title)}'>"
@@ -6335,6 +6346,7 @@ class ValidationTestRunner:
             f"<text x='{pad_left}' y='{height - 7}' font-size='11' fill='#666'>{first_label}</text>"
             f"<text x='{width - 92}' y='{height - 7}' font-size='11' fill='#666'>{last_label}</text>"
             "</svg>"
+            f"{summary_html}"
         )
 
     def _build_multi_metric_trend_svg(
@@ -6448,6 +6460,14 @@ class ValidationTestRunner:
                 "</text>"
             )
 
+        summary_html = self._build_multi_metric_trend_summary_html(
+            title=title,
+            prepared_series=prepared_series,
+            ordered_labels=ordered_labels,
+            days=days,
+            value_format=value_format,
+        )
+
         return (
             f"<h3>{self._escape_html(title)}</h3>"
             f"<svg width='{width}' height='{height}' viewBox='0 0 {width} {height}' role='img' aria-label='{self._escape_html(title)}'>"
@@ -6463,10 +6483,138 @@ class ValidationTestRunner:
             f"<text x='{pad_left}' y='{height - 7}' font-size='11' fill='#666'>{first_label}</text>"
             f"<text x='{width - 92}' y='{height - 7}' font-size='11' fill='#666'>{last_label}</text>"
             "</svg>"
+            f"{summary_html}"
         )
 
-    def _build_top_trend_dashboard_html(self) -> str:
+    @staticmethod
+    def _format_trend_value(value: float, value_format: str) -> str:
+        """Format a numeric trend value for human-readable summaries."""
+        if value_format == "percent":
+            return f"{value:.1f}%"
+        if value_format == "usd":
+            return f"${value:.2f}"
+        if value_format == "hours":
+            return f"{value:.2f}h"
+        if value_format == "count":
+            return f"{int(round(value))}"
+        return f"{value:.2f}"
+
+    def _describe_trend_delta(self, points: list[dict[str, float]], value_format: str) -> str:
+        """Return a plain-English description of the latest change vs the prior point."""
+        if len(points) < 2:
+            return "Only one run is available so far, so no direction-of-change signal exists yet."
+        latest = float(points[-1]["value"])
+        previous = float(points[-2]["value"])
+        delta = latest - previous
+        if abs(delta) < 1e-9:
+            return "The latest run is effectively unchanged from the previous point."
+        direction = "increased" if delta > 0 else "decreased"
+        delta_text = self._format_trend_value(abs(delta), value_format)
+        return f"The latest run {direction} by {self._escape_html(delta_text)} versus the previous point."
+
+    def _build_single_metric_trend_summary_html(
+        self,
+        *,
+        title: str,
+        metric_key: str,
+        points: list[dict[str, float]],
+        days: int,
+        value_format: str,
+    ) -> str:
+        """Render a deterministic textual explanation beneath a single-series trend chart."""
+        latest = points[-1]
+        latest_value = self._format_trend_value(float(latest["value"]), value_format)
+        latest_day = self._escape_html(str(latest["timestamp"])[:10])
+        direction = self._describe_trend_delta(points, value_format)
+        return (
+            "<p class='metric-trend-summary'>"
+            f"This graph shows <code>{self._escape_html(metric_key)}</code> over roughly the last {int(days)} days. "
+            f"The latest recorded value is <strong>{self._escape_html(latest_value)}</strong> on <strong>{latest_day}</strong>. "
+            f"{direction}"
+            "</p>"
+        )
+
+    def _build_multi_metric_trend_summary_html(
+        self,
+        *,
+        title: str,
+        prepared_series: list[dict[str, Any]],
+        ordered_labels: list[str],
+        days: int,
+        value_format: str,
+    ) -> str:
+        """Render a deterministic textual explanation beneath a multi-series trend chart."""
+        latest_day = self._escape_html(ordered_labels[-1])
+        latest_parts: list[str] = []
+        direction_parts: list[str] = []
+        for item in prepared_series:
+            points = item.get("points", [])
+            if not points:
+                continue
+            latest_value = self._format_trend_value(float(points[-1]["value"]), value_format)
+            latest_parts.append(f"{self._escape_html(str(item['label']))}: {self._escape_html(latest_value)}")
+            direction_parts.append(
+                f"{self._escape_html(str(item['label']))}: {self._describe_trend_delta(points, value_format)}"
+            )
+        latest_sentence = "; ".join(latest_parts) if latest_parts else "No latest values are available."
+        direction_sentence = " ".join(direction_parts)
+        return (
+            "<p class='metric-trend-summary'>"
+            f"This graph compares related metrics over roughly the last {int(days)} days. "
+            f"The latest recorded day is <strong>{latest_day}</strong>. "
+            f"Latest values: {latest_sentence}. "
+            f"{direction_sentence}"
+            "</p>"
+        )
+
+    def _build_runtime_step_breakdown_html(self, runtime_summary: dict | None) -> str:
+        """Render a compact current-run step runtime table for the runtime trend chart."""
+        runtime = runtime_summary if isinstance(runtime_summary, dict) else {}
+        spans = runtime.get("step_spans", []) if isinstance(runtime.get("step_spans"), list) else []
+        if not spans:
+            return ""
+
+        rows: list[str] = []
+        for span in spans[:7]:
+            if not isinstance(span, dict):
+                continue
+            log_file = str(span.get("log_file", "") or "").strip()
+            duration_minutes = self._safe_float(span.get("duration_minutes"))
+            if not log_file or duration_minutes is None:
+                continue
+            step_name = log_file.replace("_log.txt", "").replace(".txt", "").strip() or log_file
+            rows.append(
+                "<tr>"
+                f"<td>{self._escape_html(step_name)}</td>"
+                f"<td>{self._escape_html(f'{duration_minutes:.2f} min')}</td>"
+                "</tr>"
+            )
+        if not rows:
+            return ""
+        return (
+            "<table>"
+            "<tr><th>Step</th><th>Run Time</th></tr>"
+            f"{''.join(rows)}"
+            "</table>"
+        )
+
+    def _build_top_trend_dashboard_html(self, runtime_summary: dict | None = None) -> str:
         """Build top-of-report trend dashboard from DB-persisted metric_observations."""
+        runtime_chart = self._build_metric_trend_svg(
+            metric_key="run_control_runtime_hours",
+            title="Runtime Trend (Total Pipeline Runtime Hours)",
+            days=180,
+            value_format="hours",
+        )
+        runtime_step_breakdown = self._build_runtime_step_breakdown_html(runtime_summary)
+        if runtime_step_breakdown:
+            runtime_chart += (
+                "<p class='metric-trend-summary'>"
+                "Current-run step timings below are based on per-log-file spans for this pipeline run."
+                "</p>"
+                f"{runtime_step_breakdown}"
+            )
+
         parts = [
             self._build_metric_trend_svg(
                 metric_key="validation_replay_accuracy_pct",
@@ -6475,7 +6623,7 @@ class ValidationTestRunner:
                 value_format="percent",
             ),
             self._build_multi_metric_trend_svg(
-                title="Classifier Trends",
+                title="Classifier Usage",
                 days=180,
                 value_format="percent",
                 series=[
@@ -6484,6 +6632,13 @@ class ValidationTestRunner:
                         "label": "ML Usage %",
                         "color": "#d94841",
                     },
+                ],
+            ),
+            self._build_multi_metric_trend_svg(
+                title="Classifier Replay Accuracy",
+                days=180,
+                value_format="percent",
+                series=[
                     {
                         "metric_key": "classifier_ml_replay_url_accuracy_pct",
                         "label": "ML Replay URL Accuracy %",
@@ -6502,12 +6657,7 @@ class ValidationTestRunner:
                 days=180,
                 value_format="usd",
             ),
-            self._build_metric_trend_svg(
-                metric_key="run_control_runtime_hours",
-                title="Runtime Trend (Total Pipeline Runtime Hours)",
-                days=180,
-                value_format="hours",
-            ),
+            runtime_chart,
             self._build_metric_trend_svg(
                 metric_key="run_control_events_table_count",
                 title="Number of Events Trend (Events Table Count at End of Run)",
@@ -8316,11 +8466,7 @@ class ValidationTestRunner:
             else None
         )
         problem_categories = testing.get("problem_categories", []) if isinstance(testing.get("problem_categories"), list) else []
-        total_problem_count = sum(
-            int(category.get("count", 0) or 0)
-            for category in problem_categories
-            if isinstance(category, dict)
-        )
+        graded_response_count = int(testing_summary.get("total_tests", 0) or 0)
         hallucination_problem_count = sum(
             int(category.get("count", 0) or 0)
             for category in problem_categories
@@ -8330,15 +8476,15 @@ class ValidationTestRunner:
                 for token in ("halluc", "fabricat", "invent", "made up")
             )
         )
-        fallback_rate_pct = (
+        confirm_request_share_pct = (
             round((confirm_count / total_requests) * 100.0, 2)
             if total_requests > 0
             else None
         )
         hallucination_rate_pct = (
-            round((hallucination_problem_count / total_problem_count) * 100.0, 2)
-            if total_problem_count > 0
-            else 0.0
+            round((min(hallucination_problem_count, graded_response_count) / graded_response_count) * 100.0, 2)
+            if graded_response_count > 0
+            else None
         )
         unfinished_request_count = int(performance.get("unfinished_request_count", 0) or 0)
         user_visible_error_rate_pct = (
@@ -8361,7 +8507,8 @@ class ValidationTestRunner:
                 "chatbot_answer_correctness_pct": correctness_pct,
                 "chatbot_sql_validity_pct": sql_validity_pct,
                 "chatbot_hallucination_rate_pct": hallucination_rate_pct,
-                "chatbot_fallback_rate_pct": fallback_rate_pct,
+                "chatbot_fallback_rate_pct": None,
+                "chatbot_confirm_request_share_pct": confirm_request_share_pct,
                 "chatbot_user_visible_error_rate_pct": user_visible_error_rate_pct,
             },
             "sample_sizes": {
@@ -8597,6 +8744,7 @@ class ValidationTestRunner:
         event_data_quality_summary: dict | None,
         field_accuracy_summary: dict | None,
         coverage_summary: dict | None,
+        scraper_telemetry_summary: dict | None,
         dev_summary: dict | None,
         holdout_summary: dict | None,
         domain_capped_summary: dict | None,
@@ -8611,6 +8759,7 @@ class ValidationTestRunner:
         event_data_quality = event_data_quality_summary if isinstance(event_data_quality_summary, dict) else {}
         field_accuracy = field_accuracy_summary if isinstance(field_accuracy_summary, dict) else {}
         coverage_info = coverage_summary if isinstance(coverage_summary, dict) else {}
+        scraper_telemetry = scraper_telemetry_summary if isinstance(scraper_telemetry_summary, dict) else {}
         dev_info = dev_summary if isinstance(dev_summary, dict) else {}
         holdout_info = holdout_summary if isinstance(holdout_summary, dict) else {}
         domain_capped_info = domain_capped_summary if isinstance(domain_capped_summary, dict) else {}
@@ -8641,8 +8790,25 @@ class ValidationTestRunner:
 
         runtime_minutes = runtime_summary.get("pipeline_duration_minutes")
         runtime_hours = runtime_summary.get("pipeline_duration_hours")
-        total_classified_urls = int(classifier.get("total_classified_urls", 0) or 0)
-        total_events = int(event_data_quality.get("total_events", 0) or 0)
+        scraper_steps = scraper_telemetry.get("steps", {}) if isinstance(scraper_telemetry.get("steps"), dict) else {}
+        total_access_attempted = sum(
+            int((payload or {}).get("access_attempted_count", 0) or 0)
+            for payload in scraper_steps.values()
+            if isinstance(payload, dict)
+        )
+        telemetry_summary = telemetry_integrity.get("summary", {}) if isinstance(telemetry_integrity.get("summary"), dict) else {}
+        run_inserted_event_count = int(
+            telemetry_summary.get(
+                "write_attribution_distinct_event_ids",
+                telemetry_summary.get("write_attribution_rows", 0),
+            ) or 0
+        )
+        if run_inserted_event_count <= 0:
+            run_inserted_event_count = sum(
+                int((payload or {}).get("events_written_total", 0) or 0)
+                for payload in scraper_steps.values()
+                if isinstance(payload, dict)
+            )
         runtime_baseline = self._get_runtime_30d_baseline_hours(
             report_timestamp=report_timestamp,
             exclude_run_id=run_id,
@@ -8657,16 +8823,6 @@ class ValidationTestRunner:
             runtime_score = max(0.0, round(100.0 - float(runtime_minutes) / 6.0, 2))
 
         total_cost_usd = ((llm_cost_summary.get("summary") or {}).get("total_usd") if isinstance(llm_cost_summary.get("summary"), dict) else None)
-        cost_per_processed_url_usd = (
-            round(float(total_cost_usd) / total_classified_urls, 6)
-            if total_cost_usd is not None and total_classified_urls > 0
-            else None
-        )
-        cost_per_inserted_event_usd = (
-            round(float(total_cost_usd) / total_events, 6)
-            if total_cost_usd is not None and total_events > 0
-            else None
-        )
         run_cost_baseline = self._get_run_cost_30d_baseline_usd(
             report_timestamp=report_timestamp,
             exclude_run_id=run_id,
@@ -8765,16 +8921,8 @@ class ValidationTestRunner:
                             and runtime_baseline.get("average_runtime_hours")
                             else None
                         ),
-                        "urls_processed_per_minute": (
-                            round(total_classified_urls / float(runtime_minutes), 4)
-                            if runtime_minutes not in (None, 0, 0.0) and total_classified_urls > 0
-                            else None
-                        ),
-                        "events_inserted_per_minute": (
-                            round(total_events / float(runtime_minutes), 4)
-                            if runtime_minutes not in (None, 0, 0.0) and total_events > 0
-                            else None
-                        ),
+                        "run_processed_url_count": total_access_attempted,
+                        "run_inserted_event_count": run_inserted_event_count,
                     },
                 },
                 "run_costs": {
@@ -8789,11 +8937,9 @@ class ValidationTestRunner:
                                 round((float(total_cost_usd) / float(run_cost_baseline["average_total_usd"])) * 100.0, 2)
                                 if total_cost_usd is not None
                                 and run_cost_baseline.get("available")
-                                and run_cost_baseline.get("average_total_usd") not in (None, 0, 0.0)
+                            and run_cost_baseline.get("average_total_usd") not in (None, 0, 0.0)
                                 else None
                             ),
-                            "cost_per_processed_url_usd": cost_per_processed_url_usd,
-                            "cost_per_inserted_event_usd": cost_per_inserted_event_usd,
                         },
                     },
                 },
