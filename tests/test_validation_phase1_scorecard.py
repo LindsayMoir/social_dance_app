@@ -20,6 +20,8 @@ class _FakeDbHandler:
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.artifact_calls: list[dict] = []
+        self.fb_triage_calls: list[dict] = []
+        self.fb_occurrence_calls: list[dict] = []
         self.query_map: dict[str, list[tuple]] = {}
         self.telemetry_integrity_report: dict = {
             "available": True,
@@ -36,7 +38,13 @@ class _FakeDbHandler:
     def record_validation_run_artifact(self, **kwargs) -> None:
         self.artifact_calls.append(kwargs)
 
-    def execute_query(self, query, params=None):
+    def record_fb_block_triage_rows(self, **kwargs) -> None:
+        self.fb_triage_calls.append(kwargs)
+
+    def record_fb_block_occurrences(self, **kwargs) -> None:
+        self.fb_occurrence_calls.append(kwargs)
+
+    def execute_query(self, query, params=None, statement_timeout_ms=None):
         normalized = " ".join(str(query).split())
         for key, value in sorted(self.query_map.items(), key=lambda item: len(item[0]), reverse=True):
             if key in normalized:
@@ -59,6 +67,121 @@ def _build_runner() -> ValidationTestRunner:
 
 def _stub_code_version(runner: ValidationTestRunner) -> None:
     runner._get_code_version_info = lambda: {"git_commit": "abc123", "branch": "main"}  # type: ignore[method-assign]
+
+
+def test_build_database_accuracy_manual_review_sample_writes_rows(tmp_path) -> None:
+    runner = _build_runner()
+    runner.db_handler = _FakeDbHandler()
+    runner.db_handler.query_map["SELECT event_id, event_name, start_date, start_time, end_date, end_time, source, event_type, dance_style, location, url, description FROM events"] = [
+        (101, "Friday Social", "2026-04-10", "19:00:00", "2026-04-10", "22:00:00", "Source A", "social dance", "salsa", "Hall A", "https://example.com/a", "desc a"),
+        (102, "Saturday Social", "2026-04-11", "20:00:00", "2026-04-11", "23:00:00", "Source B", "live music", "swing", "Hall B", "https://example.com/b", "desc b"),
+    ]
+
+    original_codex_review_path = validation_test_runner.codex_review_path
+    validation_test_runner.codex_review_path = lambda filename: str(tmp_path / filename)
+    try:
+        sample = runner._build_database_accuracy_manual_review_sample(limit=2)
+    finally:
+        validation_test_runner.codex_review_path = original_codex_review_path
+
+    assert sample["mode"] == "manual_review"
+    assert sample["rows_returned"] == 2
+    assert os.path.exists(sample["csv_path"])
+    assert sample["rows"][0]["human_label"] == ""
+
+
+def test_phase1_scorecard_database_accuracy_is_manual_review_only() -> None:
+    runner = _build_runner()
+    _stub_code_version(runner)
+    runner._get_runtime_30d_baseline_hours = lambda **kwargs: {"available": False}  # type: ignore[method-assign]
+    runner._get_run_cost_30d_baseline_usd = lambda **kwargs: {"available": False}  # type: ignore[method-assign]
+
+    scorecard = runner._build_phase1_run_scorecard(
+        run_id="run-123",
+        report_timestamp="2026-03-26T12:00:00",
+        accuracy_replay={"status": "DISABLED", "mode": "manual_review", "manual_review_sample": {"rows_returned": 20}},
+        scraping_results={"summary": {"total_important_urls": 20, "total_failures": 5}, "source_distribution": {"status": "PASS"}},
+        runtime_summary={"pipeline_duration_minutes": 60.0, "pipeline_duration_hours": 1.0},
+        llm_cost_summary={"summary": {"total_usd": 2.0}},
+        chatbot_quality_summary={"summary": {"chatbot_answer_correctness_pct": 93.0}},
+        classifier_performance_summary={},
+        event_data_quality_summary={},
+        field_accuracy_summary={},
+        coverage_summary={},
+        scraper_telemetry_summary={"steps": {}},
+        dev_summary={},
+        holdout_summary={},
+        domain_capped_summary={},
+        telemetry_integrity_summary={"summary": {}},
+    )
+
+    database_accuracy = scorecard["kpis"]["database_accuracy"]
+    assert database_accuracy["score"] is None
+    assert database_accuracy["summary"]["mode"] == "manual_review"
+    assert database_accuracy["summary"]["manual_review_sample_size"] == 20
+
+
+def test_build_database_accuracy_manual_review_html_renders_review_table() -> None:
+    runner = _build_runner()
+
+    html = runner._build_database_accuracy_manual_review_html(
+        {
+            "mode": "manual_review",
+            "rows_returned": 1,
+            "csv_path": "/tmp/database_accuracy_manual_review.csv",
+            "rows": [
+                {
+                    "event_id": 101,
+                    "event_name": "Friday Social",
+                    "start_date": "2026-04-10",
+                    "start_time": "19:00:00",
+                    "source": "Source A",
+                    "event_type": "social dance",
+                    "dance_style": "salsa",
+                    "location": "Hall A",
+                    "url": "https://example.com/a",
+                    "description": "desc a",
+                }
+            ],
+        }
+    )
+
+    assert "This replaces replay-based database accuracy" in html
+    assert "Friday Social" in html
+    assert "Human Label" in html
+    assert "/tmp/database_accuracy_manual_review.csv" in html
+
+
+def test_build_scraper_telemetry_html_uses_images_event_yield_chart_and_detail() -> None:
+    runner = _build_runner()
+    runner._build_multi_metric_trend_svg = lambda **kwargs: f"<section>{kwargs['title']}</section>"  # type: ignore[method-assign]
+
+    html = runner._build_scraper_telemetry_html(
+        {
+            "steps": {
+                "images": {
+                    "total_urls": 10,
+                    "access_attempted_count": 8,
+                    "access_success_rate_pct": 75.0,
+                    "text_extracted_rate_pct": 62.5,
+                    "keyword_hit_rate_pct": 50.0,
+                    "url_event_hit_rate_pct": 37.5,
+                    "urls_with_events_count": 3,
+                    "extraction_success_rate_pct": 25.0,
+                    "extraction_success_count": 2,
+                    "events_written_total": 4,
+                    "fallback_usage_rate_pct": 12.5,
+                    "fallback_used_count": 1,
+                }
+            }
+        }
+    )
+
+    assert "Images Event Yield % Trend" in html
+    assert "Images Event Yield Detail" in html
+    assert "URLs With Events" in html
+    assert "Images OCR / Vision Success % Trend" not in html
+    assert "Images OCR / Vision Detail" not in html
 
 
 def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
@@ -452,9 +575,177 @@ def test_build_phase1_scorecard_html_omits_redundant_summary_bullets() -> None:
     )
 
     assert "Chatbot within 15s: 91.00%" in html
-    assert "Domain-capped replay URL accuracy: 66.67%" in html
+    assert "Domain-capped replay URL accuracy" not in html
     assert "Chatbot correctness" not in html
     assert "Holdout replay URL accuracy" not in html
+
+
+def test_send_email_notification_attaches_only_comprehensive_report(tmp_path, monkeypatch) -> None:
+    runner = _build_runner()
+    runner.validation_config = {"reporting": {"output_dir": str(tmp_path)}}
+
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    html_report = reports_dir / "comprehensive_test_report.html"
+    html_report.write_text("<html>report</html>", encoding="utf-8")
+
+    sent_payload: dict = {}
+
+    def _fake_send_report_email(report_summary, attachment_paths, test_type):  # type: ignore[no-untyped-def]
+        sent_payload["report_summary"] = report_summary
+        sent_payload["attachment_paths"] = attachment_paths
+        sent_payload["test_type"] = test_type
+        return True
+
+    monkeypatch.setattr(validation_test_runner, "send_report_email", _fake_send_report_email)
+    monkeypatch.setattr(validation_test_runner, "reports_path", lambda name: str(html_report))
+
+    runner._send_email_notification(
+        {
+            "overall_status": "PASS",
+            "timestamp": "2026-03-26T12:00:00",
+            "chatbot_testing": {"summary": {"total_tests": 1, "execution_success_rate": 1.0, "average_score": 95.0}},
+            "scraping_validation": {"summary": {"total_failures": 0, "whitelist_failures": 0}},
+        }
+    )
+
+    assert sent_payload["attachment_paths"] == [str(html_report)]
+    assert sent_payload["test_type"] == "Pre-Commit Validation"
+
+
+def test_summarize_fb_block_health_includes_private_unavailable_triage(tmp_path, monkeypatch) -> None:
+    runner = _build_runner()
+    monkeypatch.chdir(tmp_path)
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "fb_log.txt").write_text(
+        "\n".join(
+            [
+                "2026-03-26 08:24:16 - INFO - [run_id=run-1] [step=fb] - fb access check: phase=extract_event_links requested_url=https://www.facebook.com/groups/cubansalsaclub/posts/26145054348414416/events/ current_url=https://www.facebook.com/groups/cubansalsaclub/posts/26145054348414416/events/ state=blocked reason=private_or_unavailable_content",
+                "2026-03-26 08:44:07 - INFO - [run_id=run-1] [step=fb] - fb access check: attempt=1 phase=navigate requested_url=https://www.facebook.com/events/909522138040202/ current_url=https://www.facebook.com/events/909522138040202/ state=blocked reason=private_or_unavailable_content",
+                "2026-03-26 08:44:14 - INFO - [run_id=run-1] [step=fb] - fb access check: attempt=2 phase=navigate requested_url=https://www.facebook.com/events/909522138040202/ current_url=https://www.facebook.com/events/909522138040202/ state=blocked reason=private_or_unavailable_content",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = runner._summarize_fb_block_health("2026-03-26T10:00:00")
+
+    assert summary["private_unavailable_total_attempts"] == 3
+    assert summary["private_unavailable_unique_urls"] == 2
+    assert {"category": "group_post_events_tab", "count": 1} in summary["private_unavailable_by_category"]
+    assert {"category": "event_detail_page", "count": 1} in summary["private_unavailable_by_category"]
+    assert summary["private_unavailable_sources"][0]["source_key"] in {"facebook_event_detail", "group:cubansalsaclub"}
+
+
+def test_build_fb_block_health_html_renders_private_unavailable_triage() -> None:
+    runner = _build_runner()
+
+    html = runner._build_fb_block_health_html(
+        {
+            "explicit_block_count": 0,
+            "strike1_count": 0,
+            "abort_count": 0,
+            "avg_wait_seconds": 0.0,
+            "fb_target_urls": 4,
+            "instagram_target_urls": 0,
+            "target_total_urls": 4,
+            "attempted_total_urls": 4,
+            "successful_total_urls": 1,
+            "success_rate": 0.25,
+            "target_coverage_rate": 0.25,
+            "throttle_detected": False,
+            "fb_successes_before_throttle": 1,
+            "numerator_fb_ig": 1,
+            "denominator_fb_ig": 4,
+            "start_ts": "2026-03-26 08:00:00",
+            "end_ts": "2026-03-26 10:00:00",
+            "window_hours": 24,
+            "private_unavailable_total_attempts": 3,
+            "private_unavailable_unique_urls": 2,
+            "private_unavailable_by_category": [
+                {"category": "event_detail_page", "count": 1},
+                {"category": "group_post_events_tab", "count": 1},
+            ],
+            "private_unavailable_sources": [
+                {
+                    "source_key": "group:cubansalsaclub",
+                    "category": "group_post_events_tab",
+                    "unique_urls": 1,
+                    "attempt_count": 1,
+                    "sample_url": "https://www.facebook.com/groups/cubansalsaclub/posts/26145054348414416/events/",
+                }
+            ],
+        }
+    )
+
+    assert "Private/Unavailable Cases:" in html
+    assert "Private/Unavailable Triage" in html
+    assert "group:cubansalsaclub" in html
+    assert "group_post_events_tab" in html
+
+
+def test_build_image_date_rejections_html_renders_rows() -> None:
+    runner = _build_runner()
+
+    html = runner._build_image_date_rejections_html(
+        {
+            "total_rejections": 2,
+            "unique_urls": 1,
+            "by_reason": [{"reason": "unresolved_image_date_conflict", "count": 2}],
+            "rejections": [
+                {
+                    "url": "https://www.instagram.com/p/test/#image=abc",
+                    "event_name": "Tuesday Night WCS Dance",
+                    "start_date": "2026-03-31",
+                    "reason": "unresolved_image_date_conflict",
+                    "poster_type": "single_event",
+                    "detected_date": "2026-03-24",
+                    "schedule_dates": [],
+                }
+            ],
+        }
+    )
+
+    assert "Total rejected rows:</strong> 2" in html
+    assert "Tuesday Night WCS Dance" in html
+    assert "unresolved_image_date_conflict" in html
+    assert "single_event" in html
+
+
+def test_summarize_image_date_rejections_reads_structured_log_payload(tmp_path) -> None:
+    runner = _build_runner()
+    log_path = tmp_path / "images_log.txt"
+    log_path.write_text(
+        (
+            "2026-03-26 09:00:00 [root] INFO: image_date_rejection: "
+            "{\"url\":\"https://www.instagram.com/p/test/#image=abc\","
+            "\"parent_url\":\"https://www.instagram.com/p/test/\","
+            "\"poster_type\":\"single_event\","
+            "\"detected_date\":\"2026-03-24\","
+            "\"schedule_dates\":[],"
+            "\"reason\":\"unresolved_image_date_conflict\","
+            "\"event_name\":\"Tuesday Night WCS Dance\","
+            "\"start_date\":\"2026-03-31\","
+            "\"timestamp\":\"2026-03-26T09:00:00\"}\n"
+        ),
+        encoding="utf-8",
+    )
+    runner._get_llm_activity_log_files = lambda: [str(log_path)]  # type: ignore[method-assign]
+
+    summary = runner._summarize_image_date_rejections(
+        report_timestamp="2026-03-26T10:00:00",
+        pipeline_runtime_summary={
+            "start_ts": "2026-03-26 08:00:00",
+            "end_ts": "2026-03-26 10:00:00",
+        },
+    )
+
+    assert summary["total_rejections"] == 1
+    assert summary["unique_urls"] == 1
+    assert summary["by_reason"] == [{"reason": "unresolved_image_date_conflict", "count": 1}]
+    assert summary["rejections"][0]["event_name"] == "Tuesday Night WCS Dance"
 
 
 def test_build_top_trend_dashboard_separates_classifier_usage_from_accuracy() -> None:
@@ -472,7 +763,7 @@ def test_build_top_trend_dashboard_separates_classifier_usage_from_accuracy() ->
     html = runner._build_top_trend_dashboard_html()
 
     assert "Classifier Usage" in html
-    assert "Classifier Replay Accuracy" in html
+    assert "Classifier Replay Accuracy" not in html
     assert "Classifier Trends" not in html
 
 
@@ -534,6 +825,90 @@ def test_build_multi_metric_trend_svg_includes_textual_explanation() -> None:
     assert "Rule Replay URL Accuracy %: 82.0%" in html
     assert "increased by 3.0%" in html
     assert "decreased by 6.0%" in html
+
+
+def test_generate_html_report_omits_replay_based_sections(tmp_path) -> None:
+    runner = _build_runner()
+    runner.validation_config = {"reporting": {"output_dir": str(tmp_path)}}
+
+    report_path = tmp_path / "comprehensive_test_report.html"
+
+    original_reports_path = validation_test_runner.reports_path
+    original_codex_review_path = validation_test_runner.codex_review_path
+    original_chatbot_path = validation_test_runner.chatbot_path
+    validation_test_runner.reports_path = lambda filename: str(report_path if filename == "comprehensive_test_report.html" else tmp_path / filename)
+    validation_test_runner.codex_review_path = lambda filename: str(tmp_path / filename)
+    validation_test_runner.chatbot_path = lambda filename: str(tmp_path / filename)
+    try:
+        runner._summarize_address_alias_audit = lambda: {}  # type: ignore[method-assign]
+        runner._summarize_llm_provider_activity = lambda timestamp=None: {}  # type: ignore[method-assign]
+        runner._summarize_llm_extraction_quality = lambda timestamp=None: {}  # type: ignore[method-assign]
+        runner._summarize_chatbot_performance = lambda timestamp=None: {}  # type: ignore[method-assign]
+        runner._summarize_chatbot_metrics_sync = lambda timestamp=None: {}  # type: ignore[method-assign]
+        runner._summarize_scraper_network_health = lambda timestamp=None: {}  # type: ignore[method-assign]
+        runner._summarize_fb_block_health = lambda timestamp=None: {"run_id": "run-123"}  # type: ignore[method-assign]
+        runner._summarize_fb_ig_url_funnel = lambda timestamp=None, summary=None: {}  # type: ignore[method-assign]
+        runner._summarize_suspicious_deletes = lambda timestamp=None: {}  # type: ignore[method-assign]
+        runner._infer_latest_pipeline_run_id = lambda timestamp=None: "run-123"  # type: ignore[method-assign]
+        runner._summarize_pipeline_runtime = lambda timestamp=None, run_id=None: {}  # type: ignore[method-assign]
+        runner._summarize_scraper_step_telemetry = lambda run_id=None: {"steps": {}}  # type: ignore[method-assign]
+        runner._build_phase1_telemetry_integrity_summary = lambda run_id=None: {"status": "PASS"}  # type: ignore[method-assign]
+        runner._summarize_openrouter_run_cost = lambda **kwargs: {}  # type: ignore[method-assign]
+        runner._summarize_openai_run_cost = lambda **kwargs: {}  # type: ignore[method-assign]
+        runner._build_phase1_runtime_summary = lambda summary=None: {}  # type: ignore[method-assign]
+        runner._build_phase1_llm_cost_summary = lambda **kwargs: {"summary": {}}  # type: ignore[method-assign]
+        runner._build_phase1_chatbot_quality_summary = lambda **kwargs: {"summary": {}}  # type: ignore[method-assign]
+        runner._summarize_event_data_quality = lambda: {}  # type: ignore[method-assign]
+        runner._summarize_field_accuracy = lambda summary=None: {}  # type: ignore[method-assign]
+        runner._summarize_coverage_watchlist = lambda: {}  # type: ignore[method-assign]
+        runner._summarize_dev_replay = lambda summary=None: {}  # type: ignore[method-assign]
+        runner._summarize_holdout_replay = lambda summary=None: {}  # type: ignore[method-assign]
+        runner._summarize_domain_capped_replay = lambda summary=None: {}  # type: ignore[method-assign]
+        runner._summarize_domain_evaluation = lambda summary=None: {}  # type: ignore[method-assign]
+        runner._summarize_image_date_rejections = lambda **kwargs: {}  # type: ignore[method-assign]
+        runner._build_phase1_run_scorecard = lambda **kwargs: {"guardrails": {}, "overall_score": {"value": 1.0}}  # type: ignore[method-assign]
+        runner._evaluate_phase3_guardrails = lambda scorecard=None: {"status": "PASS"}  # type: ignore[method-assign]
+        runner._build_recommendations_input = lambda **kwargs: {}  # type: ignore[method-assign]
+        runner._build_recommendation_plan = lambda **kwargs: {"prioritized_recommendations": []}  # type: ignore[method-assign]
+        runner._build_codex_review_bundle = lambda **kwargs: {}  # type: ignore[method-assign]
+        runner._persist_phase1_scorecard_metrics = lambda **kwargs: None  # type: ignore[method-assign]
+        runner._persist_scraper_step_telemetry_metrics = lambda **kwargs: None  # type: ignore[method-assign]
+        runner._persist_fb_block_triage = lambda **kwargs: None  # type: ignore[method-assign]
+        runner._persist_validation_artifacts = lambda **kwargs: None  # type: ignore[method-assign]
+        runner._summarize_reliability_scorecard = lambda *args, **kwargs: {}  # type: ignore[method-assign]
+        runner._extract_reliability_issues = lambda *args, **kwargs: []  # type: ignore[method-assign]
+        runner._evaluate_reliability_gates = lambda scorecard=None: {}  # type: ignore[method-assign]
+        runner._build_optimization_plan = lambda *args, **kwargs: {}  # type: ignore[method-assign]
+        runner._update_and_summarize_reliability_history = lambda output_dir=None, reliability_scorecard=None: {}  # type: ignore[method-assign]
+        runner._update_reliability_issue_registry = lambda output_dir=None, issues=None: (issues or [], {})  # type: ignore[method-assign]
+        runner._build_action_queue = lambda *args, **kwargs: {}  # type: ignore[method-assign]
+        runner._summarize_run_control_panel = lambda **kwargs: {}  # type: ignore[method-assign]
+        runner._build_top_trend_dashboard_html = lambda runtime_summary=None: "<div>dashboard</div>"  # type: ignore[method-assign]
+        runner._build_scraper_telemetry_html = lambda summary=None: "<div>telemetry</div>"  # type: ignore[method-assign]
+        runner._build_database_accuracy_manual_review_html = lambda sample=None: "<div>manual review</div>"  # type: ignore[method-assign]
+        runner._build_image_date_rejections_html = lambda summary=None: "<div>image date rejections</div>"  # type: ignore[method-assign]
+        runner._build_completeness_kpis_only_html = lambda panel=None: "<div>completeness</div>"  # type: ignore[method-assign]
+        runner._build_phase1_scorecard_html = lambda scorecard=None: "<div>scorecard</div>"  # type: ignore[method-assign]
+        runner._build_phase2_integrity_html = lambda summary=None: "<div>phase 2</div>"  # type: ignore[method-assign]
+        runner._build_recommendation_plan_html = lambda plan=None: "<div>recommendation plan</div>"  # type: ignore[method-assign]
+
+        runner._generate_html_report(
+            {
+                "timestamp": "2026-03-26T12:00:00",
+                "overall_status": "PASS",
+                "accuracy_replay": {"mode": "manual_review"},
+            }
+        )
+    finally:
+        validation_test_runner.reports_path = original_reports_path
+        validation_test_runner.codex_review_path = original_codex_review_path
+        validation_test_runner.chatbot_path = original_chatbot_path
+
+    html = report_path.read_text(encoding="utf-8")
+    assert "Phase 3 Honest Evaluation" not in html
+    assert "Domain Evaluation" not in html
+    assert "Parser Improvement Workflow" not in html
+    assert "<h2>7. Recommendation Plan</h2>" in html
 
 
 def test_build_runtime_step_breakdown_html_limits_to_seven_rows() -> None:
@@ -1080,6 +1455,75 @@ def test_phase1_artifacts_persist_by_run_id_and_type() -> None:
     assert all(call["run_id"] == "run-789" for call in fake_db.artifact_calls)
 
 
+def test_persist_fb_block_triage_writes_relational_rows_and_metrics() -> None:
+    runner = _build_runner()
+    fake_db = _FakeDbHandler()
+    runner.db_handler = fake_db
+
+    runner._persist_fb_block_triage(
+        run_id="run-fb",
+        fb_block_summary={
+            "start_ts": "2026-03-26 08:00:00",
+            "end_ts": "2026-03-26 10:00:00",
+            "private_unavailable_total_attempts": 5,
+            "private_unavailable_unique_urls": 3,
+            "private_unavailable_by_category": [
+                {"category": "event_detail_page", "count": 2},
+                {"category": "group_post_events_tab", "count": 1},
+            ],
+            "private_unavailable_sources": [
+                {
+                    "source_key": "facebook_event_detail",
+                    "category": "event_detail_page",
+                    "unique_urls": 2,
+                    "attempt_count": 4,
+                    "sample_url": "https://www.facebook.com/events/909522138040202/",
+                }
+            ],
+            "private_unavailable_occurrences": [
+                {
+                    "requested_url": "https://www.facebook.com/events/909522138040202/",
+                    "source_key": "facebook_event_detail",
+                    "category": "event_detail_page",
+                    "occurrence_ts": "2026-03-26 08:44:07",
+                }
+            ],
+        },
+    )
+
+    assert len(fake_db.fb_triage_calls) == 1
+    assert len(fake_db.fb_occurrence_calls) == 1
+    assert fake_db.fb_triage_calls[0]["run_id"] == "run-fb"
+    assert fake_db.fb_triage_calls[0]["blocked_reason"] == "private_or_unavailable_content"
+    assert fake_db.fb_occurrence_calls[0]["rows"][0]["requested_url"] == "https://www.facebook.com/events/909522138040202/"
+    metric_keys = [call["metric_key"] for call in fake_db.calls]
+    assert "fb_private_unavailable_attempts" in metric_keys
+    assert "fb_private_unavailable_unique_urls" in metric_keys
+    assert "fb_private_unavailable_event_detail_page_unique_urls" in metric_keys
+    assert "fb_private_unavailable_group_post_events_tab_unique_urls" in metric_keys
+
+
+def test_build_top_trend_dashboard_includes_fb_blocked_content_trend() -> None:
+    runner = _build_runner()
+
+    def _history(metric_key, days=180):  # type: ignore[no-untyped-def]
+        mapping = {
+            "fb_private_unavailable_attempts": [{"timestamp": "2026-03-25T10:00:00", "value": 5.0}],
+            "fb_private_unavailable_unique_urls": [{"timestamp": "2026-03-25T10:00:00", "value": 3.0}],
+            "fb_private_unavailable_event_detail_page_unique_urls": [{"timestamp": "2026-03-25T10:00:00", "value": 2.0}],
+            "fb_private_unavailable_group_post_events_tab_unique_urls": [{"timestamp": "2026-03-25T10:00:00", "value": 1.0}],
+        }
+        return mapping.get(metric_key, [])
+
+    runner._load_metric_history = _history  # type: ignore[method-assign]
+
+    html = runner._build_top_trend_dashboard_html(runtime_summary={})
+
+    assert "Facebook Blocked Content Trend" in html
+    assert "Blocked Attempts" in html
+    assert "Unique Blocked URLs" in html
+
+
 def test_phase2_coverage_summary_uses_watchlist_and_manual_audit() -> None:
     runner = _build_runner()
 
@@ -1592,6 +2036,7 @@ def test_build_parser_improvement_workflow_html_surfaces_ordered_fix_plan() -> N
     assert "Work parser/replay mismatches before runtime or cost tuning." in html
     assert "python tests/validation/test_runner.py || true" in html
     assert "Top Parser Mismatch Categories" in html
+    assert "Current queued actions" not in html
     assert "wrong_replay_event_selection" in html
     assert "https://livevictoria.com/calendar/music" in html
     assert "Likely Fix Location" in html

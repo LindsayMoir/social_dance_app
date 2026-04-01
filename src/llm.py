@@ -115,6 +115,16 @@ class EventWriteResult:
         return self.success
 
 
+@dataclass(frozen=True)
+class ImageDateResolution:
+    """Resolved date outcome for one image-derived event row."""
+
+    action: str
+    resolved_date: str | None = None
+    resolved_day_of_week: str | None = None
+    reason: str = ""
+
+
 class LLMHandler:
     def __init__(self, config_path=None):
         # Resolve config path from explicit argument, runtime env, or default.
@@ -141,29 +151,33 @@ class LLMHandler:
             timeout=self.openai_timeout_seconds,
             max_retries=self.openai_max_retries,
         )
+        self._initialize_runtime_state(llm_config)
+
+    def _initialize_runtime_state(self, llm_config: dict) -> None:
+        """Initialize provider routing, cooldown state, and reusable schema helpers."""
         self.openai_timeout_strikes = 0
         self.openai_timeout_max_strikes = int(llm_config.get("openai_timeout_max_strikes", 2) or 2)
         self.openai_timeout_cooldown_seconds = int(llm_config.get("openai_timeout_cooldown_seconds", 300) or 300)
         self.openai_timeout_cooldown_until = None
 
-        # Set up Mistral client with timeout
         mistral_api_key = os.environ["MISTRAL_API_KEY"]
         self.mistral_timeout_seconds = int(llm_config.get("mistral_timeout_seconds", 60) or 60)
-        # Note: Mistral uses timeout_ms (milliseconds) instead of timeout (seconds).
         self.mistral_client = Mistral(
             api_key=mistral_api_key,
             timeout_ms=int(self.mistral_timeout_seconds * 1000),
         )
         self.mistral_rate_limit_strikes = 0
-        self.mistral_rate_limit_max_strikes = int(llm_config.get('mistral_rate_limit_max_strikes', 2) or 2)
-        self.mistral_cooldown_seconds = int(llm_config.get('mistral_cooldown_seconds', 300) or 300)
+        self.mistral_rate_limit_max_strikes = int(llm_config.get("mistral_rate_limit_max_strikes", 2) or 2)
+        self.mistral_cooldown_seconds = int(llm_config.get("mistral_cooldown_seconds", 300) or 300)
         self.mistral_cooldown_until = None
+
         self.gemini_token = os.getenv("GEMINI_API" + "_KEY")
         self.gemini_timeout_seconds = int(llm_config.get("gemini_timeout_seconds", 60) or 60)
         self.gemini_timeout_strikes = 0
         self.gemini_timeout_max_strikes = int(llm_config.get("gemini_timeout_max_strikes", 2) or 2)
         self.gemini_timeout_cooldown_seconds = int(llm_config.get("gemini_timeout_cooldown_seconds", 300) or 300)
         self.gemini_timeout_cooldown_until = None
+
         self.openrouter_token = os.getenv("OPENROUTER_API" + "_KEY")
         self.openrouter_base_url = str(
             llm_config.get("openrouter_base_url", "https://openrouter.ai/api/v1")
@@ -177,6 +191,7 @@ class LLMHandler:
         self.openrouter_rate_limit_max_strikes = int(llm_config.get("openrouter_rate_limit_max_strikes", 2) or 2)
         self.openrouter_cooldown_seconds = int(llm_config.get("openrouter_cooldown_seconds", 300) or 300)
         self.openrouter_cooldown_until = None
+
         self.self_healing_enabled = bool(llm_config.get("self_healing_enabled", True))
         self._missing_prompt_types_logged: set[str] = set()
         self.provider_retry_max_attempts = int(llm_config.get("provider_retry_max_attempts", 2) or 2)
@@ -191,10 +206,8 @@ class LLMHandler:
         self.provider_rotation_index = 0
         self._resolved_provider_models: dict[str, str] = {}
 
-        # Get the keywords      
         self.keywords_list = self.get_keywords()
 
-        # The exact fields every event must have
         self.EVENT_KEYS = {
             "source", "dance_style", "url", "event_type", "event_name",
             "day_of_week", "start_date", "end_date", "start_time",
@@ -207,11 +220,335 @@ class LLMHandler:
             "province_or_state", "postal_code", "country_id"
         }
 
-        # Keys for address deduplication responses
         self.ADDRESS_DEDUP_KEYS = {
             "address_id", "Label"
         }
         self.FIELD_RE = re.compile(r'^\s*"(?P<key>[^"]+)"\s*:\s*(?P<raw>.*)$')
+
+    @staticmethod
+    def _extract_detected_image_date_context(extracted_text: str) -> tuple[str | None, str | None]:
+        """Extract image-specific detected date/day hints from OCR context."""
+        text = str(extracted_text or "")
+        date_match = re.search(r"(?im)^Detected_Date:\s*(\d{4}-\d{2}-\d{2})", text)
+        day_match = re.search(r"(?im)^Detected_Day:\s*([A-Za-z]+)", text)
+        detected_date = date_match.group(1) if date_match else None
+        detected_day = day_match.group(1).strip() if day_match else None
+        return detected_date, detected_day
+
+    @staticmethod
+    def _extract_detected_image_poster_type(extracted_text: str) -> str:
+        """Extract the structured poster-type hint from image OCR context."""
+        text = str(extracted_text or "")
+        match = re.search(r"(?im)^Detected_Poster_Type:\s*([a-z_]+)", text)
+        return str(match.group(1)).strip().lower() if match else ""
+
+    @staticmethod
+    def _extract_detected_schedule_dates(extracted_text: str) -> list[str]:
+        """Extract normalized schedule dates from structured image OCR hints."""
+        text = str(extracted_text or "")
+        match = re.search(r"(?im)^Detected_Schedule_Dates:\s*(.+)$", text)
+        if not match:
+            return []
+        seen: set[str] = set()
+        dates: list[str] = []
+        for chunk in str(match.group(1) or "").split(","):
+            candidate = str(chunk or "").strip()
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", candidate):
+                continue
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            dates.append(candidate)
+        return dates
+
+    @staticmethod
+    def _normalize_weekday_name(value: object) -> str:
+        """Normalize weekday strings into title-case names."""
+        cleaned = str(value or "").strip()
+        return cleaned.title() if cleaned else ""
+
+    @staticmethod
+    def _weekday_for_iso_date(date_value: str) -> str:
+        """Return weekday name for an ISO date string, or empty string on failure."""
+        try:
+            return datetime.strptime(str(date_value), "%Y-%m-%d").strftime("%A")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _log_image_date_rejection(
+        *,
+        url: str,
+        parent_url: str,
+        poster_type: str,
+        detected_date: str,
+        schedule_dates: list[str],
+        reason: str,
+        row: dict,
+    ) -> None:
+        """Emit structured image-date rejection details for end-of-run review."""
+        payload = {
+            "url": str(url or ""),
+            "parent_url": str(parent_url or ""),
+            "poster_type": str(poster_type or ""),
+            "detected_date": str(detected_date or ""),
+            "schedule_dates": [str(item) for item in (schedule_dates or []) if str(item).strip()],
+            "reason": str(reason or ""),
+            "event_name": str(row.get("event_name", "") or ""),
+            "start_date": str(row.get("start_date", "") or ""),
+            "day_of_week": str(row.get("day_of_week", "") or ""),
+            "description": str(row.get("description", "") or "")[:240],
+            "timestamp": datetime.now().isoformat(),
+        }
+        logging.info("image_date_rejection: %s", json.dumps(payload, ensure_ascii=True))
+
+    def _expand_schedule_poster_events(
+        self,
+        *,
+        events_df: pd.DataFrame,
+        extracted_text: str,
+        url: str,
+    ) -> pd.DataFrame:
+        """Expand schedule-style poster rows into multiple dated rows when hints are available."""
+        poster_type = self._extract_detected_image_poster_type(extracted_text)
+        schedule_dates = self._extract_detected_schedule_dates(extracted_text)
+        if poster_type != "schedule_multi_event" or not schedule_dates or events_df.empty:
+            return events_df
+
+        working_df = events_df.copy()
+        for column in ("start_date", "end_date", "day_of_week", "description", "event_name"):
+            if column not in working_df.columns:
+                working_df[column] = ""
+
+        expanded_rows: list[dict] = []
+        if len(working_df) == 1 and len(schedule_dates) > 1:
+            base_row = dict(working_df.iloc[0].to_dict())
+            for candidate_date in schedule_dates:
+                cloned_row = dict(base_row)
+                cloned_row["start_date"] = candidate_date
+                cloned_row["end_date"] = candidate_date
+                cloned_row["day_of_week"] = self._weekday_for_iso_date(candidate_date)
+                expanded_rows.append(cloned_row)
+        else:
+            remaining_dates = list(schedule_dates)
+            for row in working_df.to_dict("records"):
+                updated_row = dict(row)
+                current_date = str(updated_row.get("start_date") or "").strip()
+                if current_date in schedule_dates:
+                    if current_date in remaining_dates:
+                        remaining_dates.remove(current_date)
+                    if not str(updated_row.get("end_date") or "").strip():
+                        updated_row["end_date"] = current_date
+                    if not str(updated_row.get("day_of_week") or "").strip():
+                        updated_row["day_of_week"] = self._weekday_for_iso_date(current_date)
+                    expanded_rows.append(updated_row)
+                    continue
+                if remaining_dates:
+                    assigned_date = remaining_dates.pop(0)
+                    updated_row["start_date"] = assigned_date
+                    updated_row["end_date"] = assigned_date
+                    updated_row["day_of_week"] = self._weekday_for_iso_date(assigned_date)
+                expanded_rows.append(updated_row)
+
+        if not expanded_rows:
+            return working_df
+
+        logging.info(
+            "process_llm_response: image_schedule_expansion_summary url=%s poster_type=%s schedule_dates=%d input_rows=%d output_rows=%d",
+            url,
+            poster_type,
+            len(schedule_dates),
+            len(working_df),
+            len(expanded_rows),
+        )
+        return pd.DataFrame(expanded_rows)
+
+    def _resolve_image_row_date_conflict(
+        self,
+        *,
+        detected_date: str,
+        detected_day: str,
+        row_start_date: str,
+        row_day_of_week: str,
+        row_event_name: str,
+        row_description: str,
+    ) -> ImageDateResolution:
+        """Resolve one image-derived row against OCR-detected date hints."""
+        normalized_row_date = str(row_start_date or "").strip()
+        normalized_row_day = self._normalize_weekday_name(row_day_of_week)
+        normalized_detected_day = self._normalize_weekday_name(detected_day)
+        recurrence_text = f"{row_event_name} {row_description}".lower()
+        recurrence_guard = bool(
+            re.search(r"\b(every|weekly|recurs?|monthly|first|second|third|fourth|fifth)\b", recurrence_text)
+        )
+
+        if not normalized_row_date:
+            return ImageDateResolution(
+                action="fill_detected",
+                resolved_date=detected_date,
+                resolved_day_of_week=normalized_detected_day or self._weekday_for_iso_date(detected_date),
+                reason="missing_start_date_filled_from_detected_image_date",
+            )
+
+        if normalized_row_date == detected_date:
+            resolved_day = normalized_row_day or normalized_detected_day or self._weekday_for_iso_date(detected_date)
+            return ImageDateResolution(
+                action="keep_existing",
+                resolved_date=normalized_row_date,
+                resolved_day_of_week=resolved_day,
+                reason="existing_start_date_matches_detected_image_date",
+            )
+
+        if (
+            normalized_row_day
+            and normalized_detected_day
+            and normalized_row_day == normalized_detected_day
+            and not recurrence_guard
+        ):
+            return ImageDateResolution(
+                action="drop_ambiguous",
+                reason="same_weekday_but_conflicting_image_dates",
+            )
+
+        row_weekday_from_date = self._weekday_for_iso_date(normalized_row_date)
+        existing_score = 4
+        detected_score = 2
+
+        if normalized_row_day:
+            if row_weekday_from_date and normalized_row_day == row_weekday_from_date:
+                existing_score += 3
+            elif row_weekday_from_date:
+                existing_score -= 5
+
+            if normalized_detected_day and normalized_row_day == normalized_detected_day:
+                detected_score += 3
+            elif normalized_detected_day:
+                detected_score -= 5
+
+        if recurrence_guard:
+            existing_score += 2
+
+        try:
+            row_dt = datetime.strptime(normalized_row_date, "%Y-%m-%d")
+            detected_dt = datetime.strptime(detected_date, "%Y-%m-%d")
+            if abs((row_dt - detected_dt).days) <= 7:
+                existing_score += 1
+        except Exception:
+            pass
+
+        if detected_score >= existing_score + 4:
+            return ImageDateResolution(
+                action="replace_with_detected",
+                resolved_date=detected_date,
+                resolved_day_of_week=normalized_detected_day or self._weekday_for_iso_date(detected_date),
+                reason="detected_image_date_outscored_existing_date",
+            )
+        if existing_score >= detected_score + 2:
+            return ImageDateResolution(
+                action="keep_existing",
+                resolved_date=normalized_row_date,
+                resolved_day_of_week=normalized_row_day or row_weekday_from_date,
+                reason="existing_date_outscored_detected_image_date",
+            )
+        return ImageDateResolution(
+            action="drop_ambiguous",
+            reason="unresolved_image_date_conflict",
+        )
+
+    def _apply_detected_image_date_resolution(
+        self,
+        *,
+        events_df: pd.DataFrame,
+        extracted_text: str,
+        url: str,
+        parent_url: str,
+    ) -> pd.DataFrame:
+        """Resolve OCR-detected image dates against parsed event rows conservatively."""
+        events_df = self._expand_schedule_poster_events(
+            events_df=events_df,
+            extracted_text=extracted_text,
+            url=url,
+        )
+        detected_date, detected_day = self._extract_detected_image_date_context(extracted_text)
+        if not detected_date or events_df.empty:
+            return events_df
+
+        working_df = events_df.copy()
+        poster_type = self._extract_detected_image_poster_type(extracted_text)
+        schedule_dates = self._extract_detected_schedule_dates(extracted_text)
+        for column in ("start_date", "end_date", "day_of_week", "description", "event_name"):
+            if column not in working_df.columns:
+                working_df[column] = ""
+
+        kept_rows: list[dict] = []
+        fill_count = 0
+        replace_count = 0
+        keep_count = 0
+        drop_count = 0
+        for row in working_df.to_dict("records"):
+            resolution = self._resolve_image_row_date_conflict(
+                detected_date=detected_date,
+                detected_day=detected_day or "",
+                row_start_date=str(row.get("start_date") or "").strip(),
+                row_day_of_week=str(row.get("day_of_week") or "").strip(),
+                row_event_name=str(row.get("event_name") or "").strip(),
+                row_description=str(row.get("description") or "").strip(),
+            )
+            if resolution.action == "drop_ambiguous":
+                drop_count += 1
+                self._log_image_date_rejection(
+                    url=url,
+                    parent_url=parent_url,
+                    poster_type=poster_type,
+                    detected_date=detected_date,
+                    schedule_dates=schedule_dates,
+                    reason=resolution.reason,
+                    row=row,
+                )
+                continue
+
+            updated_row = dict(row)
+            if resolution.resolved_date:
+                updated_row["start_date"] = resolution.resolved_date
+                if not str(updated_row.get("end_date") or "").strip():
+                    updated_row["end_date"] = resolution.resolved_date
+            if resolution.resolved_day_of_week and not str(updated_row.get("day_of_week") or "").strip():
+                updated_row["day_of_week"] = resolution.resolved_day_of_week
+
+            if resolution.action == "fill_detected":
+                fill_count += 1
+            elif resolution.action == "replace_with_detected":
+                replace_count += 1
+                if resolution.resolved_day_of_week:
+                    updated_row["day_of_week"] = resolution.resolved_day_of_week
+            else:
+                keep_count += 1
+
+            kept_rows.append(updated_row)
+
+        if drop_count > 0:
+            logging.warning(
+                "process_llm_response: image_date_resolution_drop_summary url=%s detected_date=%s kept=%d dropped=%d fills=%d replacements=%d",
+                url,
+                detected_date,
+                len(kept_rows),
+                drop_count,
+                fill_count,
+                replace_count,
+            )
+        else:
+            logging.info(
+                "process_llm_response: image_date_resolution_summary url=%s detected_date=%s kept=%d fills=%d replacements=%d",
+                url,
+                detected_date,
+                keep_count,
+                fill_count,
+                replace_count,
+            )
+
+        if not kept_rows:
+            return working_df.iloc[0:0].copy()
+        return pd.DataFrame(kept_rows)
 
     @staticmethod
     def _is_url_prompt_type(prompt_type: object) -> bool:
@@ -389,6 +726,10 @@ class LLMHandler:
                         or "canonical_address_id" in llm_response_lower)
                     else 100
                 )
+                compact_json_candidate = (
+                    len(llm_response) <= min_response_length
+                    and self._looks_like_compact_json_payload(llm_response)
+                )
                 if "no events found" in llm_response_lower:
                     self._log_extraction_attempt_result(
                         url=url,
@@ -404,7 +745,7 @@ class LLMHandler:
                         attempt_index,
                     )
                     return EventWriteResult(success=False, events_written=0, decision_reason="no_events")
-                if len(llm_response) <= min_response_length:
+                if len(llm_response) <= min_response_length and not compact_json_candidate:
                     self._log_extraction_attempt_result(
                         url=url,
                         attempt=attempt_index,
@@ -433,6 +774,21 @@ class LLMHandler:
                     return EventWriteResult(success=False, events_written=0, decision_reason="schema_type_none")
 
                 parsed_result = self.extract_and_parse_json(llm_response, url, schema_type)
+                if isinstance(parsed_result, list) and not parsed_result:
+                    self._log_extraction_attempt_result(
+                        url=url,
+                        attempt=attempt_index,
+                        provider=provider,
+                        model=model,
+                        outcome="no_events",
+                        response_len=len(llm_response),
+                    )
+                    logging.info(
+                        "def process_llm_response: URL %s attempt=%d returned valid empty JSON events payload.",
+                        url,
+                        attempt_index,
+                    )
+                    return EventWriteResult(success=False, events_written=0, decision_reason="no_events")
 
                 if parsed_result:
                     self._log_extraction_attempt_result(
@@ -443,86 +799,27 @@ class LLMHandler:
                         outcome="success",
                         response_len=len(llm_response),
                     )
-                    # If OCR provided Detected_Date, use it only to fill missing dates.
-                    # Never clobber event-level parsed dates.
-                    try:
-                        m = re.search(r"(?im)^Detected_Date:\s*(\d{4}-\d{2}-\d{2})", extracted_text or "")
-                        detected_date = m.group(1) if m else None
-                    except Exception:
-                        detected_date = None
                     events_df = pd.DataFrame(parsed_result)
                     events_df = self._apply_url_context_to_events_df(
                         events_df=events_df,
                         url=url,
                         parent_url=parent_url,
                     )
-                    if detected_date and not events_df.empty:
-                        try:
-                            if 'start_date' not in events_df.columns:
-                                events_df['start_date'] = ''
-                            if 'end_date' not in events_df.columns:
-                                events_df['end_date'] = ''
-                            if 'day_of_week' not in events_df.columns:
-                                events_df['day_of_week'] = ''
-                            if 'description' not in events_df.columns:
-                                events_df['description'] = ''
-                            if 'event_name' not in events_df.columns:
-                                events_df['event_name'] = ''
-
-                            start_series = events_df['start_date'].fillna('').astype(str).str.strip()
-                            end_series = events_df['end_date'].fillna('').astype(str).str.strip()
-                            day_series = events_df['day_of_week'].fillna('').astype(str).str.strip()
-                            parsed_nonempty = start_series.ne('')
-                            conflicting_dates = parsed_nonempty & start_series.ne(detected_date)
-
-                            recurrence_text = (
-                                events_df['event_name'].fillna('').astype(str)
-                                + ' '
-                                + events_df['description'].fillna('').astype(str)
-                            )
-                            recurrence_pattern = r"\b(every|weekly|recurs?)\b|from\s+[A-Za-z]+\s+to\s+[A-Za-z]+"
-                            recurrence_guard = recurrence_text.str.contains(
-                                recurrence_pattern, case=False, regex=True, na=False
-                            )
-
-                            fill_start_mask = (~parsed_nonempty) & (~recurrence_guard)
-                            events_df.loc[fill_start_mask, 'start_date'] = detected_date
-                            events_df.loc[fill_start_mask & end_series.eq(''), 'end_date'] = detected_date
-
-                            parsed_detected = pd.to_datetime(detected_date, errors='coerce')
-                            detected_weekday = parsed_detected.day_name() if pd.notna(parsed_detected) else None
-                            if detected_weekday:
-                                events_df.loc[fill_start_mask & day_series.eq(''), 'day_of_week'] = detected_weekday
-
-                            fill_count = int(fill_start_mask.sum())
-                            conflict_count = int(conflicting_dates.sum())
-                            recurrence_skip_count = int((~parsed_nonempty & recurrence_guard).sum())
-
-                            if conflict_count > 0:
-                                conflict_log = logging.warning
-                                try:
-                                    host = (urlparse(str(url or "")).netloc or "").lower()
-                                except Exception:
-                                    host = ""
-                                if "instagram.com" in host:
-                                    conflict_log = logging.info
-                                conflict_log(
-                                    "process_llm_response: detected_date_conflict url=%s detected_date=%s conflicts=%d",
-                                    url,
-                                    detected_date,
-                                    conflict_count,
-                                )
-                            logging.info(
-                                "process_llm_response: detected_date_fill_summary url=%s detected_date=%s filled=%d skipped_recurrence=%d conflicts=%d total_events=%d",
-                                url,
-                                detected_date,
-                                fill_count,
-                                recurrence_skip_count,
-                                conflict_count,
-                                len(events_df),
-                            )
-                        except Exception as _e:
-                            logging.warning(f"process_llm_response: Failed to apply Detected_Date fill logic: {_e}")
+                    try:
+                        events_df = self._apply_detected_image_date_resolution(
+                            events_df=events_df,
+                            extracted_text=extracted_text,
+                            url=url,
+                            parent_url=parent_url,
+                        )
+                    except Exception as _e:
+                        logging.warning(f"process_llm_response: Failed to apply image date resolution logic: {_e}")
+                    if events_df.empty:
+                        logging.warning(
+                            "def process_llm_response: URL %s dropped all parsed events after image date resolution.",
+                            url,
+                        )
+                        return EventWriteResult(success=False, events_written=0, decision_reason="image_date_conflict")
                     events_written = int(len(events_df))
                     self.db_handler.write_events_to_db(
                         events_df,
@@ -586,6 +883,41 @@ class LLMHandler:
 
         logging.error(f"def process_llm_response: Failed to process LLM response for URL: {url}")
         return EventWriteResult(success=False, events_written=0, decision_reason="hard_failure")
+
+    @staticmethod
+    def _looks_like_compact_json_payload(value: object) -> bool:
+        """Return True when a short LLM response still looks like structured JSON."""
+        text = str(value or "").strip()
+        if not text:
+            return False
+        return (text.startswith("{") and text.endswith("}")) or (
+            text.startswith("[") and text.endswith("]")
+        )
+
+    @staticmethod
+    def _parse_compact_json_payload(result: str):
+        """Parse compact JSON payloads that are shorter than the legacy length guard."""
+        cleaned = str(result or "").strip()
+        if not cleaned:
+            return None
+        try:
+            json_data = json.loads(cleaned)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+        if isinstance(json_data, dict):
+            if "events" in json_data and isinstance(json_data["events"], list):
+                return json_data["events"]
+            if "addresses" in json_data and isinstance(json_data["addresses"], list):
+                return json_data["addresses"]
+            if "address_id" in json_data or "full_address" in json_data:
+                return [json_data]
+            if "event_id" in json_data or "event_name" in json_data:
+                return [json_data]
+            return [json_data]
+        if isinstance(json_data, list):
+            return json_data
+        return None
 
     @staticmethod
     def _log_extraction_attempt_result(
@@ -907,10 +1239,11 @@ class LLMHandler:
 
     def _mistral_in_cooldown(self) -> bool:
         """Return True while Mistral rate-limit cooldown window is active."""
-        if self.mistral_cooldown_until is None:
+        cooldown_until = getattr(self, "mistral_cooldown_until", None)
+        if cooldown_until is None:
             return False
         now = datetime.now()
-        if now >= self.mistral_cooldown_until:
+        if now >= cooldown_until:
             self.mistral_cooldown_until = None
             self.mistral_rate_limit_strikes = 0
             return False
@@ -935,10 +1268,11 @@ class LLMHandler:
 
     def _openrouter_in_cooldown(self) -> bool:
         """Return True while OpenRouter rate-limit cooldown window is active."""
-        if self.openrouter_cooldown_until is None:
+        cooldown_until = getattr(self, "openrouter_cooldown_until", None)
+        if cooldown_until is None:
             return False
         now = datetime.now()
-        if now >= self.openrouter_cooldown_until:
+        if now >= cooldown_until:
             self.openrouter_cooldown_until = None
             self.openrouter_rate_limit_strikes = 0
             return False
@@ -963,10 +1297,11 @@ class LLMHandler:
 
     def _openai_in_timeout_cooldown(self) -> bool:
         """Return True while OpenAI timeout cooldown window is active."""
-        if self.openai_timeout_cooldown_until is None:
+        cooldown_until = getattr(self, "openai_timeout_cooldown_until", None)
+        if cooldown_until is None:
             return False
         now = datetime.now()
-        if now >= self.openai_timeout_cooldown_until:
+        if now >= cooldown_until:
             self.openai_timeout_cooldown_until = None
             self.openai_timeout_strikes = 0
             return False
@@ -993,10 +1328,11 @@ class LLMHandler:
 
     def _gemini_in_timeout_cooldown(self) -> bool:
         """Return True while Gemini timeout cooldown window is active."""
-        if self.gemini_timeout_cooldown_until is None:
+        cooldown_until = getattr(self, "gemini_timeout_cooldown_until", None)
+        if cooldown_until is None:
             return False
         now = datetime.now()
-        if now >= self.gemini_timeout_cooldown_until:
+        if now >= cooldown_until:
             self.gemini_timeout_cooldown_until = None
             self.gemini_timeout_strikes = 0
             return False
@@ -1146,7 +1482,7 @@ class LLMHandler:
         if not order:
             return "openai"
 
-        start_index = self.provider_rotation_index % len(order)
+        start_index = int(getattr(self, "provider_rotation_index", 0) or 0) % len(order)
         for offset in range(len(order)):
             idx = (start_index + offset) % len(order)
             provider = order[idx]
@@ -1176,7 +1512,7 @@ class LLMHandler:
             return "openai"
 
         configured = str(self.config.get("llm", {}).get("provider", "openai")).strip().lower()
-        use_rotation = self.provider_rotation_enabled or configured == "round_robin"
+        use_rotation = bool(getattr(self, "provider_rotation_enabled", False)) or configured == "round_robin"
         if use_rotation:
             return self._next_round_robin_provider(for_tools=for_tools)
         if configured in self._step_provider_exclusions():
@@ -2907,6 +3243,11 @@ class LLMHandler:
         if "No events found" in result:
             logging.info("extract_and_parse_json(): No events found.")
             return None
+        compact_json_result = None
+        if self._looks_like_compact_json_payload(result):
+            compact_json_result = self._parse_compact_json_payload(result)
+            if compact_json_result is not None:
+                return compact_json_result
         # Allow shorter responses for address deduplication (typically ~50-100 chars)
         min_length = 30 if ("address_id" in result and "Label" in result) or "canonical_address_id" in result else 100
         if len(result) <= min_length:
@@ -2961,6 +3302,12 @@ class LLMHandler:
                 return None
         else:
             blob = result[start:end]
+
+        compact_blob_result = None
+        if self._looks_like_compact_json_payload(blob):
+            compact_blob_result = self._parse_compact_json_payload(blob)
+            if compact_blob_result is not None:
+                return compact_blob_result
 
         # Allow shorter blobs for address deduplication 
         min_blob_length = 30 if ("address_id" in blob and "Label" in blob) or "canonical_address_id" in blob else 100

@@ -17,6 +17,7 @@ Version: 1.0.0
 import sys
 import os
 import csv
+import csv
 import json
 import ast
 import asyncio
@@ -489,19 +490,36 @@ class ValidationTestRunner:
             results['chatbot_testing'] = {'error': str(e)}
             results['overall_status'] = 'FAIL'
 
-        # 2.5 REPLAY ACCURACY (query -> re-scrape -> row-level compare)
+        # 2.5 DATABASE ACCURACY MANUAL REVIEW SAMPLE
         try:
-            replay_summary = self._run_accuracy_replay_assessment(results)
-            results["accuracy_replay"] = replay_summary
-            results["classifier_training_queue"] = self._build_classifier_training_queue_summary(replay_summary)
-            results["classifier_performance"] = self._summarize_classifier_performance(
-                run_id=str(replay_summary.get("run_id") or "").strip()
-            )
+            manual_review = self._build_database_accuracy_manual_review_sample()
+            results["database_accuracy_manual_review"] = manual_review
+            results["accuracy_replay"] = {
+                "status": "DISABLED",
+                "mode": "manual_review",
+                "reason": "Replay-based database accuracy evaluation is disabled in favor of human review.",
+                "manual_review_sample": manual_review,
+            }
+            results["classifier_training_queue"] = {
+                "status": "DISABLED",
+                "reason": "Replay-based classifier training queue is disabled with manual database review.",
+                "candidates": [],
+            }
+            results["classifier_performance"] = {
+                "status": "DISABLED",
+                "reason": "Replay-derived classifier performance is disabled with manual database review.",
+            }
         except Exception as e:
-            logging.error("Replay accuracy assessment failed: %s", e, exc_info=True)
-            results["accuracy_replay"] = {"error": str(e), "status": "ERROR"}
-            results["classifier_training_queue"] = {"error": str(e), "status": "ERROR", "candidates": []}
-            results["classifier_performance"] = {"error": str(e), "status": "ERROR"}
+            logging.error("Database accuracy manual review sampling failed: %s", e, exc_info=True)
+            results["database_accuracy_manual_review"] = {"error": str(e), "status": "ERROR", "rows": []}
+            results["accuracy_replay"] = {
+                "status": "DISABLED",
+                "mode": "manual_review",
+                "reason": "Replay disabled and manual review sampling failed.",
+                "manual_review_sample": {},
+            }
+            results["classifier_training_queue"] = {"status": "DISABLED", "reason": str(e), "candidates": []}
+            results["classifier_performance"] = {"status": "DISABLED", "reason": str(e)}
             if results['overall_status'] == 'PASS':
                 results['overall_status'] = 'WARNING'
 
@@ -548,9 +566,10 @@ class ValidationTestRunner:
             logging.error(f"HTML report generation failed: {e}", exc_info=True)
 
         # 5. EMAIL NOTIFICATION
-        # Email delivery is handled by pipeline remediation_planner_step so
-        # attachments can include both remediation_plan.md and the HTML report.
-        logging.info("Validation email notification skipped (handled in remediation_planner_step).")
+        try:
+            self._send_email_notification(results)
+        except Exception as e:
+            logging.error(f"Email notification failed: {e}", exc_info=True)
 
         # Final status
         logging.info("\n" + "=" * 80)
@@ -1299,10 +1318,12 @@ class ValidationTestRunner:
         image_detail_html = ""
         if images_payload:
             image_detail_html = (
-                "<h3>Images OCR / Vision Detail</h3>"
+                "<h3>Images Event Yield Detail</h3>"
                 "<table><tr><th>Metric</th><th>Count</th><th>Rate</th></tr>"
-                f"<tr><td>OCR Attempts</td><td>{int(images_payload.get('ocr_attempted_count', 0) or 0)}</td><td>{self._escape_html(str(images_payload.get('ocr_success_rate_pct', 'N/A')))}%</td></tr>"
-                f"<tr><td>Vision Attempts</td><td>{int(images_payload.get('vision_attempted_count', 0) or 0)}</td><td>{self._escape_html(str(images_payload.get('vision_success_rate_pct', 'N/A')))}%</td></tr>"
+                f"<tr><td>Access Attempted</td><td>{int(images_payload.get('access_attempted_count', 0) or 0)}</td><td>{self._escape_html(str(images_payload.get('access_success_rate_pct', 'N/A')))}%</td></tr>"
+                f"<tr><td>URLs With Events</td><td>{int(images_payload.get('urls_with_events_count', 0) or 0)}</td><td>{self._escape_html(str(images_payload.get('url_event_hit_rate_pct', 'N/A')))}%</td></tr>"
+                f"<tr><td>Extraction Success</td><td>{int(images_payload.get('extraction_success_count', 0) or 0)}</td><td>{self._escape_html(str(images_payload.get('extraction_success_rate_pct', 'N/A')))}%</td></tr>"
+                f"<tr><td>Events Written</td><td>{int(images_payload.get('events_written_total', 0) or 0)}</td><td>N/A</td></tr>"
                 f"<tr><td>Fallback Used</td><td>{int(images_payload.get('fallback_used_count', 0) or 0)}</td><td>{self._escape_html(str(images_payload.get('fallback_usage_rate_pct', 'N/A')))}%</td></tr>"
                 "</table>"
             )
@@ -1357,12 +1378,12 @@ class ValidationTestRunner:
                 ],
             ),
             self._build_multi_metric_trend_svg(
-                title="Images OCR / Vision Success % Trend",
+                title="Images Event Yield % Trend",
                 days=180,
                 value_format="percent",
                 series=[
-                    {"metric_key": "scraper_images_ocr_success_rate_pct", "label": "images OCR", "color": "#17becf"},
-                    {"metric_key": "scraper_images_vision_success_rate_pct", "label": "images vision", "color": "#bcbd22"},
+                    {"metric_key": "scraper_images_url_event_hit_rate_pct", "label": "images URLs With Events %", "color": "#17becf"},
+                    {"metric_key": "scraper_images_extraction_success_rate_pct", "label": "images Extraction Success %", "color": "#bcbd22"},
                 ],
             ),
         ]
@@ -1962,6 +1983,7 @@ class ValidationTestRunner:
         chatbot_performance_summary = self._summarize_chatbot_performance(results.get('timestamp'))
         chatbot_metrics_sync_summary = self._summarize_chatbot_metrics_sync(results.get('timestamp'))
         accuracy_replay_summary = results.get("accuracy_replay") if isinstance(results, dict) else {}
+        database_accuracy_manual_review = results.get("database_accuracy_manual_review") if isinstance(results, dict) else {}
         classifier_training_queue_summary = results.get("classifier_training_queue") if isinstance(results, dict) else {}
         classifier_performance_summary = results.get("classifier_performance") if isinstance(results, dict) else {}
         scraper_network_summary = self._summarize_scraper_network_health(results.get('timestamp'))
@@ -2000,6 +2022,10 @@ class ValidationTestRunner:
         holdout_summary = self._summarize_holdout_replay(accuracy_replay_summary)
         domain_capped_summary = self._summarize_domain_capped_replay(accuracy_replay_summary)
         domain_evaluation_summary = self._summarize_domain_evaluation(accuracy_replay_summary)
+        image_date_rejection_summary = self._summarize_image_date_rejections(
+            report_timestamp=results.get("timestamp"),
+            pipeline_runtime_summary=pipeline_runtime_summary,
+        )
         run_scorecard = self._build_phase1_run_scorecard(
             run_id=report_run_id,
             report_timestamp=results.get('timestamp'),
@@ -2069,6 +2095,10 @@ class ValidationTestRunner:
             scraper_telemetry_summary=scraper_telemetry_summary,
             runtime_summary=runtime_summary,
         )
+        self._persist_fb_block_triage(
+            run_id=report_run_id,
+            fb_block_summary=fb_block_summary,
+        )
         self._persist_validation_artifacts(
             run_id=report_run_id,
             artifacts={
@@ -2084,6 +2114,7 @@ class ValidationTestRunner:
                 "domain_capped_summary": domain_capped_summary,
                 "domain_evaluation_summary": domain_evaluation_summary,
                 "scraper_telemetry_summary": scraper_telemetry_summary,
+                "fb_block_summary": fb_block_summary,
                 "telemetry_integrity_summary": telemetry_integrity_summary,
                 "recommendation_plan": recommendation_plan,
                 "codex_review_bundle": codex_review_bundle,
@@ -2158,28 +2189,22 @@ class ValidationTestRunner:
         <h2>1. Scraper Telemetry Trends</h2>
         {self._build_scraper_telemetry_html(scraper_telemetry_summary)}
 
-        <h2>2. Replay Accuracy Row-by-Row</h2>
-        {self._build_accuracy_replay_rows_html(accuracy_replay_summary)}
+        <h2>2. Database Accuracy Manual Review</h2>
+        {self._build_database_accuracy_manual_review_html(database_accuracy_manual_review)}
 
-        <h2>3. Completeness KPIs</h2>
+        <h2>3. Image Date Rejections</h2>
+        {self._build_image_date_rejections_html(image_date_rejection_summary)}
+
+        <h2>4. Completeness KPIs</h2>
         {self._build_completeness_kpis_only_html(control_panel_summary)}
 
-        <h2>4. KPI Scorecard</h2>
+        <h2>5. KPI Scorecard</h2>
         {self._build_phase1_scorecard_html(run_scorecard)}
 
-        <h2>5. Phase 2 Integrity Coverage</h2>
+        <h2>6. Phase 2 Integrity Coverage</h2>
         {self._build_phase2_integrity_html(coverage_summary)}
 
-        <h2>6. Phase 3 Honest Evaluation</h2>
-        {self._build_phase3_honest_evaluation_html(dev_summary, holdout_summary, domain_capped_summary, run_scorecard.get('guardrails', {}))}
-
-        <h2>7. Domain Evaluation</h2>
-        {self._build_domain_evaluation_html(domain_evaluation_summary)}
-
-        <h2>8. Parser Improvement Workflow</h2>
-        {self._build_parser_improvement_workflow_html(accuracy_replay_summary, recommendation_plan, action_queue, domain_evaluation_summary)}
-
-        <h2>9. Recommendation Plan</h2>
+        <h2>7. Recommendation Plan</h2>
         {self._build_recommendation_plan_html(recommendation_plan)}
 
         <hr style="margin: 40px 0;">
@@ -2243,6 +2268,9 @@ class ValidationTestRunner:
         coverage_summary_path = codex_review_path('coverage_summary.json')
         with open(coverage_summary_path, 'w', encoding='utf-8') as f:
             json.dump(coverage_summary, f, indent=2)
+        image_date_rejections_path = codex_review_path('image_date_rejections.json')
+        with open(image_date_rejections_path, 'w', encoding='utf-8') as f:
+            json.dump(image_date_rejection_summary, f, indent=2)
         dev_summary_path = codex_review_path('dev_summary.json')
         with open(dev_summary_path, 'w', encoding='utf-8') as f:
             json.dump(dev_summary, f, indent=2)
@@ -3312,6 +3340,53 @@ class ValidationTestRunner:
         )
         return html
 
+    def _build_image_date_rejections_html(self, rejection_summary: dict | None) -> str:
+        """Render image-date rejections captured during the current run."""
+        if not rejection_summary:
+            return "<p>No image date rejection summary available.</p>"
+
+        total = int(rejection_summary.get("total_rejections", 0) or 0)
+        if total <= 0:
+            return "<p>✅ No image-date rows were rejected in this run.</p>"
+
+        html = (
+            "<p>"
+            f"<strong>Total rejected rows:</strong> {total}; "
+            f"<strong>Unique URLs:</strong> {int(rejection_summary.get('unique_urls', 0) or 0)}"
+            "</p>"
+        )
+        by_reason = rejection_summary.get("by_reason", []) or []
+        if by_reason:
+            html += "<p><strong>Top rejection reasons:</strong></p><ul>"
+            for row in by_reason[:5]:
+                html += (
+                    f"<li>{self._escape_html(str(row.get('reason', '')))}: "
+                    f"{int(row.get('count', 0) or 0)}</li>"
+                )
+            html += "</ul>"
+
+        html += (
+            "<table><tr>"
+            "<th>URL</th><th>Event</th><th>Start Date</th><th>Reason</th>"
+            "<th>Poster Type</th><th>Detected Date</th><th>Schedule Dates</th>"
+            "</tr>"
+        )
+        for row in rejection_summary.get("rejections", []) or []:
+            schedule_dates = ", ".join(str(item) for item in (row.get("schedule_dates") or []) if str(item).strip())
+            html += (
+                "<tr class='problematic'>"
+                f"<td>{self._escape_html(str(row.get('url', '')))}</td>"
+                f"<td>{self._escape_html(str(row.get('event_name', '')))}</td>"
+                f"<td>{self._escape_html(str(row.get('start_date', '')))}</td>"
+                f"<td>{self._escape_html(str(row.get('reason', '')))}</td>"
+                f"<td>{self._escape_html(str(row.get('poster_type', '')))}</td>"
+                f"<td>{self._escape_html(str(row.get('detected_date', '')))}</td>"
+                f"<td>{self._escape_html(schedule_dates)}</td>"
+                "</tr>"
+            )
+        html += "</table>"
+        return html
+
     def _build_phase3_honest_evaluation_html(
         self,
         dev_summary: dict,
@@ -4299,6 +4374,7 @@ class ValidationTestRunner:
         chatbot = ((kpis.get("chatbot_quality") or {}).get("summary") or {}).get("summary", {})
         holdout = (run_scorecard.get("evaluation_scope") or {}).get("holdout_summary", {})
         telemetry_integrity = run_scorecard.get("telemetry_integrity", {}) if isinstance(run_scorecard.get("telemetry_integrity"), dict) else {}
+        db_accuracy_mode = str(db_accuracy.get("mode", "") or "").strip().lower()
         guardrail_specs = [
             (
                 "database_accuracy_min_pct",
@@ -4357,6 +4433,11 @@ class ValidationTestRunner:
                 "Chatbot user-visible error rate above maximum",
             ),
         ]
+        if db_accuracy_mode == "manual_review":
+            guardrail_specs = [
+                spec for spec in guardrail_specs
+                if spec[0] not in {"database_accuracy_min_pct", "holdout_replay_url_accuracy_min_pct"}
+            ]
         violations: list[dict[str, Any]] = []
         thresholds: dict[str, float] = {}
         telemetry_status = str(telemetry_integrity.get("status", "") or "").upper()
@@ -6274,6 +6355,110 @@ class ValidationTestRunner:
             f"{comparison_html}</table>"
         )
 
+    def _build_database_accuracy_manual_review_sample(self, limit: int = 20) -> dict:
+        """Build and persist a human-review sample for database accuracy checks."""
+        sample_limit = max(int(limit or 20), 1)
+        query = """
+            SELECT
+                event_id,
+                event_name,
+                start_date,
+                start_time,
+                end_date,
+                end_time,
+                source,
+                event_type,
+                dance_style,
+                location,
+                url,
+                description
+            FROM events
+            ORDER BY RANDOM()
+            LIMIT :limit
+        """
+        rows = self.db_handler.execute_query(query, {"limit": sample_limit}, statement_timeout_ms=15000) or []
+        columns = [
+            "event_id",
+            "event_name",
+            "start_date",
+            "start_time",
+            "end_date",
+            "end_time",
+            "source",
+            "event_type",
+            "dance_style",
+            "location",
+            "url",
+            "description",
+        ]
+        normalized_rows: list[dict[str, object]] = []
+        for row in rows:
+            payload = {column: row[idx] if idx < len(row) else None for idx, column in enumerate(columns)}
+            payload["human_label"] = ""
+            payload["review_notes"] = ""
+            normalized_rows.append(payload)
+
+        csv_path = codex_review_path("database_accuracy_manual_review.csv")
+        with open(csv_path, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns + ["human_label", "review_notes"])
+            writer.writeheader()
+            writer.writerows(normalized_rows)
+
+        return {
+            "status": "READY",
+            "mode": "manual_review",
+            "sample_size": sample_limit,
+            "rows_returned": len(normalized_rows),
+            "csv_path": csv_path,
+            "rows": normalized_rows,
+        }
+
+    def _build_database_accuracy_manual_review_html(self, sample: dict | None) -> str:
+        """Render a human-review table for database accuracy sampling."""
+        if not isinstance(sample, dict) or not sample:
+            return "<p class='error-box'>❌ Manual database accuracy sample unavailable.</p>"
+        if sample.get("error"):
+            return f"<p class='error-box'>❌ Manual database accuracy sample failed: {self._escape_html(str(sample.get('error')))}</p>"
+
+        rows = sample.get("rows", []) if isinstance(sample.get("rows"), list) else []
+        if not rows:
+            return "<p class='error-box'>❌ Manual database accuracy sample returned no rows.</p>"
+
+        csv_path = self._escape_html(str(sample.get("csv_path", "") or ""))
+        sample_size = int(sample.get("rows_returned", len(rows)) or 0)
+        table_rows: list[str] = []
+        for idx, row in enumerate(rows, start=1):
+            if not isinstance(row, dict):
+                continue
+            table_rows.append(
+                "<tr>"
+                f"<td>{idx}</td>"
+                f"<td>{self._escape_html(str(row.get('event_id', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('event_name', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('start_date', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('start_time', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('source', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('event_type', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('dance_style', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('location', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('url', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('description', '') or ''))}</td>"
+                "<td></td>"
+                "<td></td>"
+                "</tr>"
+            )
+
+        return (
+            f"<p>This replaces replay-based database accuracy. Review these {sample_size} sampled event rows manually and record your labels in "
+            f"<code>{csv_path}</code>.</p>"
+            "<table><tr>"
+            "<th>#</th><th>Event ID</th><th>Event Name</th><th>Start Date</th><th>Start Time</th>"
+            "<th>Source</th><th>Event Type</th><th>Dance Style</th><th>Location</th><th>URL</th><th>Description</th>"
+            "<th>Human Label</th><th>Review Notes</th>"
+            "</tr>"
+            f"{''.join(table_rows)}</table>"
+        )
+
     def _build_metric_trend_svg(
         self,
         metric_key: str,
@@ -6616,12 +6801,6 @@ class ValidationTestRunner:
             )
 
         parts = [
-            self._build_metric_trend_svg(
-                metric_key="validation_replay_accuracy_pct",
-                title="Accuracy Trend (DB persisted metric_observations)",
-                days=180,
-                value_format="percent",
-            ),
             self._build_multi_metric_trend_svg(
                 title="Classifier Usage",
                 days=180,
@@ -6631,23 +6810,6 @@ class ValidationTestRunner:
                         "metric_key": "classifier_ml_usage_pct",
                         "label": "ML Usage %",
                         "color": "#d94841",
-                    },
-                ],
-            ),
-            self._build_multi_metric_trend_svg(
-                title="Classifier Replay Accuracy",
-                days=180,
-                value_format="percent",
-                series=[
-                    {
-                        "metric_key": "classifier_ml_replay_url_accuracy_pct",
-                        "label": "ML Replay URL Accuracy %",
-                        "color": "#1f77b4",
-                    },
-                    {
-                        "metric_key": "classifier_rule_replay_url_accuracy_pct",
-                        "label": "Rule Replay URL Accuracy %",
-                        "color": "#2ca02c",
                     },
                 ],
             ),
@@ -6663,6 +6825,33 @@ class ValidationTestRunner:
                 title="Number of Events Trend (Events Table Count at End of Run)",
                 days=180,
                 value_format="count",
+            ),
+            self._build_multi_metric_trend_svg(
+                title="Facebook Blocked Content Trend",
+                days=180,
+                value_format="count",
+                series=[
+                    {
+                        "metric_key": "fb_private_unavailable_attempts",
+                        "label": "Blocked Attempts",
+                        "color": "#d94841",
+                    },
+                    {
+                        "metric_key": "fb_private_unavailable_unique_urls",
+                        "label": "Unique Blocked URLs",
+                        "color": "#1f77b4",
+                    },
+                    {
+                        "metric_key": "fb_private_unavailable_event_detail_page_unique_urls",
+                        "label": "Event Detail URLs",
+                        "color": "#ff7f0e",
+                    },
+                    {
+                        "metric_key": "fb_private_unavailable_group_post_events_tab_unique_urls",
+                        "label": "Group Post /events/ URLs",
+                        "color": "#2ca02c",
+                    },
+                ],
             ),
         ]
         return "".join(parts)
@@ -7971,6 +8160,10 @@ class ValidationTestRunner:
         processing_fb_url_re = re.compile(r"Processing Facebook URL:\s*(https?://\S+)", re.IGNORECASE)
         access_ok_re = re.compile(r"fb access check:.*requested_url=(https?://\S+).*state=ok\b", re.IGNORECASE)
         access_any_re = re.compile(r"fb access check:.*requested_url=(https?://\S+)", re.IGNORECASE)
+        private_unavailable_re = re.compile(
+            r"fb access check:.*requested_url=(https?://\S+).*reason=private_or_unavailable_content",
+            re.IGNORECASE,
+        )
         event_marked_processed_re = re.compile(r"Event URL marked processed:\s*(https?://\S+)", re.IGNORECASE)
         base_marked_processed_re = re.compile(r"Base URL marked processed:\s*(https?://\S+)", re.IGNORECASE)
         base_events_scraped_re = re.compile(r"Events_scraped flag set for base URL:\s*(https?://\S+)", re.IGNORECASE)
@@ -8001,6 +8194,9 @@ class ValidationTestRunner:
         unique_processed_urls_before_throttle: set[str] = set()
         unique_attempted_fb_urls: set[str] = set()
         unique_success_fb_urls: set[str] = set()
+        private_unavailable_attempts: Counter[str] = Counter()
+        private_unavailable_url_order: list[str] = []
+        private_unavailable_occurrences: list[dict[str, Any]] = []
 
         wait_re = re.compile(r"fb temp block policy: strike=1 .* wait_seconds=(\d+)")
         for line in scoped_fb_lines:
@@ -8023,6 +8219,23 @@ class ValidationTestRunner:
             m_access_any = access_any_re.search(line)
             if m_access_any:
                 unique_attempted_fb_urls.add(m_access_any.group(1).rstrip(".,"))
+            m_private_unavailable = private_unavailable_re.search(line)
+            if m_private_unavailable:
+                blocked_url = m_private_unavailable.group(1).rstrip(".,")
+                occurrence_ts = self._parse_log_timestamp(line)
+                triage = self._classify_fb_private_unavailable_url(blocked_url)
+                private_unavailable_occurrences.append(
+                    {
+                        "requested_url": blocked_url,
+                        "blocked_reason": "private_or_unavailable_content",
+                        "category": str(triage.get("category", "other_facebook_blocked_url") or "other_facebook_blocked_url"),
+                        "source_key": str(triage.get("source_key", "facebook_unknown_source") or "facebook_unknown_source"),
+                        "occurrence_ts": occurrence_ts.isoformat(sep=" ") if occurrence_ts else "",
+                    }
+                )
+                if blocked_url not in private_unavailable_attempts:
+                    private_unavailable_url_order.append(blocked_url)
+                private_unavailable_attempts[blocked_url] += 1
             m_ok_any = access_ok_re.search(line)
             if m_ok_any:
                 unique_ok_urls_all.add(m_ok_any.group(1).rstrip(".,"))
@@ -8115,6 +8328,35 @@ class ValidationTestRunner:
         target_coverage_rate = (successful_total_urls / max(1, target_total_urls))
 
         avg_wait_seconds = (wait_seconds_total / len(wait_seconds_samples)) if wait_seconds_samples else 0.0
+        private_unavailable_by_category: Counter[str] = Counter()
+        private_unavailable_sources: list[dict[str, Any]] = []
+        source_rollup: dict[tuple[str, str], dict[str, Any]] = {}
+        for blocked_url in private_unavailable_url_order:
+            triage = self._classify_fb_private_unavailable_url(blocked_url)
+            category = str(triage.get("category", "other_facebook_blocked_url") or "other_facebook_blocked_url")
+            source_key = str(triage.get("source_key", "facebook_unknown_source") or "facebook_unknown_source")
+            attempts = int(private_unavailable_attempts.get(blocked_url, 0) or 0)
+            private_unavailable_by_category[category] += 1
+            source_entry = source_rollup.setdefault(
+                (source_key, category),
+                {
+                    "source_key": source_key,
+                    "category": category,
+                    "unique_urls": 0,
+                    "attempt_count": 0,
+                    "sample_url": blocked_url,
+                },
+            )
+            source_entry["unique_urls"] += 1
+            source_entry["attempt_count"] += attempts
+        private_unavailable_sources = sorted(
+            source_rollup.values(),
+            key=lambda item: (
+                -int(item.get("unique_urls", 0) or 0),
+                -int(item.get("attempt_count", 0) or 0),
+                str(item.get("source_key", "")),
+            ),
+        )
 
         return {
             "path": path,
@@ -8145,6 +8387,42 @@ class ValidationTestRunner:
             "denominator_fb_ig": denominator_fb_ig,
             "jail_progress_ratio": round(jail_progress_ratio, 4) if jail_progress_ratio is not None else None,
             "fb_only_ratio": round(fb_only_ratio, 4) if fb_only_ratio is not None else None,
+            "private_unavailable_total_attempts": int(sum(private_unavailable_attempts.values())),
+            "private_unavailable_unique_urls": int(len(private_unavailable_attempts)),
+            "private_unavailable_by_category": [
+                {"category": category, "count": count}
+                for category, count in private_unavailable_by_category.most_common()
+            ],
+            "private_unavailable_sources": private_unavailable_sources[:10],
+            "private_unavailable_occurrences": private_unavailable_occurrences,
+        }
+
+    def _classify_fb_private_unavailable_url(self, url: str) -> dict[str, str]:
+        """Classify a blocked Facebook URL into a review-friendly source/category bucket."""
+        normalized_url = str(url or "").strip().rstrip(".,")
+        parsed = urlparse(normalized_url)
+        path_parts = [part for part in parsed.path.split("/") if part]
+
+        if len(path_parts) >= 5 and path_parts[0] == "groups" and path_parts[2] == "posts" and path_parts[4] == "events":
+            group_key = path_parts[1].strip() or "facebook_group_unknown"
+            return {
+                "category": "group_post_events_tab",
+                "source_key": f"group:{group_key}",
+            }
+
+        if len(path_parts) >= 2 and path_parts[0] == "events":
+            event_id = path_parts[1].strip() or "unknown"
+            return {
+                "category": "event_detail_page",
+                "source_key": "facebook_event_detail",
+                "event_id": event_id,
+            }
+
+        host = parsed.netloc.lower().replace("www.", "").strip() or "facebook.com"
+        first_segment = path_parts[0].strip() if path_parts else "root"
+        return {
+            "category": "other_facebook_blocked_url",
+            "source_key": f"{host}:{first_segment}",
         }
 
     def _build_fb_block_health_html(self, fb_data: dict) -> str:
@@ -8171,6 +8449,10 @@ class ValidationTestRunner:
         denominator_fb_ig = int(fb_data.get("denominator_fb_ig", 0) or 0)
         jail_progress_ratio = fb_data.get("jail_progress_ratio")
         fb_only_ratio = fb_data.get("fb_only_ratio")
+        private_unavailable_total_attempts = int(fb_data.get("private_unavailable_total_attempts", 0) or 0)
+        private_unavailable_unique_urls = int(fb_data.get("private_unavailable_unique_urls", 0) or 0)
+        private_unavailable_by_category = fb_data.get("private_unavailable_by_category", []) or []
+        private_unavailable_sources = fb_data.get("private_unavailable_sources", []) or []
         status_class = "status-pass"
         status_text = "Healthy"
         if aborts > 0:
@@ -8241,6 +8523,49 @@ class ValidationTestRunner:
             f" to {self._escape_html(str(fb_data.get('end_ts', '')))} "
             f"(last {int(fb_data.get('window_hours', 24) or 24)} hour(s))</p>"
         )
+        html += (
+            f"<p><strong>Private/Unavailable Cases:</strong> {private_unavailable_total_attempts} blocked attempts "
+            f"across {private_unavailable_unique_urls} unique URLs.</p>"
+        )
+        if private_unavailable_by_category:
+            category_bits = [
+                f"{self._escape_html(str(entry.get('category', 'unknown')))}: {int(entry.get('count', 0) or 0)}"
+                for entry in private_unavailable_by_category
+            ]
+            html += (
+                "<p><strong>Private/Unavailable Categories:</strong> "
+                + self._escape_html(", ".join(category_bits))
+                + "</p>"
+            )
+        if private_unavailable_sources:
+            rows = []
+            for entry in private_unavailable_sources:
+                sample_url = self._escape_html(str(entry.get("sample_url", "")))
+                rows.append(
+                    "<tr>"
+                    f"<td>{self._escape_html(str(entry.get('source_key', '')))}</td>"
+                    f"<td>{self._escape_html(str(entry.get('category', '')))}</td>"
+                    f"<td>{int(entry.get('unique_urls', 0) or 0)}</td>"
+                    f"<td>{int(entry.get('attempt_count', 0) or 0)}</td>"
+                    f"<td style='word-break: break-all;'>{sample_url}</td>"
+                    "</tr>"
+                )
+            html += """
+            <h4>Private/Unavailable Triage</h4>
+            <table class="review-table">
+                <thead>
+                    <tr>
+                        <th>Source Key</th>
+                        <th>Category</th>
+                        <th>Unique URLs</th>
+                        <th>Blocked Attempts</th>
+                        <th>Sample URL</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            html += "".join(rows)
+            html += "</tbody></table>"
         return html
 
     def _summarize_fb_ig_url_funnel(self, report_timestamp: str | None, fb_data: dict | None = None) -> dict:
@@ -8316,6 +8641,80 @@ class ValidationTestRunner:
             summary["error"] = f"Failed to summarize FB/IG URL funnel: {e}"
 
         return summary
+
+    def _summarize_image_date_rejections(
+        self,
+        *,
+        report_timestamp: str | None,
+        pipeline_runtime_summary: dict | None,
+    ) -> dict:
+        """Summarize structured image-date rejection records from current-run logs."""
+        end_ts = datetime.now()
+        if report_timestamp:
+            parsed_end = self._parse_iso_datetime(report_timestamp)
+            if parsed_end is not None:
+                end_ts = parsed_end
+        start_ts = end_ts - timedelta(hours=24)
+        if isinstance(pipeline_runtime_summary, dict):
+            runtime_start = self._parse_iso_datetime(str(pipeline_runtime_summary.get("start_ts", "") or ""))
+            runtime_end = self._parse_iso_datetime(str(pipeline_runtime_summary.get("end_ts", "") or ""))
+            if runtime_start is not None:
+                start_ts = runtime_start
+            if runtime_end is not None:
+                end_ts = runtime_end
+
+        rejection_prefix = "image_date_rejection: "
+        rejections: list[dict] = []
+        by_reason: Counter = Counter()
+        unique_urls: set[str] = set()
+
+        for path in self._get_llm_activity_log_files():
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as file:
+                    for line in file:
+                        if rejection_prefix not in line:
+                            continue
+                        ts = self._parse_log_timestamp(line)
+                        if ts is not None and (ts < start_ts or ts > end_ts):
+                            continue
+                        payload_text = line.split(rejection_prefix, 1)[1].strip()
+                        try:
+                            payload = json.loads(payload_text)
+                        except Exception:
+                            continue
+                        if not isinstance(payload, dict):
+                            continue
+                        reason = str(payload.get("reason", "") or "")
+                        url = str(payload.get("url", "") or "")
+                        if url:
+                            unique_urls.add(url)
+                        if reason:
+                            by_reason[reason] += 1
+                        rejections.append(payload)
+            except Exception as e:
+                logging.warning("_summarize_image_date_rejections: Failed to parse %s: %s", path, e)
+
+        rejections.sort(
+            key=lambda row: (
+                str(row.get("timestamp", "") or ""),
+                str(row.get("url", "") or ""),
+                str(row.get("event_name", "") or ""),
+            ),
+            reverse=True,
+        )
+        return {
+            "start_ts": start_ts.isoformat(sep=" "),
+            "end_ts": end_ts.isoformat(sep=" "),
+            "total_rejections": len(rejections),
+            "unique_urls": len(unique_urls),
+            "by_reason": [
+                {"reason": reason, "count": count}
+                for reason, count in by_reason.most_common()
+            ],
+            "rejections": rejections[:100],
+        }
 
     def _build_phase1_runtime_summary(self, pipeline_runtime: dict | None) -> dict:
         """Normalize pipeline runtime into the Phase 1 scorecard shape."""
@@ -8731,6 +9130,101 @@ class ValidationTestRunner:
             except Exception:
                 continue
 
+    def _persist_fb_block_triage(
+        self,
+        run_id: str,
+        fb_block_summary: dict | None,
+    ) -> None:
+        """Persist Facebook blocked-content triage aggregates and trend metrics."""
+        if not isinstance(fb_block_summary, dict):
+            return
+        if not getattr(self, "db_handler", None):
+            return
+        safe_run_id = str(run_id or "").strip()
+        if not safe_run_id:
+            return
+
+        window_start = None
+        window_end = None
+        try:
+            start_value = fb_block_summary.get("start_ts")
+            if start_value:
+                window_start = datetime.fromisoformat(str(start_value))
+        except (TypeError, ValueError):
+            window_start = None
+        try:
+            end_value = fb_block_summary.get("end_ts")
+            if end_value:
+                window_end = datetime.fromisoformat(str(end_value))
+        except (TypeError, ValueError):
+            window_end = None
+
+        if hasattr(self.db_handler, "record_fb_block_triage_rows"):
+            try:
+                self.db_handler.record_fb_block_triage_rows(
+                    run_id=safe_run_id,
+                    blocked_reason="private_or_unavailable_content",
+                    rows=list(fb_block_summary.get("private_unavailable_sources", []) or []),
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+            except Exception:
+                pass
+        if hasattr(self.db_handler, "record_fb_block_occurrences"):
+            try:
+                self.db_handler.record_fb_block_occurrences(
+                    run_id=safe_run_id,
+                    blocked_reason="private_or_unavailable_content",
+                    rows=list(fb_block_summary.get("private_unavailable_occurrences", []) or []),
+                )
+            except Exception:
+                pass
+
+        if not hasattr(self.db_handler, "record_metric_observation"):
+            return
+        try:
+            self.db_handler.record_metric_observation(
+                run_id=safe_run_id,
+                metric_key="fb_private_unavailable_attempts",
+                metric_value_numeric=float(fb_block_summary.get("private_unavailable_total_attempts", 0) or 0),
+                metric_unit="count",
+                description="Facebook blocked access attempts with reason private_or_unavailable_content",
+                higher_is_better=False,
+                window_start=window_start,
+                window_end=window_end,
+                notes={"source": "fb_block_summary"},
+            )
+            self.db_handler.record_metric_observation(
+                run_id=safe_run_id,
+                metric_key="fb_private_unavailable_unique_urls",
+                metric_value_numeric=float(fb_block_summary.get("private_unavailable_unique_urls", 0) or 0),
+                metric_unit="count",
+                description="Unique Facebook URLs blocked with reason private_or_unavailable_content",
+                higher_is_better=False,
+                window_start=window_start,
+                window_end=window_end,
+                notes={"source": "fb_block_summary"},
+            )
+            for entry in list(fb_block_summary.get("private_unavailable_by_category", []) or []):
+                if not isinstance(entry, dict):
+                    continue
+                category = str(entry.get("category", "") or "").strip()
+                if not category:
+                    continue
+                self.db_handler.record_metric_observation(
+                    run_id=safe_run_id,
+                    metric_key=f"fb_private_unavailable_{category}_unique_urls",
+                    metric_value_numeric=float(entry.get("count", 0) or 0),
+                    metric_unit="count",
+                    description=f"Unique Facebook URLs blocked as {category}",
+                    higher_is_better=False,
+                    window_start=window_start,
+                    window_end=window_end,
+                    notes={"blocked_reason": "private_or_unavailable_content"},
+                )
+        except Exception:
+            return
+
     def _build_phase1_run_scorecard(
         self,
         run_id: str,
@@ -8766,9 +9260,10 @@ class ValidationTestRunner:
         telemetry_integrity = telemetry_integrity_summary if isinstance(telemetry_integrity_summary, dict) else {}
         dev_urls = load_dev_urls()
 
-        replay_url_accuracy_pct = float(replay.get("coverage_accuracy_pct", 0.0) or 0.0)
-        replay_row_accuracy_pct = float(replay.get("replay_accuracy_pct", 0.0) or 0.0)
-        database_accuracy_score = round(replay_url_accuracy_pct, 2) if replay_url_accuracy_pct else None
+        replay_url_accuracy_pct = self._safe_float(replay.get("coverage_accuracy_pct"))
+        replay_row_accuracy_pct = self._safe_float(replay.get("replay_accuracy_pct"))
+        database_accuracy_score = None
+        manual_review_sample = (replay.get("manual_review_sample") if isinstance(replay.get("manual_review_sample"), dict) else {})
 
         total_important_urls = int(
             scraping_summary.get("total_important_urls", scraping_summary.get("important_urls_checked", 0)) or 0
@@ -8874,6 +9369,9 @@ class ValidationTestRunner:
                 "database_accuracy": {
                     "score": database_accuracy_score,
                     "summary": {
+                        "mode": "manual_review",
+                        "manual_review_required": True,
+                        "manual_review_sample_size": int(manual_review_sample.get("rows_returned", 0) or 0),
                         "replay_url_accuracy_pct": replay_url_accuracy_pct,
                         "replay_row_accuracy_pct": replay_row_accuracy_pct,
                         "total_rows": int(replay.get("total_rows", 0) or 0),
@@ -8991,14 +9489,8 @@ class ValidationTestRunner:
             f"Telemetry integrity: {self._escape_html(str(telemetry_integrity.get('status', 'UNKNOWN') or 'UNKNOWN'))}",
         ]
         within_15s = chatbot_summary.get("chatbot_response_within_15s_pct")
-        correctness = chatbot_summary.get("chatbot_answer_correctness_pct")
-        holdout_summary = (run_scorecard.get("evaluation_scope") or {}).get("holdout_summary", {})
-        domain_capped_summary = (run_scorecard.get("evaluation_scope") or {}).get("domain_capped_summary", {})
         if within_15s is not None:
             bullet_lines.append(f"Chatbot within 15s: {float(within_15s):.2f}%")
-        domain_capped_accuracy = domain_capped_summary.get("replay_url_accuracy_pct")
-        if domain_capped_accuracy is not None:
-            bullet_lines.append(f"Domain-capped replay URL accuracy: {float(domain_capped_accuracy):.2f}%")
 
         bullets = "".join(f"<li>{self._escape_html(line)}</li>" for line in bullet_lines)
         guardrails = run_scorecard.get("guardrails", {}) if isinstance(run_scorecard.get("guardrails"), dict) else {}

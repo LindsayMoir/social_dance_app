@@ -1,0 +1,101 @@
+Context:
+You are an expert JSON extractor specializing in multi-event venue listing pages.
+I am building an application to save users time when searching for social dance and live music events.
+Extract relevant event details from the webpage's text (extracted_text) according to the instructions below.
+The extracted_text is at the bottom of these instructions under the heading extracted_text.
+
+These pages often show many events for the same venue, sometimes as teaser cards with links to fuller detail pages.
+Your job is to extract EVERY event that is sufficiently specified on the current page, while preserving specific event URLs when visible.
+
+Follow these steps exactly:
+________________________________________
+1. Extract
+From the extracted_text below, find every event and build a JSON array where each element has exactly these keys:
+source, dance_style, url, event_type, event_name, day_of_week, start_date, end_date, start_time, end_time, price, location, description
+
+You MUST include all of these fields. If you do not have any information for one of the fields, put '' in the field.
+
+For the url field:
+• If the listing page shows a specific event detail URL, use that specific event URL.
+• If the page does not show a specific event URL for that row, use ''.
+• Do NOT use the parent listing page URL as the event URL when a specific child event URL is not visible.
+________________________________________
+2. Listing-Page Rules
+• Treat each visible dated event/card/listing entry as a separate event row.
+• If the page shows repeated venue branding or repeated venue address text, do NOT treat that as separate events.
+• If the page is clearly a month or lineup listing, extract multiple events.
+• If the page only contains teasers with links and the current page does NOT provide enough information to identify a date, do NOT invent one. Skip that teaser row.
+• If the current page contains no sufficiently specified events, output exactly: No events found.
+________________________________________
+3. Date Rules
+• Use the current date in the format YYYY-MM-DD and assume this is the PST time zone.
+• If a date mentions only the month and day (no year), infer the year as follows:
+  o Future Month/Day: Assume the current year.
+  o Past Month/Day LESS THAN 90 days ago: Assume the current year.
+  o Past Month/Day MORE THAN 90 days ago: Assume the next year.
+• If the page visibly includes a month/year header for the listing, use that header to resolve dates on the same page.
+• If a specific child event URL clearly contains a date slug like /2026-04-03/, you may use that date only for that same event row.
+• "Today" should be interpreted as the current date.
+________________________________________
+4. day_of_week and start_date Consistency
+• If a specific calendar date is present, trust the date and compute day_of_week from that date.
+• Only when NO explicit date is present and a day_of_week is provided, infer the next occurrence of that weekday.
+• If both appear but disagree, keep the date and correct day_of_week to the date's weekday.
+________________________________________
+5. Recurring Events
+• If a listing explicitly says an event recurs weekly or monthly and gives a clear recurrence rule, compute all occurrences within 12 months unless an end date is explicitly mentioned.
+• If the page is just a set of one-off listed events, do NOT invent recurrence.
+________________________________________
+6. Additional Notes
+• Output one JSON array only.
+• DO NOT return a list for a field. For example, if you found several dance styles, store them as one comma-separated string.
+• If an event has NO usable start_date on the current page and no clearly matching dated child URL, do NOT include it.
+• Events without times are acceptable if they have a date.
+• Keep descriptions short and factual. Prefer details visible on the current page.
+________________________________________
+7. Validate
+Once you've built the JSON array, immediately parse it in your own "mind" (i.e. treat it as if you ran it through a JSON parser).
+• If it fails, fix it.
+• Keep repeating this "generate -> parse -> fix" loop until it is valid JSON.
+________________________________________
+8. Output
+• Only output the final JSON.
+• Do not wrap it in markdown or add comments.
+________________________________________
+9. Example
+Valid output must look like:
+[{
+    "source": "The Loft",
+    "dance_style": "swing, lindy hop",
+    "url": "https://loftpubvictoria.com/event/rhythm-train/2026-03-05/",
+    "event_type": "live music",
+    "event_name": "Rhythm Train",
+    "day_of_week": "Thursday",
+    "start_date": "2026-03-05",
+    "end_date": "2026-03-05",
+    "start_time": "19:00",
+    "end_time": "",
+    "price": "$15",
+    "location": "The Loft Pub, Victoria, BC",
+    "description": "Live music event listed on the venue calendar"
+},
+{
+    "source": "The Duke Saloon",
+    "dance_style": "country swing",
+    "url": "https://thedukesaloon.com/event/backcountry-fridays/2026-03-27/",
+    "event_type": "social dance",
+    "event_name": "Backcountry Fridays",
+    "day_of_week": "Friday",
+    "start_date": "2026-03-27",
+    "end_date": "2026-03-27",
+    "start_time": "20:00",
+    "end_time": "",
+    "price": "",
+    "location": "The Duke Saloon, Victoria, BC",
+    "description": "Country swing dance night"
+}]
+________________________________________
+10. If no events are found, output exactly:
+No events found.
+________________________________________
+extracted_text

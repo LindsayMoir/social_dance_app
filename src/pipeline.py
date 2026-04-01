@@ -22,7 +22,6 @@ import subprocess
 import sys
 import time
 import yaml
-from email_notifier import send_report_email
 from utils.crawl_telemetry_tuning import tune_crawl_config_from_first_pass
 from utils.chatbot_metrics_sync_utils import (
     count_nullish_datetime_values,
@@ -30,6 +29,8 @@ from utils.chatbot_metrics_sync_utils import (
     sanitize_records_for_sql,
     utc_now_iso_seconds,
 )
+from db import ensure_chatbot_metrics_schema
+from db import EVENTS_HISTORY_TABLE_SCHEMA_SQL, EVENTS_TABLE_SCHEMA_SQL, ADDRESS_TABLE_SCHEMA_SQL
 
 # Setup centralized logging (logging_config.py is in the same directory)
 from logging_config import setup_logging
@@ -96,6 +97,7 @@ _TRANSIENT_DB_ERROR_MARKERS = (
 )
 CHATBOT_METRICS_SYNC_LOG_PATH = os.path.join(log_dir, "chatbot_metrics_sync_log.txt")
 RUN_SCORECARD_PATH = codex_review_path("run_scorecard.json")
+VALIDATION_REPORT_PATH = reports_path("comprehensive_test_report.html")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANUAL_COVERAGE_AUDIT_PATH = os.path.join(REPO_ROOT, "data", "evaluation", "manual_coverage_audit.csv")
 _LOG_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
@@ -174,6 +176,63 @@ def _load_run_scorecard() -> dict:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _get_validation_timeout_seconds() -> int:
+    """Return the subprocess timeout for the validation runner."""
+    raw_value = (
+        cfg.get("testing", {})
+        .get("validation", {})
+        .get("pipeline_timeout_seconds", 5400)
+    )
+    try:
+        timeout_seconds = int(raw_value)
+    except (TypeError, ValueError):
+        timeout_seconds = 5400
+    return max(300, timeout_seconds)
+
+
+def _safe_file_mtime(path: str) -> float | None:
+    """Return file mtime as epoch seconds when the file exists."""
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+def _file_contains_text(path: str, needle: str) -> bool:
+    """Return True when a text file contains the provided substring."""
+    if not needle:
+        return False
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+            return needle in handle.read()
+    except OSError:
+        return False
+
+
+def _validation_report_was_regenerated(
+    report_path: str,
+    previous_mtime: float | None,
+    started_at_epoch: float,
+    run_id: str,
+) -> bool:
+    """Return True when the validation HTML report was rewritten for the current run."""
+    current_mtime = _safe_file_mtime(report_path)
+    if current_mtime is None:
+        return False
+    if previous_mtime is not None and current_mtime <= previous_mtime:
+        return False
+    if current_mtime < started_at_epoch:
+        return False
+    if run_id and not _file_contains_text(report_path, run_id):
+        return False
+    return True
+
+
+def _sql_one_line(statement: str) -> str:
+    """Collapse SQL into a single line suitable for psql -c usage."""
+    return " ".join(str(statement or "").split())
 
 
 def refresh_manual_coverage_audit_csv(
@@ -636,25 +695,8 @@ def copy_drop_create_events():
             logger.info("def copy_drop_create_events(): Migrating events_history table schema...")
             migration_sql = (
                 "BEGIN; "
-                "CREATE TABLE events_history_new ("
-                    "event_id SERIAL PRIMARY KEY, "
-                    "original_event_id INTEGER, "
-                    "event_name TEXT, "
-                    "dance_style TEXT, "
-                    "description TEXT, "
-                    "day_of_week TEXT, "
-                    "start_date DATE, "
-                    "end_date DATE, "
-                    "start_time TIME, "
-                    "end_time TIME, "
-                    "source TEXT, "
-                    "location TEXT, "
-                    "price TEXT, "
-                    "url TEXT, "
-                    "event_type TEXT, "
-                    "address_id INTEGER, "
-                    "time_stamp TIMESTAMP"
-                "); "
+                + _sql_one_line(EVENTS_HISTORY_TABLE_SCHEMA_SQL.replace("events_history", "events_history_new", 1))
+                + "; "
                 "INSERT INTO events_history_new (original_event_id, event_name, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, location, price, url, event_type, address_id, time_stamp) "
                 "SELECT event_id, event_name, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, location, price, url, event_type, address_id, time_stamp FROM events_history; "
                 "DROP TABLE events_history; "
@@ -692,89 +734,19 @@ def copy_drop_create_events():
         logger.info("def copy_drop_create_events(): Events table exists, copying to events_history")
         sql = (
             "BEGIN; "
-            "CREATE TABLE IF NOT EXISTS events_history ("
-                "event_id SERIAL PRIMARY KEY, "
-                "original_event_id INTEGER, "
-                "event_name TEXT, "
-                "dance_style TEXT, "
-                "description TEXT, "
-                "day_of_week TEXT, "
-                "start_date DATE, "
-                "end_date DATE, "
-                "start_time TIME, "
-                "end_time TIME, "
-                "source TEXT, "
-                "location TEXT, "
-                "price TEXT, "
-                "url TEXT, "
-                "event_type TEXT, "
-                "address_id INTEGER, "
-                "time_stamp TIMESTAMP"
-            "); "
+            f"{_sql_one_line(EVENTS_HISTORY_TABLE_SCHEMA_SQL)}; "
             "INSERT INTO events_history (original_event_id, event_name, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, location, price, url, event_type, address_id, time_stamp) "
             "SELECT event_id, event_name, dance_style, description, day_of_week, start_date, end_date, start_time, end_time, source, location, price, url, event_type, address_id, time_stamp FROM events; "
             "DROP TABLE IF EXISTS events; "
-            "CREATE TABLE IF NOT EXISTS events ("
-                "event_id SERIAL PRIMARY KEY, "
-                "event_name TEXT, "
-                "dance_style TEXT, "
-                "description TEXT, "
-                "day_of_week TEXT, "
-                "start_date DATE, "
-                "end_date DATE, "
-                "start_time TIME, "
-                "end_time TIME, "
-                "source TEXT, "
-                "location TEXT, "
-                "price TEXT, "
-                "url TEXT, "
-                "event_type TEXT, "
-                "address_id INTEGER, "
-                "time_stamp TIMESTAMP"
-            "); COMMIT;"
+            f"{_sql_one_line(EVENTS_TABLE_SCHEMA_SQL)}; COMMIT;"
         )
     else:
         # Events table doesn't exist - just create both tables fresh
         logger.info("def copy_drop_create_events(): Events table does not exist, creating fresh tables")
         sql = (
             "BEGIN; "
-            "CREATE TABLE IF NOT EXISTS events_history ("
-                "event_id SERIAL PRIMARY KEY, "
-                "original_event_id INTEGER, "
-                "event_name TEXT, "
-                "dance_style TEXT, "
-                "description TEXT, "
-                "day_of_week TEXT, "
-                "start_date DATE, "
-                "end_date DATE, "
-                "start_time TIME, "
-                "end_time TIME, "
-                "source TEXT, "
-                "location TEXT, "
-                "price TEXT, "
-                "url TEXT, "
-                "event_type TEXT, "
-                "address_id INTEGER, "
-                "time_stamp TIMESTAMP"
-            "); "
-            "CREATE TABLE IF NOT EXISTS events ("
-                "event_id SERIAL PRIMARY KEY, "
-                "event_name TEXT, "
-                "dance_style TEXT, "
-                "description TEXT, "
-                "day_of_week TEXT, "
-                "start_date DATE, "
-                "end_date DATE, "
-                "start_time TIME, "
-                "end_time TIME, "
-                "source TEXT, "
-                "location TEXT, "
-                "price TEXT, "
-                "url TEXT, "
-                "event_type TEXT, "
-                "address_id INTEGER, "
-                "time_stamp TIMESTAMP"
-            "); COMMIT;"
+            f"{_sql_one_line(EVENTS_HISTORY_TABLE_SCHEMA_SQL)}; "
+            f"{_sql_one_line(EVENTS_TABLE_SCHEMA_SQL)}; COMMIT;"
         )
     command = f'psql -d "{db_conn_str}" -c "{sql}"'
     logger.info(f"def copy_drop_create_events(): Running SQL command: {command}")
@@ -801,21 +773,7 @@ def sync_address_sequence():
     # SQL to sync the sequence with current maximum address_id
     # First create address table if it doesn't exist, then sync sequence
     sql = (
-        "CREATE TABLE IF NOT EXISTS address ("
-            "address_id SERIAL PRIMARY KEY, "
-            "full_address TEXT UNIQUE, "
-            "building_name TEXT, "
-            "street_number TEXT, "
-            "street_name TEXT, "
-            "street_type TEXT, "
-            "direction TEXT, "
-            "city TEXT, "
-            "met_area TEXT, "
-            "province_or_state TEXT, "
-            "postal_code TEXT, "
-            "country_id TEXT, "
-            "time_stamp TIMESTAMP"
-        "); "
+        f"{_sql_one_line(ADDRESS_TABLE_SCHEMA_SQL)}; "
         "SELECT setval('address_address_id_seq', COALESCE((SELECT MAX(address_id) FROM address), 0) + 1, false);"
     )
     command = f'psql -d "{db_conn_str}" -c "{sql}"'
@@ -1462,33 +1420,95 @@ def irrelevant_rows_step():
 @task
 def run_validation_tests():
     """Run pre-commit validation tests (scraping + chatbot)."""
+    run_id = str(os.getenv("DS_RUN_ID", "") or "").strip()
+    timeout_seconds = _get_validation_timeout_seconds()
+    started_at_epoch = time.time()
+    previous_report_mtime = _safe_file_mtime(VALIDATION_REPORT_PATH)
     try:
         # Note: No check=True - don't raise on failure (non-blocking)
         result = subprocess.run(
             [sys.executable, "tests/validation/test_runner.py"],
             capture_output=True,
             text=True,
-            timeout=1800  # 30 min (LLM scoring takes time)
+            timeout=timeout_seconds,
+        )
+        report_generated = _validation_report_was_regenerated(
+            report_path=VALIDATION_REPORT_PATH,
+            previous_mtime=previous_report_mtime,
+            started_at_epoch=started_at_epoch,
+            run_id=run_id,
         )
 
         if result.returncode == 0:
             logger.info("def run_validation_tests(): Validation completed successfully")
             logger.info(result.stdout)
-            return "Validation passed"
+            if not report_generated:
+                logger.warning(
+                    "def run_validation_tests(): Validation exited successfully but did not regenerate %s",
+                    VALIDATION_REPORT_PATH,
+                )
+            return {
+                "status": "success",
+                "message": "Validation passed",
+                "report_generated": report_generated,
+                "report_path": VALIDATION_REPORT_PATH,
+                "timeout_seconds": timeout_seconds,
+            }
         else:
             logger.warning(f"def run_validation_tests(): Validation completed with issues (exit code {result.returncode})")
             logger.warning(result.stderr)
             logger.warning("def run_validation_tests(): Continuing pipeline despite validation issues")
-            return "Validation completed with warnings"
+            if not report_generated:
+                logger.warning(
+                    "def run_validation_tests(): Validation returned non-zero and did not regenerate %s",
+                    VALIDATION_REPORT_PATH,
+                )
+            return {
+                "status": "warning",
+                "message": "Validation completed with warnings",
+                "returncode": result.returncode,
+                "report_generated": report_generated,
+                "report_path": VALIDATION_REPORT_PATH,
+                "timeout_seconds": timeout_seconds,
+            }
 
-    except subprocess.TimeoutExpired:
-        logger.error("def run_validation_tests(): Validation tests timed out after 30 minutes")
+    except subprocess.TimeoutExpired as exc:
+        report_generated = _validation_report_was_regenerated(
+            report_path=VALIDATION_REPORT_PATH,
+            previous_mtime=previous_report_mtime,
+            started_at_epoch=started_at_epoch,
+            run_id=run_id,
+        )
+        logger.error(
+            "def run_validation_tests(): Validation tests timed out after %s seconds",
+            timeout_seconds,
+        )
+        if exc.stdout:
+            logger.warning("def run_validation_tests(): Validation stdout before timeout:\n%s", exc.stdout[-4000:])
+        if exc.stderr:
+            logger.warning("def run_validation_tests(): Validation stderr before timeout:\n%s", exc.stderr[-4000:])
+        if not report_generated:
+            logger.warning(
+                "def run_validation_tests(): No fresh validation report was generated before timeout; keeping existing artifact untouched"
+            )
         logger.warning("def run_validation_tests(): Continuing pipeline despite timeout")
-        return "Validation timed out"
+        return {
+            "status": "timeout",
+            "message": "Validation timed out",
+            "report_generated": report_generated,
+            "report_path": VALIDATION_REPORT_PATH,
+            "timeout_seconds": timeout_seconds,
+        }
     except Exception as e:
         logger.error(f"def run_validation_tests(): Unexpected error: {e}")
         logger.warning("def run_validation_tests(): Continuing pipeline despite error")
-        return "Validation encountered error"
+        return {
+            "status": "error",
+            "message": "Validation encountered error",
+            "report_generated": False,
+            "report_path": VALIDATION_REPORT_PATH,
+            "timeout_seconds": timeout_seconds,
+        }
 
 @flow(name="Validation Step")
 def validation_step():
@@ -1572,112 +1592,6 @@ def result_analyzer_step():
     logger.info(f"result_analyzer_step: run_result_analyzer returned: {analyzer_result}")
 
     logger.info("result_analyzer_step: Step completed")
-    return True
-
-# ------------------------
-# REMEDIATION PLANNER STEP
-# Builds a read-only remediation plan from reliability artifacts
-# ------------------------
-@task
-def run_remediation_planner():
-    """Run remediation planner based on reliability artifacts."""
-    try:
-        result = subprocess.run(
-            [sys.executable, "tests/validation/remediation_planner.py"],
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 min
-        )
-        if result.returncode == 0:
-            logger.info("def run_remediation_planner(): Remediation planning completed successfully")
-            if result.stdout:
-                logger.info(result.stdout.strip())
-            return "Remediation plan generated"
-        logger.warning(
-            "def run_remediation_planner(): Remediation planning completed with issues (exit code %s)",
-            result.returncode,
-        )
-        if result.stderr:
-            logger.warning(result.stderr.strip())
-        logger.warning("def run_remediation_planner(): Continuing pipeline despite planning issues")
-        return "Remediation planning completed with warnings"
-    except subprocess.TimeoutExpired:
-        logger.error("def run_remediation_planner(): Remediation planner timed out after 5 minutes")
-        logger.warning("def run_remediation_planner(): Continuing pipeline despite timeout")
-        return "Remediation planner timed out"
-    except Exception as e:
-        logger.error(f"def run_remediation_planner(): Unexpected error: {e}")
-        logger.warning("def run_remediation_planner(): Continuing pipeline despite error")
-        return "Remediation planner encountered error"
-
-
-@task
-def send_remediation_email() -> bool:
-    """
-    Send remediation-phase report email with:
-    - comprehensive_test_report.html
-    - remediation_plan.md
-    """
-    try:
-        with open(CONFIG_PATH, "r") as f:
-            latest_cfg = yaml.safe_load(f) or {}
-        output_dir = (
-            latest_cfg.get("testing", {})
-            .get("validation", {})
-            .get("reporting", {})
-            .get("output_dir", "output")
-        )
-
-        html_report = reports_path("comprehensive_test_report.html")
-        remediation_md = codex_review_path("remediation_plan.md")
-        attachment_paths = [p for p in (html_report, remediation_md) if os.path.exists(p)]
-
-        if not attachment_paths:
-            logger.warning(
-                "send_remediation_email(): No report attachments found in %s; skipping email.",
-                output_dir,
-            )
-            return False
-
-        summary = {
-            "overall_status": "REMEDIATION_PLAN_READY",
-            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        }
-        success = send_report_email(
-            report_summary=summary,
-            attachment_paths=attachment_paths,
-            test_type="Remediation Plan",
-        )
-        if success:
-            logger.info(
-                "send_remediation_email(): Email sent with attachments: %s",
-                ", ".join(os.path.basename(p) for p in attachment_paths),
-            )
-        else:
-            logger.warning("send_remediation_email(): Email send skipped or failed.")
-        return success
-    except Exception as e:
-        logger.error("send_remediation_email(): Unexpected error: %s", e, exc_info=True)
-        return False
-
-
-@flow(name="Remediation Planner Step")
-def remediation_planner_step():
-    """
-    Generate a read-only remediation plan from validation/reliability outputs.
-
-    NOTE: This step does NOT modify source code or config.
-    It writes output/remediation_plan.json and output/remediation_plan.md.
-    """
-    logger.info("=" * 70)
-    logger.info("REMEDIATION PLANNER STEP")
-    logger.info("Build read-only remediation plan from reliability artifacts")
-    logger.info("=" * 70)
-
-    planner_result = run_remediation_planner()
-    logger.info(f"remediation_planner_step: run_remediation_planner returned: {planner_result}")
-    send_remediation_email()
-    logger.info("remediation_planner_step: Step completed")
     return True
 
 # ------------------------
@@ -2178,48 +2092,6 @@ def sync_render_chatbot_metrics_last_90_days():
     source_engine = None
     target_engine = None
 
-    ensure_requests_sql = """
-    CREATE TABLE IF NOT EXISTS chatbot_request_metrics (
-        id SERIAL PRIMARY KEY,
-        request_id TEXT UNIQUE NOT NULL,
-        endpoint TEXT NOT NULL,
-        session_suffix TEXT,
-        started_at TIMESTAMP,
-        finished_at TIMESTAMP,
-        duration_ms DOUBLE PRECISION,
-        result_type TEXT,
-        user_input TEXT,
-        sql_snippet TEXT,
-        has_response BOOLEAN,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """
-    ensure_stages_sql = """
-    CREATE TABLE IF NOT EXISTS chatbot_stage_metrics (
-        id SERIAL PRIMARY KEY,
-        request_id TEXT NOT NULL,
-        endpoint TEXT NOT NULL,
-        stage TEXT NOT NULL,
-        started_at TIMESTAMP,
-        finished_at TIMESTAMP,
-        duration_ms DOUBLE PRECISION,
-        metadata_json TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """
-    ensure_indexes_sql = [
-        "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_started_at ON chatbot_request_metrics(started_at);",
-        "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_endpoint ON chatbot_request_metrics(endpoint);",
-        "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_started_at ON chatbot_stage_metrics(started_at);",
-        "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_stage ON chatbot_stage_metrics(stage);",
-        "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_request_id ON chatbot_stage_metrics(request_id);",
-        (
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_chatbot_stage_metrics_nk "
-            "ON chatbot_stage_metrics(request_id, endpoint, stage, started_at, duration_ms);"
-        ),
-    ]
-
     select_requests_sql = text(
         """
         SELECT
@@ -2282,11 +2154,7 @@ def sync_render_chatbot_metrics_last_90_days():
     try:
         source_engine = create_engine(render_db_url)
         target_engine = create_engine(local_db_url)
-        with target_engine.begin() as target_conn:
-            target_conn.execute(text(ensure_requests_sql))
-            target_conn.execute(text(ensure_stages_sql))
-            for stmt in ensure_indexes_sql:
-                target_conn.execute(text(stmt))
+        ensure_chatbot_metrics_schema(target_engine)
 
         requests_df = pd.read_sql(select_requests_sql, source_engine, params={"start_ts": start_ts})
         stages_df = pd.read_sql(select_stages_sql, source_engine, params={"start_ts": start_ts})
@@ -2433,7 +2301,6 @@ PIPELINE_STEPS = [
     ("irrelevant_rows", irrelevant_rows_step),
     ("validation", validation_step),  # Pre-commit validation before prod deployment
     ("result_analyzer", result_analyzer_step),  # LLM analysis of validation results
-    ("remediation_planner", remediation_planner_step),  # Read-only plan from reliability artifacts
     ("classifier_training_promotion", classifier_training_promotion_step),  # Promote safe replay candidates into training data
     ("copy_dev_to_prod", copy_dev_db_to_prod_db_step),
     ("refresh_manual_coverage_audit", manual_coverage_audit_refresh_step),

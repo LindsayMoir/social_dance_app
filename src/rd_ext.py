@@ -27,6 +27,7 @@ from datetime import date, datetime, timedelta
 import logging
 import pandas as pd
 import os
+import re
 import time
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from playwright.sync_api import sync_playwright
@@ -134,6 +135,43 @@ def _safe_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _split_rd_ext_keywords(keywords: list[str] | str) -> list[str]:
+    """Normalize configured rd_ext edge-case keywords into ordered tokens."""
+    if isinstance(keywords, list):
+        parts = [str(item).strip().lower() for item in keywords if str(item).strip()]
+    else:
+        parts = [part.strip().lower() for part in str(keywords or "").split(",") if part.strip()]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for part in parts:
+        if part in seen:
+            continue
+        seen.add(part)
+        ordered.append(part)
+    return ordered
+
+
+def _derive_rd_ext_effective_keywords(text: str, configured_keywords: list[str] | str) -> list[str]:
+    """
+    Use only venue keywords actually evidenced on the page; otherwise fall back to live music.
+
+    This prevents edge-case venue keyword bundles from polluting dance_style when the
+    specific page is just a generic live-music event with no explicit dance evidence.
+    """
+    normalized_text = str(text or "").lower()
+    configured = _split_rd_ext_keywords(configured_keywords)
+    matched: list[str] = []
+    for keyword in configured:
+        if not keyword or keyword == "live music":
+            continue
+        pattern = r"\b" + re.escape(keyword).replace(r"\ ", r"\s+") + r"\b"
+        if re.search(pattern, normalized_text):
+            matched.append(keyword)
+    if matched:
+        return matched
+    return ["live music"]
 
 
 async def _wait_for_login_completion(
@@ -1091,13 +1129,16 @@ async def _process_edge_case_urls(
                     parent_url = url
                     prompt_type = resolve_prompt_type(event_url, fallback_prompt_type=url)
                     normalized_text = str(text or "")
-                    found_keywords = any(kw in normalized_text.lower() for kw in all_keywords)
+                    effective_keywords = _derive_rd_ext_effective_keywords(normalized_text, keywords)
+                    found_keywords = any(
+                        keyword != "live music" for keyword in effective_keywords
+                    )
                     llm_result = llm_handler.process_llm_response(
                         event_url,
                         parent_url,
                         normalized_text,
                         source,
-                        keywords,
+                        effective_keywords,
                         prompt_type=prompt_type,
                     )
                     llm_success = bool(llm_result)
@@ -1108,7 +1149,7 @@ async def _process_edge_case_urls(
                         link=event_url,
                         parent_url=url,
                         source=source,
-                        keywords=keywords,
+                        keywords=effective_keywords,
                         access_attempted=True,
                         extraction_attempted=True,
                         extraction_succeeded=llm_success,
@@ -1141,7 +1182,10 @@ async def _process_edge_case_urls(
                 parent_url = ""
                 prompt_type = resolve_prompt_type(url, fallback_prompt_type=url)
                 normalized_text = str(extracted or "")
-                found_keywords = any(kw in normalized_text.lower() for kw in all_keywords)
+                effective_keywords = _derive_rd_ext_effective_keywords(normalized_text, keywords)
+                found_keywords = any(
+                    keyword != "live music" for keyword in effective_keywords
+                )
                 llm_result = None
                 if normalized_text:
                     llm_result = llm_handler.process_llm_response(
@@ -1149,7 +1193,7 @@ async def _process_edge_case_urls(
                         parent_url,
                         normalized_text,
                         source,
-                        keywords,
+                        effective_keywords,
                         prompt_type=prompt_type,
                     )
                 llm_success = bool(llm_result)
@@ -1159,7 +1203,7 @@ async def _process_edge_case_urls(
                     link=url,
                     parent_url="",
                     source=source,
-                    keywords=keywords,
+                    keywords=effective_keywords,
                     access_attempted=True,
                     extraction_attempted=True,
                     extraction_succeeded=llm_success,

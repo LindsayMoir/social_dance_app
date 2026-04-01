@@ -52,7 +52,11 @@ class TestGeneratePromptDomainMatching(unittest.TestCase):
                 },
                 # Domain-based config (what we're testing)
                 'loftpubvictoria.com': {
-                    'file': self.default_prompt_file,  # Use same default prompt but verify it matches via domain
+                    'file': self.domain_prompt_file,
+                    'schema': 'event_extraction'
+                },
+                'https://loftpubvictoria.com/events/month/': {
+                    'file': self.exact_url_prompt_file,
                     'schema': 'event_extraction'
                 },
                 # Exact URL config (existing behavior)
@@ -100,9 +104,11 @@ class TestGeneratePromptDomainMatching(unittest.TestCase):
         for prompt_type in test_cases:
             with self.subTest(url=prompt_type):
                 prompt, schema = self.llm_handler.generate_prompt(url, extracted_text, prompt_type)
-                
-                # Should use default prompt content (since loftpubvictoria.com is configured to use default.txt)
-                self.assertIn("Default prompt content", prompt)
+
+                if prompt_type == "https://loftpubvictoria.com/events/month/":
+                    self.assertIn("Exact URL prompt content", prompt)
+                else:
+                    self.assertIn("Domain-specific prompt content", prompt)
                 self.assertEqual(schema, 'event_extraction')
                 self.assertIn("Sample extracted text", prompt)
     
@@ -126,9 +132,8 @@ class TestGeneratePromptDomainMatching(unittest.TestCase):
         
         prompt, schema = self.llm_handler.generate_prompt(url, extracted_text, prompt_type)
         
-        # Should use default prompt content (since loftpubvictoria.com is configured to use default.txt)
-        # The key test is that it matches via domain, not fallback to default warning
-        self.assertIn("Default prompt content", prompt)
+        # Should use domain-level prompt content rather than falling back to default.
+        self.assertIn("Domain-specific prompt content", prompt)
         self.assertEqual(schema, 'event_extraction')
 
     def test_www_variant_matches_non_www_domain_config(self):
@@ -165,21 +170,21 @@ class TestGeneratePromptDomainMatching(unittest.TestCase):
     @patch('logging.info')
     @patch('logging.warning')
     def test_logging_behavior(self, mock_warning, mock_info):
-        """Test that appropriate log messages are generated."""
+        """Exact URL matches should avoid warnings and log the chosen prompt file."""
         url = "https://loftpubvictoria.com/some/page"
         prompt_type = "https://loftpubvictoria.com/events/month/"
         extracted_text = "Sample extracted text"
         
         self.llm_handler.generate_prompt(url, extracted_text, prompt_type)
         
-        # Should log prompt resolution without emitting a warning.
-        mock_info.assert_any_call(
-            "def generate_prompt(): Resolved prompt type '%s' via '%s'",
-            "https://loftpubvictoria.com/events/month/",
-            "loftpubvictoria.com",
+        info_messages = [call.args[0] for call in mock_info.call_args_list if call.args]
+        self.assertTrue(
+            any(
+                "prompt type: https://loftpubvictoria.com/events/month/" in msg
+                and self.exact_url_prompt_file in msg
+                for msg in info_messages
+            )
         )
-
-        # Should not log warning since domain match was found
         mock_warning.assert_not_called()
     
     @patch('logging.info')

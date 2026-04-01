@@ -711,7 +711,18 @@ class EventSpider(scrapy.Spider):
         else:
             urls_dir = self.config['input']['urls']
             csv_files = [os.path.join(urls_dir, f) for f in os.listdir(urls_dir) if f.endswith('.csv')]
-            dataframes = [pd.read_csv(file) for file in csv_files]
+            dataframes = []
+            csv_summaries: list[str] = []
+            for file in csv_files:
+                df = pd.read_csv(file)
+                dataframes.append(df)
+                csv_summaries.append(f"{os.path.basename(file)}={len(df)}")
+            logging.info(
+                "def start(): Loaded %s URL seed CSV files from %s: %s",
+                len(csv_files),
+                urls_dir,
+                ", ".join(csv_summaries) if csv_summaries else "none",
+            )
             urls_df = pd.concat(dataframes, ignore_index=True)
 
         # Always include whitelist seeds, even in DB mode.
@@ -896,6 +907,7 @@ class EventSpider(scrapy.Spider):
         
         # 1) Build visible page text (avoid raw-HTML/script noise in LLM extraction).
         extracted_text = extract_visible_text_from_html(response.text)
+        text_extracted = bool(str(extracted_text or "").strip())
 
         # 2) Pre-extract links/calendars so archetype routing can decide page-level extraction.
         raw_links = response.css('a::attr(href)').getall()
@@ -1254,6 +1266,8 @@ class EventSpider(scrapy.Spider):
                     "routing_reason": decision_reason or "unknown",
                     "access_attempted": True,
                     "access_succeeded": True,
+                    "text_extracted": text_extracted,
+                    "keywords_found": bool(found_keywords),
                     "classification_confidence": class_decision.confidence,
                     "classification_stage": class_decision.stage,
                     "classification_owner_step": class_decision.classification.owner_step,

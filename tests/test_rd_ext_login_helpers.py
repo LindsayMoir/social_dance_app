@@ -4,7 +4,11 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from rd_ext import _get_login_probe_url, _wait_for_login_completion
+from rd_ext import (
+    _derive_rd_ext_effective_keywords,
+    _get_login_probe_url,
+    _wait_for_login_completion,
+)
 
 
 class _FakePage:
@@ -87,3 +91,21 @@ def test_get_login_probe_url_uses_authenticated_eventbrite_target() -> None:
         _get_login_probe_url("Facebook", "https://www.facebook.com/login")
         == "https://www.facebook.com/login"
     )
+
+
+def test_derive_rd_ext_effective_keywords_prefers_text_evidence() -> None:
+    keywords = "live music, swing, west coast swing, wcs"
+    text = "Join us for West Coast Swing lessons and social dancing before the band."
+
+    effective = _derive_rd_ext_effective_keywords(text, keywords)
+
+    assert effective == ["swing", "west coast swing"]
+
+
+def test_derive_rd_ext_effective_keywords_falls_back_to_live_music() -> None:
+    keywords = "live music, swing, west coast swing, wcs"
+    text = "Doors at 7pm. Featuring a local indie rock band and dinner specials."
+
+    effective = _derive_rd_ext_effective_keywords(text, keywords)
+
+    assert effective == ["live music"]

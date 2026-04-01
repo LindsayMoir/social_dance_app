@@ -233,3 +233,56 @@ def test_pipeline_steps_refresh_manual_coverage_audit_after_copy_dev_to_prod() -
     step_names = [name for name, _ in pipeline.PIPELINE_STEPS]
     copy_index = step_names.index("copy_dev_to_prod")
     assert step_names[copy_index + 1] == "refresh_manual_coverage_audit"
+
+
+def test_pipeline_steps_no_longer_include_remediation_planner() -> None:
+    step_names = [name for name, _ in pipeline.PIPELINE_STEPS]
+    assert "remediation_planner" not in step_names
+
+
+def test_validation_report_was_regenerated_accepts_fresh_run_report(tmp_path) -> None:
+    report_path = tmp_path / "comprehensive_test_report.html"
+    report_path.write_text(
+        "<html><body><p>Run ID: 20260326-180823-306fe150</p></body></html>",
+        encoding="utf-8",
+    )
+    os.utime(report_path, (30.0, 30.0))
+
+    assert pipeline._validation_report_was_regenerated(
+        str(report_path),
+        previous_mtime=10.0,
+        started_at_epoch=20.0,
+        run_id="20260326-180823-306fe150",
+    ) is True
+
+
+def test_validation_report_was_regenerated_rejects_stale_or_wrong_run_report(tmp_path) -> None:
+    report_path = tmp_path / "comprehensive_test_report.html"
+    report_path.write_text(
+        "<html><body><p>Run ID: 20260324-143020-b78a713c</p></body></html>",
+        encoding="utf-8",
+    )
+    os.utime(report_path, (30.0, 30.0))
+
+    assert pipeline._validation_report_was_regenerated(
+        str(report_path),
+        previous_mtime=30.0,
+        started_at_epoch=20.0,
+        run_id="20260326-180823-306fe150",
+    ) is False
+
+
+def test_get_validation_timeout_seconds_defaults_and_clamps(monkeypatch) -> None:
+    monkeypatch.setattr(
+        pipeline,
+        "cfg",
+        {"testing": {"validation": {"pipeline_timeout_seconds": 120}}},
+    )
+    assert pipeline._get_validation_timeout_seconds() == 300
+
+    monkeypatch.setattr(
+        pipeline,
+        "cfg",
+        {"testing": {"validation": {"pipeline_timeout_seconds": 5400}}},
+    )
+    assert pipeline._get_validation_timeout_seconds() == 5400

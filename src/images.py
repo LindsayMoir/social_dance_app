@@ -5,6 +5,7 @@ import asyncio
 import base64
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from dataclasses import dataclass
 import hashlib
 import json
 import logging
@@ -96,6 +97,17 @@ _INSTAGRAM_DYNAMIC_MEDIA_QUERY_PARAMS = frozenset(
         "ccb",
     }
 )
+
+
+@dataclass(frozen=True)
+class ImagePosterDateAnalysis:
+    """Structured date analysis for one poster image."""
+
+    poster_type: str
+    primary_date: str | None = None
+    primary_day_of_week: str | None = None
+    candidate_dates: tuple[str, ...] = ()
+    reason: str = ""
 
 
 def _safe_bool(value: object) -> bool:
@@ -229,6 +241,150 @@ def detect_date_from_image(local_path: Path) -> tuple[str | None, str | None]:
             final_date = _date(year, month_num, day_num)
             return (final_date.isoformat(), final_date.strftime('%A'))
     return (None, None)
+
+
+def _current_pacific_date() -> datetime.date:
+    """Return current Pacific-local date for poster date inference."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("America/Los_Angeles")).date()
+    except Exception:
+        return datetime.now().date()
+
+
+def _extract_textual_candidate_dates(text: str) -> list[str]:
+    """Extract explicit month/day date candidates from OCR text."""
+    raw_text = str(text or "")
+    if not raw_text.strip():
+        return []
+
+    month_lookup = {
+        "jan": 1, "january": 1,
+        "feb": 2, "february": 2,
+        "mar": 3, "march": 3,
+        "apr": 4, "april": 4,
+        "may": 5,
+        "jun": 6, "june": 6,
+        "jul": 7, "july": 7,
+        "aug": 8, "august": 8,
+        "sep": 9, "sept": 9, "september": 9,
+        "oct": 10, "october": 10,
+        "nov": 11, "november": 11,
+        "dec": 12, "december": 12,
+    }
+    today = _current_pacific_date()
+    candidates: list[str] = []
+    pattern = re.compile(
+        r"\b(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)?"
+        r"[\s,/-]*"
+        r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
+        r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+        r"[\s,/-]+(\d{1,2})(?:st|nd|rd|th)?(?:[\s,/-]+(20\d{2}))?\b",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(raw_text):
+        month_token, day_token, year_token = match.groups()
+        month_num = month_lookup.get(str(month_token).lower())
+        if not month_num:
+            continue
+        day_num = int(day_token)
+        year_num = int(year_token) if year_token else today.year
+        try:
+            candidate_date = datetime(year_num, month_num, day_num).date()
+        except ValueError:
+            continue
+        if not year_token and candidate_date < today and (today - candidate_date).days > 90:
+            try:
+                candidate_date = datetime(year_num + 1, month_num, day_num).date()
+            except ValueError:
+                continue
+        candidates.append(candidate_date.isoformat())
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        ordered.append(candidate)
+    return ordered
+
+
+def _analyze_image_poster_dates(local_path: Path, ocr_text: str) -> ImagePosterDateAnalysis:
+    """Classify image posters as single-event or schedule-style and emit date hints."""
+    primary_date, primary_dow = detect_date_from_image(local_path)
+    candidate_dates = _extract_textual_candidate_dates(ocr_text)
+    normalized_primary = str(primary_date or "").strip()
+    if normalized_primary and normalized_primary not in candidate_dates:
+        candidate_dates = [normalized_primary, *candidate_dates]
+
+    weekday_hits = re.findall(
+        r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b",
+        str(ocr_text or ""),
+        flags=re.IGNORECASE,
+    )
+    month_hits = re.findall(
+        r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
+        r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b",
+        str(ocr_text or ""),
+        flags=re.IGNORECASE,
+    )
+
+    if len(candidate_dates) >= 3 or (len(candidate_dates) >= 2 and len(weekday_hits) >= 3 and len(month_hits) >= 1):
+        return ImagePosterDateAnalysis(
+            poster_type="schedule_multi_event",
+            primary_date=None,
+            primary_day_of_week=None,
+            candidate_dates=tuple(candidate_dates[:12]),
+            reason="multiple_textual_date_candidates",
+        )
+
+    if normalized_primary:
+        return ImagePosterDateAnalysis(
+            poster_type="single_event",
+            primary_date=normalized_primary,
+            primary_day_of_week=str(primary_dow or "").strip() or None,
+            candidate_dates=tuple(candidate_dates[:6]),
+            reason="single_detected_primary_date",
+        )
+
+    if len(candidate_dates) == 1:
+        inferred_day = ""
+        try:
+            inferred_day = datetime.strptime(candidate_dates[0], "%Y-%m-%d").strftime("%A")
+        except Exception:
+            inferred_day = ""
+        return ImagePosterDateAnalysis(
+            poster_type="single_event",
+            primary_date=candidate_dates[0],
+            primary_day_of_week=inferred_day or None,
+            candidate_dates=tuple(candidate_dates),
+            reason="single_textual_date_candidate",
+        )
+
+    return ImagePosterDateAnalysis(
+        poster_type="unknown",
+        primary_date=None,
+        primary_day_of_week=None,
+        candidate_dates=tuple(candidate_dates[:12]),
+        reason="no_confident_date_resolution",
+    )
+
+
+def _prepend_image_date_hints(local_path: Path, ocr_text: str) -> tuple[str, ImagePosterDateAnalysis]:
+    """Prepend structured poster/date hints to OCR text for downstream extraction."""
+    analysis = _analyze_image_poster_dates(local_path, ocr_text)
+    hint_lines: list[str] = [f"Detected_Poster_Type: {analysis.poster_type}"]
+    if analysis.primary_date and analysis.primary_day_of_week:
+        hint_lines.append(f"Detected_Date: {analysis.primary_date}")
+        hint_lines.append(f"Detected_Day: {analysis.primary_day_of_week}")
+    elif analysis.primary_date:
+        hint_lines.append(f"Detected_Date: {analysis.primary_date}")
+    if analysis.candidate_dates:
+        hint_lines.append(f"Detected_Schedule_Dates: {', '.join(analysis.candidate_dates)}")
+    if analysis.reason:
+        hint_lines.append(f"Detected_Date_Analysis: {analysis.reason}")
+    return "\n".join(hint_lines + [str(ocr_text or "")]), analysis
 
 
 def _extract_instagram_post_links(rendered_html: str, page_url: str) -> list[str]:
@@ -1767,13 +1923,17 @@ class ImageScraper:
         self.logger.info("_process_local_image_path(): Extracted text length %d characters", len(text))
         self.logger.info("_process_local_image_path(): Extracted text:\n%s", text)
 
-        det_date, det_dow = detect_date_from_image(local_path)
-        if det_date and det_dow:
-            text = f"Detected_Date: {det_date}\nDetected_Day: {det_dow}\n{text}"
+        text, analysis = _prepend_image_date_hints(local_path, text)
+        if analysis.poster_type == "single_event" and analysis.primary_date:
             self.logger.info(
-                "_process_local_image_path(): Detected date hint %s (%s) added to OCR text",
-                det_date,
-                det_dow,
+                "_process_local_image_path(): Detected single-event date hint %s (%s) added to OCR text",
+                analysis.primary_date,
+                analysis.primary_day_of_week or "",
+            )
+        elif analysis.poster_type == "schedule_multi_event":
+            self.logger.info(
+                "_process_local_image_path(): Detected schedule-style poster with %d candidate dates",
+                len(analysis.candidate_dates),
             )
 
         llm_text = _build_image_context_text(
@@ -2093,11 +2253,18 @@ class ImageScraper:
         self.logger.info(f"process_image_url(): Extracted text length {len(text)} characters")
         self.logger.info(f"process_image_url(): Extracted text: \n{text}")
 
-        det_date, det_dow = detect_date_from_image(path)
-        if det_date and det_dow:
-            hint = f"Detected_Date: {det_date}\nDetected_Day: {det_dow}\n"
-            text = hint + text
-            self.logger.info(f"process_image_url(): Detected date hint {det_date} ({det_dow}) added to OCR text")
+        text, analysis = _prepend_image_date_hints(Path(path), text)
+        if analysis.poster_type == "single_event" and analysis.primary_date:
+            self.logger.info(
+                "process_image_url(): Detected single-event date hint %s (%s) added to OCR text",
+                analysis.primary_date,
+                analysis.primary_day_of_week or "",
+            )
+        elif analysis.poster_type == "schedule_multi_event":
+            self.logger.info(
+                "process_image_url(): Detected schedule-style poster with %d candidate dates",
+                len(analysis.candidate_dates),
+            )
 
         # Keyword filtering
         llm_text = _build_image_context_text(
@@ -2303,9 +2470,7 @@ class ImageScraper:
         """Run OCR-first replay extraction for one local image without writing to the database."""
         text = self.ocr_image_to_text(local_path)
         if text:
-            det_date, det_dow = detect_date_from_image(local_path)
-            if det_date and det_dow:
-                text = f"Detected_Date: {det_date}\nDetected_Day: {det_dow}\n{text}"
+            text, _ = _prepend_image_date_hints(local_path, text)
             llm_text = _build_image_context_text(
                 ocr_text=text,
                 parent_url=parent_url,

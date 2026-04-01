@@ -41,38 +41,15 @@ def check_address_table():
         print(f"\nSequence for address_id: {sequence_info[0][0]}")
     else:
         print("\nNo sequence found for address_id column")
-        
+
         # Create the sequence
         print("Creating sequence for address table...")
-        
+
         # Get current max ID
         max_id = db_handler.execute_query("SELECT MAX(address_id) FROM address;")
         current_max = max_id[0][0] if max_id and max_id[0][0] else 661
-        
-        # Create sequence
-        create_seq_sql = f"""
-        CREATE SEQUENCE IF NOT EXISTS address_address_id_seq
-        START WITH {current_max + 1}
-        INCREMENT BY 1
-        NO MINVALUE
-        NO MAXVALUE
-        CACHE 1;
-        """
-        db_handler.execute_query(create_seq_sql)
-        
-        # Set column default to use sequence
-        alter_col_sql = """
-        ALTER TABLE address 
-        ALTER COLUMN address_id SET DEFAULT nextval('address_address_id_seq');
-        """
-        db_handler.execute_query(alter_col_sql)
-        
-        # Set sequence ownership
-        alter_seq_sql = """
-        ALTER SEQUENCE address_address_id_seq OWNED BY address.address_id;
-        """
-        db_handler.execute_query(alter_seq_sql)
-        
+        db_handler.ensure_core_event_tables()
+        db_handler.ensure_address_sequence(current_max + 1)
         print(f"Created sequence starting from {current_max + 1}")
 
 if __name__ == "__main__":

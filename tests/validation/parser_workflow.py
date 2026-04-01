@@ -197,17 +197,6 @@ class ParserWorkflowRenderer:
             if issue_type in {"domain_regression", "classifier_regression", "coverage_gap", "guardrail_violation"}:
                 parser_recommendations.append(str(item.get("title") or "").strip())
 
-        queued_actions: list[str] = []
-        action_items = action_queue.get("items", []) if isinstance(action_queue, dict) else []
-        for item in action_items:
-            if not isinstance(item, dict):
-                continue
-            reason_text = " ".join(
-                str(item.get(key) or "").lower() for key in ("title", "reason", "suggested_change", "acceptance_test")
-            )
-            if any(token in reason_text for token in ("parser", "replay", "scraper", "domain", "classifier")):
-                queued_actions.append(str(item.get("title") or "").strip())
-
         worst_domains = []
         if isinstance(domain_evaluation_summary, dict):
             raw_worst_domains = domain_evaluation_summary.get("worst_domains", [])
@@ -219,9 +208,6 @@ class ParserWorkflowRenderer:
         parser_recommendation_text = "<br>".join(
             self.escape_html(text) for text in parser_recommendations[:3] if text
         ) or "Use the mismatch category table below to drive the next fix."
-        queued_action_text = "<br>".join(
-            self.escape_html(text) for text in queued_actions[:3] if text
-        ) or "No parser-specific action queue entries yet."
 
         ordered_steps_html = (
             "<table><tr><th>Order</th><th>What To Do</th><th>How To Do It</th><th>Done When</th></tr>"
@@ -257,8 +243,7 @@ class ParserWorkflowRenderer:
             "Use this section after each <code>pipeline.py</code> run to decide what to fix first, how to fix it, "
             "and how to verify the change before moving on.</p>"
             "<p><strong>Focus signals:</strong> worst replay domains: "
-            f"{worst_domain_text}.<br><strong>Current parser-related recommendation plan items:</strong><br>{parser_recommendation_text}"
-            f"<br><strong>Current queued actions:</strong><br>{queued_action_text}</p>"
+            f"{worst_domain_text}.<br><strong>Current parser-related recommendation plan items:</strong><br>{parser_recommendation_text}</p>"
             "<h3>Ordered Parser Workflow</h3>"
             f"{ordered_steps_html}"
             "<h3>Top Parser Mismatch Categories</h3>"

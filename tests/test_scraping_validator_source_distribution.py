@@ -9,9 +9,10 @@ from scraping_validator import ScrapingValidator
 
 
 class _FakeDbHandler:
-    def execute_query(self, query, params=None):
+    def execute_query(self, query, params=None, statement_timeout_ms=None):
         normalized = " ".join(str(query).split())
         if "SELECT source, COUNT(*) AS counted FROM events" in normalized:
+            assert statement_timeout_ms == 15000
             return [
                 ("Salsa Caliente", 20),
                 ("Victoria Latin Dance Association", 15),

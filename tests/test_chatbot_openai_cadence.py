@@ -86,3 +86,17 @@ def test_global_provider_exclusion_removes_mistral_everywhere(monkeypatch):
 
     assert "mistral" not in candidates
     assert "mistral" not in rotation
+
+
+def test_select_primary_provider_defaults_rotation_flag_when_state_missing(monkeypatch):
+    monkeypatch.delenv("DS_STEP_NAME", raising=False)
+    handler = LLMHandler.__new__(LLMHandler)
+    handler.config = {
+        "llm": {
+            "provider": "openai",
+        }
+    }
+
+    provider = handler._select_primary_provider("https://example.com/events")
+
+    assert provider == "openai"

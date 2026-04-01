@@ -1,6 +1,7 @@
 import pandas as pd
 import sys
 import asyncio
+import logging
 from collections import defaultdict, deque
 
 sys.path.insert(0, 'src')
@@ -105,6 +106,93 @@ def test_parse_marks_whitelist_non_text_response(monkeypatch):
     root = normalize_url_for_compare("https://www.instagram.com/bachatavictoria/")
     assert root in spider.attempted_whitelist_roots
     assert root in spider.whitelist_non_text_response_roots
+
+
+def test_parse_records_text_extracted_metric_for_html_response(monkeypatch):
+    import scraper as scraper_module
+
+    metrics_written = []
+    url_rows = []
+
+    class DummyDB:
+        def is_whitelisted_url(self, _url: str) -> bool:
+            return False
+
+        def maybe_reuse_static_event_detail_from_history(self, url: str):
+            return {"reused": False}
+
+        def write_url_to_db(self, row):
+            url_rows.append(row)
+
+        def write_url_scrape_metric(self, row):
+            metrics_written.append(row)
+
+        def avoid_domains(self, _url: str) -> bool:
+            return False
+
+        def should_process_url(self, _url: str) -> bool:
+            return True
+
+    class DummyLLM:
+        def process_llm_response(self, *args, **kwargs):
+            return None
+
+    class _Classification:
+        archetype = "simple_page"
+        owner_step = "scraper.py"
+        subtype = ""
+
+    class _Decision:
+        classification = _Classification()
+        confidence = 0.95
+        stage = "rule"
+        features = {}
+
+    monkeypatch.setattr(scraper_module, "db_handler", DummyDB(), raising=False)
+    monkeypatch.setattr(scraper_module, "llm_handler", DummyLLM(), raising=False)
+    monkeypatch.setattr(scraper_module, "classify_page_with_confidence", lambda **kwargs: _Decision())
+    monkeypatch.setattr(scraper_module, "extract_html_features", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(scraper_module, "should_extract_on_parent_page", lambda *args, **kwargs: False)
+
+    spider = EventSpider.__new__(EventSpider)
+    spider.whitelist_roots = set()
+    spider.attempted_whitelist_roots = set()
+    spider.whitelist_transferred_to_fb_roots = set()
+    spider.whitelist_non_text_response_roots = set()
+    spider.visited_link = set()
+    spider.calendar_urls_set = set()
+    spider.keywords_list = ["salsa"]
+    spider.page_archetype_stats = {}
+    spider.config = {"crawling": {"max_website_urls": 5, "urls_run_limit": 100}}
+    spider.domain_failure_events = defaultdict(deque)
+    spider.domain_cooldown_until = {}
+    spider.scraper_domain_failure_window_seconds = 600
+    spider.scraper_domain_cooldown_seconds = 600
+    spider.scraper_priority_download_timeout_seconds = 90
+    spider.scraper_priority_retry_times = 3
+
+    response = HtmlResponse(
+        url="https://example.com/events",
+        body=b"<html><body><h1>Live music tonight</h1><p>Doors at 8pm.</p></body></html>",
+        encoding="utf-8",
+        request=Request(url="https://example.com/events"),
+    )
+
+    list(
+        spider.parse(
+            response,
+            keywords="live music",
+            source="Example Source",
+            url="https://example.com/events",
+        )
+    )
+
+    assert url_rows
+    assert metrics_written
+    assert metrics_written[0]["access_attempted"] is True
+    assert metrics_written[0]["access_succeeded"] is True
+    assert metrics_written[0]["text_extracted"] is True
+    assert metrics_written[0]["keywords_found"] is False
 
 
 def test_merge_seed_urls_always_includes_whitelist_and_dedups():
@@ -529,3 +617,64 @@ def test_start_sets_high_priority_for_whitelist_seed(monkeypatch, tmp_path):
     assert requests
     assert requests[0].url == "https://latindancecanada.com/"
     assert requests[0].priority == 1000
+
+
+def test_start_logs_loaded_seed_csv_files(monkeypatch, tmp_path, caplog):
+    import scraper as scraper_module
+
+    (tmp_path / "gs_urls.csv").write_text(
+        "source,keywords,link\n"
+        "GS Source,salsa,https://example.com/events\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "calendar_urls.csv").write_text(
+        "source,keywords,link\n"
+        "Calendar Source,swing,https://calendar.example.com/\n",
+        encoding="utf-8",
+    )
+
+    class DummyDB:
+        def get_db_connection(self):
+            return object()
+
+        def is_whitelisted_url(self, _url: str) -> bool:
+            return False
+
+        def avoid_domains(self, _url: str) -> bool:
+            return False
+
+        def should_process_url(self, _url: str) -> bool:
+            return False
+
+        def write_url_to_db(self, _row):
+            return None
+
+    monkeypatch.setattr(scraper_module, "db_handler", DummyDB(), raising=False)
+
+    spider = EventSpider.__new__(EventSpider)
+    spider.config = {
+        "startup": {"use_db": False},
+        "input": {"urls": str(tmp_path)},
+    }
+    spider.whitelist_urls_df = pd.DataFrame(columns=["source", "keywords", "link"])
+    spider.whitelist_roots = set()
+    spider.attempted_whitelist_roots = set()
+    spider.calendar_urls_set = set()
+    spider.domain_failure_events = defaultdict(deque)
+    spider.domain_cooldown_until = {}
+    spider.domain_cooldown_skip_count = 0
+    spider.scraper_priority_download_timeout_seconds = 90
+    spider.scraper_priority_retry_times = 3
+
+    async def _collect():
+        reqs = []
+        async for req in spider.start():
+            reqs.append(req)
+        return reqs
+
+    with caplog.at_level(logging.INFO):
+        asyncio.run(_collect())
+
+    assert "Loaded 2 URL seed CSV files" in caplog.text
+    assert "gs_urls.csv=1" in caplog.text
+    assert "calendar_urls.csv=1" in caplog.text

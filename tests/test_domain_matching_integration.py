@@ -33,7 +33,7 @@ class TestDomainMatchingIntegration(unittest.TestCase):
     @patch('logging.info')
     @patch('logging.warning')
     def test_loftpubvictoria_domain_matching(self, mock_warning, mock_info):
-        """Test that loftpubvictoria.com URLs use domain-based matching."""
+        """Test that Loft listing/detail URLs resolve through the intended prompt split."""
         url = "https://loftpubvictoria.com/some/page"
         extracted_text = "Sample extracted text"
         
@@ -63,6 +63,11 @@ class TestDomainMatchingIntegration(unittest.TestCase):
                 
                 # Verify extracted text was included
                 self.assertIn("Sample extracted text", prompt)
+
+                if prompt_type == "https://loftpubvictoria.com/events/month/":
+                    self.assertIn("multi-event venue listing pages", prompt)
+                else:
+                    self.assertIn("ONE EVENT ONLY", prompt)
     
     @patch('logging.info')
     @patch('logging.warning')
@@ -92,17 +97,36 @@ class TestDomainMatchingIntegration(unittest.TestCase):
         
         prompt, schema = self.llm_handler.generate_prompt(url, extracted_text, prompt_type)
         
-        # Should use exact URL match (the_coda_prompt.txt)
+        # Should use exact URL match (shared multi-event venue listing prompt)
         self.assertEqual(schema, 'event_extraction')
         self.assertIn("Sample extracted text", prompt)
+        self.assertIn("multi-event venue listing pages", prompt)
         
     def test_config_has_loftpubvictoria_entry(self):
         """Test that the config actually has the Loft Pub Victoria prompt entry."""
         self.assertIn('https://loftpubvictoria.com/events/month/', self.config['prompts'])
+        self.assertIn('loftpubvictoria.com', self.config['prompts'])
 
         loft_config = self.config['prompts']['https://loftpubvictoria.com/events/month/']
-        self.assertEqual(loft_config['file'], 'prompts/calendar_venues.txt')
+        self.assertEqual(loft_config['file'], 'prompts/multi_event_venues.txt')
         self.assertEqual(loft_config['schema'], 'event_extraction')
+
+        loft_domain_config = self.config['prompts']['loftpubvictoria.com']
+        self.assertEqual(loft_domain_config['file'], 'prompts/calendar_venues.txt')
+        self.assertEqual(loft_domain_config['schema'], 'event_extraction')
+
+    def test_multi_event_venue_prompt_entries_exist(self):
+        """Listing-style venue URLs should use the shared multi-event venue prompt."""
+        expected_keys = [
+            'https://gotothecoda.com/calendar',
+            'https://loftpubvictoria.com/events/month/',
+            'https://thedukesaloon.com/events/',
+            'https://www.irishtimespub.ca/live-music',
+        ]
+        for key in expected_keys:
+            with self.subTest(key=key):
+                self.assertIn(key, self.config['prompts'])
+                self.assertEqual(self.config['prompts'][key]['file'], 'prompts/multi_event_venues.txt')
 
 
 if __name__ == '__main__':

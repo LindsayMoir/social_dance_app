@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import sys
+from time import perf_counter
 from typing import Any, Dict, List
 import pandas as pd
 
@@ -86,6 +87,49 @@ class ScrapingValidator:
                 files.append(path)
         return files
 
+    @staticmethod
+    def _coerce_bool(value: object, default: bool = True) -> bool:
+        """Interpret CSV-style truthy and falsy values safely."""
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if not text:
+            return default
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+
+    @staticmethod
+    def _parse_optional_date(value: object) -> date | None:
+        """Parse a CSV date value into a date, returning None when blank/invalid."""
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        parsed = pd.to_datetime(text, errors="coerce")
+        if pd.isna(parsed):
+            return None
+        return parsed.date()
+
+    @classmethod
+    def _is_pdf_source_active(cls, row: pd.Series, today: date | None = None) -> tuple[bool, str]:
+        """Determine whether a seasonal PDF source row is active for the current date."""
+        today_value = today or datetime.now().date()
+        if not cls._coerce_bool(row.get("enabled"), default=True):
+            return False, "disabled"
+        active_start = cls._parse_optional_date(row.get("active_start_date"))
+        active_end = cls._parse_optional_date(row.get("active_end_date"))
+        if active_start and today_value < active_start:
+            return False, "before_active_start_date"
+        if active_end and today_value > active_end:
+            return False, "after_active_end_date"
+        return True, "active"
+
     def _get_required_sources_for_distribution(self, today: date | None = None) -> List[str]:
         """
         Return the active required sources for source-distribution completeness checks.
@@ -109,8 +153,6 @@ class ScrapingValidator:
             return required_sources
 
         try:
-            from read_pdfs import ReadPDFs
-
             pdf_sources = pd.read_csv(pdf_sources_file, dtype=str).fillna("")
             seasonal_status = {}
             today_value = today or datetime.now().date()
@@ -118,7 +160,7 @@ class ScrapingValidator:
                 source_name = str(row.get("source", "") or "").strip()
                 if not source_name:
                     continue
-                is_active, _reason = ReadPDFs.is_pdf_source_active(row, today=today_value)
+                is_active, _reason = self._is_pdf_source_active(row, today=today_value)
                 seasonal_status[source_name] = is_active
 
             filtered_sources = []
@@ -485,47 +527,10 @@ class ScrapingValidator:
         }
 
     def _ensure_source_distribution_history_tables(self) -> None:
-        """Ensure source-distribution trend tables exist."""
-        create_counts = """
-            CREATE TABLE IF NOT EXISTS source_event_counts_history (
-                id SERIAL PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                run_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                source TEXT NOT NULL,
-                event_count INTEGER NOT NULL,
-                rank_in_run INTEGER,
-                total_events INTEGER NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(run_id, source)
-            )
-        """
-        create_alerts = """
-            CREATE TABLE IF NOT EXISTS source_distribution_alerts_history (
-                id SERIAL PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                run_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                source TEXT NOT NULL,
-                alert_type TEXT NOT NULL,
-                severity TEXT NOT NULL,
-                current_count INTEGER,
-                baseline_avg DOUBLE PRECISION,
-                pct_change DOUBLE PRECISION,
-                details_json TEXT,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """
-        indexes = [
-            "CREATE INDEX IF NOT EXISTS idx_source_event_counts_history_run_ts ON source_event_counts_history(run_ts)",
-            "CREATE INDEX IF NOT EXISTS idx_source_event_counts_history_source ON source_event_counts_history(source)",
-            "CREATE INDEX IF NOT EXISTS idx_source_event_counts_history_run_id ON source_event_counts_history(run_id)",
-            "CREATE INDEX IF NOT EXISTS idx_source_distribution_alerts_history_run_ts ON source_distribution_alerts_history(run_ts)",
-            "CREATE INDEX IF NOT EXISTS idx_source_distribution_alerts_history_source ON source_distribution_alerts_history(source)",
-            "CREATE INDEX IF NOT EXISTS idx_source_distribution_alerts_history_run_id ON source_distribution_alerts_history(run_id)",
-        ]
-        self.db_handler.execute_query(create_counts)
-        self.db_handler.execute_query(create_alerts)
-        for stmt in indexes:
-            self.db_handler.execute_query(stmt)
+        """Delegate source-distribution schema setup to DatabaseHandler."""
+        ensure_method = getattr(self.db_handler, "ensure_source_distribution_history_tables", None)
+        if callable(ensure_method):
+            ensure_method()
 
     def _persist_source_counts_snapshot(
         self,
@@ -1022,6 +1027,7 @@ class ScrapingValidator:
         logging.info("Checking event source distribution...")
 
         try:
+            overall_start = perf_counter()
             # Critical sources that MUST be present in database (presence check only)
             # These are major event providers - if missing, scraping failed
             REQUIRED_SOURCES = self._get_required_sources_for_distribution()
@@ -1036,7 +1042,12 @@ class ScrapingValidator:
                 ORDER BY counted DESC
             """
 
-            result = self.db_handler.execute_query(query)
+            source_query_start = perf_counter()
+            result = self.db_handler.execute_query(query, statement_timeout_ms=15000)
+            logging.info(
+                "check_source_distribution: source count query completed in %.2fs",
+                perf_counter() - source_query_start,
+            )
 
             if not result:
                 return {
@@ -1118,13 +1129,30 @@ class ScrapingValidator:
 
             # Persist and analyze source trends (non-fatal)
             try:
+                ensure_start = perf_counter()
                 self._ensure_source_distribution_history_tables()
+                logging.info(
+                    "check_source_distribution: ensure_source_distribution_history_tables completed in %.2fs",
+                    perf_counter() - ensure_start,
+                )
+
+                snapshot_start = perf_counter()
                 self._persist_source_counts_snapshot(run_id, run_ts, int(total_events), ordered_sources)
+                logging.info(
+                    "check_source_distribution: persist_source_counts_snapshot completed in %.2fs",
+                    perf_counter() - snapshot_start,
+                )
+
+                trend_start = perf_counter()
                 trend_summary = self._build_source_trend_summary(
                     run_id=run_id,
                     run_ts=run_ts,
                     all_sources=all_sources,
                     top_10_sources=top_10_sources,
+                )
+                logging.info(
+                    "check_source_distribution: build_source_trend_summary completed in %.2fs",
+                    perf_counter() - trend_start,
                 )
                 if trend_summary.get('alerts'):
                     status = 'WARNING' if status == 'PASS' else status
@@ -1153,6 +1181,11 @@ class ScrapingValidator:
                     logging.warning(f"Source distribution check: {warning}")
             else:
                 logging.info("✅ All required sources present in database")
+
+            logging.info(
+                "check_source_distribution: completed in %.2fs",
+                perf_counter() - overall_start,
+            )
 
             return {
                 'status': status,

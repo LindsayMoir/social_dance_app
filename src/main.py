@@ -37,7 +37,7 @@ print("Updated sys.path:", sys.path)
 print("Current working directory:", os.getcwd())
 
 from llm import LLMHandler  # Import the LLMHandler module
-from db import DatabaseHandler  # Import DatabaseHandler for conversation management
+from db import DatabaseHandler, ensure_chatbot_metrics_schema  # Import DB helpers
 from conversation_manager import ConversationManager  # Import ConversationManager
 from query_constraints import (
     build_sql_from_constraints,
@@ -140,49 +140,8 @@ def _chatbot_traffic_timeout_message() -> str:
 
 def _ensure_chatbot_metrics_tables() -> None:
     """Create chatbot performance metric tables if they do not exist."""
-    create_requests = """
-    CREATE TABLE IF NOT EXISTS chatbot_request_metrics (
-        id SERIAL PRIMARY KEY,
-        request_id TEXT UNIQUE NOT NULL,
-        endpoint TEXT NOT NULL,
-        session_suffix TEXT,
-        started_at TIMESTAMP,
-        finished_at TIMESTAMP,
-        duration_ms DOUBLE PRECISION,
-        result_type TEXT,
-        user_input TEXT,
-        sql_snippet TEXT,
-        has_response BOOLEAN,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """
-    create_stages = """
-    CREATE TABLE IF NOT EXISTS chatbot_stage_metrics (
-        id SERIAL PRIMARY KEY,
-        request_id TEXT NOT NULL,
-        endpoint TEXT NOT NULL,
-        stage TEXT NOT NULL,
-        started_at TIMESTAMP,
-        finished_at TIMESTAMP,
-        duration_ms DOUBLE PRECISION,
-        metadata_json TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """
-    create_indexes = [
-        "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_started_at ON chatbot_request_metrics(started_at);",
-        "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_endpoint ON chatbot_request_metrics(endpoint);",
-        "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_started_at ON chatbot_stage_metrics(started_at);",
-        "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_stage ON chatbot_stage_metrics(stage);",
-        "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_request_id ON chatbot_stage_metrics(request_id);",
-    ]
     try:
-        with get_engine().begin() as conn:
-            conn.execute(text(create_requests))
-            conn.execute(text(create_stages))
-            for idx_sql in create_indexes:
-                conn.execute(text(idx_sql))
+        ensure_chatbot_metrics_schema(get_engine())
         logging.info("chatbot_metrics_db: ensured chatbot performance metric tables exist")
     except Exception as e:
         logging.warning("chatbot_metrics_db: failed to ensure metric tables: %s", e)

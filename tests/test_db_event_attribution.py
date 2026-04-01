@@ -5,7 +5,7 @@ import pandas as pd
 
 sys.path.insert(0, "src")
 
-from db import DatabaseHandler
+from db import DatabaseHandler, ensure_chatbot_metrics_schema
 
 
 def _make_handler(old_days: int = 30) -> DatabaseHandler:
@@ -31,6 +31,148 @@ def test_ensure_event_attribution_tables_executes_expected_queries() -> None:
     assert "CREATE TABLE IF NOT EXISTS event_delete_attribution" in joined
     assert "idx_event_write_attribution_run_id" in joined
     assert "idx_event_delete_attribution_reason_code" in joined
+
+
+def test_ensure_source_distribution_history_tables_executes_expected_queries() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    queries: list[str] = []
+
+    def _exec(query: str, params=None):
+        queries.append(query)
+        return []
+
+    handler.execute_query = _exec  # type: ignore[attr-defined]
+
+    handler.ensure_source_distribution_history_tables()
+
+    joined = "\n".join(queries)
+    assert "CREATE TABLE IF NOT EXISTS source_event_counts_history" in joined
+    assert "CREATE TABLE IF NOT EXISTS source_distribution_alerts_history" in joined
+    assert "idx_source_event_counts_history_run_id" in joined
+    assert "idx_source_distribution_alerts_history_run_id" in joined
+
+
+def test_ensure_chatbot_metrics_schema_executes_expected_queries() -> None:
+    executed: list[str] = []
+
+    class _FakeConn:
+        def execute(self, stmt):
+            executed.append(str(stmt))
+
+    class _FakeBegin:
+        def __enter__(self):
+            return _FakeConn()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        def begin(self):
+            return _FakeBegin()
+
+    ensure_chatbot_metrics_schema(_FakeEngine())
+
+    joined = "\n".join(executed)
+    assert "CREATE TABLE IF NOT EXISTS chatbot_request_metrics" in joined
+    assert "CREATE TABLE IF NOT EXISTS chatbot_stage_metrics" in joined
+    assert "uq_chatbot_stage_metrics_nk" in joined
+
+
+def test_ensure_core_event_tables_executes_expected_queries() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    queries: list[str] = []
+
+    def _exec(query: str, params=None):
+        queries.append(query)
+        return []
+
+    handler.execute_query = _exec  # type: ignore[attr-defined]
+
+    handler.ensure_core_event_tables()
+
+    joined = "\n".join(queries)
+    assert "CREATE TABLE IF NOT EXISTS events_history" in joined
+    assert "ALTER TABLE events_history ADD COLUMN IF NOT EXISTS original_event_id INTEGER" in joined
+    assert "CREATE TABLE IF NOT EXISTS events (" in joined
+    assert "CREATE TABLE IF NOT EXISTS address (" in joined
+
+
+def test_ensure_core_application_tables_executes_expected_queries() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    queries: list[str] = []
+
+    def _exec(query: str, params=None):
+        queries.append(query)
+        return []
+
+    handler.execute_query = _exec  # type: ignore[attr-defined]
+
+    handler.ensure_core_application_tables()
+
+    joined = "\n".join(queries)
+    assert "CREATE TABLE IF NOT EXISTS urls (" in joined
+    assert "CREATE TABLE IF NOT EXISTS runs (" in joined
+    assert "CREATE TABLE IF NOT EXISTS events_history" in joined
+    assert "CREATE TABLE IF NOT EXISTS events (" in joined
+    assert "CREATE TABLE IF NOT EXISTS address (" in joined
+
+
+def test_ensure_address_sequence_executes_expected_queries() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    queries: list[str] = []
+
+    def _exec(query: str, params=None):
+        queries.append(query)
+        return []
+
+    handler.execute_query = _exec  # type: ignore[attr-defined]
+
+    handler.ensure_address_sequence(662)
+
+    joined = "\n".join(queries)
+    assert "CREATE SEQUENCE IF NOT EXISTS address_address_id_seq" in joined
+    assert "START WITH 662" in joined
+    assert "ALTER COLUMN address_id SET DEFAULT nextval('address_address_id_seq')" in joined
+    assert "ALTER SEQUENCE address_address_id_seq OWNED BY address.address_id" in joined
+
+
+def test_execute_query_applies_statement_timeout_before_query() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    executed: list[tuple[str, object]] = []
+
+    class _FakeResult:
+        returns_rows = True
+
+        def fetchall(self):
+            return [("Salsa Caliente", 20)]
+
+    class _FakeConnection:
+        def execute(self, stmt, params=None):
+            executed.append((str(stmt), params))
+            return _FakeResult()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        def connect(self):
+            return _FakeConnection()
+
+    handler.conn = _FakeEngine()
+
+    result = handler.execute_query(
+        "SELECT source, COUNT(*) AS counted FROM events GROUP BY source",
+        statement_timeout_ms=15000,
+    )
+
+    assert result == [("Salsa Caliente", 20)]
+    assert len(executed) == 2
+    assert "set_config('statement_timeout'" in executed[0][0]
+    assert executed[0][1] == {"timeout_value": "15000ms"}
+    assert "SELECT source, COUNT(*) AS counted FROM events GROUP BY source" in executed[1][0]
 
 
 def test_normalize_delete_reason_code_handles_dynamic_old_event_reason() -> None:

@@ -754,7 +754,28 @@ def test_process_local_image_path_reuses_existing_ocr_llm_flow(monkeypatch) -> N
     generate_url, generate_text, generate_prompt_type = scraper.llm_handler.generate_args
     assert generate_url == "https://www.instagram.com/bachatavictoria/"
     assert generate_prompt_type == "fb"
+    assert "Detected_Poster_Type: single_event" in generate_text
     assert "Detected_Date: 2026-03-20" in generate_text
+    assert "Detected_Day: Friday" in generate_text
+    assert "Detected_Date_Analysis: single_detected_primary_date" in generate_text
+
+
+def test_prepend_image_date_hints_marks_schedule_posters(monkeypatch) -> None:
+    monkeypatch.setattr(images, "detect_date_from_image", lambda _path: (None, None))
+
+    hinted_text, analysis = images._prepend_image_date_hints(
+        Path("/tmp/fake_schedule.png"),
+        "March 1 Salsa Night\nMarch 8 Bachata Social\nMarch 15 Kizomba Night\nEvery Tuesday lessons",
+    )
+
+    assert analysis.poster_type == "schedule_multi_event"
+    assert analysis.primary_date is None
+    assert "Detected_Poster_Type: schedule_multi_event" in hinted_text
+    assert "Detected_Schedule_Dates:" in hinted_text
+    assert "2026-03-01" in hinted_text
+    assert "2026-03-08" in hinted_text
+    assert "2026-03-15" in hinted_text
+    assert "Detected_Date_Analysis: multiple_textual_date_candidates" in hinted_text
 
 
 def test_process_local_image_path_uses_ocr_first(tmp_path, monkeypatch) -> None:
@@ -1405,6 +1426,7 @@ def test_log_processing_summary_reports_rates(caplog) -> None:
     scraper.telemetry_counts = images.Counter(
         {
             "total_urls": 5,
+            "access_attempted": 5,
             "access_succeeded": 4,
             "text_extracted": 3,
             "keywords_found": 2,
@@ -1423,7 +1445,8 @@ def test_log_processing_summary_reports_rates(caplog) -> None:
     assert "IMAGES SCRAPER SUMMARY" in caplog.text
     assert "URL access success rate: 80.0% (4/5)" in caplog.text
     assert "Text extracted rate: 60.0% (3/5)" in caplog.text
-    assert "Keyword hit rate: 40.0% (2/5)" in caplog.text
+    assert "Keyword hit rate: 66.7% (2/3)" in caplog.text
     assert "Event extraction success rate: 40.0% (2/5)" in caplog.text
     assert "OCR success rate: 75.0% (3/4)" in caplog.text
     assert "Vision success rate: 50.0% (1/2)" in caplog.text
+    assert "Vision fallback usage rate: 40.0% (2/5)" in caplog.text

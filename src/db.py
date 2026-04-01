@@ -50,6 +50,147 @@ _US_STATE_OR_TERRITORY_CODES: Final[frozenset[str]] = frozenset(
     }
 )
 
+CHATBOT_METRICS_SCHEMA_QUERIES: Final[tuple[str, ...]] = (
+    """
+    CREATE TABLE IF NOT EXISTS chatbot_request_metrics (
+        id SERIAL PRIMARY KEY,
+        request_id TEXT UNIQUE NOT NULL,
+        endpoint TEXT NOT NULL,
+        session_suffix TEXT,
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP,
+        duration_ms DOUBLE PRECISION,
+        result_type TEXT,
+        user_input TEXT,
+        sql_snippet TEXT,
+        has_response BOOLEAN,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS chatbot_stage_metrics (
+        id SERIAL PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        endpoint TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP,
+        duration_ms DOUBLE PRECISION,
+        metadata_json TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_started_at ON chatbot_request_metrics(started_at)",
+    "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_endpoint ON chatbot_request_metrics(endpoint)",
+    "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_started_at ON chatbot_stage_metrics(started_at)",
+    "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_stage ON chatbot_stage_metrics(stage)",
+    "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_request_id ON chatbot_stage_metrics(request_id)",
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_chatbot_stage_metrics_nk "
+        "ON chatbot_stage_metrics(request_id, endpoint, stage, started_at, duration_ms)"
+    ),
+)
+
+EVENTS_TABLE_SCHEMA_SQL: Final[str] = """
+CREATE TABLE IF NOT EXISTS events (
+    event_id SERIAL PRIMARY KEY,
+    event_name TEXT,
+    dance_style TEXT,
+    description TEXT,
+    day_of_week TEXT,
+    start_date DATE,
+    end_date DATE,
+    start_time TIME,
+    end_time TIME,
+    source TEXT,
+    location TEXT,
+    price TEXT,
+    url TEXT,
+    event_type TEXT,
+    address_id INTEGER,
+    time_stamp TIMESTAMP
+)
+"""
+
+EVENTS_HISTORY_TABLE_SCHEMA_SQL: Final[str] = """
+CREATE TABLE IF NOT EXISTS events_history (
+    event_id SERIAL PRIMARY KEY,
+    original_event_id INTEGER,
+    event_name TEXT,
+    dance_style TEXT,
+    description TEXT,
+    day_of_week TEXT,
+    start_date DATE,
+    end_date DATE,
+    start_time TIME,
+    end_time TIME,
+    source TEXT,
+    location TEXT,
+    price TEXT,
+    url TEXT,
+    event_type TEXT,
+    address_id INTEGER,
+    time_stamp TIMESTAMP
+)
+"""
+
+ADDRESS_TABLE_SCHEMA_SQL: Final[str] = """
+CREATE TABLE IF NOT EXISTS address (
+    address_id SERIAL PRIMARY KEY,
+    full_address TEXT UNIQUE,
+    building_name TEXT,
+    street_number TEXT,
+    street_name TEXT,
+    street_type TEXT,
+    direction TEXT,
+    city TEXT,
+    met_area TEXT,
+    province_or_state TEXT,
+    postal_code TEXT,
+    country_id TEXT,
+    time_stamp TIMESTAMP
+)
+"""
+
+URLS_TABLE_SCHEMA_SQL: Final[str] = """
+CREATE TABLE IF NOT EXISTS urls (
+    link_id SERIAL PRIMARY KEY,
+    link TEXT,
+    parent_url TEXT,
+    source TEXT,
+    keywords TEXT,
+    relevant BOOLEAN,
+    crawl_try INTEGER,
+    time_stamp TIMESTAMP
+)
+"""
+
+RUNS_TABLE_SCHEMA_SQL: Final[str] = """
+CREATE TABLE IF NOT EXISTS runs (
+    run_id SERIAL PRIMARY KEY,
+    run_name TEXT UNIQUE,
+    run_description TEXT,
+    start_time TEXT,
+    end_time TEXT,
+    elapsed_time TEXT,
+    python_file_name TEXT,
+    unique_urls_count INTEGER,
+    total_url_attempts INTEGER,
+    urls_with_extracted_text INTEGER,
+    urls_with_found_keywords INTEGER,
+    events_written_to_db INTEGER,
+    time_stamp TIMESTAMP
+)
+"""
+
+
+def ensure_chatbot_metrics_schema(engine) -> None:
+    """Ensure chatbot metrics schema exists using a SQLAlchemy engine."""
+    with engine.begin() as conn:
+        for query in CHATBOT_METRICS_SCHEMA_QUERIES:
+            conn.execute(text(query))
+
 
 class DatabaseHandler():
     _DELETE_REASON_CODE_MAP: Final[Dict[str, str]] = {
@@ -169,6 +310,8 @@ class DatabaseHandler():
         if self.conn is None:
                 raise ConnectionError("def __init__(): DatabaseHandler: Failed to establish a database connection.")
 
+        self.ensure_core_application_tables()
+
         self.metadata = MetaData()
         # Reflect the existing database schema into metadata
         self.metadata.reflect(bind=self.conn)
@@ -176,6 +319,9 @@ class DatabaseHandler():
         self.ensure_url_scrape_metrics_table()
         self.ensure_event_attribution_tables()
         self.ensure_validation_metric_tables()
+        self.ensure_source_distribution_history_tables()
+        self.ensure_fb_block_triage_table()
+        self.ensure_fb_block_occurrences_table()
 
         # Get google api key
         self.google_api_key = os.getenv("GOOGLE_KEY_PW")
@@ -476,6 +622,122 @@ class DatabaseHandler():
             logging.info("ensure_validation_metric_tables: ensured normalized validation metric tables exist")
         except Exception as e:
             logging.warning("ensure_validation_metric_tables: could not ensure tables (continuing): %s", e)
+
+    def ensure_source_distribution_history_tables(self) -> None:
+        """Ensure source-distribution trend history tables exist for validation reporting."""
+        create_counts = """
+            CREATE TABLE IF NOT EXISTS source_event_counts_history (
+                id SERIAL PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                run_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                source TEXT NOT NULL,
+                event_count INTEGER NOT NULL,
+                rank_in_run INTEGER,
+                total_events INTEGER NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(run_id, source)
+            )
+        """
+        create_alerts = """
+            CREATE TABLE IF NOT EXISTS source_distribution_alerts_history (
+                id SERIAL PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                run_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                source TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                current_count INTEGER,
+                baseline_avg DOUBLE PRECISION,
+                pct_change DOUBLE PRECISION,
+                details_json TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_source_event_counts_history_run_ts ON source_event_counts_history(run_ts)",
+            "CREATE INDEX IF NOT EXISTS idx_source_event_counts_history_source ON source_event_counts_history(source)",
+            "CREATE INDEX IF NOT EXISTS idx_source_event_counts_history_run_id ON source_event_counts_history(run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_source_distribution_alerts_history_run_ts ON source_distribution_alerts_history(run_ts)",
+            "CREATE INDEX IF NOT EXISTS idx_source_distribution_alerts_history_source ON source_distribution_alerts_history(source)",
+            "CREATE INDEX IF NOT EXISTS idx_source_distribution_alerts_history_run_id ON source_distribution_alerts_history(run_id)",
+        ]
+        try:
+            self.execute_query(create_counts)
+            self.execute_query(create_alerts)
+            for index_sql in indexes:
+                self.execute_query(index_sql)
+            logging.info(
+                "ensure_source_distribution_history_tables: ensured source distribution history tables exist"
+            )
+        except Exception as e:
+            logging.warning(
+                "ensure_source_distribution_history_tables: could not ensure tables (continuing): %s",
+                e,
+            )
+
+    def ensure_fb_block_triage_table(self) -> None:
+        """Ensure aggregated Facebook blocked-content triage facts exist for run-over-run analysis."""
+        create_table_sql = """
+            CREATE TABLE IF NOT EXISTS fb_block_triage (
+                id SERIAL PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                blocked_reason TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                block_category TEXT NOT NULL,
+                unique_url_count INTEGER NOT NULL,
+                blocked_attempt_count INTEGER NOT NULL,
+                sample_url TEXT,
+                window_start TIMESTAMP,
+                window_end TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (run_id, blocked_reason, source_key, block_category)
+            )
+        """
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_fb_block_triage_run_id ON fb_block_triage(run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_fb_block_triage_reason ON fb_block_triage(blocked_reason)",
+            "CREATE INDEX IF NOT EXISTS idx_fb_block_triage_category ON fb_block_triage(block_category)",
+            "CREATE INDEX IF NOT EXISTS idx_fb_block_triage_source_key ON fb_block_triage(source_key)",
+            "CREATE INDEX IF NOT EXISTS idx_fb_block_triage_created_at ON fb_block_triage(created_at)",
+        ]
+        try:
+            self.execute_query(create_table_sql)
+            for index_sql in indexes:
+                self.execute_query(index_sql)
+            logging.info("ensure_fb_block_triage_table: ensured fb_block_triage exists")
+        except Exception as e:
+            logging.warning("ensure_fb_block_triage_table: could not ensure table (continuing): %s", e)
+
+    def ensure_fb_block_occurrences_table(self) -> None:
+        """Ensure raw Facebook blocked URL occurrences exist for detailed troubleshooting."""
+        create_table_sql = """
+            CREATE TABLE IF NOT EXISTS fb_block_occurrences (
+                id SERIAL PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                blocked_reason TEXT NOT NULL,
+                requested_url TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                block_category TEXT NOT NULL,
+                occurrence_ts TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (run_id, blocked_reason, requested_url, source_key, block_category, occurrence_ts)
+            )
+        """
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_fb_block_occurrences_run_id ON fb_block_occurrences(run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_fb_block_occurrences_reason ON fb_block_occurrences(blocked_reason)",
+            "CREATE INDEX IF NOT EXISTS idx_fb_block_occurrences_source_key ON fb_block_occurrences(source_key)",
+            "CREATE INDEX IF NOT EXISTS idx_fb_block_occurrences_category ON fb_block_occurrences(block_category)",
+            "CREATE INDEX IF NOT EXISTS idx_fb_block_occurrences_occurrence_ts ON fb_block_occurrences(occurrence_ts)",
+        ]
+        try:
+            self.execute_query(create_table_sql)
+            for index_sql in indexes:
+                self.execute_query(index_sql)
+            logging.info("ensure_fb_block_occurrences_table: ensured fb_block_occurrences exists")
+        except Exception as e:
+            logging.warning("ensure_fb_block_occurrences_table: could not ensure table (continuing): %s", e)
         
 
     def load_blacklist_domains(self):
@@ -1100,85 +1362,19 @@ class DatabaseHandler():
             pass
 
         # Create the 'urls' table
-        urls_table_query = """
-            CREATE TABLE IF NOT EXISTS urls (
-                link_id SERIAL PRIMARY KEY
-                link TEXT,
-                parent_url TEXT,
-                source TEXT,
-                keywords TEXT,
-                relevant BOOLEAN,
-                crawl_try INTEGER,
-                time_stamp TIMESTAMP
-            )
-        """
-        self.execute_query(urls_table_query)
+        self.execute_query(URLS_TABLE_SCHEMA_SQL)
         logging.info("create_tables: 'urls' table created or already exists.")
 
         # Create the 'events' table
-        events_table_query = """
-            CREATE TABLE IF NOT EXISTS events (
-                event_id SERIAL PRIMARY KEY,
-                event_name TEXT,
-                dance_style TEXT,
-                description TEXT,
-                day_of_week TEXT,
-                start_date DATE,
-                end_date DATE,
-                start_time TIME,
-                end_time TIME,
-                source TEXT,
-                location TEXT,
-                price TEXT,
-                url TEXT,
-                event_type TEXT,
-                address_id INTEGER,
-                time_stamp TIMESTAMP
-            )
-        """
-        self.execute_query(events_table_query)
+        self.execute_query(EVENTS_TABLE_SCHEMA_SQL)
         logging.info("create_tables: 'events' table created or already exists.")
 
         # Create the 'address' table
-        address_table_query = """
-            CREATE TABLE IF NOT EXISTS address (
-                address_id SERIAL PRIMARY KEY,
-                full_address TEXT UNIQUE,
-                building_name TEXT,
-                street_number TEXT,
-                street_name TEXT,
-                street_type TEXT,
-                direction TEXT,
-                city TEXT,
-                met_area TEXT,
-                province_or_state TEXT,
-                postal_code TEXT,
-                country_id TEXT,
-                time_stamp TIMESTAMP
-            )
-        """
-        self.execute_query(address_table_query)
+        self.execute_query(ADDRESS_TABLE_SCHEMA_SQL)
         logging.info("create_tables: 'address' table created or already exists.")
 
         # Create the 'runs' table
-        runs_table_query = """
-            CREATE TABLE IF NOT EXISTS runs (
-                run_id SERIAL PRIMARY KEY,
-                run_name TEXT UNIQUE,
-                run_description TEXT,
-                start_time TEXT,
-                end_time TEXT,
-                elapsed_time TEXT,
-                python_file_name TEXT,
-                unique_urls_count INTEGER,
-                total_url_attempts INTEGER,
-                urls_with_extracted_text INTEGER,
-                urls_with_found_keywords INTEGER,
-                events_written_to_db INTEGER,
-                time_stamp TIMESTAMP
-            )
-        """
-        self.execute_query(runs_table_query)
+        self.execute_query(RUNS_TABLE_SCHEMA_SQL)
         logging.info("create_tables: 'address' table created or already exists.")
 
         # Create chatbot performance metric tables
@@ -1203,48 +1399,44 @@ class DatabaseHandler():
 
     def create_chatbot_metrics_tables(self) -> None:
         """Create chatbot performance metric tables used for long-term latency reporting."""
-        request_metrics_query = """
-            CREATE TABLE IF NOT EXISTS chatbot_request_metrics (
-                id SERIAL PRIMARY KEY,
-                request_id TEXT UNIQUE NOT NULL,
-                endpoint TEXT NOT NULL,
-                session_suffix TEXT,
-                started_at TIMESTAMP,
-                finished_at TIMESTAMP,
-                duration_ms DOUBLE PRECISION,
-                result_type TEXT,
-                user_input TEXT,
-                sql_snippet TEXT,
-                has_response BOOLEAN,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """
-        stage_metrics_query = """
-            CREATE TABLE IF NOT EXISTS chatbot_stage_metrics (
-                id SERIAL PRIMARY KEY,
-                request_id TEXT NOT NULL,
-                endpoint TEXT NOT NULL,
-                stage TEXT NOT NULL,
-                started_at TIMESTAMP,
-                finished_at TIMESTAMP,
-                duration_ms DOUBLE PRECISION,
-                metadata_json TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """
-        indexes = [
-            "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_started_at ON chatbot_request_metrics(started_at)",
-            "CREATE INDEX IF NOT EXISTS idx_chatbot_request_metrics_endpoint ON chatbot_request_metrics(endpoint)",
-            "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_started_at ON chatbot_stage_metrics(started_at)",
-            "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_stage ON chatbot_stage_metrics(stage)",
-            "CREATE INDEX IF NOT EXISTS idx_chatbot_stage_metrics_request_id ON chatbot_stage_metrics(request_id)",
-        ]
-        self.execute_query(request_metrics_query)
-        self.execute_query(stage_metrics_query)
-        for query in indexes:
+        for query in CHATBOT_METRICS_SCHEMA_QUERIES:
             self.execute_query(query)
         logging.info("create_chatbot_metrics_tables: chatbot metric tables created or already exist.")
+
+    def ensure_core_event_tables(self) -> None:
+        """Ensure canonical events, events_history, and address tables exist."""
+        self.execute_query(EVENTS_HISTORY_TABLE_SCHEMA_SQL)
+        self.execute_query("ALTER TABLE events_history ADD COLUMN IF NOT EXISTS original_event_id INTEGER")
+        self.execute_query(EVENTS_TABLE_SCHEMA_SQL)
+        self.execute_query(ADDRESS_TABLE_SCHEMA_SQL)
+
+    def ensure_core_application_tables(self) -> None:
+        """Ensure the base application tables and required core columns exist."""
+        self.execute_query(URLS_TABLE_SCHEMA_SQL)
+        self.execute_query(RUNS_TABLE_SCHEMA_SQL)
+        self.ensure_core_event_tables()
+
+    def ensure_address_sequence(self, start_with: int) -> None:
+        """Ensure the address primary-key sequence exists and is attached to address.address_id."""
+        safe_start_with = max(1, int(start_with or 1))
+        create_seq_sql = f"""
+            CREATE SEQUENCE IF NOT EXISTS address_address_id_seq
+            START WITH {safe_start_with}
+            INCREMENT BY 1
+            NO MINVALUE
+            NO MAXVALUE
+            CACHE 1;
+        """
+        alter_col_sql = """
+            ALTER TABLE address
+            ALTER COLUMN address_id SET DEFAULT nextval('address_address_id_seq');
+        """
+        alter_seq_sql = """
+            ALTER SEQUENCE address_address_id_seq OWNED BY address.address_id;
+        """
+        self.execute_query(create_seq_sql)
+        self.execute_query(alter_col_sql)
+        self.execute_query(alter_seq_sql)
 
 
     def create_urls_df(self):
@@ -1290,13 +1482,16 @@ class DatabaseHandler():
                 return pd.read_sql(query, connection, params=params)
         
 
-    def execute_query(self, query, params=None):
+    def execute_query(self, query, params=None, statement_timeout_ms: Optional[int] = None):
         """
         Executes a given SQL query with optional parameters.
 
         Args:
             query (str): The SQL query to execute.
             params (dict, optional): Dictionary of parameters for parameterized queries.
+            statement_timeout_ms (int, optional): PostgreSQL statement timeout in milliseconds
+                for this query only. When provided, the query will fail fast instead of
+                waiting indefinitely on locks or blocked execution.
 
         Returns:
             list: List of rows (as tuples) if the query returns rows.
@@ -1319,6 +1514,17 @@ class DatabaseHandler():
 
         try:
             with self.conn.connect() as connection:
+                if statement_timeout_ms is not None:
+                    timeout_ms = max(int(statement_timeout_ms), 1)
+                    connection.execute(
+                        text("SELECT set_config('statement_timeout', :timeout_value, true)"),
+                        {"timeout_value": f"{timeout_ms}ms"},
+                    )
+                    logging.info(
+                        "execute_query(): applied statement_timeout=%dms for query starting with %s",
+                        timeout_ms,
+                        query.strip().split()[0].upper() if query and query.strip() else "UNKNOWN",
+                    )
                 result = connection.execute(text(query), params or {})
 
                 if result.returns_rows:
@@ -2261,6 +2467,156 @@ class DatabaseHandler():
                 "record_validation_run_artifact(): failed for run_id=%s artifact_type=%s: %s",
                 safe_run_id,
                 safe_artifact_type,
+                e,
+            )
+
+    def record_fb_block_triage_rows(
+        self,
+        *,
+        run_id: str,
+        blocked_reason: str,
+        rows: List[Dict[str, Any]],
+        window_start: Optional[datetime] = None,
+        window_end: Optional[datetime] = None,
+    ) -> None:
+        """Upsert aggregated Facebook blocked-content triage rows for one validation run."""
+        safe_run_id = str(run_id or "").strip()
+        safe_blocked_reason = str(blocked_reason or "").strip()
+        if not safe_run_id or not safe_blocked_reason or not isinstance(rows, list):
+            return
+        try:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                source_key = str(row.get("source_key", "") or "").strip()
+                block_category = str(row.get("category", "") or "").strip()
+                if not source_key or not block_category:
+                    continue
+                self.execute_query(
+                    """
+                    INSERT INTO fb_block_triage (
+                        run_id,
+                        blocked_reason,
+                        source_key,
+                        block_category,
+                        unique_url_count,
+                        blocked_attempt_count,
+                        sample_url,
+                        window_start,
+                        window_end,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (
+                        :run_id,
+                        :blocked_reason,
+                        :source_key,
+                        :block_category,
+                        :unique_url_count,
+                        :blocked_attempt_count,
+                        :sample_url,
+                        :window_start,
+                        :window_end,
+                        :created_at,
+                        :updated_at
+                    )
+                    ON CONFLICT (run_id, blocked_reason, source_key, block_category)
+                    DO UPDATE SET
+                        unique_url_count = EXCLUDED.unique_url_count,
+                        blocked_attempt_count = EXCLUDED.blocked_attempt_count,
+                        sample_url = EXCLUDED.sample_url,
+                        window_start = EXCLUDED.window_start,
+                        window_end = EXCLUDED.window_end,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    {
+                        "run_id": safe_run_id,
+                        "blocked_reason": safe_blocked_reason,
+                        "source_key": source_key,
+                        "block_category": block_category,
+                        "unique_url_count": int(row.get("unique_urls", 0) or 0),
+                        "blocked_attempt_count": int(row.get("attempt_count", 0) or 0),
+                        "sample_url": str(row.get("sample_url", "") or "").strip() or None,
+                        "window_start": window_start,
+                        "window_end": window_end,
+                        "created_at": datetime.now(),
+                        "updated_at": datetime.now(),
+                    },
+                )
+        except Exception as e:
+            logging.warning(
+                "record_fb_block_triage_rows(): failed for run_id=%s blocked_reason=%s: %s",
+                safe_run_id,
+                safe_blocked_reason,
+                e,
+            )
+
+    def record_fb_block_occurrences(
+        self,
+        *,
+        run_id: str,
+        blocked_reason: str,
+        rows: List[Dict[str, Any]],
+    ) -> None:
+        """Insert raw Facebook blocked URL occurrences for one validation run."""
+        safe_run_id = str(run_id or "").strip()
+        safe_blocked_reason = str(blocked_reason or "").strip()
+        if not safe_run_id or not safe_blocked_reason or not isinstance(rows, list):
+            return
+        try:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                requested_url = str(row.get("requested_url", "") or "").strip()
+                source_key = str(row.get("source_key", "") or "").strip()
+                block_category = str(row.get("category", "") or "").strip()
+                occurrence_raw = str(row.get("occurrence_ts", "") or "").strip()
+                if not requested_url or not source_key or not block_category:
+                    continue
+                occurrence_ts = None
+                if occurrence_raw:
+                    try:
+                        occurrence_ts = datetime.fromisoformat(occurrence_raw)
+                    except ValueError:
+                        occurrence_ts = None
+                self.execute_query(
+                    """
+                    INSERT INTO fb_block_occurrences (
+                        run_id,
+                        blocked_reason,
+                        requested_url,
+                        source_key,
+                        block_category,
+                        occurrence_ts,
+                        created_at
+                    )
+                    VALUES (
+                        :run_id,
+                        :blocked_reason,
+                        :requested_url,
+                        :source_key,
+                        :block_category,
+                        :occurrence_ts,
+                        :created_at
+                    )
+                    ON CONFLICT (run_id, blocked_reason, requested_url, source_key, block_category, occurrence_ts)
+                    DO NOTHING
+                    """,
+                    {
+                        "run_id": safe_run_id,
+                        "blocked_reason": safe_blocked_reason,
+                        "requested_url": requested_url,
+                        "source_key": source_key,
+                        "block_category": block_category,
+                        "occurrence_ts": occurrence_ts,
+                        "created_at": datetime.now(),
+                    },
+                )
+        except Exception as e:
+            logging.warning(
+                "record_fb_block_occurrences(): failed for run_id=%s blocked_reason=%s: %s",
+                safe_run_id,
+                safe_blocked_reason,
                 e,
             )
 
@@ -6568,29 +6924,7 @@ class DatabaseHandler():
                 logging.info(f"reset_address_id_sequence(): Reset sequence '{sequence_name}' to {max_id}")
             else:
                 # Create proper sequence if it doesn't exist
-                create_seq_sql = f"""
-                CREATE SEQUENCE IF NOT EXISTS address_address_id_seq
-                START WITH {max_id + 1}
-                INCREMENT BY 1
-                NO MINVALUE
-                NO MAXVALUE
-                CACHE 1;
-                """
-                self.execute_query(create_seq_sql)
-                
-                # Update column default
-                alter_col_sql = """
-                ALTER TABLE address 
-                ALTER COLUMN address_id SET DEFAULT nextval('address_address_id_seq');
-                """
-                self.execute_query(alter_col_sql)
-                
-                # Set sequence ownership
-                alter_seq_sql = """
-                ALTER SEQUENCE address_address_id_seq OWNED BY address.address_id;
-                """
-                self.execute_query(alter_seq_sql)
-                
+                self.ensure_address_sequence(max_id + 1)
                 logging.info(f"reset_address_id_sequence(): Created new sequence 'address_address_id_seq' starting from {max_id + 1}")
             
             # Clean up temp table
