@@ -324,8 +324,11 @@ prompts:
   irishtimespub.ca:
     file: prompts/multi_event_venues.txt
     schema: event_extraction
+  https://www.theemporia.ca/events:
+    file: prompts/multi_event_venues.txt
+    schema: event_extraction
   https://vbds.org/other-dancing-opportunities/:
-    file: prompts/default.txt
+    file: prompts/multi_event_venues.txt
     schema: event_extraction
   latindancecanada.com:
     file: prompts/default.txt

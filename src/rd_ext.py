@@ -200,6 +200,120 @@ async def _wait_for_login_completion(
     return False
 
 
+def _is_obvious_non_event_navigation_path(path: str) -> bool:
+    """Return True for common venue navigation paths that should not be crawled as child events."""
+    normalized = (path or "").strip().lower().rstrip("/")
+    if not normalized:
+        return True
+
+    blocked_segments = {
+        "about",
+        "booking",
+        "calendar-feed",
+        "catering",
+        "contact",
+        "contacts",
+        "drink",
+        "drinks",
+        "faq",
+        "food",
+        "gallery",
+        "history",
+        "home",
+        "hours",
+        "location",
+        "locations",
+        "menu",
+        "menus",
+        "policy",
+        "policies",
+        "privacy",
+        "reservation",
+        "reservations",
+        "shop",
+        "tickets",
+        "venue",
+    }
+    parts = [part for part in normalized.split("/") if part]
+    if not parts:
+        return True
+    return any(part in blocked_segments for part in parts)
+
+
+def _should_follow_same_domain_child_link(base_url: str, candidate_url: str) -> bool:
+    """Filter same-domain links so multi-event listings do not wander into venue navigation pages."""
+    base_parsed = urlparse(base_url)
+    candidate_parsed = urlparse(candidate_url)
+    base_path = (base_parsed.path or "").strip().lower().rstrip("/")
+    candidate_path = (candidate_parsed.path or "").strip().lower().rstrip("/")
+
+    if not candidate_path or candidate_path == base_path:
+        return False
+    if candidate_parsed.fragment and not candidate_path:
+        return False
+
+    listing_like_base = any(
+        marker in base_path for marker in ("/events", "/event", "/calendar", "/live-music")
+    )
+    if not listing_like_base:
+        return True
+
+    if _is_obvious_non_event_navigation_path(candidate_path):
+        return False
+    return True
+
+
+def _should_attempt_content_reveal_click(url: str) -> bool:
+    """Return True for known listing pages that sometimes reveal content only after interaction."""
+    normalized = (url or "").strip().lower()
+    interactive_listing_urls = {
+        "https://www.theemporia.ca/events",
+    }
+    return normalized.rstrip("/") in {entry.rstrip("/") for entry in interactive_listing_urls}
+
+
+def _is_embedded_event_iframe_url(url: str) -> bool:
+    """Return True for iframe sources that can contain crawlable event listings."""
+    normalized = (url or "").strip().lower()
+    iframe_event_hosts = (
+        "calendar.boomte.ch",
+        "widgets.boomte.ch",
+        "calendar.google.com",
+    )
+    if any(host in normalized for host in iframe_event_hosts):
+        return True
+    return any(token in normalized for token in ("widget?", "/widget", "currentroute=.%2fevents"))
+
+
+def _looks_like_child_event_url(url: str) -> bool:
+    """Return True for links that likely point to a single event detail page."""
+    normalized = (url or "").strip().lower()
+    return (
+        "/single/" in normalized
+        or "/show/" in normalized
+        or "/event/" in normalized
+        or "/events/" in normalized
+    )
+
+
+def _looks_like_event_iframe_text(text: str) -> bool:
+    """Return True when iframe text looks like an event widget rather than generic embedded content."""
+    normalized = str(text or "").lower()
+    event_markers = ("agenda", "add to calendar", "share this event", "description")
+    date_markers = (
+        "monday,",
+        "tuesday,",
+        "wednesday,",
+        "thursday,",
+        "friday,",
+        "saturday,",
+        "sunday,",
+    )
+    return any(marker in normalized for marker in event_markers) and any(
+        marker in normalized for marker in date_markers
+    )
+
+
 def _get_login_probe_url(organization: str, login_url: str) -> str:
     """Return the best page to probe when checking whether saved auth is reusable."""
     org = str(organization or "").strip().lower()
@@ -630,10 +744,15 @@ class ReadExtract:
                     except Exception as e:
                         logging.warning(f"extract_event_text: Error clicking 'View all event details' button for {link}: {e}")
 
+                await self._attempt_content_reveal_click(link)
+
                 # Pull the page HTML and parse
                 content = await self.page.content()
                 soup = BeautifulSoup(content, "html.parser")
                 text = " ".join(soup.stripped_strings)
+                iframe_text = await self._extract_embedded_iframe_text()
+                if len(iframe_text.strip()) > len(text.strip()):
+                    text = iframe_text
 
                 if text.strip():
                     logging.info(f"extract_event_text: Success on attempt {attempt} for {link}")
@@ -669,6 +788,59 @@ class ReadExtract:
 
         logging.error(f"extract_event_text: All {max_retries} attempts failed for {link}.")
         return None
+
+    async def _attempt_content_reveal_click(self, link: str) -> None:
+        """Trigger a minimal page interaction for pages that reveal content only after a click."""
+        if not _should_attempt_content_reveal_click(link):
+            return
+
+        try:
+            await self.page.mouse.click(20, 20)
+            await asyncio.sleep(1.0)
+            logging.info(
+                "extract_event_text: Applied guarded content-reveal click for %s",
+                link,
+            )
+        except Exception as exc:
+            logging.warning(
+                "extract_event_text: Guarded content-reveal click failed for %s: %s",
+                link,
+                exc,
+            )
+
+    async def _extract_embedded_iframe_text(self) -> str:
+        """Return text from embedded event/calendar iframes when present."""
+        collected_text: list[str] = []
+        for frame in self.page.frames:
+            if frame == self.page.main_frame:
+                continue
+            if not _is_embedded_event_iframe_url(frame.url):
+                continue
+            try:
+                frame_body = await frame.locator("body").inner_text()
+            except Exception as exc:
+                logging.warning(
+                    "_extract_embedded_iframe_text(): Failed reading iframe %s: %s",
+                    frame.url,
+                    exc,
+                )
+                continue
+            if not frame_body.strip():
+                continue
+            if not _looks_like_event_iframe_text(frame_body):
+                logging.info(
+                    "_extract_embedded_iframe_text(): Ignoring non-event iframe host=%s text_len=%s",
+                    urlparse(frame.url).netloc or frame.url,
+                    len(frame_body),
+                )
+                continue
+            logging.info(
+                "_extract_embedded_iframe_text(): Using embedded event iframe host=%s text_len=%s",
+                urlparse(frame.url).netloc or frame.url,
+                len(frame_body),
+            )
+            collected_text.append(frame_body)
+        return "\n".join(collected_text).strip()
 
 
     async def close(self):
@@ -819,7 +991,44 @@ class ReadExtract:
             if is_calendar_export_url(abs_url):
                 logging.info(f"Skipping calendar feed link: {abs_url}")
                 continue
+            if not _should_follow_same_domain_child_link(base, abs_url):
+                logging.info("extract_links(): Skipping non-event same-domain link: %s", abs_url)
+                continue
             found.add(abs_url)
+
+        for frame in self.page.frames:
+            if frame == self.page.main_frame:
+                continue
+            if not _is_embedded_event_iframe_url(frame.url):
+                continue
+            try:
+                iframe_links = await frame.locator("a[href]").evaluate_all(
+                    """els => els.map(el => (el.href || '').trim()).filter(Boolean)"""
+                )
+            except Exception as exc:
+                logging.warning(
+                    "extract_links(): Failed reading iframe links from %s: %s",
+                    frame.url,
+                    exc,
+                )
+                continue
+            followed_from_frame = 0
+            for iframe_link in iframe_links:
+                if is_social_media_url(iframe_link):
+                    logging.info("extract_links(): Skipping social media iframe URL (fb/ig): %s", iframe_link)
+                    continue
+                if is_calendar_export_url(iframe_link):
+                    logging.info("extract_links(): Skipping iframe calendar feed link: %s", iframe_link)
+                    continue
+                if not _looks_like_child_event_url(iframe_link):
+                    continue
+                found.add(iframe_link)
+                followed_from_frame += 1
+            logging.info(
+                "extract_links(): embedded iframe host=%s child_event_links=%s",
+                urlparse(frame.url).netloc or frame.url,
+                followed_from_frame,
+            )
 
         return list(found)
 

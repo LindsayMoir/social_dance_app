@@ -20,14 +20,11 @@ It initializes with a configuration file, sets up logging, connects to the datab
         delete_irrelevant_rows(df): Deletes irrelevant events from the database.
 """
 from datetime import datetime
-from dotenv import load_dotenv
-import json
-from io import StringIO
 import logging
 import os
+
 import pandas as pd
-import re
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 import yaml
 
 from config_runtime import get_config_path
@@ -36,6 +33,8 @@ from db import DatabaseHandler
 
 
 class IrrelevantRowsHandler:
+    _RELEVANCE_SCHEMA_TYPE = "relevance_classification"
+
     def __init__(self, config_path='config/config.yaml'):
         """
         Initializes the IrrelevantRowsHandler with configuration, database, and API connections.
@@ -190,7 +189,11 @@ class IrrelevantRowsHandler:
             prompt = self.load_prompt(chunk.to_json(orient="records"))
             # logging.info(f"def process_chunk_with_llm(): Prompt for chunk {chunk_index}:\n{prompt}")
 
-            response_chunk = self.llm_handler.query_llm('', prompt)
+            response_chunk = self.llm_handler.query_llm(
+                '',
+                prompt,
+                schema_type=self._RELEVANCE_SCHEMA_TYPE,
+            )
 
             if not response_chunk:
                 logging.warning(f"def process_chunk_with_llm(): Received empty response for chunk {chunk_index}.")
@@ -215,31 +218,26 @@ class IrrelevantRowsHandler:
             pd.DataFrame: Cleaned DataFrame with extracted structured JSON data.
         """
         try:
-            # Find the JSON-like block within the response
-            json_match = re.search(r'\[\s*\{.*\}\s*\]', response_chunk, re.DOTALL)
+            parsed_rows = self.llm_handler.extract_and_parse_json(
+                response_chunk,
+                "irrelevant_rows",
+                self._RELEVANCE_SCHEMA_TYPE,
+            )
+            if not isinstance(parsed_rows, list) or not parsed_rows:
+                logging.error("def clean_response(): No valid relevance classification rows parsed from response.")
+                return pd.DataFrame()
 
-            if not json_match:
-                logging.error("def clean_response(): No valid JSON structure found in response.")
-                return pd.DataFrame()  # Return empty DataFrame if no match is found
-
-            # Extract the JSON string
-            json_str = json_match.group()
-
-            # Load JSON into a DataFrame
-            df = pd.read_json(StringIO(json_str))
-
-            # Ensure DataFrame has expected columns
+            df = pd.DataFrame(parsed_rows)
             required_columns = {"event_id", "Label", "event_type_new"}
             if not required_columns.issubset(df.columns):
-                logging.error(f"def clean_response(): Extracted JSON is missing required columns: {df.columns}")
+                logging.error("def clean_response(): Extracted JSON is missing required columns: %s", df.columns)
                 return pd.DataFrame()
 
             logging.info(f"def clean_response(): Successfully extracted {len(df)} rows from response.")
             return df
-
-        except (json.JSONDecodeError, ValueError) as e:
+        except (TypeError, ValueError) as e:
             logging.error(f"def clean_response(): Error parsing LLM response to JSON: {e}")
-            return pd.DataFrame()  # Return empty DataFrame if parsing fails
+            return pd.DataFrame()
 
 
     def merge_and_save_results(self, df, response_dfs):

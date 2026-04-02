@@ -109,6 +109,28 @@ class DeduplicationHandler:
             logging.warning("_load_source_score_penalties: Failed to load penalties: %s", e)
             return []
 
+    def _write_unparseable_datetime_artifact(self, dropped_df: pd.DataFrame) -> None:
+        """Persist dropped embedding-dedup rows with datetime parse failures for review."""
+        if dropped_df.empty:
+            return
+        artifact_columns = [
+            "event_id",
+            "event_name",
+            "start_date",
+            "start_time",
+            "source",
+            "location",
+            "url",
+        ]
+        artifact_df = dropped_df.loc[:, [col for col in artifact_columns if col in dropped_df.columns]].copy()
+        artifact_path = duplicates_path("unparseable_datetimes.csv")
+        artifact_df.to_csv(artifact_path, index=False)
+        logging.info(
+            "_write_unparseable_datetime_artifact(): Saved %s rows to %s",
+            len(artifact_df),
+            artifact_path,
+        )
+
     @staticmethod
     def _source_matches_rule(source: str, match_rule: Dict[str, Any]) -> bool:
         if not source or not isinstance(match_rule, dict):
@@ -1133,10 +1155,24 @@ class DeduplicationHandler:
         )
 
         # Drop any events where datetime parsing failed
-        before_drop = len(df)
-        df = df.dropna(subset=['start_datetime'])
-        if len(df) < before_drop:
-            logging.warning(f"Dropped {before_drop - len(df)} events with unparseable datetime")
+        invalid_datetime_mask = df['start_datetime'].isna()
+        invalid_datetime_df = df.loc[invalid_datetime_mask].copy()
+        if not invalid_datetime_df.empty:
+            dropped_count = len(invalid_datetime_df)
+            sample_payload = (
+                invalid_datetime_df[
+                    [col for col in ['event_id', 'event_name', 'start_date', 'start_time', 'source'] if col in invalid_datetime_df.columns]
+                ]
+                .head(5)
+                .to_dict(orient='records')
+            )
+            logging.warning(
+                "Dropped %s events with unparseable datetime. sample=%s",
+                dropped_count,
+                sample_payload,
+            )
+            self._write_unparseable_datetime_artifact(invalid_datetime_df)
+        df = df.loc[~invalid_datetime_mask].copy()
 
         address_query = "SELECT address_id, postal_code FROM address"
         address_df = pd.read_sql(address_query, self.engine)

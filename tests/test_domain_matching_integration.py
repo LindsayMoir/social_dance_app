@@ -122,6 +122,8 @@ class TestDomainMatchingIntegration(unittest.TestCase):
             'https://loftpubvictoria.com/events/month/',
             'https://thedukesaloon.com/events/',
             'https://www.irishtimespub.ca/live-music',
+            'https://www.theemporia.ca/events',
+            'https://vbds.org/other-dancing-opportunities/',
         ]
         for key in expected_keys:
             with self.subTest(key=key):

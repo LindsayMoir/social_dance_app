@@ -7,6 +7,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from rd_ext import (
     _derive_rd_ext_effective_keywords,
     _get_login_probe_url,
+    _is_embedded_event_iframe_url,
+    _looks_like_event_iframe_text,
+    _looks_like_child_event_url,
+    _should_attempt_content_reveal_click,
+    _should_follow_same_domain_child_link,
     _wait_for_login_completion,
 )
 
@@ -109,3 +114,56 @@ def test_derive_rd_ext_effective_keywords_falls_back_to_live_music() -> None:
     effective = _derive_rd_ext_effective_keywords(text, keywords)
 
     assert effective == ["live music"]
+
+
+def test_should_follow_same_domain_child_link_skips_navigation_pages() -> None:
+    base_url = "https://www.theemporia.ca/events"
+
+    assert not _should_follow_same_domain_child_link(
+        base_url, "https://www.theemporia.ca/menu"
+    )
+    assert not _should_follow_same_domain_child_link(
+        base_url, "https://www.theemporia.ca/reservations"
+    )
+    assert not _should_follow_same_domain_child_link(
+        base_url, "https://www.theemporia.ca/catering"
+    )
+
+
+def test_should_follow_same_domain_child_link_keeps_event_candidates() -> None:
+    base_url = "https://www.theemporia.ca/events"
+
+    assert _should_follow_same_domain_child_link(
+        base_url, "https://www.theemporia.ca/events/friday-night-dance/"
+    )
+    assert _should_follow_same_domain_child_link(
+        base_url, "https://www.theemporia.ca/live-band-april-12/"
+    )
+
+
+def test_should_attempt_content_reveal_click_only_for_known_interactive_pages() -> None:
+    assert _should_attempt_content_reveal_click("https://www.theemporia.ca/events")
+    assert _should_attempt_content_reveal_click("https://www.theemporia.ca/events/")
+    assert not _should_attempt_content_reveal_click("https://www.theemporia.ca/menu")
+    assert not _should_attempt_content_reveal_click("https://loftpubvictoria.com/events/month/")
+
+
+def test_is_embedded_event_iframe_url_identifies_boomte_calendar() -> None:
+    assert _is_embedded_event_iframe_url("https://calendar.boomte.ch/widget?pageId=za8dj")
+    assert _is_embedded_event_iframe_url("https://example.com/widget?currentRoute=.%2Fevents")
+    assert not _is_embedded_event_iframe_url("https://www.theemporia.ca/events")
+
+
+def test_looks_like_child_event_url_accepts_single_event_patterns() -> None:
+    assert _looks_like_child_event_url("https://calendar.boomte.ch/single/abc123")
+    assert _looks_like_child_event_url("https://thedukesaloon.com/event/backcountry-fridays/")
+    assert not _looks_like_child_event_url("https://www.theemporia.ca/menu")
+
+
+def test_looks_like_event_iframe_text_requires_event_and_date_signals() -> None:
+    rich_event_text = (
+        "Agenda\nHeather Ferguson\nThursday, 02 April\nDescription\n"
+        "Add to Calendar\nShare this Event"
+    )
+    assert _looks_like_event_iframe_text(rich_event_text)
+    assert not _looks_like_event_iframe_text("Embedded newsletter signup widget")

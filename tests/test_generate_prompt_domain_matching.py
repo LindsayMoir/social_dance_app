@@ -59,6 +59,10 @@ class TestGeneratePromptDomainMatching(unittest.TestCase):
                     'file': self.exact_url_prompt_file,
                     'schema': 'event_extraction'
                 },
+                'https://www.theemporia.ca/events': {
+                    'file': self.exact_url_prompt_file,
+                    'schema': 'event_extraction'
+                },
                 # Exact URL config (existing behavior)
                 'https://example.com/exact/path': {
                     'file': self.exact_url_prompt_file,
@@ -135,6 +139,17 @@ class TestGeneratePromptDomainMatching(unittest.TestCase):
         # Should use domain-level prompt content rather than falling back to default.
         self.assertIn("Domain-specific prompt content", prompt)
         self.assertEqual(schema, 'event_extraction')
+
+    def test_exact_www_listing_url_match(self):
+        """Known listing URLs should resolve via their exact configured entry."""
+        url = "https://www.theemporia.ca/events"
+        prompt_type = "https://www.theemporia.ca/events"
+        extracted_text = "Sample extracted text"
+
+        prompt, schema = self.llm_handler.generate_prompt(url, extracted_text, prompt_type)
+
+        self.assertIn("Exact URL prompt content", prompt)
+        self.assertEqual(schema, "event_extraction")
 
     def test_www_variant_matches_non_www_domain_config(self):
         """Test that www/non-www hostname differences still resolve the configured prompt."""
