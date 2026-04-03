@@ -29,6 +29,11 @@ from utils.chatbot_metrics_sync_utils import (
     sanitize_records_for_sql,
     utc_now_iso_seconds,
 )
+from classifier_training_promoter import (
+    parse_manual_review_label,
+    promote_manual_review_training_rows,
+    summarize_manual_review_csv,
+)
 from db import ensure_chatbot_metrics_schema
 from db import EVENTS_HISTORY_TABLE_SCHEMA_SQL, EVENTS_TABLE_SCHEMA_SQL, ADDRESS_TABLE_SCHEMA_SQL
 
@@ -100,6 +105,9 @@ RUN_SCORECARD_PATH = codex_review_path("run_scorecard.json")
 VALIDATION_REPORT_PATH = reports_path("comprehensive_test_report.html")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANUAL_COVERAGE_AUDIT_PATH = os.path.join(REPO_ROOT, "data", "evaluation", "manual_coverage_audit.csv")
+DATABASE_ACCURACY_MANUAL_REVIEW_PATH = codex_review_path("database_accuracy_manual_review.csv")
+URL_ARCHETYPE_ML_CLASSIFIER_REVIEW_PATH = codex_review_path("url_archetype_ml_classifier_review.csv")
+CLASSIFIER_TRAINING_CSV_PATH = os.path.join(REPO_ROOT, "ml", "training_data", "original_td.csv")
 _LOG_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 
 
@@ -233,6 +241,136 @@ def _validation_report_was_regenerated(
 def _sql_one_line(statement: str) -> str:
     """Collapse SQL into a single line suitable for psql -c usage."""
     return " ".join(str(statement or "").split())
+
+
+def _database_accuracy_manual_review_status(csv_path: str | None = None) -> dict:
+    """Return completion status for the prior database accuracy manual review CSV."""
+    target_path = str(csv_path or DATABASE_ACCURACY_MANUAL_REVIEW_PATH)
+    summary = summarize_manual_review_csv(target_path)
+    if not summary.get("exists"):
+        return {
+            "path": target_path,
+            "exists": False,
+            "rows_total": 0,
+            "rows_completed": 0,
+            "rows_missing_label": 0,
+            "rows_true": 0,
+            "rows_false": 0,
+            "false_rows_missing_truth": 0,
+            "correctness_pct": None,
+            "complete": True,
+            "reason": "missing_file",
+        }
+
+    rows_total = int(summary.get("rows_total", 0) or 0)
+    rows_missing_label = int(summary.get("rows_missing_label", 0) or 0)
+    false_rows_missing_truth = int(summary.get("false_rows_missing_truth", 0) or 0)
+    complete = rows_total > 0 and rows_missing_label == 0 and false_rows_missing_truth == 0
+    return {
+        "path": target_path,
+        "exists": True,
+        "rows_total": rows_total,
+        "rows_completed": int(summary.get("rows_completed", 0) or 0),
+        "rows_missing_label": rows_missing_label,
+        "rows_true": int(summary.get("rows_true", 0) or 0),
+        "rows_false": int(summary.get("rows_false", 0) or 0),
+        "false_rows_missing_truth": false_rows_missing_truth,
+        "correctness_pct": summary.get("correctness_pct"),
+        "complete": complete,
+        "reason": (
+            "complete"
+            if complete
+            else ("missing_false_truth_labels" if false_rows_missing_truth else "missing_human_labels")
+        ),
+    }
+
+
+def _database_event_accuracy_manual_review_status(csv_path: str | None = None) -> dict:
+    """Return completion status for the prior event-accuracy manual review CSV."""
+    target_path = str(csv_path or DATABASE_ACCURACY_MANUAL_REVIEW_PATH)
+    if not os.path.exists(target_path):
+        return {
+            "path": target_path,
+            "exists": False,
+            "rows_total": 0,
+            "rows_completed": 0,
+            "rows_missing_label": 0,
+            "rows_true": 0,
+            "rows_false": 0,
+            "correctness_pct": None,
+            "complete": True,
+            "reason": "missing_file",
+        }
+
+    with open(target_path, "r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    rows_total = len(rows)
+    rows_completed = 0
+    rows_missing_label = 0
+    rows_true = 0
+    rows_false = 0
+    for row in rows:
+        parsed = parse_manual_review_label(row.get("human_label"))
+        if parsed is None:
+            if str(row.get("human_label") or "").strip():
+                rows_completed += 1
+            else:
+                rows_missing_label += 1
+            continue
+        rows_completed += 1
+        if parsed:
+            rows_true += 1
+        else:
+            rows_false += 1
+
+    labeled_rows = rows_true + rows_false
+    correctness_pct = round((rows_true / labeled_rows) * 100.0, 2) if labeled_rows else None
+    complete = rows_total > 0 and rows_missing_label == 0
+    return {
+        "path": target_path,
+        "exists": True,
+        "rows_total": rows_total,
+        "rows_completed": rows_completed,
+        "rows_missing_label": rows_missing_label,
+        "rows_true": rows_true,
+        "rows_false": rows_false,
+        "correctness_pct": correctness_pct,
+        "complete": complete,
+        "reason": "complete" if complete else "missing_human_labels",
+    }
+
+
+def _persist_manual_review_classifier_accuracy(status: dict, db_handler=None) -> None:
+    """Persist classifier correctness derived from the scored manual-review CSV."""
+    correctness_pct = status.get("correctness_pct")
+    rows_true = int(status.get("rows_true", 0) or 0)
+    rows_false = int(status.get("rows_false", 0) or 0)
+    labeled_rows = rows_true + rows_false
+    if correctness_pct is None or labeled_rows <= 0:
+        return
+
+    from db import DatabaseHandler
+
+    handler = db_handler if db_handler is not None else DatabaseHandler(cfg)
+    run_id = (
+        str(os.getenv("DS_RUN_ID", "")).strip()
+        or f"manual-review-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+    )
+    handler.record_metric_observation(
+        run_id=run_id,
+        metric_key="classifier_manual_correctness_pct",
+        metric_value_numeric=float(correctness_pct),
+        metric_unit="percent",
+        description="Share of reviewed classifier audit URLs marked correct by human scoring",
+        higher_is_better=True,
+        notes={
+            "review_csv_path": str(status.get("path") or ""),
+            "labeled_rows": labeled_rows,
+            "true_count": rows_true,
+            "false_count": rows_false,
+        },
+    )
 
 
 def refresh_manual_coverage_audit_csv(
@@ -650,6 +788,77 @@ def copy_log_files():
     
     logger.info(f"def copy_log_files(): Successfully moved {log_files_moved} log files to {archive_folder}")
     return True
+
+
+@flow(name="Database Accuracy Manual Review Gate Step")
+def database_accuracy_manual_review_gate_step():
+    """Block the pipeline until the prior event and classifier review CSVs are completed."""
+    logger.info("=" * 70)
+    logger.info("DATABASE ACCURACY MANUAL REVIEW GATE STEP")
+    logger.info("Checking whether the prior database accuracy and URL classifier review CSVs are complete")
+    logger.info("=" * 70)
+
+    while True:
+        event_status = _database_event_accuracy_manual_review_status()
+        classifier_status = _database_accuracy_manual_review_status(URL_ARCHETYPE_ML_CLASSIFIER_REVIEW_PATH)
+        logger.info(
+            "database_accuracy_manual_review_gate_step(): event_status=%s classifier_status=%s",
+            event_status,
+            classifier_status,
+        )
+
+        event_complete = bool(event_status.get("complete"))
+        classifier_complete = bool(classifier_status.get("complete"))
+
+        if event_complete and classifier_complete:
+            if event_status.get("reason") == "missing_file" and classifier_status.get("reason") == "missing_file":
+                logger.info(
+                    "database_accuracy_manual_review_gate_step(): No prior manual review CSVs found; continuing."
+                )
+                return True
+
+            _persist_manual_review_classifier_accuracy(classifier_status)
+            promotion_summary = promote_manual_review_training_rows(
+                review_csv_path=str(classifier_status.get("path") or URL_ARCHETYPE_ML_CLASSIFIER_REVIEW_PATH),
+                training_csv_path=CLASSIFIER_TRAINING_CSV_PATH,
+                true_limit=2,
+                false_limit=2,
+            )
+            logger.info(
+                "database_accuracy_manual_review_gate_step(): Prior manual review CSVs complete. "
+                "Database accuracy=%s%% (%s/%s rows). Classifier correctness=%s%% (%s/%s rows). "
+                "Promoted %s review rows into training CSV (%s true, %s false). Continuing.",
+                event_status.get("correctness_pct"),
+                event_status.get("rows_completed", 0),
+                event_status.get("rows_total", 0),
+                classifier_status.get("correctness_pct"),
+                classifier_status.get("rows_completed", 0),
+                classifier_status.get("rows_total", 0),
+                promotion_summary.get("promoted_count", 0),
+                promotion_summary.get("promoted_true_count", 0),
+                promotion_summary.get("promoted_false_count", 0),
+            )
+            return True
+
+        print("\nManual review requirements are not complete.")
+        print("Database Accuracy Manual Review:")
+        print(f"CSV: {event_status.get('path')}")
+        print(
+            f"Rows completed: {event_status.get('rows_completed', 0)} / {event_status.get('rows_total', 0)}; "
+            f"missing human_label: {event_status.get('rows_missing_label', 0)}"
+        )
+        print("URL Archetype ML Classifier Review:")
+        print(f"CSV: {classifier_status.get('path')}")
+        print(
+            f"Rows completed: {classifier_status.get('rows_completed', 0)} / {classifier_status.get('rows_total', 0)}; "
+            f"missing human_label: {classifier_status.get('rows_missing_label', 0)}; "
+            f"false rows missing truth labels: {classifier_status.get('false_rows_missing_truth', 0)}"
+        )
+        acknowledgment = input(
+            "Complete the required CSVs, then type COMPLETE to re-check: "
+        ).strip()
+        if acknowledgment.upper() != "COMPLETE":
+            print("Acknowledgment not received. The pipeline will continue waiting.")
 
 # ------------------------
 # TASK: COPY, DROP, AND CREATE EVENTS TABLE
@@ -2282,6 +2491,7 @@ def sync_render_chatbot_metrics_step():
 # ------------------------
 PIPELINE_STEPS = [
     ("copy_log_files", copy_log_files),
+    ("database_accuracy_manual_review_gate", database_accuracy_manual_review_gate_step),
     ("credential_validation", credential_validation_step),
     ("validate_llm_models", validate_llm_models_step),
     ("copy_drop_create_events", copy_drop_create_events),

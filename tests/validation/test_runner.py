@@ -38,7 +38,7 @@ sys.path.insert(0, script_dir)  # Also add tests/validation for local imports
 from dotenv import load_dotenv
 load_dotenv('src/.env')  # Load from src/.env since that's where credentials are stored
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import logging
 import yaml
 import random
@@ -80,6 +80,7 @@ from classifier_training_queue import (
     build_classifier_training_queue,
     filter_classifier_review_candidates,
 )
+from classifier_training_promoter import parse_manual_review_label
 from db import DatabaseHandler
 from evaluation_holdout import load_dev_urls, load_gold_holdout_urls, normalize_evaluation_url
 from llm import LLMHandler
@@ -103,6 +104,10 @@ from page_classifier import (
     is_social_url,
     resolve_prompt_type,
 )
+
+
+DATABASE_EVENT_ACCURACY_MANUAL_REVIEW_FILENAME = "database_event_accuracy_manual_review.csv"
+URL_ARCHETYPE_ML_CLASSIFIER_REVIEW_FILENAME = "url_archetype_ml_classifier_review.csv"
 
 
 class ValidationTestRunner:
@@ -490,15 +495,19 @@ class ValidationTestRunner:
             results['chatbot_testing'] = {'error': str(e)}
             results['overall_status'] = 'FAIL'
 
-        # 2.5 DATABASE ACCURACY MANUAL REVIEW SAMPLE
+        # 2.5 MANUAL REVIEW SAMPLES
         try:
-            manual_review = self._build_database_accuracy_manual_review_sample()
-            results["database_accuracy_manual_review"] = manual_review
+            review_run_id = str(os.getenv("DS_RUN_ID", "")).strip() or self._infer_latest_pipeline_run_id(results.get("timestamp"))
+            self._persist_completed_database_event_accuracy_review()
+            database_accuracy_manual_review = self._build_database_accuracy_manual_review_sample(limit=10)
+            classifier_manual_review = self._build_classifier_manual_review_sample(run_id=review_run_id, limit=10)
+            results["database_accuracy_manual_review"] = database_accuracy_manual_review
+            results["classifier_manual_review"] = classifier_manual_review
             results["accuracy_replay"] = {
                 "status": "DISABLED",
                 "mode": "manual_review",
                 "reason": "Replay-based database accuracy evaluation is disabled in favor of human review.",
-                "manual_review_sample": manual_review,
+                "manual_review_sample": database_accuracy_manual_review,
             }
             results["classifier_training_queue"] = {
                 "status": "DISABLED",
@@ -510,8 +519,9 @@ class ValidationTestRunner:
                 "reason": "Replay-derived classifier performance is disabled with manual database review.",
             }
         except Exception as e:
-            logging.error("Database accuracy manual review sampling failed: %s", e, exc_info=True)
+            logging.error("Manual review sampling failed: %s", e, exc_info=True)
             results["database_accuracy_manual_review"] = {"error": str(e), "status": "ERROR", "rows": []}
+            results["classifier_manual_review"] = {"error": str(e), "status": "ERROR", "rows": []}
             results["accuracy_replay"] = {
                 "status": "DISABLED",
                 "mode": "manual_review",
@@ -1103,7 +1113,7 @@ class ValidationTestRunner:
         try:
             rows = self.db_handler.execute_query(
                 """
-                SELECT mo.created_at, mo.metric_value_numeric
+                SELECT mo.created_at, mo.metric_value_numeric, mo.run_id, mo.notes_json
                 FROM metric_observations mo
                 JOIN metric_definitions md ON md.metric_id = mo.metric_id
                 WHERE md.metric_key = :metric_key
@@ -1115,19 +1125,85 @@ class ValidationTestRunner:
         except Exception:
             rows = []
         history: list[dict] = []
+        latest_by_run_id: dict[str, dict[str, Any]] = {}
         for row in rows or []:
             ts = row[0]
             val = row[1]
+            run_id = str(row[2] or "").strip()
+            notes_raw = row[3]
+            notes: dict[str, Any] = {}
+            if isinstance(notes_raw, dict):
+                notes = notes_raw
+            elif isinstance(notes_raw, str) and notes_raw.strip():
+                try:
+                    parsed_notes = json.loads(notes_raw)
+                    if isinstance(parsed_notes, dict):
+                        notes = parsed_notes
+                except Exception:
+                    notes = {}
+
+            if metric_key == "classifier_ml_usage_pct":
+                stage_counts = notes.get("stage_counts", {}) if isinstance(notes, dict) else {}
+                if run_id.lower() in {"", "na"} and not stage_counts:
+                    continue
+
             try:
-                history.append(
-                    {
-                        "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
-                        "value": float(val),
-                    }
-                )
+                item = {
+                    "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                    "value": float(val),
+                    "run_id": run_id,
+                    "notes": notes,
+                }
+                if metric_key == "total_llm_run_cost_usd" and run_id:
+                    latest_by_run_id[run_id] = item
+                    continue
+                history.append(item)
             except Exception:
                 continue
+        if metric_key == "total_llm_run_cost_usd" and latest_by_run_id:
+            for item in latest_by_run_id.values():
+                notes = item.get("notes", {})
+                trusted = True
+                if isinstance(notes, dict) and "trusted" in notes:
+                    trusted = bool(notes.get("trusted"))
+                if trusted:
+                    history.append(item)
+            history.sort(key=lambda item: str(item.get("timestamp", "")))
         return history
+
+    @staticmethod
+    def _sanitize_provider_run_cost_summary(provider_name: str, provider_summary: dict | None, observed_attempts: int) -> dict:
+        """Reject provider totals that are inconsistent with local run-scoped attempt counts."""
+        summary = dict(provider_summary) if isinstance(provider_summary, dict) else {}
+        safe_provider = str(provider_name or "").strip().lower() or "provider"
+        requests_count = int(summary.get("requests", 0) or 0)
+        cost_basis = str(summary.get("cost_basis", "") or "")
+        mismatch_threshold = max(int(observed_attempts * 3), int(observed_attempts + 500))
+        untrusted = (
+            observed_attempts > 0
+            and requests_count > mismatch_threshold
+            and cost_basis in {"window_total_api", "window_total_api_reset_detected"}
+        )
+        summary["cost_trust_status"] = "untrusted" if untrusted else "trusted"
+        if untrusted:
+            summary["cost_trust_reason"] = (
+                f"{safe_provider}_request_count_exceeds_local_attempts:"
+                f" provider_requests={requests_count}, local_attempts={observed_attempts}"
+            )
+            summary["cost_usd"] = None
+        else:
+            summary["cost_trust_reason"] = ""
+        return summary
+
+    def _load_latest_metric_observation(self, metric_key: str, days: int = 365) -> dict[str, Any] | None:
+        """Return the latest observation for one metric, if available."""
+        history = self._load_metric_history(metric_key, days=days)
+        if not history:
+            return None
+        latest = history[-1]
+        if not isinstance(latest, dict):
+            return None
+        return latest
 
     def _summarize_scraper_step_telemetry(self, run_id: str) -> dict:
         """Aggregate per-step scraper telemetry for the requested run from url_scrape_metrics."""
@@ -1984,6 +2060,7 @@ class ValidationTestRunner:
         chatbot_metrics_sync_summary = self._summarize_chatbot_metrics_sync(results.get('timestamp'))
         accuracy_replay_summary = results.get("accuracy_replay") if isinstance(results, dict) else {}
         database_accuracy_manual_review = results.get("database_accuracy_manual_review") if isinstance(results, dict) else {}
+        classifier_manual_review = results.get("classifier_manual_review") if isinstance(results, dict) else {}
         classifier_training_queue_summary = results.get("classifier_training_queue") if isinstance(results, dict) else {}
         classifier_performance_summary = results.get("classifier_performance") if isinstance(results, dict) else {}
         scraper_network_summary = self._summarize_scraper_network_health(results.get('timestamp'))
@@ -2189,22 +2266,25 @@ class ValidationTestRunner:
         <h2>1. Scraper Telemetry Trends</h2>
         {self._build_scraper_telemetry_html(scraper_telemetry_summary)}
 
-        <h2>2. Database Accuracy Manual Review</h2>
+        <h2>2. Database Event Accuracy Manual Review</h2>
         {self._build_database_accuracy_manual_review_html(database_accuracy_manual_review)}
 
-        <h2>3. Image Date Rejections</h2>
+        <h2>3. URL Archetype ML Classifier Review</h2>
+        {self._build_classifier_manual_review_html(classifier_manual_review)}
+
+        <h2>4. Image Date Rejections</h2>
         {self._build_image_date_rejections_html(image_date_rejection_summary)}
 
-        <h2>4. Completeness KPIs</h2>
+        <h2>5. Completeness KPIs</h2>
         {self._build_completeness_kpis_only_html(control_panel_summary)}
 
-        <h2>5. KPI Scorecard</h2>
+        <h2>6. KPI Scorecard</h2>
         {self._build_phase1_scorecard_html(run_scorecard)}
 
-        <h2>6. Phase 2 Integrity Coverage</h2>
+        <h2>7. Phase 2 Integrity Coverage</h2>
         {self._build_phase2_integrity_html(coverage_summary)}
 
-        <h2>7. Recommendation Plan</h2>
+        <h2>8. Recommendation Plan</h2>
         {self._build_recommendation_plan_html(recommendation_plan)}
 
         <hr style="margin: 40px 0;">
@@ -5104,6 +5184,62 @@ class ValidationTestRunner:
         summary["snapshot_history_path"] = history_path
         return summary
 
+    def _resolve_provider_cost_window(
+        self,
+        report_timestamp: str | None,
+        pipeline_runtime: dict | None,
+    ) -> tuple[datetime, datetime]:
+        """Resolve a day-scoped provider cost window for the pipeline run date."""
+        anchor_ts: datetime | None = None
+        if isinstance(pipeline_runtime, dict):
+            anchor_ts = self._parse_iso_datetime(pipeline_runtime.get("start_ts"))
+            if anchor_ts is None:
+                anchor_ts = self._parse_iso_datetime(pipeline_runtime.get("end_ts"))
+        if anchor_ts is None and report_timestamp:
+            anchor_ts = self._parse_iso_datetime(report_timestamp)
+        if anchor_ts is None:
+            anchor_ts = datetime.now()
+
+        start_ts = datetime.combine(anchor_ts.date(), datetime.min.time())
+        day_end = datetime.combine(anchor_ts.date(), datetime.max.time())
+        observed_end = self._parse_iso_datetime(report_timestamp) if report_timestamp else None
+        if observed_end is None:
+            observed_end = datetime.now()
+        end_ts = min(day_end, observed_end)
+        if end_ts < start_ts:
+            end_ts = start_ts
+        return start_ts, end_ts
+
+    def _resolve_provider_cost_utc_dates(
+        self,
+        report_timestamp: str | None,
+        pipeline_runtime: dict | None,
+    ) -> list[str]:
+        """Resolve the UTC calendar day(s) covered by the run window.
+
+        OpenRouter activity is documented as a per-UTC-day endpoint, so we
+        convert the observed local timestamps into UTC calendar dates and query
+        each covered day explicitly.
+        """
+        start_ts, end_ts = self._resolve_provider_cost_window(report_timestamp, pipeline_runtime)
+        local_tz = datetime.now().astimezone().tzinfo
+        if local_tz is not None:
+            start_utc = start_ts.replace(tzinfo=local_tz).astimezone(timezone.utc)
+            end_utc = end_ts.replace(tzinfo=local_tz).astimezone(timezone.utc)
+        else:
+            start_utc = start_ts.replace(tzinfo=timezone.utc)
+            end_utc = end_ts.replace(tzinfo=timezone.utc)
+        if end_utc < start_utc:
+            end_utc = start_utc
+
+        current_day = start_utc.date()
+        end_day = end_utc.date()
+        utc_dates: list[str] = []
+        while current_day <= end_day:
+            utc_dates.append(current_day.isoformat())
+            current_day += timedelta(days=1)
+        return utc_dates
+
     def _summarize_openrouter_run_cost(
         self,
         report_timestamp: str | None,
@@ -5127,18 +5263,7 @@ class ValidationTestRunner:
             "endpoint_used": "",
             "error": "",
         }
-        start_ts: datetime | None = None
-        end_ts: datetime | None = None
-        if isinstance(pipeline_runtime, dict):
-            start_ts = self._parse_iso_datetime(pipeline_runtime.get("start_ts"))
-            end_ts = self._parse_iso_datetime(pipeline_runtime.get("end_ts"))
-        if start_ts is None or end_ts is None:
-            end_ts = datetime.now()
-            if report_timestamp:
-                parsed = self._parse_iso_datetime(report_timestamp)
-                if parsed is not None:
-                    end_ts = parsed
-            start_ts = end_ts - timedelta(hours=24)
+        start_ts, end_ts = self._resolve_provider_cost_window(report_timestamp, pipeline_runtime)
         summary["start_ts"] = start_ts.isoformat(sep=" ")
         summary["end_ts"] = end_ts.isoformat(sep=" ")
 
@@ -5166,21 +5291,16 @@ class ValidationTestRunner:
             "Authorization": f"Bearer {openrouter_key}",
             "Content-Type": "application/json",
         }
-        start_iso = start_ts.isoformat()
-        end_iso = end_ts.isoformat()
-        start_epoch = int(start_ts.timestamp())
-        end_epoch = int(end_ts.timestamp())
-        endpoint_candidates = [
-            ("https://openrouter.ai/api/v1/activity", {"start_time": start_iso, "end_time": end_iso}),
-            ("https://openrouter.ai/api/v1/activity", {"start_time": start_epoch, "end_time": end_epoch}),
-            ("https://openrouter.ai/api/v1/usage", {"start_time": start_iso, "end_time": end_iso}),
-            ("https://openrouter.ai/api/v1/usage", {"start_time": start_epoch, "end_time": end_epoch}),
-            ("https://openrouter.ai/api/v1/auth/key", {}),
-        ]
+        endpoint = "https://openrouter.ai/api/v1/activity"
+        utc_dates = self._resolve_provider_cost_utc_dates(report_timestamp, pipeline_runtime)
+        total_cost = 0.0
+        total_requests = 0
+        total_tokens = 0
+        saw_any_data = False
         last_error = ""
-        for endpoint, params in endpoint_candidates:
+        for utc_date in utc_dates:
             try:
-                resp = requests.get(endpoint, headers=headers, params=params, timeout=15)
+                resp = requests.get(endpoint, headers=headers, params={"date": utc_date}, timeout=15)
                 if resp.status_code >= 400:
                     error_detail = ""
                     try:
@@ -5195,35 +5315,43 @@ class ValidationTestRunner:
                         error_detail = ""
                     if resp.status_code == 403 and "management" in error_detail.lower():
                         last_error = (
-                            "OpenRouter usage endpoint requires a management key. "
+                            "OpenRouter activity endpoint requires a management key. "
                             "Set OPENROUTER_MANAGEMENT_KEY in src/.env."
                         )
                     else:
                         last_error = (
-                            f"{endpoint} HTTP {resp.status_code}"
+                            f"{endpoint}?date={utc_date} HTTP {resp.status_code}"
                             + (f": {error_detail}" if error_detail else "")
                         )
                     continue
                 payload = resp.json()
                 parsed = self._extract_openrouter_activity_totals(payload)
                 if parsed.get("cost_usd") is None and parsed.get("requests") is None and parsed.get("tokens") is None:
-                    last_error = f"{endpoint} returned no cost/usage fields for requested window"
                     continue
-                summary.update(
-                    {
-                        "available": True,
-                        "endpoint_used": endpoint,
-                        "cost_usd": parsed.get("cost_usd"),
-                        "requests": parsed.get("requests"),
-                        "tokens": parsed.get("tokens"),
-                        "error": "",
-                    }
-                )
-                return self._apply_snapshot_delta_cost("openrouter", summary, output_dir)
+                saw_any_data = True
+                total_cost += float(parsed.get("cost_usd") or 0.0)
+                total_requests += int(parsed.get("requests") or 0)
+                total_tokens += int(parsed.get("tokens") or 0)
             except Exception as e:
-                last_error = f"{endpoint} request failed: {e}"
+                last_error = f"{endpoint}?date={utc_date} request failed: {e}"
                 continue
-        summary["error"] = last_error or "No OpenRouter usage endpoint returned parseable totals"
+
+        if saw_any_data:
+            summary.update(
+                {
+                    "available": True,
+                    "endpoint_used": endpoint,
+                    "cost_usd": round(total_cost, 6),
+                    "requests": total_requests,
+                    "tokens": total_tokens,
+                    "cost_basis": "utc_day_api",
+                    "utc_dates": utc_dates,
+                    "error": "",
+                }
+            )
+            return summary
+
+        summary["error"] = last_error or "OpenRouter activity returned no parseable totals for the covered UTC day(s)"
         return summary
 
     def _extract_openai_cost_totals(self, payload: Any) -> dict:
@@ -5350,18 +5478,7 @@ class ValidationTestRunner:
             "endpoint_used": "",
             "error": "",
         }
-        start_ts: datetime | None = None
-        end_ts: datetime | None = None
-        if isinstance(pipeline_runtime, dict):
-            start_ts = self._parse_iso_datetime(pipeline_runtime.get("start_ts"))
-            end_ts = self._parse_iso_datetime(pipeline_runtime.get("end_ts"))
-        if start_ts is None or end_ts is None:
-            end_ts = datetime.now()
-            if report_timestamp:
-                parsed = self._parse_iso_datetime(report_timestamp)
-                if parsed is not None:
-                    end_ts = parsed
-            start_ts = end_ts - timedelta(hours=24)
+        start_ts, end_ts = self._resolve_provider_cost_window(report_timestamp, pipeline_runtime)
         summary["start_ts"] = start_ts.isoformat(sep=" ")
         summary["end_ts"] = end_ts.isoformat(sep=" ")
 
@@ -5425,10 +5542,11 @@ class ValidationTestRunner:
                         "cost_usd": parsed.get("cost_usd"),
                         "requests": parsed.get("requests"),
                         "tokens": parsed.get("tokens"),
+                        "cost_basis": "day_window_api",
                         "error": "",
                     }
                 )
-                return self._apply_snapshot_delta_cost("openai", summary, output_dir)
+                return summary
             except Exception as e:
                 last_error = f"{endpoint} request failed: {e}"
                 continue
@@ -5636,9 +5754,11 @@ class ValidationTestRunner:
         max_cost_warn = float(cost_cfg.get("max_run_cost_usd_warn", 2.0) or 2.0)
         max_cost_fail = float(cost_cfg.get("max_run_cost_usd_fail", 5.0) or 5.0)
 
+        sanitized_openrouter_cost = self._sanitize_provider_run_cost_summary("openrouter", openrouter_cost, llm_total_attempts)
+        sanitized_openai_cost = self._sanitize_provider_run_cost_summary("openai", openai_cost, llm_total_attempts)
         cost_checks: list[dict] = []
-        openrouter_cost_usd = self._safe_float((openrouter_cost or {}).get("cost_usd"))
-        openai_cost_usd = self._safe_float((openai_cost or {}).get("cost_usd"))
+        openrouter_cost_usd = self._safe_float(sanitized_openrouter_cost.get("cost_usd"))
+        openai_cost_usd = self._safe_float(sanitized_openai_cost.get("cost_usd"))
         if openrouter_cost_usd is None:
             cost_checks.append({
                 "name": "OpenRouter Run Cost (USD)",
@@ -5646,7 +5766,10 @@ class ValidationTestRunner:
                 "target": f"<= ${max_cost_warn:.2f} warn, <= ${max_cost_fail:.2f} fail",
                 "delta": "N/A",
                 "status": "WARN",
-                "details": str((openrouter_cost or {}).get("error", "OpenRouter cost unavailable")),
+                "details": str(
+                    sanitized_openrouter_cost.get("cost_trust_reason")
+                    or sanitized_openrouter_cost.get("error", "OpenRouter cost unavailable")
+                ),
             })
         else:
             run_cost_status = "PASS"
@@ -5662,9 +5785,9 @@ class ValidationTestRunner:
                 "status": run_cost_status,
                 "details": (
                     f"requests={int((openrouter_cost or {}).get('requests', 0) or 0)}, "
-                    f"tokens={int((openrouter_cost or {}).get('tokens', 0) or 0)}, "
-                    f"endpoint={str((openrouter_cost or {}).get('endpoint_used', ''))}, "
-                    f"basis={str((openrouter_cost or {}).get('cost_basis', 'window_total_api'))}"
+                    f"tokens={int((sanitized_openrouter_cost or {}).get('tokens', 0) or 0)}, "
+                    f"endpoint={str((sanitized_openrouter_cost or {}).get('endpoint_used', ''))}, "
+                    f"basis={str((sanitized_openrouter_cost or {}).get('cost_basis', 'window_total_api'))}"
                 ),
             })
 
@@ -5675,7 +5798,10 @@ class ValidationTestRunner:
                 "target": "Informational",
                 "delta": "N/A",
                 "status": "WARN",
-                "details": str((openai_cost or {}).get("error", "OpenAI cost unavailable")),
+                "details": str(
+                    sanitized_openai_cost.get("cost_trust_reason")
+                    or sanitized_openai_cost.get("error", "OpenAI cost unavailable")
+                ),
             })
         else:
             cost_checks.append({
@@ -5685,10 +5811,10 @@ class ValidationTestRunner:
                 "delta": "N/A",
                 "status": "PASS",
                 "details": (
-                    f"requests={int((openai_cost or {}).get('requests', 0) or 0)}, "
-                    f"tokens={int((openai_cost or {}).get('tokens', 0) or 0)}, "
-                    f"endpoint={str((openai_cost or {}).get('endpoint_used', ''))}, "
-                    f"basis={str((openai_cost or {}).get('cost_basis', 'window_total_api'))}"
+                    f"requests={int((sanitized_openai_cost or {}).get('requests', 0) or 0)}, "
+                    f"tokens={int((sanitized_openai_cost or {}).get('tokens', 0) or 0)}, "
+                    f"endpoint={str((sanitized_openai_cost or {}).get('endpoint_used', ''))}, "
+                    f"basis={str((sanitized_openai_cost or {}).get('cost_basis', 'window_total_api'))}"
                 ),
             })
 
@@ -5706,7 +5832,7 @@ class ValidationTestRunner:
                 "target": f"<= ${max_cost_warn:.2f} warn, <= ${max_cost_fail:.2f} fail",
                 "delta": f"{total_run_cost_usd - max_cost_warn:+.4f} vs warn",
                 "status": total_status,
-                "details": "Sum of provider management-usage totals for run window.",
+                "details": "Sum of trusted provider management-usage totals for run window.",
             })
 
         if llm_calls_per_event_url is None:
@@ -5896,14 +6022,6 @@ class ValidationTestRunner:
         max_critical_alerts_fail = int(completeness_cfg.get("max_critical_trend_alerts_fail", 0) or 0)
 
         completeness_checks: list[dict] = []
-        completeness_checks.append({
-            "name": "Source Distribution Check Status",
-            "actual": source_dist_status_raw,
-            "target": "PASS",
-            "delta": "N/A",
-            "status": source_dist_status,
-            "details": "Direct status from Source Distribution Check section.",
-        })
 
         missing_sources_status = "PASS" if len(missing_sources) == 0 else "FAIL"
         completeness_checks.append({
@@ -6075,6 +6193,7 @@ class ValidationTestRunner:
 
         # Persist top-line control metrics for DB-backed trend charts.
         try:
+            cost_metric_trusted = total_run_cost_usd is not None
             if total_run_cost_usd is not None:
                 self.db_handler.record_metric_observation(
                     run_id=str(run_id or ""),
@@ -6085,6 +6204,38 @@ class ValidationTestRunner:
                     higher_is_better=False,
                     window_start=runtime_start_dt,
                     window_end=runtime_end_dt,
+                    notes={
+                        "trusted": True,
+                        "openrouter_trusted": sanitized_openrouter_cost.get("cost_trust_status") != "untrusted",
+                        "openai_trusted": sanitized_openai_cost.get("cost_trust_status") != "untrusted",
+                    },
+                )
+            elif (
+                sanitized_openrouter_cost.get("cost_trust_status") == "untrusted"
+                or sanitized_openai_cost.get("cost_trust_status") == "untrusted"
+            ):
+                self.db_handler.record_metric_observation(
+                    run_id=str(run_id or ""),
+                    metric_key="total_llm_run_cost_usd",
+                    metric_value_numeric=0.0,
+                    metric_unit="usd",
+                    description="Untrusted total LLM run cost placeholder; excluded from charts when trusted=false",
+                    higher_is_better=False,
+                    window_start=runtime_start_dt,
+                    window_end=runtime_end_dt,
+                    notes={
+                        "trusted": False,
+                        "openrouter_trusted": sanitized_openrouter_cost.get("cost_trust_status") != "untrusted",
+                        "openai_trusted": sanitized_openai_cost.get("cost_trust_status") != "untrusted",
+                        "reason": "; ".join(
+                            reason
+                            for reason in [
+                                str(sanitized_openrouter_cost.get("cost_trust_reason", "") or "").strip(),
+                                str(sanitized_openai_cost.get("cost_trust_reason", "") or "").strip(),
+                            ]
+                            if reason
+                        ),
+                    },
                 )
             if events_table_count is not None:
                 self.db_handler.record_metric_observation(
@@ -6355,9 +6506,107 @@ class ValidationTestRunner:
             f"{comparison_html}</table>"
         )
 
-    def _build_database_accuracy_manual_review_sample(self, limit: int = 20) -> dict:
-        """Build and persist a human-review sample for database accuracy checks."""
-        sample_limit = max(int(limit or 20), 1)
+    def _summarize_binary_manual_review_csv(
+        self,
+        csv_path: str | os.PathLike[str],
+    ) -> dict[str, Any]:
+        """Summarize a simple human-labeled review CSV with binary correctness labels."""
+        path = str(csv_path)
+        if not os.path.exists(path):
+            return {
+                "exists": False,
+                "rows_total": 0,
+                "rows_completed": 0,
+                "rows_missing_label": 0,
+                "rows_true": 0,
+                "rows_false": 0,
+                "rows_unknown_label": 0,
+                "correctness_pct": None,
+            }
+
+        with open(path, "r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+
+        rows_total = len(rows)
+        rows_completed = 0
+        rows_missing_label = 0
+        rows_true = 0
+        rows_false = 0
+        rows_unknown_label = 0
+        for row in rows:
+            parsed = parse_manual_review_label(row.get("human_label"))
+            if parsed is None:
+                if str(row.get("human_label") or "").strip():
+                    rows_completed += 1
+                    rows_unknown_label += 1
+                else:
+                    rows_missing_label += 1
+                continue
+            rows_completed += 1
+            if parsed:
+                rows_true += 1
+            else:
+                rows_false += 1
+
+        labeled_rows = rows_true + rows_false
+        correctness_pct = round((rows_true / labeled_rows) * 100.0, 2) if labeled_rows else None
+        return {
+            "exists": True,
+            "rows_total": rows_total,
+            "rows_completed": rows_completed,
+            "rows_missing_label": rows_missing_label,
+            "rows_true": rows_true,
+            "rows_false": rows_false,
+            "rows_unknown_label": rows_unknown_label,
+            "correctness_pct": correctness_pct,
+        }
+
+    def _persist_completed_database_event_accuracy_review(self) -> dict[str, Any]:
+        """Persist a completed event-accuracy review CSV before generating the next sample."""
+        csv_path = codex_review_path(DATABASE_EVENT_ACCURACY_MANUAL_REVIEW_FILENAME)
+        summary = self._summarize_binary_manual_review_csv(csv_path)
+        rows_total = int(summary.get("rows_total", 0) or 0)
+        rows_missing_label = int(summary.get("rows_missing_label", 0) or 0)
+        correctness_pct = summary.get("correctness_pct")
+        if rows_total <= 0 or rows_missing_label != 0 or correctness_pct is None:
+            return summary
+
+        rows_true = int(summary.get("rows_true", 0) or 0)
+        rows_false = int(summary.get("rows_false", 0) or 0)
+        self.db_handler.record_metric_observation(
+            run_id=f"database-event-review-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            metric_key="database_event_manual_accuracy_pct",
+            metric_value_numeric=float(correctness_pct),
+            metric_unit="percent",
+            description="Share of manually reviewed event rows judged accurate in the final events table",
+            higher_is_better=True,
+            notes={
+                "review_csv_path": csv_path,
+                "labeled_rows": rows_true + rows_false,
+                "true_count": rows_true,
+                "false_count": rows_false,
+            },
+        )
+        return summary
+
+    def _build_database_accuracy_manual_review_sample(self, limit: int = 10) -> dict:
+        """Build and persist an event-level manual review sample for database accuracy checks."""
+        csv_path = codex_review_path(DATABASE_EVENT_ACCURACY_MANUAL_REVIEW_FILENAME)
+        existing_summary = self._summarize_binary_manual_review_csv(csv_path)
+        if existing_summary.get("exists") and int(existing_summary.get("rows_missing_label", 0) or 0) > 0:
+            with open(csv_path, "r", encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            return {
+                "status": "READY",
+                "mode": "manual_review",
+                "sample_size": max(int(limit or 10), 1),
+                "rows_returned": len(rows),
+                "csv_path": csv_path,
+                "rows": rows,
+                "preserved_existing_review": True,
+            }
+
+        sample_limit = max(int(limit or 10), 1)
         query = """
             SELECT
                 event_id,
@@ -6373,10 +6622,21 @@ class ValidationTestRunner:
                 url,
                 description
             FROM events
+            WHERE COALESCE(NULLIF(TRIM(url), ''), '') <> ''
+              AND COALESCE(NULLIF(TRIM(event_name), ''), '') <> ''
+              AND start_date IS NOT NULL
+              AND start_date >= CURRENT_DATE
             ORDER BY RANDOM()
             LIMIT :limit
         """
-        rows = self.db_handler.execute_query(query, {"limit": sample_limit}, statement_timeout_ms=15000) or []
+        candidate_rows = (
+            self.db_handler.execute_query(
+                query,
+                {"limit": max(sample_limit * 8, 50)},
+                statement_timeout_ms=15000,
+            )
+            or []
+        )
         columns = [
             "event_id",
             "event_name",
@@ -6391,16 +6651,25 @@ class ValidationTestRunner:
             "url",
             "description",
         ]
-        normalized_rows: list[dict[str, object]] = []
-        for row in rows:
+        normalized_rows: list[dict[str, Any]] = []
+        seen_domains: set[str] = set()
+        for row in candidate_rows:
             payload = {column: row[idx] if idx < len(row) else None for idx, column in enumerate(columns)}
+            url = str(payload.get("url") or "").strip()
+            domain = (urlparse(url).netloc or "").lower().strip()
+            if not domain or domain in seen_domains:
+                continue
+            seen_domains.add(domain)
+            payload["domain"] = domain
             payload["human_label"] = ""
             payload["review_notes"] = ""
             normalized_rows.append(payload)
+            if len(normalized_rows) >= sample_limit:
+                break
 
-        csv_path = codex_review_path("database_accuracy_manual_review.csv")
+        fieldnames = columns + ["domain", "human_label", "review_notes"]
         with open(csv_path, "w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=columns + ["human_label", "review_notes"])
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(normalized_rows)
 
@@ -6411,6 +6680,147 @@ class ValidationTestRunner:
             "rows_returned": len(normalized_rows),
             "csv_path": csv_path,
             "rows": normalized_rows,
+        }
+
+    def _build_classifier_manual_review_sample(self, run_id: str, limit: int = 10) -> dict:
+        """Build and persist a URL-level manual review sample for classifier correctness checks."""
+        safe_run_id = str(run_id or "").strip()
+        sample_limit = max(int(limit or 10), 2)
+        success_limit = max(1, sample_limit // 2)
+        miss_limit = max(1, sample_limit - success_limit)
+        positive_query = """
+            WITH surviving_urls AS (
+                SELECT DISTINCT COALESCE(NULLIF(TRIM(ewa.url), ''), NULLIF(TRIM(ewa.parent_url), '')) AS audit_url
+                FROM event_write_attribution ewa
+                LEFT JOIN event_delete_attribution eda ON eda.event_id = ewa.event_id
+                WHERE ewa.run_id = :run_id
+                  AND eda.event_id IS NULL
+                  AND COALESCE(NULLIF(TRIM(ewa.url), ''), NULLIF(TRIM(ewa.parent_url), '')) IS NOT NULL
+            )
+            SELECT DISTINCT ON (usm.link)
+                usm.run_id,
+                'true_candidate' AS sample_bucket,
+                usm.link AS url,
+                usm.parent_url,
+                usm.source,
+                COALESCE(NULLIF(TRIM(usm.handled_by), ''), NULLIF(TRIM(usm.step_name), '')) AS handled_by,
+                usm.classification_stage,
+                usm.classification_owner_step,
+                usm.archetype,
+                usm.classification_subtype,
+                usm.classification_confidence,
+                usm.keywords,
+                usm.decision_reason,
+                usm.routing_reason,
+                usm.events_written,
+                TRUE AS survived_to_end
+            FROM url_scrape_metrics usm
+            INNER JOIN surviving_urls su
+                ON su.audit_url = usm.link
+                OR su.audit_url = usm.parent_url
+            WHERE usm.run_id = :run_id
+              AND COALESCE(usm.access_attempted, FALSE)
+              AND COALESCE(usm.keywords_found, FALSE)
+              AND COALESCE(usm.events_written, 0) > 0
+              AND COALESCE(NULLIF(TRIM(usm.link), ''), '') <> ''
+            ORDER BY usm.link, RANDOM()
+            LIMIT :limit
+        """
+        negative_query = """
+            SELECT DISTINCT ON (usm.link)
+                usm.run_id,
+                'false_candidate' AS sample_bucket,
+                usm.link AS url,
+                usm.parent_url,
+                usm.source,
+                COALESCE(NULLIF(TRIM(usm.handled_by), ''), NULLIF(TRIM(usm.step_name), '')) AS handled_by,
+                usm.classification_stage,
+                usm.classification_owner_step,
+                usm.archetype,
+                usm.classification_subtype,
+                usm.classification_confidence,
+                usm.keywords,
+                usm.decision_reason,
+                usm.routing_reason,
+                usm.events_written,
+                FALSE AS survived_to_end
+            FROM url_scrape_metrics usm
+            WHERE usm.run_id = :run_id
+              AND COALESCE(usm.access_attempted, FALSE)
+              AND COALESCE(usm.keywords_found, FALSE)
+              AND COALESCE(usm.events_written, 0) = 0
+              AND COALESCE(NULLIF(TRIM(usm.link), ''), '') <> ''
+            ORDER BY usm.link, RANDOM()
+            LIMIT :limit
+        """
+        positive_rows = (
+            self.db_handler.execute_query(
+                positive_query,
+                {"run_id": safe_run_id, "limit": success_limit},
+                statement_timeout_ms=15000,
+            )
+            or []
+        )
+        negative_rows = (
+            self.db_handler.execute_query(
+                negative_query,
+                {"run_id": safe_run_id, "limit": miss_limit},
+                statement_timeout_ms=15000,
+            )
+            or []
+        )
+        columns = [
+            "run_id",
+            "sample_bucket",
+            "url",
+            "parent_url",
+            "source",
+            "handled_by",
+            "classifier_stage",
+            "classifier_predicted_owner_step",
+            "classifier_predicted_archetype",
+            "classifier_predicted_subtype",
+            "classifier_confidence",
+            "keywords",
+            "decision_reason",
+            "routing_reason",
+            "events_written",
+            "survived_to_end",
+        ]
+        normalized_rows: list[dict[str, object]] = []
+        seen_urls: set[str] = set()
+        for row in list(positive_rows) + list(negative_rows):
+            payload = {column: row[idx] if idx < len(row) else None for idx, column in enumerate(columns)}
+            normalized_url = normalize_evaluation_url(payload.get("url"))
+            if not normalized_url or normalized_url in seen_urls:
+                continue
+            seen_urls.add(normalized_url)
+            payload["human_label"] = ""
+            payload["human_truth_archetype"] = ""
+            payload["human_truth_owner_step"] = ""
+            payload["review_notes"] = ""
+            normalized_rows.append(payload)
+
+        csv_path = codex_review_path(URL_ARCHETYPE_ML_CLASSIFIER_REVIEW_FILENAME)
+        fieldnames = columns + [
+            "human_label",
+            "human_truth_archetype",
+            "human_truth_owner_step",
+            "review_notes",
+        ]
+        with open(csv_path, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(normalized_rows)
+
+        return {
+            "status": "READY",
+            "mode": "manual_review",
+            "sample_size": sample_limit,
+            "rows_returned": len(normalized_rows),
+            "csv_path": csv_path,
+            "rows": normalized_rows,
+            "run_id": safe_run_id,
         }
 
     def _build_database_accuracy_manual_review_html(self, sample: dict | None) -> str:
@@ -6433,11 +6843,11 @@ class ValidationTestRunner:
             table_rows.append(
                 "<tr>"
                 f"<td>{idx}</td>"
-                f"<td>{self._escape_html(str(row.get('event_id', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('domain', '') or ''))}</td>"
                 f"<td>{self._escape_html(str(row.get('event_name', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('source', '') or ''))}</td>"
                 f"<td>{self._escape_html(str(row.get('start_date', '') or ''))}</td>"
                 f"<td>{self._escape_html(str(row.get('start_time', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('source', '') or ''))}</td>"
                 f"<td>{self._escape_html(str(row.get('event_type', '') or ''))}</td>"
                 f"<td>{self._escape_html(str(row.get('dance_style', '') or ''))}</td>"
                 f"<td>{self._escape_html(str(row.get('location', '') or ''))}</td>"
@@ -6449,12 +6859,61 @@ class ValidationTestRunner:
             )
 
         return (
-            f"<p>This replaces replay-based database accuracy. Review these {sample_size} sampled event rows manually and record your labels in "
-            f"<code>{csv_path}</code>.</p>"
+            f"<p>Review these {sample_size} sampled event rows from the final <code>events</code> table and record your labels in "
+            f"<code>{csv_path}</code>. Rows are sampled across different URL domains so this check is not dominated by one source family. "
+            "Set <code>human_label</code> to indicate whether the event row looks accurate when compared against the source page on the internet.</p>"
             "<table><tr>"
-            "<th>#</th><th>Event ID</th><th>Event Name</th><th>Start Date</th><th>Start Time</th>"
-            "<th>Source</th><th>Event Type</th><th>Dance Style</th><th>Location</th><th>URL</th><th>Description</th>"
+            "<th>#</th><th>Domain</th><th>Event Name</th><th>Source</th><th>Start Date</th><th>Start Time</th>"
+            "<th>Event Type</th><th>Dance Style</th><th>Location</th><th>URL</th><th>Description</th>"
             "<th>Human Label</th><th>Review Notes</th>"
+            "</tr>"
+            f"{''.join(table_rows)}</table>"
+        )
+
+    def _build_classifier_manual_review_html(self, sample: dict | None) -> str:
+        """Render a human-review table for classifier audit sampling."""
+        if not isinstance(sample, dict) or not sample:
+            return "<p class='error-box'>❌ Classifier manual review sample unavailable.</p>"
+        if sample.get("error"):
+            return f"<p class='error-box'>❌ Classifier manual review sample failed: {self._escape_html(str(sample.get('error')))}</p>"
+
+        rows = sample.get("rows", []) if isinstance(sample.get("rows"), list) else []
+        if not rows:
+            return "<p class='error-box'>❌ Classifier manual review sample returned no rows.</p>"
+
+        csv_path = self._escape_html(str(sample.get("csv_path", "") or ""))
+        sample_size = int(sample.get("rows_returned", len(rows)) or 0)
+        table_rows: list[str] = []
+        for idx, row in enumerate(rows, start=1):
+            if not isinstance(row, dict):
+                continue
+            table_rows.append(
+                "<tr>"
+                f"<td>{idx}</td>"
+                f"<td>{self._escape_html(str(row.get('sample_bucket', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('source', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('handled_by', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('url', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('classifier_stage', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('classifier_predicted_archetype', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('classifier_predicted_owner_step', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('events_written', '') or ''))}</td>"
+                f"<td>{self._escape_html(str(row.get('survived_to_end', '') or ''))}</td>"
+                "<td></td>"
+                "<td></td>"
+                "<td></td>"
+                "<td></td>"
+                "</tr>"
+            )
+
+        return (
+            f"<p>Review these {sample_size} sampled URLs for URL archetype ML classifier correctness and record your labels in "
+            f"<code>{csv_path}</code>. The <code>sample_bucket</code> column splits the sample between URLs that produced surviving events and URLs that had keywords but produced no surviving events. "
+            "Set <code>human_label</code> to indicate whether the classifier/scrape decision was correct. For rows marked false, also fill <code>human_truth_archetype</code> and <code>human_truth_owner_step</code> so they can be promoted into classifier training.</p>"
+            "<table><tr>"
+            "<th>#</th><th>Sample Bucket</th><th>Source</th><th>Handled By</th><th>URL</th><th>Classifier Stage</th>"
+            "<th>Predicted Archetype</th><th>Predicted Owner Step</th><th>Events Written</th><th>Survived To End</th>"
+            "<th>Human Label</th><th>Human Truth Archetype</th><th>Human Truth Owner Step</th><th>Review Notes</th>"
             "</tr>"
             f"{''.join(table_rows)}</table>"
         )
@@ -6711,6 +7170,21 @@ class ValidationTestRunner:
         latest_value = self._format_trend_value(float(latest["value"]), value_format)
         latest_day = self._escape_html(str(latest["timestamp"])[:10])
         direction = self._describe_trend_delta(points, value_format)
+        if title == "Database Event Accuracy (Manual Review)":
+            latest_obs = self._load_latest_metric_observation(metric_key, days=365) or {}
+            notes = latest_obs.get("notes", {}) if isinstance(latest_obs.get("notes"), dict) else {}
+            labeled_rows = int(notes.get("labeled_rows", 0) or 0)
+            return (
+                "<p class='metric-trend-summary'>"
+                "This graph shows the share of manually reviewed event rows judged accurate in the final "
+                "<code>events</code> table. "
+                "It is measured as <code>accurate_rows / labeled_rows * 100</code> using the scored database event accuracy review CSV. "
+                "Use it to track whether inserted events are being populated correctly over time based on human review. "
+                f"The latest recorded value is <strong>{self._escape_html(latest_value)}</strong> on <strong>{latest_day}</strong>, "
+                f"based on {labeled_rows} labeled row(s). "
+                f"{direction}"
+                "</p>"
+            )
         return (
             "<p class='metric-trend-summary'>"
             f"This graph shows <code>{self._escape_html(metric_key)}</code> over roughly the last {int(days)} days. "
@@ -6743,6 +7217,35 @@ class ValidationTestRunner:
             )
         latest_sentence = "; ".join(latest_parts) if latest_parts else "No latest values are available."
         direction_sentence = " ".join(direction_parts)
+        if title == "Classifier Usage":
+            correctness = self._load_latest_metric_observation("classifier_manual_correctness_pct", days=365)
+            if correctness:
+                correctness_value = self._format_trend_value(
+                    float(correctness.get("value", 0.0) or 0.0),
+                    "percent",
+                )
+                correctness_notes = correctness.get("notes", {}) if isinstance(correctness.get("notes"), dict) else {}
+                labeled_rows = int(correctness_notes.get("labeled_rows", 0) or 0)
+                correctness_sentence = (
+                    f"Manual review correctness from the scored CSV is {self._escape_html(correctness_value)} "
+                    f"based on {labeled_rows} labeled URL(s). "
+                )
+            else:
+                correctness_sentence = "Manual review correctness from the scored CSV is not available yet. "
+            return (
+                "<p class='metric-trend-summary'>"
+                "This graph shows the share of classified URLs handled by the ML classifier stage. "
+                "It is classifying URLs/pages for routing and handling decisions in the scraping pipeline. "
+                "It is measured as <code>ml_classified_urls / total_classified_urls * 100</code> for runs where classifier-stage data exists; "
+                "runs with no classifier data are excluded rather than plotted as 0%. "
+                "Use it to track how often ML is being invoked versus rule or structural routing. "
+                f"{correctness_sentence}"
+                f"The latest recorded day is <strong>{latest_day}</strong>. "
+                f"Latest value: {latest_sentence}. "
+                "The change statement compares against the previous run with classifier data. "
+                f"{direction_sentence}"
+                "</p>"
+            )
         return (
             "<p class='metric-trend-summary'>"
             f"This graph compares related metrics over roughly the last {int(days)} days. "
@@ -6811,7 +7314,18 @@ class ValidationTestRunner:
                         "label": "ML Usage %",
                         "color": "#d94841",
                     },
+                    {
+                        "metric_key": "classifier_manual_correctness_pct",
+                        "label": "Manual Correctness %",
+                        "color": "#1f77b4",
+                    },
                 ],
+            ),
+            self._build_metric_trend_svg(
+                metric_key="database_event_manual_accuracy_pct",
+                title="Database Event Accuracy (Manual Review)",
+                days=180,
+                value_format="percent",
             ),
             self._build_metric_trend_svg(
                 metric_key="total_llm_run_cost_usd",
@@ -7041,7 +7555,50 @@ class ValidationTestRunner:
                 "</tr>"
             )
         html += "</table>"
+        html += self._build_top_sources_table_html(limit=10)
         return html
+
+    def _build_top_sources_table_html(self, limit: int = 10) -> str:
+        """Render the current top-N event sources by row count."""
+        safe_limit = max(int(limit or 10), 1)
+        try:
+            rows = self.db_handler.execute_query(
+                """
+                SELECT source, COUNT(*) AS counted
+                FROM events
+                GROUP BY source
+                ORDER BY counted DESC
+                LIMIT :limit
+                """,
+                {"limit": safe_limit},
+                statement_timeout_ms=15000,
+            ) or []
+        except Exception as exc:
+            return (
+                "<p class='error-box'>❌ Top source distribution table unavailable: "
+                f"{self._escape_html(str(exc))}</p>"
+            )
+
+        if not rows:
+            return "<p>No top-source rows available.</p>"
+
+        table_rows: list[str] = []
+        for idx, row in enumerate(rows, start=1):
+            source = str(row[0] or "").strip()
+            counted = int(row[1] or 0)
+            table_rows.append(
+                "<tr>"
+                f"<td>{idx}</td>"
+                f"<td>{self._escape_html(source)}</td>"
+                f"<td>{counted}</td>"
+                "</tr>"
+            )
+
+        return (
+            "<h3>Top 10 Sources</h3>"
+            "<table><tr><th>#</th><th>Source</th><th>Count</th></tr>"
+            f"{''.join(table_rows)}</table>"
+        )
 
     def _summarize_llm_provider_activity(self, report_timestamp: str | None) -> dict:
         """
@@ -8755,10 +9312,17 @@ class ValidationTestRunner:
         openai = openai_cost if isinstance(openai_cost, dict) else {}
         replay = accuracy_replay if isinstance(accuracy_replay, dict) else {}
         llm_activity = llm_activity_summary if isinstance(llm_activity_summary, dict) else {}
+        observed_attempts = sum(
+            int(item[1])
+            for item in (llm_activity.get("top_models", []) if isinstance(llm_activity.get("top_models"), list) else [])
+            if isinstance(item, (tuple, list)) and len(item) >= 2
+        )
+        openrouter = self._sanitize_provider_run_cost_summary("openrouter", openrouter, observed_attempts)
+        openai = self._sanitize_provider_run_cost_summary("openai", openai, observed_attempts)
 
         provider_costs = {
-            "openrouter_usd": float(openrouter.get("cost_usd", 0.0) or 0.0),
-            "openai_usd": float(openai.get("cost_usd", 0.0) or 0.0),
+            "openrouter_usd": self._safe_float(openrouter.get("cost_usd")),
+            "openai_usd": self._safe_float(openai.get("cost_usd")),
         }
         provider_requests = {
             "openrouter_requests": int(openrouter.get("requests", 0) or 0),
@@ -8768,13 +9332,14 @@ class ValidationTestRunner:
             "openrouter_tokens": int(openrouter.get("tokens", 0) or 0),
             "openai_tokens": int(openai.get("tokens", 0) or 0),
         }
-        total_cost_usd = round(sum(provider_costs.values()), 6)
+        trusted_cost_values = [value for value in provider_costs.values() if value is not None]
+        total_cost_usd = round(sum(trusted_cost_values), 6) if trusted_cost_values else None
         total_requests = sum(provider_requests.values())
         total_tokens = sum(provider_tokens.values())
         successful_replay_urls = int(replay.get("true_count", 0) or 0)
         cost_per_successful_replay_url = (
             round(total_cost_usd / successful_replay_urls, 6)
-            if successful_replay_urls > 0
+            if successful_replay_urls > 0 and total_cost_usd is not None
             else None
         )
 
@@ -8785,7 +9350,7 @@ class ValidationTestRunner:
         total_file_attempts = sum(int(item[1]) for item in top_files if isinstance(item, (tuple, list)) and len(item) >= 2)
         by_model: dict[str, float] = {}
         by_step: dict[str, float] = {}
-        if total_cost_usd > 0 and total_model_attempts > 0:
+        if total_cost_usd is not None and total_cost_usd > 0 and total_model_attempts > 0:
             for item in top_models:
                 if not isinstance(item, (tuple, list)) or len(item) < 2:
                     continue
@@ -8794,7 +9359,7 @@ class ValidationTestRunner:
                 if not model_key or attempts <= 0:
                     continue
                 by_model[model_key] = round(total_cost_usd * (attempts / total_model_attempts), 6)
-        if total_cost_usd > 0 and total_file_attempts > 0:
+        if total_cost_usd is not None and total_cost_usd > 0 and total_file_attempts > 0:
             for item in top_files:
                 if not isinstance(item, (tuple, list)) or len(item) < 2:
                     continue
@@ -9472,10 +10037,12 @@ class ValidationTestRunner:
             metric = kpis.get(key, {}) if isinstance(kpis.get(key), dict) else {}
             score = metric.get("score")
             score_text = f"{float(score):.1f}" if isinstance(score, (int, float)) else "n/a"
+            explanation = self._build_phase1_kpi_explanation_html(key, metric)
             cards.append(
                 "<div class='metric'>"
                 f"<div class='metric-value'>{self._escape_html(score_text)}</div>"
                 f"<div class='metric-label'>{self._escape_html(title)}</div>"
+                f"{explanation}"
                 "</div>"
             )
 
@@ -9503,6 +10070,74 @@ class ValidationTestRunner:
             f"<strong>Guardrails:</strong> {self._escape_html(str(guardrails.get('status', 'UNKNOWN') or 'UNKNOWN'))}.</p>"
             + f"<ul>{bullets}</ul>"
         )
+
+    def _build_phase1_kpi_explanation_html(self, key: str, metric: dict | None) -> str:
+        """Render a short calculation note under one KPI scorecard card."""
+        payload = metric if isinstance(metric, dict) else {}
+        summary = payload.get("summary", {}) if isinstance(payload.get("summary"), dict) else {}
+
+        if key == "database_accuracy":
+            sample_size = int(summary.get("manual_review_sample_size", 0) or 0)
+            text = (
+                "Calculated from the scored database event manual-review CSV as "
+                "<code>accurate_rows / labeled_rows * 100</code>. "
+                f"The current report prepared <code>{sample_size}</code> review row(s); this KPI stays <code>n/a</code> until that sample is scored and persisted."
+            )
+        elif key == "events_coverage":
+            checked = int(summary.get("important_urls_checked", 0) or 0)
+            failed = int(summary.get("failed_urls", 0) or 0)
+            if checked > 0:
+                text = (
+                    "Calculated as "
+                    f"<code>(important_urls_checked - failed_urls) / important_urls_checked * 100</code> "
+                    f"= <code>({checked} - {failed}) / {checked} * 100</code>."
+                )
+            else:
+                text = (
+                    "Fallback completeness score based on source-distribution status when no important-URL denominator is available."
+                )
+        elif key == "run_time":
+            baseline = self._safe_float(summary.get("baseline_30d_average_runtime_hours"))
+            current = self._safe_float(summary.get("pipeline_duration_hours"))
+            if baseline not in (None, 0.0) and current is not None:
+                text = (
+                    "Calculated as "
+                    f"<code>pipeline_duration_hours / 30d_average_runtime_hours * 100</code> "
+                    f"= <code>{current:.2f} / {baseline:.2f} * 100</code>."
+                )
+            else:
+                minutes = self._safe_float(summary.get("pipeline_duration_minutes"))
+                text = (
+                    "Fallback runtime score when no 30-day baseline exists: "
+                    f"<code>max(0, 100 - pipeline_duration_minutes / 6)</code>"
+                    + (f" with <code>pipeline_duration_minutes={minutes:.2f}</code>." if minutes is not None else ".")
+                )
+        elif key == "run_costs":
+            cost_summary = summary.get("summary", {}) if isinstance(summary.get("summary"), dict) else summary
+            total_cost = self._safe_float(cost_summary.get("total_usd"))
+            baseline = self._safe_float(cost_summary.get("baseline_30d_average_total_usd"))
+            if baseline not in (None, 0.0) and total_cost is not None:
+                text = (
+                    "Calculated as "
+                    f"<code>total_usd / 30d_average_total_usd * 100</code> "
+                    f"= <code>{total_cost:.4f} / {baseline:.4f} * 100</code>."
+                )
+            else:
+                text = (
+                    "Fallback cost score when no 30-day baseline exists: "
+                    "<code>max(0, 100 - total_usd * 5)</code>."
+                )
+        elif key == "chatbot_quality":
+            chatbot_summary = summary.get("summary", {}) if isinstance(summary.get("summary"), dict) else summary
+            answer_correctness = self._safe_float(chatbot_summary.get("chatbot_answer_correctness_pct"))
+            text = (
+                "Calculated directly from the chatbot answer-correctness percentage"
+                + (f": <code>{answer_correctness:.1f}%</code>." if answer_correctness is not None else ".")
+            )
+        else:
+            text = "Calculation note unavailable."
+
+        return f"<p class='metric-trend-summary'>{text}</p>"
 
     def _build_fb_ig_url_funnel_html(self, funnel_data: dict) -> str:
         """Render HTML for FB/IG URL funnel summary."""

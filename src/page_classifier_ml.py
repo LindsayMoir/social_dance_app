@@ -212,7 +212,8 @@ def build_model_features(
     """
     Build a compact feature dict available at runtime and training time.
     """
-    safe_url = str(url or "").strip()
+    raw_url = str(url or "").strip()
+    safe_url = _canonicalize_classifier_url(raw_url)
     parsed = urlparse(safe_url)
     domain = (parsed.netloc or "").lower()
     path = (parsed.path or "").lower()
@@ -252,6 +253,54 @@ def build_model_features(
             elif isinstance(value, (int, float)):
                 features[normalized_key] = value
     return features
+
+
+def _canonicalize_classifier_url(url: str) -> str:
+    """Reduce exact-instance URL memorization for templated classifier families."""
+    safe_url = str(url or "").strip()
+    if not safe_url:
+        return ""
+
+    parsed = urlparse(safe_url)
+    scheme = parsed.scheme or "https"
+    domain = (parsed.netloc or "").lower()
+    path = (parsed.path or "").strip()
+    query = (parsed.query or "").strip()
+    path_parts = [segment for segment in path.split("/") if segment]
+
+    if "facebook.com" in domain:
+        if path_parts and path_parts[0].lower() == "events":
+            return f"{scheme}://{domain}/events"
+        if len(path_parts) >= 3 and path_parts[1].lower() == "posts":
+            return f"{scheme}://{domain}/{path_parts[0].lower()}/posts"
+
+    if "instagram.com" in domain and path_parts:
+        head = path_parts[0].lower()
+        if head in {"p", "reel", "tv"}:
+            return f"{scheme}://{domain}/{head}"
+
+    if "eventbrite" in domain and path_parts:
+        head = path_parts[0].lower()
+        if head in {"e", "o"}:
+            return f"{scheme}://{domain}/{head}"
+
+    if "google." in domain and len(path_parts) >= 2 and path_parts[0].lower() == "calendar" and path_parts[1].lower() == "event":
+        return f"{scheme}://{domain}/calendar/event"
+
+    if "calendar.google.com" in domain and path_parts:
+        if path_parts[0].lower() == "calendar" and len(path_parts) >= 2 and path_parts[1].lower() == "event":
+            return f"{scheme}://{domain}/calendar/event"
+        return f"{scheme}://{domain}/calendar"
+
+    if len(path_parts) >= 2 and path_parts[0].lower() == "event":
+        return f"{scheme}://{domain}/event/{path_parts[1].lower()}"
+    if path_parts and path_parts[0].lower() == "events":
+        return f"{scheme}://{domain}/events"
+
+    if query and "event" in query.lower():
+        return f"{scheme}://{domain}{path}"
+
+    return safe_url
 
 
 def _build_pipeline() -> Pipeline:

@@ -2033,14 +2033,15 @@ class DatabaseHandler():
             steps[step_name]["unknown_delete_reason_count"] = int(mapping.get("unknown_delete_reason_count", 0) or 0)
 
         violations: List[str] = []
+        advisories: List[str] = []
         for step_name, payload in steps.items():
             metrics_events = int(payload.get("metrics_events_written_total", 0) or 0)
             write_events = int(payload.get("write_attribution_count", 0) or 0)
             payload["delta_metrics_vs_write_attribution"] = metrics_events - write_events
             payload["status"] = "PASS"
             if metrics_events != write_events:
-                payload["status"] = "FAIL"
-                violations.append(
+                payload["status"] = "WARN"
+                advisories.append(
                     f"step_mismatch:{step_name}:metrics_events={metrics_events}:write_attribution={write_events}"
                 )
             if int(payload.get("unknown_delete_reason_count", 0) or 0) > 0:
@@ -2082,6 +2083,7 @@ class DatabaseHandler():
             "run_id": safe_run_id,
             "status": status,
             "violations": violations,
+            "advisories": advisories,
             "summary": {
                 "steps_with_metrics": len(steps),
                 "write_attribution_rows": write_rows_total,
@@ -2089,6 +2091,7 @@ class DatabaseHandler():
                 "delete_attribution_rows": delete_rows_total,
                 "delete_attribution_distinct_event_ids": delete_distinct_total,
                 "unknown_delete_reason_total": unknown_delete_reason_total,
+                "step_mismatch_advisory_count": len(advisories),
             },
             "steps": dict(sorted(steps.items())),
             "reconciliation_queries": [

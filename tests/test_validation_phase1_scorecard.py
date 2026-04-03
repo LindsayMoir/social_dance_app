@@ -72,9 +72,9 @@ def _stub_code_version(runner: ValidationTestRunner) -> None:
 def test_build_database_accuracy_manual_review_sample_writes_rows(tmp_path) -> None:
     runner = _build_runner()
     runner.db_handler = _FakeDbHandler()
-    runner.db_handler.query_map["SELECT event_id, event_name, start_date, start_time, end_date, end_time, source, event_type, dance_style, location, url, description FROM events"] = [
+    runner.db_handler.query_map["FROM events"] = [
         (101, "Friday Social", "2026-04-10", "19:00:00", "2026-04-10", "22:00:00", "Source A", "social dance", "salsa", "Hall A", "https://example.com/a", "desc a"),
-        (102, "Saturday Social", "2026-04-11", "20:00:00", "2026-04-11", "23:00:00", "Source B", "live music", "swing", "Hall B", "https://example.com/b", "desc b"),
+        (102, "Saturday Social", "2026-04-11", "20:00:00", "2026-04-11", "23:00:00", "Source B", "live music", "swing", "Hall B", "https://other.example.org/b", "desc b"),
     ]
 
     original_codex_review_path = validation_test_runner.codex_review_path
@@ -88,6 +88,7 @@ def test_build_database_accuracy_manual_review_sample_writes_rows(tmp_path) -> N
     assert sample["rows_returned"] == 2
     assert os.path.exists(sample["csv_path"])
     assert sample["rows"][0]["human_label"] == ""
+    assert sample["rows"][0]["domain"] == "example.com"
 
 
 def test_phase1_scorecard_database_accuracy_is_manual_review_only() -> None:
@@ -131,11 +132,11 @@ def test_build_database_accuracy_manual_review_html_renders_review_table() -> No
             "csv_path": "/tmp/database_accuracy_manual_review.csv",
             "rows": [
                 {
-                    "event_id": 101,
+                    "domain": "example.com",
                     "event_name": "Friday Social",
+                    "source": "Source A",
                     "start_date": "2026-04-10",
                     "start_time": "19:00:00",
-                    "source": "Source A",
                     "event_type": "social dance",
                     "dance_style": "salsa",
                     "location": "Hall A",
@@ -146,10 +147,146 @@ def test_build_database_accuracy_manual_review_html_renders_review_table() -> No
         }
     )
 
-    assert "This replaces replay-based database accuracy" in html
+    assert "sampled event rows from the final" in html
     assert "Friday Social" in html
+    assert "example.com" in html
     assert "Human Label" in html
     assert "/tmp/database_accuracy_manual_review.csv" in html
+
+
+def test_build_classifier_manual_review_html_renders_review_table() -> None:
+    runner = _build_runner()
+
+    html = runner._build_classifier_manual_review_html(
+        {
+            "mode": "manual_review",
+            "rows_returned": 1,
+            "csv_path": "/tmp/url_archetype_ml_classifier_review.csv",
+            "rows": [
+                {
+                    "sample_bucket": "true_candidate",
+                    "source": "Source A",
+                    "handled_by": "scraper.py",
+                    "url": "https://example.com/a",
+                    "classifier_stage": "ml",
+                    "classifier_predicted_archetype": "simple_page",
+                    "classifier_predicted_owner_step": "scraper.py",
+                    "events_written": 1,
+                    "survived_to_end": True,
+                }
+            ],
+        }
+    )
+
+    assert "classifier correctness" in html
+    assert "true_candidate" in html
+    assert "Human Truth Archetype" in html
+    assert "/tmp/url_archetype_ml_classifier_review.csv" in html
+
+
+def test_build_completeness_kpis_only_html_includes_top_sources_table() -> None:
+    runner = _build_runner()
+    runner.db_handler = _FakeDbHandler()
+    runner.db_handler.query_map["SELECT source, COUNT(*) AS counted FROM events"] = [
+        ("Victoria Latin Dance Association", 226),
+        ("Red Hot Swing", 123),
+    ]
+
+    html = runner._build_completeness_kpis_only_html(
+        {
+            "completeness": {
+                "checks": [
+                    {
+                        "name": "Missing Required Sources",
+                        "actual": "0",
+                        "target": "0",
+                        "delta": "+0",
+                        "status": "PASS",
+                        "details": "All required sources present.",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert "Top 10 Sources" in html
+    assert "Victoria Latin Dance Association" in html
+    assert "226" in html
+
+
+def test_build_phase1_scorecard_html_includes_kpi_calculation_notes() -> None:
+    runner = _build_runner()
+
+    html = runner._build_phase1_scorecard_html(
+        {
+            "kpis": {
+                "database_accuracy": {
+                    "score": None,
+                    "summary": {"manual_review_sample_size": 10},
+                },
+                "events_coverage": {
+                    "score": 97.9,
+                    "summary": {"important_urls_checked": 2213, "failed_urls": 46},
+                },
+                "run_time": {
+                    "score": 50.0,
+                    "summary": {
+                        "pipeline_duration_hours": 2.0,
+                        "pipeline_duration_minutes": 120.0,
+                        "baseline_30d_average_runtime_hours": 4.0,
+                    },
+                },
+                "run_costs": {
+                    "score": 38.7,
+                    "summary": {
+                        "summary": {
+                            "total_usd": 1.4453,
+                            "baseline_30d_average_total_usd": 3.7346,
+                        }
+                    },
+                },
+                "chatbot_quality": {
+                    "score": 76.0,
+                    "summary": {"summary": {"chatbot_answer_correctness_pct": 76.0}},
+                },
+            },
+            "overall_score": {"status": "PRELIMINARY"},
+            "guardrails": {"status": "PASS"},
+            "telemetry_integrity": {"status": "PASS"},
+        }
+    )
+
+    assert "accurate_rows / labeled_rows * 100" in html
+    assert "stays <code>n/a</code> until that sample is scored and persisted" in html
+    assert "(important_urls_checked - failed_urls) / important_urls_checked * 100" in html
+    assert "pipeline_duration_hours / 30d_average_runtime_hours * 100" in html
+    assert "total_usd / 30d_average_total_usd * 100" in html
+    assert "Calculated directly from the chatbot answer-correctness percentage" in html
+
+
+def test_persist_completed_database_event_accuracy_review_records_metric(tmp_path) -> None:
+    runner = _build_runner()
+    runner.db_handler = _FakeDbHandler()
+    csv_path = tmp_path / "database_event_accuracy_manual_review.csv"
+    csv_path.write_text(
+        "event_id,event_name,url,human_label,review_notes\n"
+        "1,Friday Social,https://example.com/a,True,\n"
+        "2,Saturday Social,https://other.example.org/b,False,\n",
+        encoding="utf-8",
+    )
+
+    original_codex_review_path = validation_test_runner.codex_review_path
+    validation_test_runner.codex_review_path = lambda filename: str(csv_path if filename == "database_event_accuracy_manual_review.csv" else tmp_path / filename)
+    try:
+        summary = runner._persist_completed_database_event_accuracy_review()
+    finally:
+        validation_test_runner.codex_review_path = original_codex_review_path
+
+    assert summary["correctness_pct"] == 50.0
+    assert runner.db_handler.calls
+    metric_call = runner.db_handler.calls[-1]
+    assert metric_call["metric_key"] == "database_event_manual_accuracy_pct"
+    assert metric_call["metric_value_numeric"] == 50.0
 
 
 def test_build_scraper_telemetry_html_uses_images_event_yield_chart_and_detail() -> None:
@@ -219,139 +356,54 @@ def test_phase1_summary_builders_normalize_existing_validation_data() -> None:
     assert llm_cost_summary["by_model"] == {"gpt-5": 3.0, "gpt-5-mini": 1.0}
     assert llm_cost_summary["by_step"] == {"scraper": 2.0, "fb": 2.0}
 
-    chatbot_quality_summary = runner._build_phase1_chatbot_quality_summary(
-        chatbot_performance={
-            "source": "db",
-            "start_ts": "2026-03-18 10:00:00",
-            "end_ts": "2026-03-18 12:00:00",
-            "query_request_count": 8,
-            "confirm_request_count": 2,
-            "query_latency_ms": {"p50": 5200.0, "p95": 14200.0},
-            "slow_requests": [
-                {"duration_ms": 17000.0},
-                {"duration_ms": 9000.0},
-            ],
-            "unfinished_request_count": 1,
-            "status": "WATCH",
-            "status_reasons": ["query p95 latency high"],
-        },
-        chatbot_testing={
-            "summary": {
-                "total_tests": 20,
-                "average_score": 88.0,
-                "execution_success_rate": 0.95,
-            },
-            "problem_categories": [
-                {"name": "Weekend Calculation", "count": 3},
-                {"name": "Hallucinated Venue", "count": 1},
-            ],
-        },
-    )
-    assert chatbot_quality_summary["summary"]["chatbot_response_within_15s_pct"] == 90.0
-    assert chatbot_quality_summary["summary"]["chatbot_answer_correctness_pct"] == 88.0
-    assert chatbot_quality_summary["summary"]["chatbot_sql_validity_pct"] == 95.0
-    assert chatbot_quality_summary["summary"]["chatbot_hallucination_rate_pct"] == 5.0
-    assert chatbot_quality_summary["summary"]["chatbot_fallback_rate_pct"] is None
-    assert chatbot_quality_summary["summary"]["chatbot_confirm_request_share_pct"] == 20.0
-    assert chatbot_quality_summary["summary"]["chatbot_p95_latency_seconds"] == 14.2
-    assert chatbot_quality_summary["summary"]["chatbot_user_visible_error_rate_pct"] == 10.0
 
-    dev_summary = {
-        "available": True,
-        "dev_version": "v1",
-        "dev_urls_total": 3,
-        "replay_urls_seen": 2,
-        "matched_urls": 1,
-        "mismatched_urls": 1,
-        "replay_url_accuracy_pct": 50.0,
-    }
-    run_scorecard = runner._build_phase1_run_scorecard(
-        run_id="run-123",
-        report_timestamp="2026-03-18T12:00:00",
-        accuracy_replay={"coverage_accuracy_pct": 82.5, "replay_accuracy_pct": 77.0, "total_rows": 10, "true_count": 8, "false_count": 2},
-        scraping_results={"summary": {"important_urls_checked": 20, "failed_count": 3, "whitelist_failures": 1, "edge_case_failures": 0}, "source_distribution": {"status": "PASS"}},
-        runtime_summary=runtime_summary,
-        llm_cost_summary=llm_cost_summary,
-        chatbot_quality_summary=chatbot_quality_summary,
-        classifier_performance_summary={
-            "total_classified_urls": 8,
-            "ml_usage_pct": 25.0,
-            "stage_counts": {"rule": 6, "ml": 2},
-            "stage_details": [{"stage": "rule", "replay_url_accuracy_pct": 80.0}],
-        },
-        event_data_quality_summary={
-            "invalid_event_rate_pct": 1.25,
-            "stale_event_rate_pct": 2.5,
-            "total_events": 40,
-        },
-        field_accuracy_summary={
-            "date_pct": 90.0,
-            "time_pct": 80.0,
-            "location_pct": 70.0,
-            "source_pct": 95.0,
-            "address_id_pct": 85.0,
-            "dance_style_pct": 75.0,
-            "description_pct": 65.0,
-        },
-        coverage_summary={
-            "source_hit_rate_pct": 80.0,
-            "event_capture_rate_pct": 60.0,
-            "missed_event_rate_manual_audit_pct": 20.0,
-            "new_source_discovery_count": 4,
-            "watchlist_source": "coverage_watchlist_csv",
-        },
-        scraper_telemetry_summary={
+def test_phase1_llm_cost_summary_rejects_untrusted_provider_totals() -> None:
+    runner = _build_runner()
+
+    llm_cost_summary = runner._build_phase1_llm_cost_summary(
+        openrouter_cost={
             "available": True,
-            "steps": {
-                "scraper": {"access_attempted_count": 8, "events_written_total": 40},
-            },
+            "cost_usd": 9.37,
+            "requests": 12208,
+            "tokens": 36834437,
+            "cost_basis": "window_total_api_reset_detected",
+            "start_ts": "a",
+            "end_ts": "b",
         },
-        dev_summary=dev_summary,
-        holdout_summary={
-            "available": True,
-            "holdout_version": "v1",
-            "replay_url_accuracy_pct": 78.0,
-        },
-        domain_capped_summary={
-            "available": True,
-            "per_domain_cap": 3,
-            "replay_url_accuracy_pct": 75.0,
-        },
-        telemetry_integrity_summary={
-            "summary": {"write_attribution_distinct_event_ids": 40},
+        openai_cost={"available": True, "cost_usd": None, "requests": 8, "tokens": 500, "start_ts": "a", "end_ts": "b"},
+        accuracy_replay={},
+        llm_activity_summary={
+            "top_models": [("openrouter:deepseek/deepseek-v3.2", 1206), ("openrouter:qwen/qwen3-coder", 3)],
+            "top_files": [("images_log.txt", 10)],
         },
     )
-    assert run_scorecard["kpis"]["database_accuracy"]["score"] == 82.5
-    assert run_scorecard["kpis"]["events_coverage"]["score"] == 85.0
-    assert run_scorecard["kpis"]["chatbot_quality"]["score"] == 88.0
-    assert run_scorecard["kpis"]["database_accuracy"]["summary"]["invalid_event_rate_pct"] == 1.25
-    assert run_scorecard["kpis"]["database_accuracy"]["summary"]["stale_event_rate_pct"] == 2.5
-    assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["date_pct"] == 90.0
-    assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["time_pct"] == 80.0
-    assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["address_id_pct"] == 85.0
-    assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["dance_style_pct"] == 75.0
-    assert run_scorecard["kpis"]["database_accuracy"]["field_accuracy"]["description_pct"] == 65.0
-    assert run_scorecard["kpis"]["database_accuracy"]["summary"]["classifier_effect"]["ml_usage_pct"] == 25.0
-    assert run_scorecard["kpis"]["events_coverage"]["summary"]["watchlist_source_hit_rate_pct"] == 80.0
-    assert run_scorecard["kpis"]["events_coverage"]["summary"]["missed_event_rate_manual_audit_pct"] == 20.0
-    assert run_scorecard["kpis"]["events_coverage"]["summary"]["new_source_discovery_count"] == 4
-    assert run_scorecard["evaluation_scope"]["uses_holdout"] is True
-    assert run_scorecard["evaluation_scope"]["holdout_summary"]["replay_url_accuracy_pct"] == 78.0
-    assert run_scorecard["evaluation_scope"]["uses_dev_split"] is True
-    assert run_scorecard["evaluation_scope"]["dev_version"] == "v1"
-    assert run_scorecard["evaluation_scope"]["dev_summary"]["replay_url_accuracy_pct"] == 50.0
-    assert run_scorecard["kpis"]["events_coverage"]["summary"]["dev_replay_url_accuracy_pct"] == 50.0
-    assert run_scorecard["kpis"]["run_time"]["summary"]["run_processed_url_count"] == 8
-    assert run_scorecard["kpis"]["run_time"]["summary"]["run_inserted_event_count"] == 40
-    assert "urls_processed_per_minute" not in run_scorecard["kpis"]["run_time"]["summary"]
-    assert "events_inserted_per_minute" not in run_scorecard["kpis"]["run_time"]["summary"]
-    assert "cost_per_processed_url_usd" not in run_scorecard["kpis"]["run_costs"]["summary"]["summary"]
-    assert "cost_per_inserted_event_usd" not in run_scorecard["kpis"]["run_costs"]["summary"]["summary"]
-    assert run_scorecard["code_version"] == {"git_commit": "abc123", "branch": "main"}
-    assert run_scorecard["scorecard_version"] == "phase4"
-    assert run_scorecard["telemetry_integrity"] == {"summary": {"write_attribution_distinct_event_ids": 40}}
-    assert "top_regressions" not in run_scorecard["recommendations_input"]
-    assert run_scorecard["overall_score"]["status"] == "PRELIMINARY"
+
+    assert llm_cost_summary["summary"]["total_usd"] is None
+    assert llm_cost_summary["providers"]["openrouter"]["cost_usd"] is None
+    assert llm_cost_summary["providers"]["openrouter"]["cost_trust_status"] == "untrusted"
+
+
+def test_resolve_provider_cost_window_uses_run_day_bounds() -> None:
+    runner = _build_runner()
+
+    start_ts, end_ts = runner._resolve_provider_cost_window(
+        report_timestamp="2026-04-01T14:40:37",
+        pipeline_runtime={"start_ts": "2026-04-01 11:39:17", "end_ts": "2026-04-01 14:20:00"},
+    )
+
+    assert start_ts.isoformat(sep=" ") == "2026-04-01 00:00:00"
+    assert end_ts.isoformat(sep=" ") == "2026-04-01 14:40:37"
+
+
+def test_resolve_provider_cost_utc_dates_uses_covered_utc_days() -> None:
+    runner = _build_runner()
+
+    utc_dates = runner._resolve_provider_cost_utc_dates(
+        report_timestamp="2026-04-01T14:40:37",
+        pipeline_runtime={"start_ts": "2026-04-01 11:39:17", "end_ts": "2026-04-01 14:20:00"},
+    )
+
+    assert utc_dates == ["2026-04-01"]
 
 
 def test_build_phase1_telemetry_integrity_summary_uses_db_handler() -> None:
@@ -750,11 +802,13 @@ def test_summarize_image_date_rejections_reads_structured_log_payload(tmp_path) 
 
 def test_build_top_trend_dashboard_separates_classifier_usage_from_accuracy() -> None:
     runner = _build_runner()
+    captured_series: list[list[dict]] = []
 
     def _fake_metric_trend_svg(**kwargs):
         return f"<section>{kwargs['title']}</section>"
 
     def _fake_multi_metric_trend_svg(**kwargs):
+        captured_series.append(list(kwargs.get("series", [])))
         return f"<section>{kwargs['title']}</section>"
 
     runner._build_metric_trend_svg = _fake_metric_trend_svg  # type: ignore[method-assign]
@@ -763,8 +817,13 @@ def test_build_top_trend_dashboard_separates_classifier_usage_from_accuracy() ->
     html = runner._build_top_trend_dashboard_html()
 
     assert "Classifier Usage" in html
+    assert "Database Event Accuracy (Manual Review)" in html
     assert "Classifier Replay Accuracy" not in html
     assert "Classifier Trends" not in html
+    assert captured_series
+    metric_keys = {str(item.get("metric_key")) for item in captured_series[0] if isinstance(item, dict)}
+    assert "classifier_ml_usage_pct" in metric_keys
+    assert "classifier_manual_correctness_pct" in metric_keys
 
 
 def test_build_metric_trend_svg_includes_textual_explanation() -> None:
@@ -825,6 +884,83 @@ def test_build_multi_metric_trend_svg_includes_textual_explanation() -> None:
     assert "Rule Replay URL Accuracy %: 82.0%" in html
     assert "increased by 3.0%" in html
     assert "decreased by 6.0%" in html
+
+
+def test_load_metric_history_skips_empty_classifier_usage_placeholder_runs() -> None:
+    runner = _build_runner()
+    runner.db_handler = SimpleNamespace(
+        execute_query=lambda query, params=None: [
+            ("2026-03-23T10:00:00", 0.0, "na", '{"stage_counts": {}}'),
+            ("2026-03-24T10:00:00", 15.0, "20260324-abc", '{"stage_counts": {"ml": 15, "rule": 85}}'),
+        ]
+    )
+
+    history = runner._load_metric_history("classifier_ml_usage_pct", days=180)
+
+    assert len(history) == 1
+    assert history[0]["value"] == 15.0
+    assert history[0]["run_id"] == "20260324-abc"
+
+
+def test_build_multi_metric_trend_svg_classifier_usage_explains_metric() -> None:
+    runner = _build_runner()
+    history = {
+        "classifier_ml_usage_pct": [
+            {"timestamp": "2026-03-20T10:00:00", "value": 21.0},
+            {"timestamp": "2026-03-24T10:00:00", "value": 15.0},
+        ],
+        "classifier_manual_correctness_pct": [
+            {"timestamp": "2026-03-24T10:00:00", "value": 75.0, "notes": {"labeled_rows": 8}},
+        ],
+    }
+    runner._load_metric_history = lambda metric_key, days=90: history.get(metric_key, [])  # type: ignore[method-assign]
+
+    html = runner._build_multi_metric_trend_svg(
+        title="Classifier Usage",
+        days=180,
+        value_format="percent",
+        series=[
+            {
+                "metric_key": "classifier_ml_usage_pct",
+                "label": "ML Usage %",
+                "color": "#d94841",
+            },
+            {
+                "metric_key": "classifier_manual_correctness_pct",
+                "label": "Manual Correctness %",
+                "color": "#1f77b4",
+            },
+        ],
+    )
+
+    assert "share of classified URLs handled by the ML classifier stage" in html
+    assert "classifying URLs/pages for routing and handling decisions in the scraping pipeline" in html
+    assert "ml_classified_urls / total_classified_urls * 100" in html
+    assert "runs with no classifier data are excluded rather than plotted as 0%" in html
+    assert "Manual review correctness from the scored CSV is 75.0%" in html
+    assert "Manual Correctness %: 75.0%" in html
+    assert "previous run with classifier data" in html
+
+
+def test_build_metric_trend_svg_database_event_accuracy_explains_metric() -> None:
+    runner = _build_runner()
+    history = [
+        {"timestamp": "2026-03-24T10:00:00", "value": 80.0, "notes": {"labeled_rows": 10}},
+        {"timestamp": "2026-04-01T10:00:00", "value": 90.0, "notes": {"labeled_rows": 10}},
+    ]
+    runner._load_metric_history = lambda metric_key, days=90: history if metric_key == "database_event_manual_accuracy_pct" else []  # type: ignore[method-assign]
+
+    html = runner._build_metric_trend_svg(
+        metric_key="database_event_manual_accuracy_pct",
+        title="Database Event Accuracy (Manual Review)",
+        days=180,
+        value_format="percent",
+    )
+
+    assert "share of manually reviewed event rows judged accurate" in html
+    assert "accurate_rows / labeled_rows * 100" in html
+    assert "based on 10 labeled row(s)" in html
+    assert "90.0%" in html
 
 
 def test_generate_html_report_omits_replay_based_sections(tmp_path) -> None:

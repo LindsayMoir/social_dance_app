@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from page_classifier import classify_page_with_confidence
 from page_classifier_ml import (
+    build_model_features,
     predict_page_classifier_labels,
     reset_model_cache,
     train_page_classifier_models,
@@ -242,6 +243,47 @@ def test_training_excludes_holdout_rows(tmp_path) -> None:
         output_path=model_path,
     )
     assert result["training_row_count"] == 4
+
+
+def test_build_model_features_canonicalizes_facebook_event_urls() -> None:
+    features = build_model_features(url="https://www.facebook.com/events/1615616856414575/")
+
+    assert features["path_depth"] == 1
+    assert features["path_has_event"] is True
+    assert features["domain_has_facebook"] is True
+    assert "path_token:1615616856414575" not in features
+    assert "path_token:events" in features
+
+
+def test_build_model_features_canonicalizes_instagram_post_urls() -> None:
+    features = build_model_features(url="https://www.instagram.com/p/DVZJAkEEh1-/")
+
+    assert features["path_depth"] == 1
+    assert features["domain_has_instagram"] is True
+    assert "path_token:dvzjakeeh1" not in features
+    assert "path_token:p" in features
+
+
+def test_build_model_features_canonicalizes_eventbrite_event_urls() -> None:
+    features = build_model_features(url="https://www.eventbrite.ca/e/latin-dance-night-tickets-123456789")
+
+    assert features["path_depth"] == 1
+    assert features["domain_has_eventbrite"] is True
+    assert "path_token:123456789" not in features
+    assert "path_token:e" in features
+
+
+def test_build_model_features_canonicalizes_google_calendar_event_urls() -> None:
+    features = build_model_features(
+        url="https://www.google.com/calendar/event?eid=MTJmZnRzbDl1c3Z0NzkxbmVmamcya2x0dW5fMjAyNjA0MDlUMDIwMDAwWiBjYWVwYWthNGh2YW03ZjgyMDdrZmE5N3VwMEBn"
+    )
+
+    assert features["path_depth"] == 2
+    assert features["path_has_event"] is True
+    assert features["domain_has_google"] is True
+    assert "path_token:eid" not in features
+    assert "path_token:calendar" in features
+    assert "path_token:event" in features
 
 
 def test_training_excludes_dev_rows(tmp_path) -> None:

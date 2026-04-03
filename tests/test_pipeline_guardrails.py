@@ -235,9 +235,126 @@ def test_pipeline_steps_refresh_manual_coverage_audit_after_copy_dev_to_prod() -
     assert step_names[copy_index + 1] == "refresh_manual_coverage_audit"
 
 
+def test_pipeline_steps_manual_review_gate_after_copy_log_files() -> None:
+    step_names = [name for name, _ in pipeline.PIPELINE_STEPS]
+    copy_index = step_names.index("copy_log_files")
+    assert step_names[copy_index + 1] == "database_accuracy_manual_review_gate"
+
+
 def test_pipeline_steps_no_longer_include_remediation_planner() -> None:
     step_names = [name for name, _ in pipeline.PIPELINE_STEPS]
     assert "remediation_planner" not in step_names
+
+
+def test_database_accuracy_manual_review_status_marks_complete_when_all_labels_present(tmp_path) -> None:
+    csv_path = tmp_path / "url_archetype_ml_classifier_review.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "url",
+                "human_label",
+                "human_truth_archetype",
+                "human_truth_owner_step",
+                "review_notes",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "url": "https://example.com/1",
+                "human_label": "correct",
+                "human_truth_archetype": "",
+                "human_truth_owner_step": "",
+                "review_notes": "",
+            }
+        )
+        writer.writerow(
+            {
+                "url": "https://example.com/2",
+                "human_label": "incorrect",
+                "human_truth_archetype": "complicated_page",
+                "human_truth_owner_step": "rd_ext.py",
+                "review_notes": "bad route",
+            }
+        )
+
+    status = pipeline._database_accuracy_manual_review_status(str(csv_path))
+
+    assert status["complete"] is True
+    assert status["rows_total"] == 2
+    assert status["rows_completed"] == 2
+    assert status["rows_missing_label"] == 0
+
+
+def test_database_accuracy_manual_review_status_marks_incomplete_when_labels_missing(tmp_path) -> None:
+    csv_path = tmp_path / "url_archetype_ml_classifier_review.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["url", "human_label", "human_truth_archetype", "human_truth_owner_step", "review_notes"],
+        )
+        writer.writeheader()
+        writer.writerow({"url": "https://example.com/1", "human_label": "", "human_truth_archetype": "", "human_truth_owner_step": "", "review_notes": ""})
+        writer.writerow({"url": "https://example.com/2", "human_label": "correct", "human_truth_archetype": "", "human_truth_owner_step": "", "review_notes": ""})
+
+    status = pipeline._database_accuracy_manual_review_status(str(csv_path))
+
+    assert status["complete"] is False
+    assert status["rows_total"] == 2
+    assert status["rows_completed"] == 1
+    assert status["rows_missing_label"] == 1
+
+
+def test_database_accuracy_manual_review_status_marks_incomplete_when_false_rows_lack_truth(tmp_path) -> None:
+    csv_path = tmp_path / "url_archetype_ml_classifier_review.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["url", "human_label", "human_truth_archetype", "human_truth_owner_step", "review_notes"],
+        )
+        writer.writeheader()
+        writer.writerow({"url": "https://example.com/1", "human_label": "false", "human_truth_archetype": "", "human_truth_owner_step": "", "review_notes": ""})
+
+    status = pipeline._database_accuracy_manual_review_status(str(csv_path))
+
+    assert status["complete"] is False
+    assert status["false_rows_missing_truth"] == 1
+
+
+def test_database_event_accuracy_manual_review_status_marks_complete_when_all_labels_present(tmp_path) -> None:
+    csv_path = tmp_path / "database_accuracy_manual_review.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["event_id", "event_name", "url", "human_label", "review_notes"],
+        )
+        writer.writeheader()
+        writer.writerow({"event_id": "1", "event_name": "Friday Social", "url": "https://example.com/1", "human_label": "correct", "review_notes": ""})
+        writer.writerow({"event_id": "2", "event_name": "Saturday Social", "url": "https://example.com/2", "human_label": "incorrect", "review_notes": ""})
+
+    status = pipeline._database_event_accuracy_manual_review_status(str(csv_path))
+
+    assert status["complete"] is True
+    assert status["rows_total"] == 2
+    assert status["rows_completed"] == 2
+    assert status["rows_missing_label"] == 0
+
+
+def test_database_event_accuracy_manual_review_status_marks_incomplete_when_labels_missing(tmp_path) -> None:
+    csv_path = tmp_path / "database_accuracy_manual_review.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["event_id", "event_name", "url", "human_label", "review_notes"],
+        )
+        writer.writeheader()
+        writer.writerow({"event_id": "1", "event_name": "Friday Social", "url": "https://example.com/1", "human_label": "", "review_notes": ""})
+
+    status = pipeline._database_event_accuracy_manual_review_status(str(csv_path))
+
+    assert status["complete"] is False
+    assert status["rows_missing_label"] == 1
 
 
 def test_validation_report_was_regenerated_accepts_fresh_run_report(tmp_path) -> None:

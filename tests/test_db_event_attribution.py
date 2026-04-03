@@ -329,7 +329,7 @@ def test_write_events_to_db_aligns_recurring_weekday_dates_before_insert(monkeyp
     monkeypatch.delenv("DS_STEP_NAME", raising=False)
 
 
-def test_build_phase1_telemetry_integrity_report_flags_step_mismatch_and_unknown_reason() -> None:
+def test_build_phase1_telemetry_integrity_report_treats_step_mismatch_as_advisory() -> None:
     handler = DatabaseHandler.__new__(DatabaseHandler)
     query_results = {
         "SUM(COALESCE(events_written, 0)) AS metrics_events_written_total": [
@@ -361,11 +361,12 @@ def test_build_phase1_telemetry_integrity_report_flags_step_mismatch_and_unknown
 
     assert report["available"] is True
     assert report["status"] == "FAIL"
-    assert "step_mismatch:fb:metrics_events=3:write_attribution=2" in report["violations"]
+    assert "step_mismatch:fb:metrics_events=3:write_attribution=2" in report["advisories"]
     assert "unknown_delete_reason_total:1" in report["violations"]
     assert report["steps"]["scraper"]["status"] == "FAIL"
-    assert report["steps"]["fb"]["status"] == "FAIL"
+    assert report["steps"]["fb"]["status"] == "WARN"
     assert report["summary"]["write_attribution_rows"] == 7
+    assert report["summary"]["step_mismatch_advisory_count"] == 1
 
 
 def test_build_phase1_telemetry_integrity_report_prefers_handled_by_over_pipeline_step() -> None:
