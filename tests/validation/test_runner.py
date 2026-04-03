@@ -3628,19 +3628,32 @@ class ValidationTestRunner:
         )
         issues: list[dict[str, Any]] = []
         for detail in recommendations_input.get("top_regressions", [])[:3]:
+            detail_text = str(detail)
+            if "chatbot correctness below minimum" in detail_text.lower():
+                likely_root_causes = [
+                    "The chatbot validation set is still returning low-scoring clarifications, SQL, or result selections.",
+                    "A recurring prompt, policy, or date-window rule is pulling down the average graded score.",
+                ]
+                recommended_actions = [
+                    "Inspect chatbot_evaluation_report.json for the lowest-scoring questions and repeated problem categories.",
+                    "Fix the narrow prompt, policy, or SQL-generation issue behind those misses before broadening model scope.",
+                ]
+            else:
+                likely_root_causes = [
+                    "A protected KPI regressed below its minimum threshold.",
+                    "The current run traded accuracy or coverage for speed or cost.",
+                ]
+                recommended_actions = [
+                    "Inspect the failing metric's underlying artifact before promoting any further changes.",
+                    "Prioritize fixes that address the failing guardrail without expanding model scope.",
+                ]
             issues.append(
                 {
                     "issue_type": "guardrail_violation",
-                    "title": str(detail),
-                    "evidence": {"guardrail": str(detail)},
-                    "likely_root_causes": [
-                        "A protected KPI regressed below its minimum threshold.",
-                        "The current run traded accuracy or coverage for speed or cost.",
-                    ],
-                    "recommended_actions": [
-                        "Inspect the failing metric's underlying artifact before promoting any further changes.",
-                        "Prioritize fixes that address the failing guardrail without expanding model scope.",
-                    ],
+                    "title": detail_text,
+                    "evidence": {"guardrail": detail_text},
+                    "likely_root_causes": likely_root_causes,
+                    "recommended_actions": recommended_actions,
                     "expected_kpi_impact": self._classify_recommendation_expected_impact("guardrail_violation"),
                     "confidence": "high",
                     "regression_risk": "medium",
@@ -3668,19 +3681,32 @@ class ValidationTestRunner:
         for item in recommendations_input.get("runtime_bottlenecks", [])[:1]:
             if not isinstance(item, dict):
                 continue
+            step_name = str(item.get("step", "(unknown step)") or "(unknown step)")
+            if step_name == "images_log.txt":
+                likely_root_causes = [
+                    "The images step is spending too much time on OCR and LLM work for images that do not yield surviving events.",
+                    "Duplicate image processing, date-conflict drops, or late-stage filtering are wasting the critical-path budget.",
+                ]
+                recommended_actions = [
+                    "Inspect images_log.txt for repeated OCR, vision, or extraction passes that end in no-events or image_date_resolution_drop_summary.",
+                    "Add earlier skip, reuse, or duplicate-image short-circuit paths before adding concurrency or model complexity.",
+                ]
+            else:
+                likely_root_causes = [
+                    "The step is dominating the critical path.",
+                    "The step is doing repeated work that can be cached or short-circuited.",
+                ]
+                recommended_actions = [
+                    "Inspect the step for repeated network, LLM, or database work.",
+                    "Prefer deterministic skip/reuse paths before adding concurrency or model complexity.",
+                ]
             issues.append(
                 {
                     "issue_type": "runtime_bottleneck",
-                    "title": f"Reduce runtime in {item.get('step', '(unknown step)')}",
+                    "title": f"Reduce runtime in {step_name}",
                     "evidence": item,
-                    "likely_root_causes": [
-                        "The step is dominating the critical path.",
-                        "The step is doing repeated work that can be cached or short-circuited.",
-                    ],
-                    "recommended_actions": [
-                        "Inspect the step for repeated network, LLM, or database work.",
-                        "Prefer deterministic skip/reuse paths before adding concurrency or model complexity.",
-                    ],
+                    "likely_root_causes": likely_root_causes,
+                    "recommended_actions": recommended_actions,
                     "expected_kpi_impact": self._classify_recommendation_expected_impact("runtime_bottleneck"),
                     "confidence": "medium",
                     "regression_risk": "medium",
@@ -3826,7 +3852,12 @@ class ValidationTestRunner:
         """Build a structured recommendations_input section for Codex review."""
         guardrails = run_scorecard.get("guardrails", {}) if isinstance(run_scorecard.get("guardrails"), dict) else {}
         violations = guardrails.get("violations", []) if isinstance(guardrails.get("violations"), list) else []
-        top_regressions = [str(item.get("detail") or "") for item in violations[:5] if str(item.get("detail") or "").strip()]
+        top_regressions = [
+            str(item.get("detail") or "")
+            for item in violations[:5]
+            if str(item.get("detail") or "").strip()
+            and "telemetry integrity guardrail failed" not in str(item.get("detail") or "").lower()
+        ]
 
         largest_cost_deltas: list[dict[str, Any]] = []
         by_provider = llm_cost_summary.get("by_provider", {}) if isinstance(llm_cost_summary.get("by_provider"), dict) else {}

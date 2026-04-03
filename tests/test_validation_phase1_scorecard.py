@@ -2078,7 +2078,13 @@ def test_recommendation_plan_uses_existing_scorecard_signals() -> None:
     run_scorecard = {
         "run_id": "run-plan",
         "overall_score": {"status": "FAIL"},
-        "guardrails": {"status": "FAIL", "violations": [{"detail": "Replay URL accuracy below minimum"}]},
+        "guardrails": {
+            "status": "FAIL",
+            "violations": [
+                {"detail": "Telemetry integrity guardrail failed"},
+                {"detail": "Chatbot correctness below minimum"},
+            ],
+        },
     }
     recommendation_plan = runner._build_recommendation_plan(
         run_scorecard=run_scorecard,
@@ -2090,7 +2096,7 @@ def test_recommendation_plan_uses_existing_scorecard_signals() -> None:
         },
         dev_summary={"replay_url_accuracy_pct": 65.0, "replay_urls_seen": 4, "matched_urls": 2, "mismatched_urls": 2},
         runtime_summary={
-            "step_spans": [{"log_file": "scraper_log.txt", "duration_minutes": 80.0}],
+            "step_spans": [{"log_file": "images_log.txt", "duration_minutes": 80.0}],
         },
         llm_cost_summary={
             "by_provider": {"openai_usd": 4.2, "openrouter_usd": 1.1},
@@ -2103,7 +2109,20 @@ def test_recommendation_plan_uses_existing_scorecard_signals() -> None:
     assert recommendation_plan["summary"]["has_guardrail_failure"] is True
     assert len(recommendation_plan["top_issues"]) == 3
     assert recommendation_plan["top_issues"][0]["issue_type"] == "guardrail_violation"
-    assert "recommended_actions" in recommendation_plan["top_issues"][0]
+    assert recommendation_plan["top_issues"][0]["title"] == "Chatbot correctness below minimum"
+    assert any(
+        "chatbot_evaluation_report.json" in action
+        for action in recommendation_plan["top_issues"][0]["recommended_actions"]
+    )
+    assert all(
+        item["title"] != "Telemetry integrity guardrail failed"
+        for item in recommendation_plan["top_issues"]
+    )
+    assert any(
+        item["issue_type"] == "runtime_bottleneck"
+        and any("image_date_resolution_drop_summary" in action for action in item["recommended_actions"])
+        for item in recommendation_plan["top_issues"]
+    )
 
 
 def test_build_parser_improvement_workflow_html_surfaces_ordered_fix_plan() -> None:
