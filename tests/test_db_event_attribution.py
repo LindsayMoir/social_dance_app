@@ -329,6 +329,67 @@ def test_write_events_to_db_aligns_recurring_weekday_dates_before_insert(monkeyp
     monkeypatch.delenv("DS_STEP_NAME", raising=False)
 
 
+def test_write_events_to_db_rolls_overnight_end_date(monkeypatch) -> None:
+    handler = _make_handler(old_days=30)
+    handler._rename_google_calendar_columns = lambda df: df
+    handler._keywords_to_specific_dance_styles = lambda _keywords: ""
+    handler._resolve_event_source_label = lambda source, url, parent_url: source or "Example Source"
+    handler._enforce_event_source_values = lambda df, _source: df
+    handler._enforce_event_url_values = lambda df, default_url, parent_url, source: df
+    handler._apply_event_overrides = lambda df, url, parent_url: df
+    handler._convert_datetime_fields = DatabaseHandler._convert_datetime_fields.__get__(handler, DatabaseHandler)
+    handler._clean_day_of_week_field = lambda df: df
+    handler._enforce_live_music_dance_style_policy = lambda df: df
+    handler.clean_up_address_basic = lambda df: df
+    handler.process_event_address = lambda event_dict: event_dict
+    handler._filter_events = lambda df, apply_date_filter=False: df
+    handler._sanitize_events_dataframe_for_insert = lambda df: df
+    handler.write_url_to_db = lambda _row: None
+    handler._write_event_write_attribution_rows = lambda **_kwargs: None
+
+    inserted_batches: list[pd.DataFrame] = []
+    handler._insert_events_and_return_ids = lambda df: inserted_batches.append(df.copy()) or [601]
+
+    monkeypatch.setenv("DS_RUN_ID", "run-1")
+    monkeypatch.setenv("DS_STEP_NAME", "rd_ext")
+
+    df = pd.DataFrame(
+        {
+            "event_name": ["Late Show"],
+            "dance_style": ["live music"],
+            "description": ["Late night live music event"],
+            "day_of_week": ["Friday"],
+            "start_date": ["2026-04-10"],
+            "end_date": ["2026-04-10"],
+            "start_time": ["21:00"],
+            "end_time": ["02:00"],
+            "source": ["The Duke Saloon"],
+            "location": ["The Duke Saloon, 502 Discovery St, Victoria, BC V8T 1G8, CA"],
+            "price": [""],
+            "url": ["https://thedukesaloon.com/event/the-county-line/"],
+            "event_type": ["live music"],
+            "address_id": [None],
+        }
+    )
+
+    written_count = handler.write_events_to_db(
+        df,
+        "https://thedukesaloon.com/event/the-county-line/",
+        "",
+        "The Duke Saloon",
+        ["live music"],
+    )
+
+    assert written_count == 1
+    assert inserted_batches
+    inserted_df = inserted_batches[0]
+    assert inserted_df.iloc[0]["start_date"].isoformat() == "2026-04-10"
+    assert pd.to_datetime(inserted_df.iloc[0]["end_date"]).date().isoformat() == "2026-04-11"
+
+    monkeypatch.delenv("DS_RUN_ID", raising=False)
+    monkeypatch.delenv("DS_STEP_NAME", raising=False)
+
+
 def test_build_phase1_telemetry_integrity_report_treats_step_mismatch_as_advisory() -> None:
     handler = DatabaseHandler.__new__(DatabaseHandler)
     query_results = {

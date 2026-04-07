@@ -152,6 +152,10 @@ def test_build_database_accuracy_manual_review_html_renders_review_table() -> No
     assert "example.com" in html
     assert "Human Label" in html
     assert "/tmp/database_accuracy_manual_review.csv" in html
+    assert "Scoring instructions:" in html
+    assert "human_label" in html
+    assert "review_notes" in html
+    assert "url_archetype_ml_classifier_review.csv" in html
 
 
 def test_build_classifier_manual_review_html_renders_review_table() -> None:
@@ -182,6 +186,43 @@ def test_build_classifier_manual_review_html_renders_review_table() -> None:
     assert "true_candidate" in html
     assert "Human Truth Archetype" in html
     assert "/tmp/url_archetype_ml_classifier_review.csv" in html
+    assert "Scoring instructions:" in html
+    assert "human_truth_owner_step" in html
+    assert "database_event_accuracy_manual_review.csv" in html
+    assert "simple_page" in html
+    assert "complicated_page" in html
+    assert "scraper.py" in html
+    assert "rd_ext.py" in html
+
+
+def test_infer_latest_pipeline_run_id_reads_archived_pipeline_logs(tmp_path, monkeypatch) -> None:
+    runner = _build_runner()
+    logs_dir = tmp_path / "logs"
+    archived_dir = logs_dir / "logs_20260406_202409"
+    archived_dir.mkdir(parents=True)
+    (archived_dir / "pipeline_log.txt").write_text(
+        "2026-04-06 20:28:22 - INFO - [run_id=20260406-202822-40c67542] [step=pipeline] - start\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+
+    inferred = runner._infer_latest_pipeline_run_id("2026-04-07T13:59:03.325938")
+
+    assert inferred == "20260406-202822-40c67542"
+
+
+def test_resolve_validation_run_id_prefers_db_telemetry_over_logs() -> None:
+    runner = _build_runner()
+    runner.db_handler = _FakeDbHandler()
+    runner.db_handler.query_map["FROM url_scrape_metrics"] = [
+        ("20260406-202822-40c67542", datetime(2026, 4, 6, 20, 45, 0)),
+    ]
+    runner._infer_latest_pipeline_run_id = lambda timestamp=None: "log-run-id"  # type: ignore[method-assign]
+
+    resolved = runner._resolve_validation_run_id("2026-04-07T13:59:03.325938")
+
+    assert resolved == "20260406-202822-40c67542"
 
 
 def test_build_completeness_kpis_only_html_includes_top_sources_table() -> None:

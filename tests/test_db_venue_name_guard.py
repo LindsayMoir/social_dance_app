@@ -72,7 +72,38 @@ def test_resolve_or_insert_address_rejects_loft_to_lab_street_fuzzy_match() -> N
 
 def test_lookup_raw_location_ignores_stale_loft_to_lab_cache() -> None:
     handler = DatabaseHandler.__new__(DatabaseHandler)
-    handler.execute_query = lambda *_args, **_kwargs: [(101, "The Lab Victoria")]  # type: ignore[attr-defined]
+    handler.execute_query = lambda *_args, **_kwargs: [(101, "The Lab Victoria", "729", "Yates", None, "The Lab Victoria, 729 Yates, Victoria, BC, CA")]  # type: ignore[attr-defined]
+    handler._stale_raw_location_warnings = set()  # type: ignore[attr-defined]
 
     result = handler.lookup_raw_location("The Loft Victoria, Fort, Victoria, BC, CA")
     assert result is None
+
+
+def test_build_full_address_preserves_direction_token() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+
+    result = handler.build_full_address(
+        building_name="The Relocation Experiment",
+        street_number="154",
+        direction="E",
+        street_name="10th",
+        city="Vancouver",
+        province_or_state="BC",
+        postal_code="V5T 1Z4",
+        country_id="CA",
+    )
+
+    assert result == "The Relocation Experiment, 154 E 10th, Vancouver, BC V5T 1Z4, CA"
+
+
+def test_address_text_supports_candidate_rejects_mismatched_quick_lookup() -> None:
+    assert DatabaseHandler._address_text_supports_candidate(
+        "Slovenian Society, 5762 Sprott Street Burnaby, BC V5G 1X5",
+        {
+            "building_name": "Slovenian Society",
+            "street_number": "5751",
+            "street_name": "Forest",
+            "direction": None,
+            "full_address": "5751 Forest, Burnaby, BC V5G 1X5, CA",
+        },
+    ) is False

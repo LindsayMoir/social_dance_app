@@ -5,13 +5,16 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from rd_ext import (
+    _build_synthetic_calendar_detail_url,
     _derive_rd_ext_effective_keywords,
     _get_login_probe_url,
     _is_embedded_event_iframe_url,
     _looks_like_event_iframe_text,
+    _looks_like_clickable_calendar_box_label,
     _looks_like_child_event_url,
     _should_attempt_content_reveal_click,
     _should_follow_same_domain_child_link,
+    ReadExtract,
     _wait_for_login_completion,
 )
 
@@ -167,3 +170,48 @@ def test_looks_like_event_iframe_text_requires_event_and_date_signals() -> None:
     )
     assert _looks_like_event_iframe_text(rich_event_text)
     assert not _looks_like_event_iframe_text("Embedded newsletter signup widget")
+
+
+def test_looks_like_clickable_calendar_box_label_filters_calendar_ui_noise() -> None:
+    assert _looks_like_clickable_calendar_box_label("Miguelito Valdes + band")
+    assert _looks_like_clickable_calendar_box_label("Friday Night Live with DJ Rye")
+    assert not _looks_like_clickable_calendar_box_label("Month")
+    assert not _looks_like_clickable_calendar_box_label("Apr 21")
+    assert not _looks_like_clickable_calendar_box_label("12")
+
+
+def test_build_synthetic_calendar_detail_url_is_stable_and_readable() -> None:
+    url = _build_synthetic_calendar_detail_url(
+        "https://www.bardandbanker.com/live-music",
+        "Miguelito Valdes + band",
+        3,
+    )
+    assert url.startswith("https://www.bardandbanker.com/live-music?calendar_click=")
+    assert "#miguelito-valdes-band" in url
+
+
+def test_extract_from_url_routes_bard_listing_to_calendar_event_extraction(monkeypatch) -> None:
+    extractor = ReadExtract.__new__(ReadExtract)
+    extractor.config = {}
+
+    class _FakeDb:
+        @staticmethod
+        def should_process_url(_url: str) -> bool:
+            return True
+
+    async def _fake_extract_calendar_events(url: str, venue_name: str = "Calendar"):
+        assert url == "https://www.bardandbanker.com/live-music"
+        assert venue_name == "Bard and Banker"
+        return [("https://example.com/event-1", "Event One"), ("https://example.com/event-2", "Event Two")]
+
+    monkeypatch.setattr("rd_ext.get_db_handler", lambda: _FakeDb())
+    monkeypatch.setattr(extractor, "extract_calendar_events", _fake_extract_calendar_events)
+
+    result = asyncio.run(
+        extractor.extract_from_url("https://www.bardandbanker.com/live-music", multiple=False)
+    )
+
+    assert result == {
+        "https://example.com/event-1": "Event One",
+        "https://example.com/event-2": "Event Two",
+    }

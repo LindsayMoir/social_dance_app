@@ -24,6 +24,7 @@ import asyncio
 import json  # New import for JSON parsing
 from bs4 import BeautifulSoup
 from datetime import date, datetime, timedelta
+from hashlib import md5
 import logging
 import pandas as pd
 import os
@@ -294,6 +295,50 @@ def _looks_like_child_event_url(url: str) -> bool:
         or "/event/" in normalized
         or "/events/" in normalized
     )
+
+
+def _looks_like_clickable_calendar_box_label(text: str) -> bool:
+    """Return True when visible calendar-box text looks like an event entry, not UI chrome."""
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(normalized) < 6 or len(normalized) > 180:
+        return False
+    if not re.search(r"[A-Za-z]", normalized):
+        return False
+    lowered = normalized.lower()
+    blocked_exact = {
+        "today",
+        "tomorrow",
+        "yesterday",
+        "month",
+        "week",
+        "day",
+        "agenda",
+        "list",
+        "calendar",
+        "next",
+        "previous",
+        "read more",
+        "learn more",
+        "buy tickets",
+        "tickets",
+    }
+    if lowered in blocked_exact:
+        return False
+    if re.fullmatch(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}", lowered):
+        return False
+    if re.fullmatch(r"\d{1,2}", lowered):
+        return False
+    return True
+
+
+def _build_synthetic_calendar_detail_url(calendar_url: str, event_label: str, index: int) -> str:
+    """Create a stable synthetic child URL when a calendar click reveals detail without navigation."""
+    normalized_label = re.sub(r"[^a-z0-9]+", "-", str(event_label or "").strip().lower()).strip("-")
+    if not normalized_label:
+        normalized_label = f"event-{index}"
+    digest = md5(f"{calendar_url}|{normalized_label}|{index}".encode("utf-8")).hexdigest()[:10]
+    separator = "&" if "?" in calendar_url else "?"
+    return f"{calendar_url}{separator}calendar_click={digest}#{normalized_label}"
 
 
 def _looks_like_event_iframe_text(text: str) -> bool:
@@ -888,6 +933,7 @@ class ReadExtract:
             'gotothecoda.com/calendar': 'The Coda',
             'loftpubvictoria.com/events/month': 'The Loft',
             'thedukesaloon.com': 'The Duke Saloon',
+            'bardandbanker.com/live-music': 'Bard and Banker',
         }
 
         for venue_url_pattern, venue_name in calendar_venues.items():
@@ -1106,6 +1152,22 @@ class ReadExtract:
             logging.info(f"extract_calendar_events({venue_name}): Filtered to {len(event_links)} unique event URLs")
 
             if not event_links:
+                logging.info(
+                    "extract_calendar_events(%s): No explicit child links found; trying clickable calendar detail extraction on %s",
+                    venue_name,
+                    calendar_url,
+                )
+                clicked_event_data = await self._extract_click_revealed_calendar_events(
+                    calendar_url=calendar_url,
+                    venue_name=venue_name,
+                )
+                if clicked_event_data:
+                    logging.info(
+                        "extract_calendar_events(%s): Extracted %d click-revealed calendar events",
+                        venue_name,
+                        len(clicked_event_data),
+                    )
+                    return clicked_event_data
                 logging.warning(f"extract_calendar_events({venue_name}): No event links found on {calendar_url}")
                 return event_data
 
@@ -1147,6 +1209,156 @@ class ReadExtract:
         except Exception as e:
             logging.error(f"extract_calendar_events({venue_name}): Failed to extract events: {e}")
             return event_data
+
+    async def _extract_click_revealed_calendar_events(self, calendar_url: str, venue_name: str) -> list[tuple[str, str]]:
+        """Extract event detail from clickable calendar entries when no child URLs are exposed."""
+        event_data: list[tuple[str, str]] = []
+        seen_keys: set[str] = set()
+        candidate_selectors = (
+            ".fc-event",
+            ".fc-daygrid-event",
+            ".fc-daygrid-event-harness a",
+            ".tribe-events-calendar-month__calendar-event",
+            ".tribe-events-calendar-month__multiday-event-wrapper a",
+            "[data-event-id]",
+            "[data-mecid]",
+            "[role='button']",
+        )
+        discovered_candidates: list[tuple[str, int, str]] = []
+
+        for selector in candidate_selectors:
+            try:
+                locator = self.page.locator(selector)
+                count = await locator.count()
+            except Exception as exc:
+                logging.info(
+                    "_extract_click_revealed_calendar_events(%s): selector=%s unavailable: %s",
+                    venue_name,
+                    selector,
+                    exc,
+                )
+                continue
+            for index in range(min(count, 80)):
+                handle = locator.nth(index)
+                try:
+                    if not await handle.is_visible():
+                        continue
+                    label = re.sub(r"\s+", " ", str(await handle.inner_text() or "")).strip()
+                except Exception:
+                    continue
+                if not _looks_like_clickable_calendar_box_label(label):
+                    continue
+                candidate_key = f"{selector}|{index}|{label.lower()}"
+                if candidate_key in seen_keys:
+                    continue
+                seen_keys.add(candidate_key)
+                discovered_candidates.append((selector, index, label))
+
+        logging.info(
+            "_extract_click_revealed_calendar_events(%s): discovered_candidates=%d url=%s",
+            venue_name,
+            len(discovered_candidates),
+            calendar_url,
+        )
+
+        seen_output_urls: set[str] = set()
+        for selector, index, label in discovered_candidates:
+            try:
+                await self.page.goto(calendar_url, timeout=15000)
+                await self.page.wait_for_load_state("domcontentloaded")
+                locator = self.page.locator(selector).nth(index)
+                await locator.scroll_into_view_if_needed(timeout=3000)
+                await locator.click(timeout=5000, force=True)
+                await self.page.wait_for_timeout(800)
+            except Exception as exc:
+                logging.info(
+                    "_extract_click_revealed_calendar_events(%s): click failed selector=%s index=%d label=%s error=%s",
+                    venue_name,
+                    selector,
+                    index,
+                    label,
+                    exc,
+                )
+                continue
+
+            detail_text = await self._extract_click_revealed_event_detail_text(
+                calendar_url=calendar_url,
+                fallback_label=label,
+            )
+            if not detail_text:
+                continue
+
+            current_url = str(getattr(self.page, "url", "") or "").strip()
+            output_url = (
+                current_url
+                if current_url and current_url.rstrip("/") != calendar_url.rstrip("/")
+                else _build_synthetic_calendar_detail_url(calendar_url, label, index)
+            )
+            if output_url in seen_output_urls:
+                continue
+            seen_output_urls.add(output_url)
+            event_data.append((output_url, detail_text))
+
+        return event_data
+
+    async def _extract_click_revealed_event_detail_text(self, calendar_url: str, fallback_label: str) -> str:
+        """Capture authoritative event detail text after clicking a calendar entry."""
+        modal_selectors = (
+            "[role='dialog']",
+            ".modal",
+            ".mfp-wrap",
+            ".mfp-content",
+            ".ui-dialog",
+            ".tribe-events-calendar-month__calendar-event-details",
+            ".fc-popover",
+        )
+        best_text = ""
+
+        for selector in modal_selectors:
+            try:
+                locator = self.page.locator(selector)
+                count = await locator.count()
+            except Exception:
+                continue
+            for index in range(min(count, 5)):
+                handle = locator.nth(index)
+                try:
+                    if not await handle.is_visible():
+                        continue
+                    text = re.sub(r"\s+", " ", str(await handle.inner_text() or "")).strip()
+                except Exception:
+                    continue
+                if len(text) > len(best_text) and fallback_label.lower() in text.lower():
+                    best_text = text
+
+        if best_text:
+            return best_text
+
+        try:
+            content = await self.page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+            for tag in soup(['script', 'style']):
+                tag.decompose()
+            page_text = ' '.join(soup.stripped_strings)
+        except Exception as exc:
+            logging.info(
+                "_extract_click_revealed_event_detail_text(): failed reading page content for %s: %s",
+                calendar_url,
+                exc,
+            )
+            return ""
+
+        page_text = re.sub(r"\s+", " ", page_text).strip()
+        if (
+            page_text
+            and fallback_label.lower() in page_text.lower()
+            and (
+                str(getattr(self.page, "url", "") or "").rstrip("/") != calendar_url.rstrip("/")
+                or len(page_text) >= 400
+            )
+        ):
+            return page_text
+        return ""
 
 
 

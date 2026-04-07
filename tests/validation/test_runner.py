@@ -498,7 +498,7 @@ class ValidationTestRunner:
 
         # 2.5 MANUAL REVIEW SAMPLES
         try:
-            review_run_id = str(os.getenv("DS_RUN_ID", "")).strip() or self._infer_latest_pipeline_run_id(results.get("timestamp"))
+            review_run_id = self._resolve_validation_run_id(results.get("timestamp"))
             self._persist_completed_database_event_accuracy_review()
             database_accuracy_manual_review = self._build_database_accuracy_manual_review_sample(limit=10)
             classifier_manual_review = self._build_classifier_manual_review_sample(run_id=review_run_id, limit=10)
@@ -2073,7 +2073,10 @@ class ValidationTestRunner:
         fb_block_summary = self._summarize_fb_block_health(results.get('timestamp'))
         fb_ig_funnel_summary = self._summarize_fb_ig_url_funnel(results.get('timestamp'), fb_block_summary)
         suspicious_deletes_summary = self._summarize_suspicious_deletes(results.get('timestamp'))
-        report_run_id = str(fb_block_summary.get("run_id", "") or "").strip() or self._infer_latest_pipeline_run_id(results.get('timestamp'))
+        report_run_id = self._resolve_validation_run_id(
+            results.get('timestamp'),
+            preferred_run_id=str(fb_block_summary.get("run_id", "") or "").strip(),
+        )
         pipeline_runtime_summary = self._summarize_pipeline_runtime(results.get('timestamp'), report_run_id)
         scraper_telemetry_summary = self._summarize_scraper_step_telemetry(report_run_id)
         telemetry_integrity_summary = self._build_phase1_telemetry_integrity_summary(report_run_id)
@@ -4600,9 +4603,13 @@ class ValidationTestRunner:
         return None
 
     def _infer_latest_pipeline_run_id(self, report_timestamp: str | None) -> str:
-        """Return latest pipeline run_id from logs/pipeline_log.txt near report timestamp."""
-        path = "logs/pipeline_log.txt"
-        if not os.path.exists(path):
+        """Return latest pipeline run_id from live or archived pipeline logs near report timestamp."""
+        candidate_paths = [
+            str(path)
+            for path in sorted(Path("logs").glob("**/pipeline_log.txt"))
+            if path.is_file()
+        ]
+        if not candidate_paths:
             return ""
 
         end_ts = datetime.now()
@@ -4615,21 +4622,64 @@ class ValidationTestRunner:
         latest_run_id = ""
         latest_ts: datetime | None = None
 
-        try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as file:
-                for line in file:
-                    ts = self._parse_log_timestamp(line)
-                    if ts is None or ts < start_ts or ts > end_ts:
-                        continue
-                    m = run_re.search(line)
-                    if not m:
-                        continue
-                    if latest_ts is None or ts >= latest_ts:
-                        latest_ts = ts
-                        latest_run_id = m.group(1).strip()
-        except Exception:
-            return ""
+        for path in candidate_paths:
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as file:
+                    for line in file:
+                        ts = self._parse_log_timestamp(line)
+                        if ts is None or ts < start_ts or ts > end_ts:
+                            continue
+                        m = run_re.search(line)
+                        if not m:
+                            continue
+                        candidate_run_id = m.group(1).strip()
+                        if not candidate_run_id or candidate_run_id.lower() == "na":
+                            continue
+                        if latest_ts is None or ts >= latest_ts:
+                            latest_ts = ts
+                            latest_run_id = candidate_run_id
+            except Exception:
+                continue
         return latest_run_id
+
+    def _resolve_validation_run_id(self, report_timestamp: str | None, preferred_run_id: str | None = None) -> str:
+        """Resolve the current validation run_id using environment, DB telemetry, then logs."""
+        explicit_run_id = str(preferred_run_id or "").strip() or str(os.getenv("DS_RUN_ID", "")).strip()
+        if explicit_run_id and explicit_run_id.lower() != "na":
+            return explicit_run_id
+
+        end_ts = datetime.now()
+        if report_timestamp:
+            parsed = self._parse_iso_datetime(report_timestamp)
+            if parsed is not None:
+                end_ts = parsed
+        start_ts = end_ts - timedelta(hours=48)
+
+        if getattr(self, "db_handler", None):
+            try:
+                rows = self.db_handler.execute_query(
+                    """
+                    SELECT run_id, MAX(time_stamp) AS latest_ts
+                    FROM url_scrape_metrics
+                    WHERE COALESCE(NULLIF(TRIM(run_id), ''), '') <> ''
+                      AND LOWER(COALESCE(NULLIF(TRIM(run_id), ''), '')) <> 'na'
+                      AND time_stamp >= :start_ts
+                      AND time_stamp <= :end_ts
+                    GROUP BY run_id
+                    ORDER BY latest_ts DESC
+                    LIMIT 1
+                    """,
+                    {"start_ts": start_ts, "end_ts": end_ts},
+                    statement_timeout_ms=15000,
+                ) or []
+                if rows:
+                    resolved_run_id = str(rows[0][0] or "").strip()
+                    if resolved_run_id and resolved_run_id.lower() != "na":
+                        return resolved_run_id
+            except Exception:
+                pass
+
+        return self._infer_latest_pipeline_run_id(report_timestamp)
 
     def _summarize_pipeline_runtime(self, report_timestamp: str | None, run_id: str) -> dict:
         """Approximate end-to-end runtime using top-level log timestamps for one run_id."""
@@ -6843,6 +6893,7 @@ class ValidationTestRunner:
 
         csv_path = self._escape_html(str(sample.get("csv_path", "") or ""))
         sample_size = int(sample.get("rows_returned", len(rows)) or 0)
+        csv_name = self._escape_html(os.path.basename(str(sample.get("csv_path", "") or "")))
         table_rows: list[str] = []
         for idx, row in enumerate(rows, start=1):
             if not isinstance(row, dict):
@@ -6867,8 +6918,14 @@ class ValidationTestRunner:
 
         return (
             f"<p>Review these {sample_size} sampled event rows from the final <code>events</code> table and record your labels in "
-            f"<code>{csv_path}</code>. Rows are sampled across different URL domains so this check is not dominated by one source family. "
-            "Set <code>human_label</code> to indicate whether the event row looks accurate when compared against the source page on the internet.</p>"
+            f"<code>{csv_path}</code>. Rows are sampled across different URL domains so this check is not dominated by one source family.</p>"
+            "<p><strong>Scoring instructions:</strong> Open the source URL on the internet, compare it to the database row, and fill in the CSV. "
+            f"For this workflow use <code>{csv_name}</code> at <code>{csv_path}</code>. "
+            "Set <code>human_label</code> to <code>True</code> when the event row is accurate and <code>False</code> when it is not. "
+            "Use <code>review_notes</code> to describe what is wrong for any false row.</p>"
+            "<p><strong>Manual review CSV locations:</strong> "
+            f"Database event review: <code>{csv_path}</code>. "
+            f"URL archetype ML classifier review: <code>{self._escape_html(codex_review_path(URL_ARCHETYPE_ML_CLASSIFIER_REVIEW_FILENAME))}</code>.</p>"
             "<table><tr>"
             "<th>#</th><th>Domain</th><th>Event Name</th><th>Source</th><th>Start Date</th><th>Start Time</th>"
             "<th>Event Type</th><th>Dance Style</th><th>Location</th><th>URL</th><th>Description</th>"
@@ -6890,6 +6947,7 @@ class ValidationTestRunner:
 
         csv_path = self._escape_html(str(sample.get("csv_path", "") or ""))
         sample_size = int(sample.get("rows_returned", len(rows)) or 0)
+        csv_name = self._escape_html(os.path.basename(str(sample.get("csv_path", "") or "")))
         table_rows: list[str] = []
         for idx, row in enumerate(rows, start=1):
             if not isinstance(row, dict):
@@ -6915,8 +6973,18 @@ class ValidationTestRunner:
 
         return (
             f"<p>Review these {sample_size} sampled URLs for URL archetype ML classifier correctness and record your labels in "
-            f"<code>{csv_path}</code>. The <code>sample_bucket</code> column splits the sample between URLs that produced surviving events and URLs that had keywords but produced no surviving events. "
-            "Set <code>human_label</code> to indicate whether the classifier/scrape decision was correct. For rows marked false, also fill <code>human_truth_archetype</code> and <code>human_truth_owner_step</code> so they can be promoted into classifier training.</p>"
+            f"<code>{csv_path}</code>. The <code>sample_bucket</code> column splits the sample between URLs that produced surviving events and URLs that had keywords but produced no surviving events.</p>"
+            "<p><strong>Scoring instructions:</strong> Open each URL on the internet and decide whether the classifier/scrape decision was correct. "
+            f"For this workflow use <code>{csv_name}</code> at <code>{csv_path}</code>. "
+            "Set <code>human_label</code> to one of <code>true</code>, <code>correct</code>, <code>yes</code>, <code>y</code>, or <code>1</code> when the classifier/routing choice was correct, "
+            "or one of <code>false</code>, <code>incorrect</code>, <code>no</code>, <code>n</code>, or <code>0</code> when it was not. "
+            "For every false row, also fill <code>human_truth_archetype</code> and <code>human_truth_owner_step</code> so the reviewed row can be promoted into classifier training. "
+            "Accepted <code>human_truth_archetype</code> values are <code>simple_page</code>, <code>incomplete_event</code>, <code>complicated_page</code>, <code>google_calendar</code>, and <code>other</code>. "
+            "Accepted <code>human_truth_owner_step</code> values are <code>scraper.py</code>, <code>rd_ext.py</code>, <code>fb.py</code>, <code>ebs.py</code>, and <code>emails.py</code>. "
+            "Use <code>review_notes</code> to explain the mistake.</p>"
+            "<p><strong>Manual review CSV locations:</strong> "
+            f"Database event review: <code>{self._escape_html(codex_review_path(DATABASE_EVENT_ACCURACY_MANUAL_REVIEW_FILENAME))}</code>. "
+            f"URL archetype ML classifier review: <code>{csv_path}</code>.</p>"
             "<table><tr>"
             "<th>#</th><th>Sample Bucket</th><th>Source</th><th>Handled By</th><th>URL</th><th>Classifier Stage</th>"
             "<th>Predicted Archetype</th><th>Predicted Owner Step</th><th>Events Written</th><th>Survived To End</th>"

@@ -301,6 +301,7 @@ class LLMHandler:
         *,
         events_df: pd.DataFrame,
         url: str,
+        extracted_text: str = "",
     ) -> pd.DataFrame:
         """Normalize parsed event rows before DB write to keep late cleanup minimal."""
         if events_df.empty:
@@ -345,6 +346,12 @@ class LLMHandler:
                 cleared_count,
             )
 
+        working_df = self._apply_facebook_detail_header_date_consistency(
+            events_df=working_df,
+            url=url,
+            extracted_text=extracted_text,
+        )
+
         before_drop = len(working_df)
         working_df = working_df[working_df["start_date"].ne("")].copy()
         dropped_count = before_drop - len(working_df)
@@ -354,6 +361,127 @@ class LLMHandler:
                 url,
                 dropped_count,
                 len(working_df),
+            )
+
+        return working_df
+
+    @staticmethod
+    def _is_facebook_event_detail_url(url: str) -> bool:
+        """Return True when the URL points at a Facebook event detail page."""
+        normalized_url = str(url or "").strip().lower()
+        return "facebook.com/events/" in normalized_url
+
+    @staticmethod
+    def _parse_month_token_to_number(month_token: str) -> int | None:
+        """Parse a month token into its numeric month value."""
+        normalized_token = str(month_token or "").strip()
+        if not normalized_token:
+            return None
+        for fmt in ("%B", "%b"):
+            try:
+                return datetime.strptime(normalized_token, fmt).month
+            except ValueError:
+                continue
+        return None
+
+    def _extract_facebook_authoritative_header_date(self, extracted_text: str) -> str:
+        """Extract the authoritative absolute date from Facebook detail-page header text."""
+        cleaned_text = re.sub(r"\s+", " ", str(extracted_text or "")).strip()
+        if not cleaned_text:
+            return ""
+
+        patterns = (
+            re.compile(
+                r"\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+"
+                r"(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]+)\s+(?P<year>\d{4})\s+from\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s*,?\s+"
+                r"(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?\,?\s+"
+                r"(?P<year>\d{4})\s+(?:at|from)\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\b(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?\,?\s+"
+                r"(?P<year>\d{4})\s+(?:at|from)\b",
+                re.IGNORECASE,
+            ),
+        )
+
+        candidate_counts: dict[str, int] = {}
+        first_seen_order: list[str] = []
+        for pattern in patterns:
+            for match in pattern.finditer(cleaned_text):
+                month_number = self._parse_month_token_to_number(match.group("month"))
+                if month_number is None:
+                    continue
+                try:
+                    normalized_date = datetime(
+                        year=int(match.group("year")),
+                        month=month_number,
+                        day=int(match.group("day")),
+                    ).strftime("%Y-%m-%d")
+                except ValueError:
+                    continue
+                if normalized_date not in candidate_counts:
+                    candidate_counts[normalized_date] = 0
+                    first_seen_order.append(normalized_date)
+                candidate_counts[normalized_date] += 1
+
+        if not candidate_counts:
+            return ""
+        if len(candidate_counts) == 1:
+            return first_seen_order[0]
+
+        ranked_candidates = sorted(
+            candidate_counts.items(),
+            key=lambda item: (-item[1], first_seen_order.index(item[0])),
+        )
+        top_date, top_count = ranked_candidates[0]
+        second_count = ranked_candidates[1][1]
+        if top_count > second_count:
+            return top_date
+        return ""
+
+    def _apply_facebook_detail_header_date_consistency(
+        self,
+        *,
+        events_df: pd.DataFrame,
+        url: str,
+        extracted_text: str,
+    ) -> pd.DataFrame:
+        """Use explicit Facebook header dates as the authoritative date on event detail pages."""
+        if events_df.empty or not self._is_facebook_event_detail_url(url):
+            return events_df
+
+        authoritative_date = self._extract_facebook_authoritative_header_date(extracted_text)
+        if not authoritative_date:
+            return events_df
+
+        working_df = events_df.copy()
+        replaced_count = 0
+        filled_count = 0
+        authoritative_weekday = self._weekday_for_iso_date(authoritative_date)
+
+        for idx in working_df.index:
+            current_start_date = str(working_df.at[idx, "start_date"] or "").strip()
+            if not current_start_date:
+                working_df.at[idx, "start_date"] = authoritative_date
+                filled_count += 1
+            elif current_start_date != authoritative_date:
+                working_df.at[idx, "start_date"] = authoritative_date
+                replaced_count += 1
+            if authoritative_weekday:
+                working_df.at[idx, "day_of_week"] = authoritative_weekday
+
+        if replaced_count > 0 or filled_count > 0:
+            logging.info(
+                "process_llm_response: normalized_facebook_header_date url=%s authoritative_date=%s replaced=%d filled=%d",
+                url,
+                authoritative_date,
+                replaced_count,
+                filled_count,
             )
 
         return working_df
@@ -908,6 +1036,7 @@ class LLMHandler:
                     events_df = self._normalize_event_rows_before_write(
                         events_df=events_df,
                         url=url,
+                        extracted_text=extracted_text,
                     )
                     if events_df.empty:
                         logging.warning(

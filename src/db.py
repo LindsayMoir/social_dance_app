@@ -3169,7 +3169,7 @@ class DatabaseHandler():
         
         # Ensure ALL fields expected by INSERT query are present (set to None if missing)
         required_fields = [
-            "building_name", "street_number", "street_name", "city",
+            "building_name", "street_number", "street_name", "street_type", "direction", "city",
             "province_or_state", "postal_code", "country_id"
         ]
         
@@ -3181,6 +3181,8 @@ class DatabaseHandler():
         parsed_address["building_name"] = building_name or parsed_address.get("building_name")
         parsed_address["street_number"] = street_number or parsed_address.get("street_number")
         parsed_address["street_name"] = street_name or parsed_address.get("street_name")
+        parsed_address["street_type"] = parsed_address.get("street_type")
+        parsed_address["direction"] = parsed_address.get("direction")
         parsed_address["country_id"] = country_id or parsed_address.get("country_id")
 
         # Build standardized full_address from components
@@ -3189,6 +3191,7 @@ class DatabaseHandler():
             street_number=parsed_address.get("street_number"),
             street_name=parsed_address.get("street_name"),
             street_type=parsed_address.get("street_type"),
+            direction=parsed_address.get("direction"),
             city=parsed_address.get("city"),
             province_or_state=parsed_address.get("province_or_state"),
             postal_code=parsed_address.get("postal_code"),
@@ -3210,10 +3213,10 @@ class DatabaseHandler():
 
         insert_query = """
             INSERT INTO address (
-                building_name, street_number, street_name, city,
+                building_name, street_number, street_name, street_type, direction, city,
                 province_or_state, postal_code, country_id, full_address, time_stamp
             ) VALUES (
-                :building_name, :street_number, :street_name, :city,
+                :building_name, :street_number, :street_name, :street_type, :direction, :city,
                 :province_or_state, :postal_code, :country_id, :full_address, :time_stamp
             )
             RETURNING address_id;
@@ -3241,6 +3244,7 @@ class DatabaseHandler():
 
     def build_full_address(self, building_name: str = None, street_number: str = None, 
                           street_name: str = None, street_type: str = None, 
+                          direction: str = None,
                           city: str = None, province_or_state: str = None, 
                           postal_code: str = None, country_id: str = None) -> str:
         """
@@ -3253,6 +3257,7 @@ class DatabaseHandler():
             street_number: Street number
             street_name: Street name  
             street_type: Street type (St, Ave, Rd, etc.)
+            direction: Street direction token (E, W, N, S, etc.)
             city: City name
             province_or_state: Province or state
             postal_code: Postal code
@@ -3271,6 +3276,8 @@ class DatabaseHandler():
         street_parts = []
         if street_number and street_number.strip():
             street_parts.append(street_number.strip())
+        if direction and direction.strip():
+            street_parts.append(direction.strip())
         if street_name and street_name.strip():
             street_parts.append(street_name.strip())
         if street_type and street_type.strip():
@@ -3454,6 +3461,8 @@ class DatabaseHandler():
                 )
                 self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now()])
                 return 0
+
+        df = self._normalize_overnight_end_dates(df)
 
         if 'price' not in df.columns:
             logging.warning("write_events_to_db: 'price' column is missing. Filling with empty string.")
@@ -3842,6 +3851,79 @@ class DatabaseHandler():
             for col in ['start_time', 'end_time']:
                 df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
             warnings.resetwarnings()
+
+    def _normalize_overnight_end_dates(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Roll end_date forward for overnight events whose end_time crosses midnight."""
+        if df is None or df.empty:
+            return df
+        working_df = df.copy()
+        required_columns = {"start_date", "end_date", "start_time", "end_time"}
+        if not required_columns.issubset(set(working_df.columns)):
+            return working_df
+
+        rollover_count = 0
+        for idx, row in working_df.iterrows():
+            start_date = row.get("start_date")
+            end_date = row.get("end_date")
+            start_time = row.get("start_time")
+            end_time = row.get("end_time")
+            if pd.isna(start_date) or pd.isna(start_time) or pd.isna(end_time):
+                continue
+            if not end_date or pd.isna(end_date):
+                end_date = start_date
+            if end_date != start_date:
+                continue
+            try:
+                if end_time < start_time:
+                    start_date_value = pd.to_datetime(start_date, errors="coerce")
+                    if pd.isna(start_date_value):
+                        continue
+                    working_df.at[idx, "end_date"] = (start_date_value + timedelta(days=1)).date()
+                    rollover_count += 1
+            except Exception:
+                continue
+
+        if rollover_count:
+            logging.info(
+                "_normalize_overnight_end_dates: Rolled %d event(s) to next-day end_date.",
+                rollover_count,
+            )
+        return working_df
+
+    @staticmethod
+    def _address_text_supports_candidate(raw_location: str, candidate: dict[str, Any]) -> bool:
+        """Return True when raw location text plausibly supports the candidate address row."""
+        raw_text = str(raw_location or "").strip().lower()
+        if not raw_text:
+            return True
+
+        building_name = str(candidate.get("building_name") or "").strip()
+        street_number = str(candidate.get("street_number") or "").strip().lower()
+        street_name = str(candidate.get("street_name") or "").strip().lower()
+        direction = str(candidate.get("direction") or "").strip().lower()
+        full_address = str(candidate.get("full_address") or "").strip().lower()
+
+        building_supported = bool(
+            building_name and DatabaseHandler._has_meaningful_token_overlap(raw_text, building_name)
+        )
+
+        if street_number and street_number not in raw_text:
+            return False if (street_name or full_address) else building_supported
+        if street_name:
+            street_name_tokens = [token for token in re.split(r"[\s,/.-]+", street_name) if token]
+            significant_tokens = [token for token in street_name_tokens if len(token) > 2 or token.isdigit()]
+            if significant_tokens and not all(token in raw_text for token in significant_tokens):
+                return False if (street_number or full_address) else building_supported
+        if direction:
+            directional_pattern = re.compile(
+                rf"\b{re.escape(street_number)}\s+{re.escape(direction)}\b" if street_number else rf"\b{re.escape(direction)}\b",
+                re.IGNORECASE,
+            )
+            if direction in {"n", "s", "e", "w"} and directional_pattern.search(raw_text) is None:
+                return False
+        if street_name and street_number:
+            return True
+        return building_supported or bool(street_name or street_number)
 
     def _clean_day_of_week_field(self, df):
         """
@@ -4450,23 +4532,41 @@ class DatabaseHandler():
         cached_addr_id = self.lookup_raw_location(location)
         if cached_addr_id:
             full_address = self.get_full_address_from_id(cached_addr_id)
-            event["address_id"] = cached_addr_id
-            if full_address:
-                event["location"] = full_address
-            logging.info(f"process_event_address: Cache hit for '{location}' → address_id={cached_addr_id}")
-            return event
+            if self._address_text_supports_candidate(
+                location,
+                {"full_address": full_address},
+            ):
+                event["address_id"] = cached_addr_id
+                if full_address:
+                    event["location"] = full_address
+                logging.info(f"process_event_address: Cache hit for '{location}' → address_id={cached_addr_id}")
+                return event
+            logging.info(
+                "process_event_address: Ignoring low-confidence cache hit for '%s' → address_id=%s",
+                location,
+                cached_addr_id,
+            )
 
         # STEP 2: Try intelligent address parsing (fuzzy matching, regex)
         quick_addr_id = self.quick_address_lookup(location)
         if quick_addr_id:
-            # Cache this mapping for future use
-            self.cache_raw_location(location, quick_addr_id)
             full_address = self.get_full_address_from_id(quick_addr_id)
-            event["address_id"] = quick_addr_id
-            if full_address:
-                event["location"] = full_address
-            logging.info(f"process_event_address: Quick lookup found address_id={quick_addr_id} for '{location}'")
-            return event
+            if self._address_text_supports_candidate(
+                location,
+                {"full_address": full_address},
+            ):
+                # Cache this mapping for future use
+                self.cache_raw_location(location, quick_addr_id)
+                event["address_id"] = quick_addr_id
+                if full_address:
+                    event["location"] = full_address
+                logging.info(f"process_event_address: Quick lookup found address_id={quick_addr_id} for '{location}'")
+                return event
+            logging.info(
+                "process_event_address: Ignoring low-confidence quick lookup for '%s' → address_id=%s",
+                location,
+                quick_addr_id,
+            )
 
         # STEP 3: LLM processing (last resort)
         # Generate the LLM prompt
@@ -4789,7 +4889,7 @@ class DatabaseHandler():
         try:
             result = self.execute_query(
                 """
-                SELECT rl.address_id, a.building_name
+                SELECT rl.address_id, a.building_name, a.street_number, a.street_name, a.direction, a.full_address
                 FROM raw_locations rl
                 LEFT JOIN address a ON a.address_id = rl.address_id
                 WHERE rl.raw_location = :raw_location
@@ -4797,15 +4897,26 @@ class DatabaseHandler():
                 {"raw_location": raw_location}
             )
             if result:
-                address_id, building_name = result[0]
-                if building_name and not self._has_meaningful_token_overlap(raw_location, building_name):
-                    warning_key = (str(raw_location), int(address_id) if address_id is not None else None, str(building_name))
+                address_id, building_name, street_number, street_name, direction, full_address = result[0]
+                candidate = {
+                    "building_name": building_name,
+                    "street_number": street_number,
+                    "street_name": street_name,
+                    "direction": direction,
+                    "full_address": full_address,
+                }
+                if not self._address_text_supports_candidate(raw_location, candidate):
+                    warning_key = (
+                        str(raw_location),
+                        int(address_id) if address_id is not None else None,
+                        str(building_name or full_address),
+                    )
                     if warning_key not in self._stale_raw_location_warnings:
                         logging.warning(
                             "lookup_raw_location: Ignoring stale/mismatched cache mapping '%s' -> address_id=%s (%s)",
                             raw_location,
                             address_id,
-                            building_name,
+                            building_name or full_address,
                         )
                         self._stale_raw_location_warnings.add(warning_key)
                     try:

@@ -436,3 +436,105 @@ def test_process_llm_response_keeps_schedule_poster_rows_without_single_date_con
     assert result == EventWriteResult(success=True, events_written=3, decision_reason="llm_success")
     assert len(writes) == 1
     assert list(writes[0]["start_date"]) == ["2026-03-01", "2026-03-08", "2026-03-15"]
+
+
+def test_process_llm_response_uses_facebook_header_date_over_conflicting_llm_date(monkeypatch) -> None:
+    handler = LLMHandler.__new__(LLMHandler)
+    handler.config = {"crawling": {"prompt_max_length": 5000}}
+    writes: list[pd.DataFrame] = []
+    handler.db_handler = SimpleNamespace(
+        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
+    )
+
+    monkeypatch.setattr(
+        handler,
+        "generate_prompt",
+        lambda url, extracted_text, prompt_type: ("prompt text", "event_extraction"),
+    )
+    monkeypatch.setattr(
+        handler,
+        "query_llm",
+        lambda url, prompt_attempt, schema_type, return_metadata=True: (
+            '{"events":[{"event_name":"Victoria WCS Collective Saturday April 19th Lesson and Social Dance","start_date":"2026-04-18","day_of_week":"Friday","description":"long enough description to exceed the minimum response threshold for parsing validation and preserve the old-event regression case."}]}',
+            {"provider": "test", "model": "fake"},
+        ),
+    )
+    monkeypatch.setattr(
+        handler,
+        "extract_and_parse_json",
+        lambda llm_response, url, schema_type: [
+            {
+                "event_name": "Victoria WCS Collective Saturday April 19th Lesson and Social Dance",
+                "start_date": "2026-04-18",
+                "day_of_week": "Friday",
+                "description": "long enough description to exceed the minimum response threshold for parsing validation and preserve the old-event regression case.",
+            },
+        ],
+    )
+
+    result = handler.process_llm_response(
+        "https://www.facebook.com/events/1615616856414575/",
+        "",
+        (
+            "(2) Victoria WCS Collective Saturday April 19th Lesson and Social Dance | Facebook "
+            "Saturday 19 April 2025 from 7:00 PM - 11:00 PM "
+            "Victoria WCS Collective Saturday April 19th Lesson and Social Dance"
+        ),
+        "Victoria WCS Collective",
+        ["west coast swing"],
+        "fb",
+    )
+
+    assert result == EventWriteResult(success=True, events_written=1, decision_reason="llm_success")
+    assert len(writes) == 1
+    assert writes[0].iloc[0]["start_date"] == "2025-04-19"
+    assert writes[0].iloc[0]["day_of_week"] == "Saturday"
+
+
+def test_process_llm_response_keeps_non_facebook_dates_unchanged(monkeypatch) -> None:
+    handler = LLMHandler.__new__(LLMHandler)
+    handler.config = {"crawling": {"prompt_max_length": 5000}}
+    writes: list[pd.DataFrame] = []
+    handler.db_handler = SimpleNamespace(
+        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
+    )
+
+    monkeypatch.setattr(
+        handler,
+        "generate_prompt",
+        lambda url, extracted_text, prompt_type: ("prompt text", "event_extraction"),
+    )
+    monkeypatch.setattr(
+        handler,
+        "query_llm",
+        lambda url, prompt_attempt, schema_type, return_metadata=True: (
+            '{"events":[{"event_name":"Regular Event","start_date":"2026-04-18","day_of_week":"Friday","description":"long enough description to exceed the minimum response threshold for parsing validation and prove non-facebook pages are untouched."}]}',
+            {"provider": "test", "model": "fake"},
+        ),
+    )
+    monkeypatch.setattr(
+        handler,
+        "extract_and_parse_json",
+        lambda llm_response, url, schema_type: [
+            {
+                "event_name": "Regular Event",
+                "start_date": "2026-04-18",
+                "day_of_week": "Friday",
+                "description": "long enough description to exceed the minimum response threshold for parsing validation and prove non-facebook pages are untouched.",
+            },
+        ],
+    )
+
+    result = handler.process_llm_response(
+        "https://example.com/event",
+        "",
+        "Saturday 19 April 2025 from 7:00 PM - 11:00 PM Regular Event",
+        "Example Source",
+        ["dance"],
+        "default",
+    )
+
+    assert result == EventWriteResult(success=True, events_written=1, decision_reason="llm_success")
+    assert len(writes) == 1
+    assert writes[0].iloc[0]["start_date"] == "2026-04-18"
+    assert writes[0].iloc[0]["day_of_week"] == "Friday"
