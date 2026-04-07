@@ -306,6 +306,22 @@ def test_database_accuracy_manual_review_status_marks_incomplete_when_labels_mis
     assert status["rows_missing_label"] == 1
 
 
+def test_database_accuracy_manual_review_status_treats_empty_csv_as_non_blocking(tmp_path) -> None:
+    csv_path = tmp_path / "url_archetype_ml_classifier_review.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["url", "human_label", "human_truth_archetype", "human_truth_owner_step", "review_notes"],
+        )
+        writer.writeheader()
+
+    status = pipeline._database_accuracy_manual_review_status(str(csv_path))
+
+    assert status["complete"] is True
+    assert status["rows_total"] == 0
+    assert status["reason"] == "empty_file"
+
+
 def test_database_accuracy_manual_review_status_marks_incomplete_when_false_rows_lack_truth(tmp_path) -> None:
     csv_path = tmp_path / "url_archetype_ml_classifier_review.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
@@ -355,6 +371,22 @@ def test_database_event_accuracy_manual_review_status_marks_incomplete_when_labe
 
     assert status["complete"] is False
     assert status["rows_missing_label"] == 1
+
+
+def test_database_event_accuracy_manual_review_status_treats_empty_csv_as_non_blocking(tmp_path) -> None:
+    csv_path = tmp_path / "database_accuracy_manual_review.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["event_id", "event_name", "url", "human_label", "review_notes"],
+        )
+        writer.writeheader()
+
+    status = pipeline._database_event_accuracy_manual_review_status(str(csv_path))
+
+    assert status["complete"] is True
+    assert status["rows_total"] == 0
+    assert status["reason"] == "empty_file"
 
 
 def test_validation_report_was_regenerated_accepts_fresh_run_report(tmp_path) -> None:

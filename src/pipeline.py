@@ -245,7 +245,7 @@ def _sql_one_line(statement: str) -> str:
 
 def _database_accuracy_manual_review_status(csv_path: str | None = None) -> dict:
     """Return completion status for the prior database accuracy manual review CSV."""
-    target_path = str(csv_path or DATABASE_ACCURACY_MANUAL_REVIEW_PATH)
+    target_path = os.path.abspath(str(csv_path or DATABASE_ACCURACY_MANUAL_REVIEW_PATH))
     summary = summarize_manual_review_csv(target_path)
     if not summary.get("exists"):
         return {
@@ -263,6 +263,20 @@ def _database_accuracy_manual_review_status(csv_path: str | None = None) -> dict
         }
 
     rows_total = int(summary.get("rows_total", 0) or 0)
+    if rows_total <= 0:
+        return {
+            "path": target_path,
+            "exists": True,
+            "rows_total": 0,
+            "rows_completed": 0,
+            "rows_missing_label": 0,
+            "rows_true": 0,
+            "rows_false": 0,
+            "false_rows_missing_truth": 0,
+            "correctness_pct": None,
+            "complete": True,
+            "reason": "empty_file",
+        }
     rows_missing_label = int(summary.get("rows_missing_label", 0) or 0)
     false_rows_missing_truth = int(summary.get("false_rows_missing_truth", 0) or 0)
     complete = rows_total > 0 and rows_missing_label == 0 and false_rows_missing_truth == 0
@@ -287,7 +301,7 @@ def _database_accuracy_manual_review_status(csv_path: str | None = None) -> dict
 
 def _database_event_accuracy_manual_review_status(csv_path: str | None = None) -> dict:
     """Return completion status for the prior event-accuracy manual review CSV."""
-    target_path = str(csv_path or DATABASE_ACCURACY_MANUAL_REVIEW_PATH)
+    target_path = os.path.abspath(str(csv_path or DATABASE_ACCURACY_MANUAL_REVIEW_PATH))
     if not os.path.exists(target_path):
         return {
             "path": target_path,
@@ -306,6 +320,19 @@ def _database_event_accuracy_manual_review_status(csv_path: str | None = None) -
         rows = list(csv.DictReader(handle))
 
     rows_total = len(rows)
+    if rows_total <= 0:
+        return {
+            "path": target_path,
+            "exists": True,
+            "rows_total": 0,
+            "rows_completed": 0,
+            "rows_missing_label": 0,
+            "rows_true": 0,
+            "rows_false": 0,
+            "correctness_pct": None,
+            "complete": True,
+            "reason": "empty_file",
+        }
     rows_completed = 0
     rows_missing_label = 0
     rows_true = 0
@@ -811,9 +838,13 @@ def database_accuracy_manual_review_gate_step():
         classifier_complete = bool(classifier_status.get("complete"))
 
         if event_complete and classifier_complete:
-            if event_status.get("reason") == "missing_file" and classifier_status.get("reason") == "missing_file":
+            no_prior_review_reasons = {"missing_file", "empty_file"}
+            if (
+                event_status.get("reason") in no_prior_review_reasons
+                and classifier_status.get("reason") in no_prior_review_reasons
+            ):
                 logger.info(
-                    "database_accuracy_manual_review_gate_step(): No prior manual review CSVs found; continuing."
+                    "database_accuracy_manual_review_gate_step(): No prior completed manual review CSVs found; continuing."
                 )
                 return True
 
