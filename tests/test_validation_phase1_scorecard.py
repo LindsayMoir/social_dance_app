@@ -607,6 +607,42 @@ def test_generate_chatbot_report_includes_review_rows() -> None:
     assert report["review_rows"][0]["sql_issues"] == ["missing default filter"]
 
 
+def test_write_chatbot_evaluation_review_csv_creates_flat_csv(tmp_path) -> None:
+    runner = _build_runner()
+    report = {
+        "review_rows": [
+            {
+                "question": "Where can I find beginner tango classes?",
+                "category": "classes",
+                "score": 88,
+                "execution_success": True,
+                "result_count": 3,
+                "interpretation": "Looking for beginner tango classes.",
+                "interpretation_score": 90,
+                "interpretation_issues": ["minor ambiguity"],
+                "criteria_matched": ["dance_style"],
+                "criteria_missed": ["timeframe"],
+                "sql_issues": ["missing default filter"],
+                "sql_query": "SELECT * FROM events WHERE dance_style ILIKE '%tango%'",
+                "reasoning": "Missed the default social-dance filter.",
+            }
+        ]
+    }
+
+    original_codex_review_path = validation_test_runner.codex_review_path
+    validation_test_runner.codex_review_path = lambda filename: str(tmp_path / filename)
+    try:
+        csv_path = runner._write_chatbot_evaluation_review_csv(report)
+    finally:
+        validation_test_runner.codex_review_path = original_codex_review_path
+
+    assert csv_path.endswith("chatbot_evaluation_review.csv")
+    with open(csv_path, encoding="utf-8") as handle:
+        text = handle.read()
+    assert "Where can I find beginner tango classes?" in text
+    assert "missing default filter" in text
+
+
 def test_build_chatbot_html_includes_row_by_row_scoring_table() -> None:
     runner = _build_runner()
     html = runner._build_chatbot_html(
@@ -632,9 +668,12 @@ def test_build_chatbot_html_includes_row_by_row_scoring_table() -> None:
                     "sql_issues": ["missing default filter"],
                 }
             ],
+            "review_csv_path": "/tmp/chatbot_evaluation_review.csv",
         }
     )
 
+    assert "Review instructions:" in html
+    assert "/tmp/chatbot_evaluation_review.csv" in html
     assert "Row-by-Row Chatbot Scoring" in html
     assert "Where can I find beginner tango classes?" in html
     assert "Missed the default social-dance filter." in html

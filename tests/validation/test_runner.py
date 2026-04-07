@@ -109,6 +109,7 @@ from page_classifier import (
 
 DATABASE_EVENT_ACCURACY_MANUAL_REVIEW_FILENAME = "database_event_accuracy_manual_review.csv"
 URL_ARCHETYPE_ML_CLASSIFIER_REVIEW_FILENAME = "url_archetype_ml_classifier_review.csv"
+CHATBOT_EVALUATION_REVIEW_FILENAME = "chatbot_evaluation_review.csv"
 
 
 class ValidationTestRunner:
@@ -452,6 +453,9 @@ class ValidationTestRunner:
             # Generate report
             output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'output')
             chatbot_report = generate_chatbot_report(scored_results, output_dir)
+            chatbot_review_csv_path = self._write_chatbot_evaluation_review_csv(chatbot_report)
+            if chatbot_review_csv_path:
+                chatbot_report["review_csv_path"] = chatbot_review_csv_path
             results['chatbot_testing'] = chatbot_report
 
             # Check thresholds
@@ -591,6 +595,44 @@ class ValidationTestRunner:
         self._close_replay_image_scraper()
 
         return results
+
+    def _write_chatbot_evaluation_review_csv(self, chatbot_report: dict | None) -> str:
+        """Write a flat CSV review view from chatbot evaluation review rows."""
+        payload = chatbot_report if isinstance(chatbot_report, dict) else {}
+        review_rows = payload.get("review_rows", []) if isinstance(payload.get("review_rows"), list) else []
+        output_path = codex_review_path(CHATBOT_EVALUATION_REVIEW_FILENAME)
+        fieldnames = [
+            "question",
+            "category",
+            "score",
+            "execution_success",
+            "result_count",
+            "interpretation",
+            "interpretation_score",
+            "interpretation_issues",
+            "criteria_matched",
+            "criteria_missed",
+            "sql_issues",
+            "sql_query",
+            "reasoning",
+        ]
+        with open(output_path, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in review_rows:
+                if not isinstance(row, dict):
+                    continue
+                normalized: dict[str, Any] = {}
+                for field in fieldnames:
+                    value = row.get(field, "")
+                    if isinstance(value, list):
+                        normalized[field] = " | ".join(str(item) for item in value)
+                    elif isinstance(value, dict):
+                        normalized[field] = json.dumps(value, ensure_ascii=True, sort_keys=True)
+                    else:
+                        normalized[field] = value
+                writer.writerow(normalized)
+        return output_path
 
     def _persist_validation_chatbot_metrics(self, test_results: list[dict]) -> None:
         """
@@ -12072,6 +12114,15 @@ class ValidationTestRunner:
 
         review_rows = chatbot_data.get("review_rows") if isinstance(chatbot_data, dict) else None
         if isinstance(review_rows, list) and review_rows:
+            review_csv_path = self._escape_html(str(chatbot_data.get("review_csv_path", "") or ""))
+            if review_csv_path:
+                review_csv_name = self._escape_html(os.path.basename(str(chatbot_data.get("review_csv_path", "") or "")))
+                html += (
+                    "<p><strong>Review instructions:</strong> "
+                    "Inspect the chatbot scoring CSV to review the lowest-scoring questions, missed criteria, SQL issues, and grader reasoning. "
+                    f"You can find it at <code>{review_csv_path}</code> "
+                    f"(<code>{review_csv_name}</code>).</p>"
+                )
             html += (
                 "<h3>Row-by-Row Chatbot Scoring</h3>"
                 "<table><tr>"
