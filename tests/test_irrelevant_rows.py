@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import pandas as pd
 import sys
+from pathlib import Path
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(TESTS_DIR)
@@ -31,6 +32,7 @@ def _build_handler(parsed_result) -> IrrelevantRowsHandler:
     handler = IrrelevantRowsHandler.__new__(IrrelevantRowsHandler)
     handler.llm_handler = _FakeLlmHandler(parsed_result)
     handler._RELEVANCE_SCHEMA_TYPE = "relevance_classification"
+    handler._RELEVANCE_REQUIRED_COLUMNS = {"event_id", "Label", "event_type_new"}
     handler.load_prompt = lambda chunk: f"prompt:{chunk}"  # type: ignore[method-assign]
     return handler
 
@@ -61,3 +63,39 @@ def test_process_chunk_with_llm_requests_relevance_schema() -> None:
     assert isinstance(result, pd.DataFrame)
     query_call = handler.llm_handler.calls[0]
     assert query_call[2] == "relevance_classification"
+
+
+def test_parse_llm_response_falls_back_to_deterministic_row_parsing() -> None:
+    handler = _build_handler([])
+
+    response = """
+    Here are the rows:
+    {"event_id": 21, "label": 0, "event_type": "social dance"}
+    {"event_id": 22, "Label": 1, "event_type_new": "other"}
+    """
+
+    df = handler.parse_llm_response(response)
+
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) == 2
+    assert df.to_dict(orient="records") == [
+        {"event_id": 21, "Label": 0, "event_type_new": "social dance"},
+        {"event_id": 22, "Label": 1, "event_type_new": "other"},
+    ]
+
+
+def test_parse_llm_response_captures_raw_response_when_parsing_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
+    handler = _build_handler([])
+    monkeypatch.chdir(tmp_path)
+
+    df = handler.parse_llm_response("not valid json and no recoverable rows")
+
+    assert isinstance(df, pd.DataFrame)
+    assert df.empty
+    artifacts = list((tmp_path / "output" / "codex_review").glob("irrelevant_rows_bad_response_*.txt"))
+    assert len(artifacts) == 1
+    contents = artifacts[0].read_text(encoding="utf-8")
+    assert "reason=no_valid_rows" in contents
+    assert "not valid json and no recoverable rows" in contents

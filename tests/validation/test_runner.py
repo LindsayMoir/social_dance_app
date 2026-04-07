@@ -38,7 +38,8 @@ sys.path.insert(0, script_dir)  # Also add tests/validation for local imports
 from dotenv import load_dotenv
 load_dotenv('src/.env')  # Load from src/.env since that's where credentials are stored
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 import logging
 import yaml
 import random
@@ -2041,8 +2042,13 @@ class ValidationTestRunner:
         }
         path = chatbot_path("chatbot_problem_category_regressions.json")
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+            json.dump(self._make_json_safe(payload), f, indent=2)
         logging.info("Chatbot problem-category regression cases saved: %s", path)
+
+    def _dump_json_file(self, path: str, payload: Any) -> None:
+        """Write one JSON artifact after converting runtime objects into JSON-safe values."""
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self._make_json_safe(payload), f, indent=2)
 
     def _generate_html_report(self, results: dict) -> None:
         """
@@ -2302,82 +2308,56 @@ class ValidationTestRunner:
             f.write(html)
         scorecard_path = codex_review_path('reliability_scorecard.json')
         issues_path = codex_review_path('reliability_issues.json')
-        with open(scorecard_path, 'w', encoding='utf-8') as f:
-            json.dump(reliability_scorecard, f, indent=2)
-        with open(issues_path, 'w', encoding='utf-8') as f:
-            json.dump({"issues": reliability_issues}, f, indent=2)
+        self._dump_json_file(scorecard_path, reliability_scorecard)
+        self._dump_json_file(issues_path, {"issues": reliability_issues})
         gates_path = codex_review_path('reliability_gates.json')
-        with open(gates_path, 'w', encoding='utf-8') as f:
-            json.dump(reliability_gates, f, indent=2)
+        self._dump_json_file(gates_path, reliability_gates)
         optimization_path = codex_review_path('reliability_optimization.json')
-        with open(optimization_path, 'w', encoding='utf-8') as f:
-            json.dump(optimization_plan, f, indent=2)
+        self._dump_json_file(optimization_path, optimization_plan)
         action_queue_path = codex_review_path('reliability_action_queue.json')
-        with open(action_queue_path, 'w', encoding='utf-8') as f:
-            json.dump(action_queue, f, indent=2)
+        self._dump_json_file(action_queue_path, action_queue)
         llm_extraction_quality_path = codex_review_path('llm_extraction_quality.json')
-        with open(llm_extraction_quality_path, 'w', encoding='utf-8') as f:
-            json.dump(llm_extraction_quality, f, indent=2)
+        self._dump_json_file(llm_extraction_quality_path, llm_extraction_quality)
         chatbot_performance_path = chatbot_path('chatbot_performance.json')
-        with open(chatbot_performance_path, 'w', encoding='utf-8') as f:
-            json.dump(chatbot_performance_summary, f, indent=2)
+        self._dump_json_file(chatbot_performance_path, chatbot_performance_summary)
         suspicious_deletes_path = codex_review_path('suspicious_deletes.json')
-        with open(suspicious_deletes_path, 'w', encoding='utf-8') as f:
-            json.dump(suspicious_deletes_summary, f, indent=2)
+        self._dump_json_file(suspicious_deletes_path, suspicious_deletes_summary)
         chatbot_metrics_sync_path = chatbot_path('chatbot_metrics_sync_summary.json')
-        with open(chatbot_metrics_sync_path, 'w', encoding='utf-8') as f:
-            json.dump(chatbot_metrics_sync_summary, f, indent=2)
+        self._dump_json_file(chatbot_metrics_sync_path, chatbot_metrics_sync_summary)
         control_panel_path = codex_review_path('run_control_panel.json')
-        with open(control_panel_path, 'w', encoding='utf-8') as f:
-            json.dump(control_panel_summary, f, indent=2)
+        self._dump_json_file(control_panel_path, control_panel_summary)
         runtime_summary_path = codex_review_path('runtime_summary.json')
-        with open(runtime_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(runtime_summary, f, indent=2)
+        self._dump_json_file(runtime_summary_path, runtime_summary)
         llm_cost_summary_path = codex_review_path('llm_cost_summary.json')
-        with open(llm_cost_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(llm_cost_summary, f, indent=2)
+        self._dump_json_file(llm_cost_summary_path, llm_cost_summary)
         chatbot_quality_summary_path = chatbot_path('chatbot_quality_summary.json')
-        with open(chatbot_quality_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(chatbot_quality_summary, f, indent=2)
+        self._dump_json_file(chatbot_quality_summary_path, chatbot_quality_summary)
         event_data_quality_summary_path = codex_review_path('event_data_quality_summary.json')
-        with open(event_data_quality_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(event_data_quality_summary, f, indent=2)
+        self._dump_json_file(event_data_quality_summary_path, event_data_quality_summary)
         field_accuracy_summary_path = codex_review_path('field_accuracy_summary.json')
-        with open(field_accuracy_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(field_accuracy_summary, f, indent=2)
+        self._dump_json_file(field_accuracy_summary_path, field_accuracy_summary)
         coverage_summary_path = codex_review_path('coverage_summary.json')
-        with open(coverage_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(coverage_summary, f, indent=2)
+        self._dump_json_file(coverage_summary_path, coverage_summary)
         image_date_rejections_path = codex_review_path('image_date_rejections.json')
-        with open(image_date_rejections_path, 'w', encoding='utf-8') as f:
-            json.dump(image_date_rejection_summary, f, indent=2)
+        self._dump_json_file(image_date_rejections_path, image_date_rejection_summary)
         dev_summary_path = codex_review_path('dev_summary.json')
-        with open(dev_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(dev_summary, f, indent=2)
+        self._dump_json_file(dev_summary_path, dev_summary)
         holdout_summary_path = codex_review_path('holdout_summary.json')
-        with open(holdout_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(holdout_summary, f, indent=2)
+        self._dump_json_file(holdout_summary_path, holdout_summary)
         domain_capped_summary_path = codex_review_path('domain_capped_summary.json')
-        with open(domain_capped_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(domain_capped_summary, f, indent=2)
+        self._dump_json_file(domain_capped_summary_path, domain_capped_summary)
         domain_evaluation_summary_path = codex_review_path('domain_evaluation_summary.json')
-        with open(domain_evaluation_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(domain_evaluation_summary, f, indent=2)
+        self._dump_json_file(domain_evaluation_summary_path, domain_evaluation_summary)
         recommendation_plan_path = codex_review_path('recommendation_plan.json')
-        with open(recommendation_plan_path, 'w', encoding='utf-8') as f:
-            json.dump(recommendation_plan, f, indent=2)
+        self._dump_json_file(recommendation_plan_path, recommendation_plan)
         run_scorecard_path = codex_review_path('run_scorecard.json')
-        with open(run_scorecard_path, 'w', encoding='utf-8') as f:
-            json.dump(run_scorecard, f, indent=2)
+        self._dump_json_file(run_scorecard_path, run_scorecard)
         codex_review_bundle_path = codex_review_path('codex_review_bundle.json')
-        with open(codex_review_bundle_path, 'w', encoding='utf-8') as f:
-            json.dump(codex_review_bundle, f, indent=2)
+        self._dump_json_file(codex_review_bundle_path, codex_review_bundle)
         accuracy_replay_path = replay_path('accuracy_replay_summary.json')
-        with open(accuracy_replay_path, 'w', encoding='utf-8') as f:
-            json.dump(accuracy_replay_summary, f, indent=2)
+        self._dump_json_file(accuracy_replay_path, accuracy_replay_summary)
         classifier_training_queue_path = classifier_path('classifier_training_queue.json')
-        with open(classifier_training_queue_path, 'w', encoding='utf-8') as f:
-            json.dump(classifier_training_queue_summary, f, indent=2)
+        self._dump_json_file(classifier_training_queue_path, classifier_training_queue_summary)
         classifier_training_queue_csv_path = classifier_path('classifier_training_queue.csv')
         self._write_classifier_training_queue_csv(
             classifier_training_queue_csv_path,
@@ -2385,22 +2365,18 @@ class ValidationTestRunner:
         )
         classifier_review_queue_summary = filter_classifier_review_candidates(classifier_training_queue_summary)
         classifier_review_queue_path = classifier_path('classifier_review_queue.json')
-        with open(classifier_review_queue_path, 'w', encoding='utf-8') as f:
-            json.dump(classifier_review_queue_summary, f, indent=2)
+        self._dump_json_file(classifier_review_queue_path, classifier_review_queue_summary)
         classifier_review_queue_csv_path = classifier_path('classifier_review_queue.csv')
         self._write_classifier_training_queue_csv(
             classifier_review_queue_csv_path,
             classifier_review_queue_summary,
         )
         classifier_performance_path = classifier_path('classifier_performance_summary.json')
-        with open(classifier_performance_path, 'w', encoding='utf-8') as f:
-            json.dump(classifier_performance_summary, f, indent=2)
+        self._dump_json_file(classifier_performance_path, classifier_performance_summary)
         openrouter_cost_path = codex_review_path('openrouter_run_cost.json')
-        with open(openrouter_cost_path, 'w', encoding='utf-8') as f:
-            json.dump(openrouter_cost_summary, f, indent=2)
+        self._dump_json_file(openrouter_cost_path, openrouter_cost_summary)
         openai_cost_path = codex_review_path('openai_run_cost.json')
-        with open(openai_cost_path, 'w', encoding='utf-8') as f:
-            json.dump(openai_cost_summary, f, indent=2)
+        self._dump_json_file(openai_cost_path, openai_cost_summary)
 
         logging.info(f"HTML report saved: {output_path}")
         logging.info(f"Reliability scorecard saved: {scorecard_path}")
@@ -8945,6 +8921,12 @@ class ValidationTestRunner:
                 str(item.get("source_key", "")),
             ),
         )
+        important_source_keys = self._build_fb_important_source_keys()
+        important_private_unavailable_sources: list[dict[str, Any]] = []
+        for entry in private_unavailable_sources:
+            entry["important_source"] = bool(str(entry.get("source_key", "")) in important_source_keys)
+            if bool(entry["important_source"]):
+                important_private_unavailable_sources.append(entry)
 
         return {
             "path": path,
@@ -8982,6 +8964,7 @@ class ValidationTestRunner:
                 for category, count in private_unavailable_by_category.most_common()
             ],
             "private_unavailable_sources": private_unavailable_sources[:10],
+            "important_private_unavailable_sources": important_private_unavailable_sources[:10],
             "private_unavailable_occurrences": private_unavailable_occurrences,
         }
 
@@ -8995,6 +8978,13 @@ class ValidationTestRunner:
             group_key = path_parts[1].strip() or "facebook_group_unknown"
             return {
                 "category": "group_post_events_tab",
+                "source_key": f"group:{group_key}",
+            }
+
+        if len(path_parts) >= 2 and path_parts[0] == "groups":
+            group_key = path_parts[1].strip() or "facebook_group_unknown"
+            return {
+                "category": "facebook_group",
                 "source_key": f"group:{group_key}",
             }
 
@@ -9012,6 +9002,20 @@ class ValidationTestRunner:
             "category": "other_facebook_blocked_url",
             "source_key": f"{host}:{first_segment}",
         }
+
+    def _build_fb_important_source_keys(self) -> set[str]:
+        """Derive important Facebook source keys from the coverage watchlist."""
+        watchlist_rows, _source_label = self._load_coverage_watchlist_rows()
+        important_keys: set[str] = {"facebook_event_detail"}
+        for row in watchlist_rows:
+            source_url = str(row.get("source_url", "") or "").strip()
+            if not source_url or "facebook.com" not in source_url.lower():
+                continue
+            triage = self._classify_fb_private_unavailable_url(source_url)
+            source_key = str(triage.get("source_key", "") or "").strip()
+            if source_key:
+                important_keys.add(source_key)
+        return important_keys
 
     def _build_fb_block_health_html(self, fb_data: dict) -> str:
         """Render HTML for Facebook temporary-block policy health."""
@@ -9041,6 +9045,7 @@ class ValidationTestRunner:
         private_unavailable_unique_urls = int(fb_data.get("private_unavailable_unique_urls", 0) or 0)
         private_unavailable_by_category = fb_data.get("private_unavailable_by_category", []) or []
         private_unavailable_sources = fb_data.get("private_unavailable_sources", []) or []
+        important_private_unavailable_sources = fb_data.get("important_private_unavailable_sources", []) or []
         status_class = "status-pass"
         status_text = "Healthy"
         if aborts > 0:
@@ -9132,6 +9137,7 @@ class ValidationTestRunner:
                 rows.append(
                     "<tr>"
                     f"<td>{self._escape_html(str(entry.get('source_key', '')))}</td>"
+                    f"<td>{'Yes' if bool(entry.get('important_source', False)) else 'No'}</td>"
                     f"<td>{self._escape_html(str(entry.get('category', '')))}</td>"
                     f"<td>{int(entry.get('unique_urls', 0) or 0)}</td>"
                     f"<td>{int(entry.get('attempt_count', 0) or 0)}</td>"
@@ -9144,6 +9150,7 @@ class ValidationTestRunner:
                 <thead>
                     <tr>
                         <th>Source Key</th>
+                        <th>Important Source</th>
                         <th>Category</th>
                         <th>Unique URLs</th>
                         <th>Blocked Attempts</th>
@@ -9154,6 +9161,17 @@ class ValidationTestRunner:
             """
             html += "".join(rows)
             html += "</tbody></table>"
+        if important_private_unavailable_sources:
+            html += (
+                "<p><strong>Important Source Triage:</strong> "
+                + self._escape_html(
+                    ", ".join(
+                        f"{str(entry.get('source_key', ''))} ({int(entry.get('unique_urls', 0) or 0)} URL)"
+                        for entry in important_private_unavailable_sources
+                    )
+                )
+                + "</p>"
+            )
         return html
 
     def _summarize_fb_ig_url_funnel(self, report_timestamp: str | None, fb_data: dict | None = None) -> dict:
@@ -9721,10 +9739,28 @@ class ValidationTestRunner:
                 self.db_handler.record_validation_run_artifact(
                     run_id=safe_run_id,
                     artifact_type=str(artifact_type or "").strip(),
-                    artifact_payload=payload,
+                    artifact_payload=self._make_json_safe(payload),
                 )
             except Exception:
                 continue
+
+    def _make_json_safe(self, value: Any) -> Any:
+        """Recursively convert runtime objects into JSON-safe primitives."""
+        if isinstance(value, dict):
+            return {str(key): self._make_json_safe(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._make_json_safe(item) for item in value]
+        if isinstance(value, tuple):
+            return [self._make_json_safe(item) for item in value]
+        if isinstance(value, set):
+            return [self._make_json_safe(item) for item in sorted(value, key=lambda item: str(item))]
+        if isinstance(value, (datetime, date, time)):
+            return value.isoformat()
+        if isinstance(value, pd.Timestamp):
+            return value.isoformat()
+        if isinstance(value, Path):
+            return str(value)
+        return value
 
     def _persist_fb_block_triage(
         self,

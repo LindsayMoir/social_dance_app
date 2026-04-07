@@ -126,6 +126,14 @@ class ImageDateResolution:
 
 
 class LLMHandler:
+    _RELATIVE_WEEKDAY_TOKENS = {
+        "today",
+        "tomorrow",
+        "yesterday",
+        "tonight",
+        "tonite",
+    }
+
     def __init__(self, config_path=None):
         # Resolve config path from explicit argument, runtime env, or default.
         resolved_config_path = get_config_path(config_path)
@@ -274,6 +282,81 @@ class LLMHandler:
             return datetime.strptime(str(date_value), "%Y-%m-%d").strftime("%A")
         except Exception:
             return ""
+
+    @staticmethod
+    def _normalize_iso_date_value(value: object) -> str:
+        """Normalize one date-like value into YYYY-MM-DD, or empty string."""
+        cleaned = str(value or "").strip()
+        if not cleaned or cleaned.lower() in {"nan", "none", "nat"}:
+            return ""
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", cleaned):
+            return cleaned
+        try:
+            return pd.to_datetime(cleaned, errors="coerce").strftime("%Y-%m-%d")  # type: ignore[union-attr]
+        except Exception:
+            return ""
+
+    def _normalize_event_rows_before_write(
+        self,
+        *,
+        events_df: pd.DataFrame,
+        url: str,
+    ) -> pd.DataFrame:
+        """Normalize parsed event rows before DB write to keep late cleanup minimal."""
+        if events_df.empty:
+            return events_df
+
+        working_df = events_df.copy()
+        for column in ("start_date", "end_date", "day_of_week"):
+            if column not in working_df.columns:
+                working_df[column] = ""
+
+        working_df["start_date"] = working_df["start_date"].apply(self._normalize_iso_date_value)
+        working_df["end_date"] = working_df["end_date"].apply(self._normalize_iso_date_value)
+        working_df["day_of_week"] = working_df["day_of_week"].fillna("").astype(str).str.strip()
+
+        missing_start_mask = working_df["start_date"].eq("") & working_df["end_date"].ne("")
+        if bool(missing_start_mask.any()):
+            fill_count = int(missing_start_mask.sum())
+            working_df.loc[missing_start_mask, "start_date"] = working_df.loc[missing_start_mask, "end_date"]
+            logging.info(
+                "process_llm_response: normalized_missing_start_date_from_end_date url=%s count=%d",
+                url,
+                fill_count,
+            )
+
+        relative_day_mask = working_df["day_of_week"].str.strip().str.lower().isin(self._RELATIVE_WEEKDAY_TOKENS)
+        if bool(relative_day_mask.any()):
+            replaced_count = 0
+            cleared_count = 0
+            for idx in working_df.index[relative_day_mask]:
+                normalized_start_date = str(working_df.at[idx, "start_date"] or "").strip()
+                normalized_weekday = self._weekday_for_iso_date(normalized_start_date)
+                if normalized_weekday:
+                    working_df.at[idx, "day_of_week"] = normalized_weekday
+                    replaced_count += 1
+                else:
+                    working_df.at[idx, "day_of_week"] = ""
+                    cleared_count += 1
+            logging.info(
+                "process_llm_response: normalized_relative_day_of_week url=%s replaced=%d cleared=%d",
+                url,
+                replaced_count,
+                cleared_count,
+            )
+
+        before_drop = len(working_df)
+        working_df = working_df[working_df["start_date"].ne("")].copy()
+        dropped_count = before_drop - len(working_df)
+        if dropped_count > 0:
+            logging.warning(
+                "process_llm_response: dropped_rows_missing_start_date url=%s dropped=%d kept=%d",
+                url,
+                dropped_count,
+                len(working_df),
+            )
+
+        return working_df
 
     @staticmethod
     def _log_image_date_rejection(
@@ -469,13 +552,21 @@ class LLMHandler:
             extracted_text=extracted_text,
             url=url,
         )
+        poster_type = self._extract_detected_image_poster_type(extracted_text)
+        schedule_dates = self._extract_detected_schedule_dates(extracted_text)
+        if poster_type == "schedule_multi_event" and schedule_dates:
+            logging.info(
+                "process_llm_response: image_schedule_alignment_summary url=%s schedule_dates=%d rows=%d",
+                url,
+                len(schedule_dates),
+                len(events_df),
+            )
+            return events_df
         detected_date, detected_day = self._extract_detected_image_date_context(extracted_text)
         if not detected_date or events_df.empty:
             return events_df
 
         working_df = events_df.copy()
-        poster_type = self._extract_detected_image_poster_type(extracted_text)
-        schedule_dates = self._extract_detected_schedule_dates(extracted_text)
         for column in ("start_date", "end_date", "day_of_week", "description", "event_name"):
             if column not in working_df.columns:
                 working_df[column] = ""
@@ -814,12 +905,16 @@ class LLMHandler:
                         )
                     except Exception as _e:
                         logging.warning(f"process_llm_response: Failed to apply image date resolution logic: {_e}")
+                    events_df = self._normalize_event_rows_before_write(
+                        events_df=events_df,
+                        url=url,
+                    )
                     if events_df.empty:
                         logging.warning(
-                            "def process_llm_response: URL %s dropped all parsed events after image date resolution.",
+                            "def process_llm_response: URL %s dropped all parsed events after image/date normalization.",
                             url,
                         )
-                        return EventWriteResult(success=False, events_written=0, decision_reason="image_date_conflict")
+                        return EventWriteResult(success=False, events_written=0, decision_reason="invalid_or_missing_start_date")
                     events_written = int(len(events_df))
                     self.db_handler.write_events_to_db(
                         events_df,

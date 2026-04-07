@@ -20,8 +20,10 @@ It initializes with a configuration file, sets up logging, connects to the datab
         delete_irrelevant_rows(df): Deletes irrelevant events from the database.
 """
 from datetime import datetime
+import json
 import logging
 import os
+import re
 
 import pandas as pd
 from sqlalchemy import text
@@ -34,6 +36,7 @@ from db import DatabaseHandler
 
 class IrrelevantRowsHandler:
     _RELEVANCE_SCHEMA_TYPE = "relevance_classification"
+    _RELEVANCE_REQUIRED_COLUMNS = {"event_id", "Label", "event_type_new"}
 
     def __init__(self, config_path='config/config.yaml'):
         """
@@ -224,20 +227,125 @@ class IrrelevantRowsHandler:
                 self._RELEVANCE_SCHEMA_TYPE,
             )
             if not isinstance(parsed_rows, list) or not parsed_rows:
-                logging.error("def clean_response(): No valid relevance classification rows parsed from response.")
+                parsed_rows = self._fallback_parse_relevance_rows(response_chunk)
+            if not isinstance(parsed_rows, list) or not parsed_rows:
+                artifact_path = self._capture_invalid_relevance_response(
+                    response_chunk,
+                    reason="no_valid_rows",
+                )
+                logging.error(
+                    "def clean_response(): No valid relevance classification rows parsed from response. artifact=%s",
+                    artifact_path,
+                )
                 return pd.DataFrame()
 
             df = pd.DataFrame(parsed_rows)
-            required_columns = {"event_id", "Label", "event_type_new"}
-            if not required_columns.issubset(df.columns):
-                logging.error("def clean_response(): Extracted JSON is missing required columns: %s", df.columns)
+            if not self._RELEVANCE_REQUIRED_COLUMNS.issubset(df.columns):
+                artifact_path = self._capture_invalid_relevance_response(
+                    response_chunk,
+                    reason="missing_required_columns",
+                )
+                logging.error(
+                    "def clean_response(): Extracted JSON is missing required columns: %s artifact=%s",
+                    df.columns,
+                    artifact_path,
+                )
                 return pd.DataFrame()
 
             logging.info(f"def clean_response(): Successfully extracted {len(df)} rows from response.")
             return df
         except (TypeError, ValueError) as e:
-            logging.error(f"def clean_response(): Error parsing LLM response to JSON: {e}")
+            fallback_rows = self._fallback_parse_relevance_rows(response_chunk)
+            if isinstance(fallback_rows, list) and fallback_rows:
+                df = pd.DataFrame(fallback_rows)
+                if self._RELEVANCE_REQUIRED_COLUMNS.issubset(df.columns):
+                    logging.info(
+                        "def clean_response(): Recovered %s rows using fallback relevance parser after JSON error.",
+                        len(df),
+                    )
+                    return df
+            artifact_path = self._capture_invalid_relevance_response(
+                response_chunk,
+                reason=f"json_error:{e}",
+            )
+            logging.error(f"def clean_response(): Error parsing LLM response to JSON: {e}. artifact={artifact_path}")
             return pd.DataFrame()
+
+    @staticmethod
+    def _coerce_relevance_row(candidate):
+        """Return one normalized relevance row dict when the candidate has the required keys."""
+        if not isinstance(candidate, dict):
+            return None
+        row = {
+            "event_id": candidate.get("event_id"),
+            "Label": candidate.get("Label", candidate.get("label")),
+            "event_type_new": candidate.get("event_type_new", candidate.get("event_type")),
+        }
+        if any(value is None or str(value).strip() == "" for value in row.values()):
+            return None
+        return row
+
+    def _fallback_parse_relevance_rows(self, response_chunk):
+        """Parse simple malformed row-oriented relevance output without the general JSON extractor."""
+        text = str(response_chunk or "").strip()
+        if not text:
+            return []
+
+        recovered_rows = []
+
+        def _append_candidate(candidate):
+            normalized = self._coerce_relevance_row(candidate)
+            if normalized is not None:
+                recovered_rows.append(normalized)
+
+        try:
+            loaded = json.loads(text)
+            if isinstance(loaded, list):
+                for item in loaded:
+                    _append_candidate(item)
+            elif isinstance(loaded, dict):
+                for key in ("rows", "items", "events", "results"):
+                    value = loaded.get(key)
+                    if isinstance(value, list):
+                        for item in value:
+                            _append_candidate(item)
+                _append_candidate(loaded)
+        except Exception:
+            pass
+
+        if recovered_rows:
+            return recovered_rows
+
+        for match in re.finditer(r"\{[^{}]+\}", text, flags=re.DOTALL):
+            snippet = match.group(0)
+            try:
+                candidate = json.loads(snippet)
+            except Exception:
+                continue
+            _append_candidate(candidate)
+
+        if recovered_rows:
+            logging.info(
+                "def clean_response(): Recovered %s rows using deterministic fallback relevance parser.",
+                len(recovered_rows),
+            )
+        return recovered_rows
+
+    def _capture_invalid_relevance_response(self, response_chunk, reason):
+        """Write the raw malformed relevance response to a debug artifact for inspection."""
+        output_dir = os.path.join("output", "codex_review")
+        os.makedirs(output_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        artifact_path = os.path.join(output_dir, f"irrelevant_rows_bad_response_{timestamp}.txt")
+        try:
+            with open(artifact_path, "w", encoding="utf-8") as handle:
+                handle.write(f"reason={reason}\n")
+                handle.write(f"captured_at={datetime.now().isoformat()}\n\n")
+                handle.write(str(response_chunk or ""))
+        except Exception as exc:
+            logging.error("def _capture_invalid_relevance_response(): Failed to write artifact: %s", exc)
+            return ""
+        return artifact_path
 
 
     def merge_and_save_results(self, df, response_dfs):

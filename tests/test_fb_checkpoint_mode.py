@@ -8,6 +8,7 @@ from fb import FacebookEventScraper
 from fb import canonicalize_facebook_url, is_facebook_login_redirect, is_non_content_facebook_url
 from fb import extract_facebook_event_links_from_html
 from fb import sanitize_facebook_seed_urls
+from fb import partition_facebook_event_links_for_processing
 from fb import partition_facebook_seed_urls_for_processing
 from fb import classify_facebook_access_state
 from fb import diagnose_facebook_access
@@ -362,6 +363,37 @@ def test_partition_facebook_seed_urls_prefilters_low_yield_event_details():
         }
     ]
     assert stats["kept_rows"] == 1
+    assert stats["skipped_stale_event_detail_rows"] == 1
+
+
+def test_partition_facebook_event_links_prefilters_low_yield_event_details():
+    kept_links, skipped_rows, stats = partition_facebook_event_links_for_processing(
+        [
+            "https://www.facebook.com/events/1018836737121988/",
+            "https://www.facebook.com/events/999999999999999/",
+            "https://www.facebook.com/groups/1634269246863069/",
+        ],
+        base_url="https://www.facebook.com/groups/1634269246863069/",
+        source="Victoria Kizomba Lovers Group",
+        keywords="kizomba",
+        should_process_url=lambda url: url.endswith("/999999999999999/") or "/groups/" in url,
+        get_should_process_decision_reason=lambda _url: "skip_stale_facebook_event_detail",
+    )
+
+    assert kept_links == [
+        "https://www.facebook.com/events/999999999999999/",
+        "https://www.facebook.com/groups/1634269246863069/",
+    ]
+    assert skipped_rows == [
+        {
+            "link": "https://www.facebook.com/events/1018836737121988/",
+            "parent_url": "https://www.facebook.com/groups/1634269246863069/",
+            "source": "Victoria Kizomba Lovers Group",
+            "keywords": "kizomba",
+            "decision_reason": "skip_stale_facebook_event_detail",
+        }
+    ]
+    assert stats["kept_rows"] == 2
     assert stats["skipped_stale_event_detail_rows"] == 1
 
 

@@ -581,6 +581,66 @@ def partition_facebook_seed_urls_for_processing(
     return kept_df, skipped_rows, stats
 
 
+def partition_facebook_event_links_for_processing(
+    event_links: list[str],
+    *,
+    base_url: str,
+    source: str,
+    keywords: str,
+    should_process_url,
+    get_should_process_decision_reason,
+) -> tuple[list[str], list[dict[str, str]], dict[str, int]]:
+    """
+    Pre-filter stale/rejected Facebook event-detail links before the per-link loop.
+
+    This mirrors seed-url pruning so discovered event-detail URLs do not pay the
+    full processing cost when `should_process_url()` already knows they are stale.
+    """
+    if not event_links:
+        return [], [], {
+            "kept_rows": 0,
+            "skipped_stale_event_detail_rows": 0,
+            "skipped_rejected_old_event_detail_rows": 0,
+        }
+
+    kept_links: list[str] = []
+    skipped_rows: list[dict[str, str]] = []
+    stats = {
+        "kept_rows": 0,
+        "skipped_stale_event_detail_rows": 0,
+        "skipped_rejected_old_event_detail_rows": 0,
+    }
+
+    for raw_link in event_links:
+        normalized_link = canonicalize_facebook_url(str(raw_link or "").strip())
+        if not is_facebook_event_detail_url(normalized_link):
+            kept_links.append(normalized_link)
+            continue
+        if should_process_url(normalized_link):
+            kept_links.append(normalized_link)
+            continue
+        decision_reason = str(get_should_process_decision_reason(normalized_link) or "")
+        if decision_reason == "skip_stale_facebook_event_detail":
+            stats["skipped_stale_event_detail_rows"] += 1
+        elif decision_reason == "skip_rejected_old_facebook_event_detail":
+            stats["skipped_rejected_old_event_detail_rows"] += 1
+        else:
+            kept_links.append(normalized_link)
+            continue
+        skipped_rows.append(
+            {
+                "link": normalized_link,
+                "parent_url": str(base_url or ""),
+                "source": str(source or ""),
+                "keywords": str(keywords or ""),
+                "decision_reason": decision_reason,
+            }
+        )
+
+    stats["kept_rows"] = len(kept_links)
+    return kept_links, skipped_rows, stats
+
+
 def get_git_revision() -> str:
     """
     Return current git short SHA for runtime traceability.
@@ -2428,6 +2488,36 @@ class FacebookEventScraper():
                     random.shuffle(fb_event_links)
                 else:
                     fb_event_links = sorted(fb_event_links)
+                link_decision_reason_getter = getattr(db_handler, "get_should_process_decision_reason", lambda _url: "")
+                fb_event_links, prefetched_event_skip_rows, event_filter_stats = partition_facebook_event_links_for_processing(
+                    fb_event_links,
+                    base_url=base_url,
+                    source=source,
+                    keywords=keywords,
+                    should_process_url=db_handler.should_process_url,
+                    get_should_process_decision_reason=link_decision_reason_getter,
+                )
+                if prefetched_event_skip_rows:
+                    for skipped_row in prefetched_event_skip_rows:
+                        db_handler.write_url_to_db(
+                            [
+                                skipped_row["link"],
+                                skipped_row["parent_url"],
+                                skipped_row["source"],
+                                skipped_row["keywords"],
+                                False,
+                                1,
+                                datetime.now(),
+                                skipped_row["decision_reason"],
+                            ]
+                        )
+                    logging.info(
+                        "def driver_fb_urls(): Prefiltered discovered event-detail links for %s: kept=%d stale_skips=%d rejected_old_skips=%d",
+                        base_url,
+                        event_filter_stats["kept_rows"],
+                        event_filter_stats["skipped_stale_event_detail_rows"],
+                        event_filter_stats["skipped_rejected_old_event_detail_rows"],
+                    )
                 if self.fb_event_links_per_base_limit > 0 and len(fb_event_links) > self.fb_event_links_per_base_limit:
                     logging.info(
                         "def driver_fb_urls(): Limiting discovered event links for %s from %d to %d.",

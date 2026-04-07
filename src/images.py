@@ -438,6 +438,35 @@ def _normalize_instagram_media_identity_url(image_url: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "&".join(query_pairs), ""))
 
 
+def _normalize_image_identity_url(image_url: str) -> str:
+    """Return a stable in-run identity for one underlying image asset."""
+    raw = str(image_url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if "instagram" in (parsed.netloc or "").lower() or "fbcdn.net" in (parsed.netloc or "").lower():
+        return _normalize_instagram_media_identity_url(raw)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, parsed.query, ""))
+
+
+def _build_repeated_poster_signature(
+    *,
+    source: str,
+    analysis: ImagePosterDateAnalysis,
+    ocr_text: str,
+) -> str:
+    """Build a stable signature for poster-like OCR content to avoid repeated low-yield work."""
+    normalized_text = re.sub(r"\s+", " ", str(ocr_text or "").lower()).strip()
+    payload = {
+        "source": str(source or "").strip().lower(),
+        "poster_type": analysis.poster_type,
+        "primary_date": analysis.primary_date or "",
+        "candidate_dates": list(analysis.candidate_dates),
+        "ocr_text_hash": hashlib.sha1(normalized_text.encode("utf-8")).hexdigest(),
+    }
+    return hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def build_image_replay_url(parent_url: str, image_url: str) -> str:
     """Build a stable per-image replay URL anchored to the parent post/page URL."""
     base_parent = str(parent_url or "").strip() or str(image_url or "").strip()
@@ -662,6 +691,8 @@ class ImageScraper:
         self.run_id = os.getenv("DS_RUN_ID", "na")
         self.step_name = os.getenv("DS_STEP_NAME", "images")
         self.telemetry_counts: Counter[str] = Counter()
+        self._processed_image_identities: set[str] = set()
+        self._repeated_poster_outcomes: dict[str, int] = {}
 
         # Directories
         self.download_dir = Path(config.get("image_download_dir", "images/"))
@@ -699,6 +730,68 @@ class ImageScraper:
             tag.decompose()
         text = " ".join(soup.get_text(separator=" ").split())
         return text or None
+
+    def _get_processed_image_identities(self) -> set[str]:
+        """Return the in-run set of already-processed image identities."""
+        identities = getattr(self, "_processed_image_identities", None)
+        if identities is None:
+            identities = set()
+            self._processed_image_identities = identities
+        return identities
+
+    def _get_repeated_poster_outcomes(self) -> dict[str, int]:
+        """Return the in-run cache of poster OCR signatures to prior outcomes."""
+        outcomes = getattr(self, "_repeated_poster_outcomes", None)
+        if outcomes is None:
+            outcomes = {}
+            self._repeated_poster_outcomes = outcomes
+        return outcomes
+
+    def _mark_image_identity_processed(self, image_url: str) -> str:
+        """Record one normalized image identity as processed for this run."""
+        identity = _normalize_image_identity_url(image_url)
+        if identity:
+            self._get_processed_image_identities().add(identity)
+        return identity
+
+    def _has_processed_image_identity(self, image_url: str) -> bool:
+        """Return True when this underlying image asset was already processed in-run."""
+        identity = _normalize_image_identity_url(image_url)
+        return bool(identity) and identity in self._get_processed_image_identities()
+
+    def _lookup_repeated_poster_outcome(
+        self,
+        *,
+        source: str,
+        analysis: ImagePosterDateAnalysis,
+        ocr_text: str,
+    ) -> tuple[str, int] | None:
+        """Return prior repeated-poster outcome when the OCR signature was already seen."""
+        signature = _build_repeated_poster_signature(
+            source=source,
+            analysis=analysis,
+            ocr_text=ocr_text,
+        )
+        outcomes = self._get_repeated_poster_outcomes()
+        if signature not in outcomes:
+            return None
+        return signature, int(outcomes.get(signature, 0) or 0)
+
+    def _remember_repeated_poster_outcome(
+        self,
+        *,
+        source: str,
+        analysis: ImagePosterDateAnalysis,
+        ocr_text: str,
+        events_written: int,
+    ) -> None:
+        """Cache one poster OCR signature outcome so repeated posters can short-circuit."""
+        signature = _build_repeated_poster_signature(
+            source=source,
+            analysis=analysis,
+            ocr_text=ocr_text,
+        )
+        self._get_repeated_poster_outcomes()[signature] = int(events_written or 0)
 
     def _fetch_page_response(self, page_url: str, timeout_seconds: int = 10) -> requests.Response | None:
         """Fetch one page with a narrow retry for transient DNS/connection failures."""
@@ -1935,6 +2028,39 @@ class ImageScraper:
                 "_process_local_image_path(): Detected schedule-style poster with %d candidate dates",
                 len(analysis.candidate_dates),
             )
+        repeated_outcome = self._lookup_repeated_poster_outcome(
+            source=source,
+            analysis=analysis,
+            ocr_text=text,
+        )
+        if repeated_outcome is not None:
+            _, prior_events_written = repeated_outcome
+            self.logger.info(
+                "_process_local_image_path(): Reused repeated poster OCR signature for %s (prior_events_written=%d)",
+                local_path,
+                prior_events_written,
+            )
+            self._record_image_metric(
+                link=canonical_url,
+                parent_url=parent_url,
+                source=source,
+                keywords=keywords,
+                archetype="image_screenshot",
+                access_succeeded=True,
+                extraction_attempted=True,
+                extraction_succeeded=prior_events_written > 0,
+                extraction_skipped=True,
+                decision_reason="screenshot_repeated_poster_reuse",
+                text_extracted=True,
+                keywords_found=prior_events_written > 0,
+                events_written=0,
+                ocr_attempted=ocr_attempted,
+                ocr_succeeded=True,
+                vision_attempted=False,
+                vision_succeeded=False,
+                fallback_used=False,
+            )
+            return prior_events_written > 0
 
         llm_text = _build_image_context_text(
             ocr_text=text,
@@ -2043,8 +2169,20 @@ class ImageScraper:
                 vision_succeeded=False,
                 fallback_used=False,
             )
+            self._remember_repeated_poster_outcome(
+                source=source,
+                analysis=analysis,
+                ocr_text=text,
+                events_written=llm_events_written,
+            )
             return True
         self.logger.warning("_process_local_image_path(): LLM processing did not produce any events for screenshot %s", local_path)
+        self._remember_repeated_poster_outcome(
+            source=source,
+            analysis=analysis,
+            ocr_text=text,
+            events_written=0,
+        )
         vision_events_written = self._process_local_image_path_with_vision(
             local_path,
             canonical_url,
@@ -2121,9 +2259,39 @@ class ImageScraper:
         self.urls_visited.add(event_url)
         self.logger.info(f"process_image_url(): Marked {event_url} as visited.")
 
+        if self._has_processed_image_identity(image_url):
+            self.logger.info(
+                "process_image_url(): Reused previously processed image identity for %s, skipping.",
+                image_url,
+            )
+            self.db_handler.write_url_to_db(url_row)
+            self._record_image_metric(
+                link=event_url,
+                parent_url=parent_url,
+                source=source,
+                keywords=keywords,
+                archetype="image_url",
+                access_attempted=False,
+                access_succeeded=True,
+                extraction_attempted=False,
+                extraction_succeeded=False,
+                extraction_skipped=True,
+                decision_reason="reused_processed_image_identity",
+                text_extracted=False,
+                keywords_found=False,
+                events_written=0,
+                ocr_attempted=False,
+                ocr_succeeded=False,
+                vision_attempted=False,
+                vision_succeeded=False,
+                fallback_used=False,
+            )
+            return
+
         # Skip if events already exist
         if self.db_handler.check_image_events_exist(event_url):
             self.logger.info(f"process_image_url(): Events already exist for {event_url}, skipping OCR.")
+            self._mark_image_identity_processed(image_url)
             url_row = (event_url, parent_url, source, keywords, True, 1, datetime.now())
             self.db_handler.write_url_to_db(url_row)
             self._record_image_metric(
@@ -2204,6 +2372,7 @@ class ImageScraper:
             )
             return
         self.logger.info(f"process_image_url(): Image saved to {path}")
+        self._mark_image_identity_processed(image_url)
 
         # Run OCR
         self.logger.info(f"process_image_url(): Running OCR on {path}")
@@ -2265,6 +2434,40 @@ class ImageScraper:
                 "process_image_url(): Detected schedule-style poster with %d candidate dates",
                 len(analysis.candidate_dates),
             )
+        repeated_outcome = self._lookup_repeated_poster_outcome(
+            source=source,
+            analysis=analysis,
+            ocr_text=text,
+        )
+        if repeated_outcome is not None:
+            _, prior_events_written = repeated_outcome
+            self.logger.info(
+                "process_image_url(): Reused repeated poster OCR signature for %s (prior_events_written=%d)",
+                event_url,
+                prior_events_written,
+            )
+            self.db_handler.write_url_to_db(url_row)
+            self._record_image_metric(
+                link=event_url,
+                parent_url=parent_url,
+                source=source,
+                keywords=keywords,
+                archetype="image_url",
+                access_succeeded=True,
+                extraction_attempted=True,
+                extraction_succeeded=prior_events_written > 0,
+                extraction_skipped=True,
+                decision_reason="reused_repeated_poster_pattern",
+                text_extracted=True,
+                keywords_found=prior_events_written > 0,
+                events_written=0,
+                ocr_attempted=True,
+                ocr_succeeded=True,
+                vision_attempted=False,
+                vision_succeeded=False,
+                fallback_used=False,
+            )
+            return
 
         # Keyword filtering
         llm_text = _build_image_context_text(
@@ -2395,8 +2598,20 @@ class ImageScraper:
                 vision_succeeded=False,
                 fallback_used=False,
             )
+            self._remember_repeated_poster_outcome(
+                source=source,
+                analysis=analysis,
+                ocr_text=text,
+                events_written=llm_events_written,
+            )
         else:
             self.logger.warning(f"process_image_url(): LLM processing did not produce any events for {event_url}")
+            self._remember_repeated_poster_outcome(
+                source=source,
+                analysis=analysis,
+                ocr_text=text,
+                events_written=0,
+            )
             vision_attempted = bool(use_vision_first)
             vision_events_written = 0
             if use_vision_first:

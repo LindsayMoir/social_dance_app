@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, time
 import os
 import sys
 from types import SimpleNamespace
@@ -667,6 +667,7 @@ def test_send_email_notification_attaches_only_comprehensive_report(tmp_path, mo
 
 def test_summarize_fb_block_health_includes_private_unavailable_triage(tmp_path, monkeypatch) -> None:
     runner = _build_runner()
+    runner._load_coverage_watchlist_rows = lambda: ([{"source_url": "https://www.facebook.com/groups/cubansalsaclub/"}], "test")  # type: ignore[method-assign]
     monkeypatch.chdir(tmp_path)
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
@@ -689,6 +690,8 @@ def test_summarize_fb_block_health_includes_private_unavailable_triage(tmp_path,
     assert {"category": "group_post_events_tab", "count": 1} in summary["private_unavailable_by_category"]
     assert {"category": "event_detail_page", "count": 1} in summary["private_unavailable_by_category"]
     assert summary["private_unavailable_sources"][0]["source_key"] in {"facebook_event_detail", "group:cubansalsaclub"}
+    assert any(entry.get("important_source") is True for entry in summary["private_unavailable_sources"])
+    assert any(entry.get("source_key") == "group:cubansalsaclub" for entry in summary["important_private_unavailable_sources"])
 
 
 def test_build_fb_block_health_html_renders_private_unavailable_triage() -> None:
@@ -723,6 +726,17 @@ def test_build_fb_block_health_html_renders_private_unavailable_triage() -> None
             "private_unavailable_sources": [
                 {
                     "source_key": "group:cubansalsaclub",
+                    "important_source": True,
+                    "category": "group_post_events_tab",
+                    "unique_urls": 1,
+                    "attempt_count": 1,
+                    "sample_url": "https://www.facebook.com/groups/cubansalsaclub/posts/26145054348414416/events/",
+                }
+            ],
+            "important_private_unavailable_sources": [
+                {
+                    "source_key": "group:cubansalsaclub",
+                    "important_source": True,
                     "category": "group_post_events_tab",
                     "unique_urls": 1,
                     "attempt_count": 1,
@@ -734,6 +748,8 @@ def test_build_fb_block_health_html_renders_private_unavailable_triage() -> None
 
     assert "Private/Unavailable Cases:" in html
     assert "Private/Unavailable Triage" in html
+    assert "Important Source" in html
+    assert "Important Source Triage" in html
     assert "group:cubansalsaclub" in html
     assert "group_post_events_tab" in html
 
@@ -1916,6 +1932,31 @@ def test_domain_evaluation_and_codex_review_bundle() -> None:
     assert bundle["artifacts"]["domain_evaluation_summary"]["domain_count"] == 3
     assert bundle["artifacts"]["dev_summary"]["replay_url_accuracy_pct"] == 66.0
     assert bundle["artifacts"]["recommendation_plan"]["plan_version"] == "v1"
+
+
+def test_persist_validation_artifacts_makes_payload_json_safe() -> None:
+    runner = _build_runner()
+    fake_db = _FakeDbHandler()
+    runner.db_handler = fake_db
+
+    runner._persist_validation_artifacts(
+        "run-safe",
+        {
+            "codex_review_bundle": {
+                "generated_on": date(2026, 4, 6),
+                "generated_at": datetime(2026, 4, 6, 23, 35, 54),
+                "window_end_time": time(23, 35, 54),
+                "nested": {"items": [date(2026, 4, 7)]},
+            }
+        },
+    )
+
+    assert len(fake_db.artifact_calls) == 1
+    payload = fake_db.artifact_calls[0]["artifact_payload"]
+    assert payload["generated_on"] == "2026-04-06"
+    assert payload["generated_at"].startswith("2026-04-06T23:35:54")
+    assert payload["window_end_time"] == "23:35:54"
+    assert payload["nested"]["items"] == ["2026-04-07"]
 
 
 def test_phase3_holdout_domain_caps_and_guardrails() -> None:

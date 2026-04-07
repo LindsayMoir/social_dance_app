@@ -717,6 +717,33 @@ def test_process_image_url_can_skip_vision_after_rank_limit(monkeypatch) -> None
     assert scraper.llm_handler.process_args is not None
 
 
+def test_process_image_url_skips_reused_image_identity() -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.urls_visited = set()
+    scraper.keywords_list = ["bachata", "dance", "salsa"]
+    scraper._processed_image_identities = {images._normalize_image_identity_url("https://instagram.fcxh2-1.fna.fbcdn.net/poster.jpg")}
+    metrics: list[dict] = []
+
+    class _FakeDb:
+        def write_url_to_db(self, _row):
+            return None
+
+    scraper.db_handler = _FakeDb()
+    scraper._record_image_metric = lambda **kwargs: metrics.append(kwargs)
+
+    scraper.process_image_url(
+        "https://instagram.fcxh2-1.fna.fbcdn.net/poster.jpg",
+        "https://www.instagram.com/bachatavictoria/",
+        "Bachata Victoria BC",
+        "bachata",
+    )
+
+    assert len(metrics) == 1
+    assert metrics[0]["decision_reason"] == "reused_processed_image_identity"
+    assert metrics[0]["extraction_skipped"] is True
+
+
 def test_process_local_image_path_reuses_existing_ocr_llm_flow(monkeypatch) -> None:
     scraper = ImageScraper.__new__(ImageScraper)
     scraper.logger = logging.getLogger("test.images")
@@ -758,6 +785,56 @@ def test_process_local_image_path_reuses_existing_ocr_llm_flow(monkeypatch) -> N
     assert "Detected_Date: 2026-03-20" in generate_text
     assert "Detected_Day: Friday" in generate_text
     assert "Detected_Date_Analysis: single_detected_primary_date" in generate_text
+
+
+def test_process_local_image_path_skips_repeated_poster_pattern(monkeypatch) -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.keywords_list = ["bachata", "dance"]
+    scraper._repeated_poster_outcomes = {}
+    metrics: list[dict] = []
+    scraper._record_image_metric = lambda **kwargs: metrics.append(kwargs)
+    scraper._process_local_image_path_with_vision = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("vision path should not run for repeated poster reuse")
+    )
+
+    class _FakeLLM:
+        def __init__(self):
+            self.process_calls = 0
+
+        def generate_prompt(self, url, extracted_text, prompt_type):
+            return ("prompt", "event_extraction")
+
+        def process_llm_response(self, image_url, parent_url, extracted_text, source, found, prompt_type):
+            self.process_calls += 1
+            return True
+
+    scraper.llm_handler = _FakeLLM()
+    scraper.ocr_image_to_text = lambda _path: "BACHATA 715 YATES ST 8PM SOCIAL DANCE"
+    monkeypatch.setattr(images, "detect_date_from_image", lambda _path: ("2026-03-20", "Friday"))
+    monkeypatch.setattr(images, "resolve_prompt_type", lambda *_args, **_kwargs: "fb")
+
+    first_result = scraper._process_local_image_path(
+        Path("/tmp/repeated_poster_1.png"),
+        "https://www.instagram.com/bachatavictoria/",
+        "",
+        "Bachata Victoria BC",
+        "bachata",
+        page_context_text="Next Social: March 20th",
+    )
+    second_result = scraper._process_local_image_path(
+        Path("/tmp/repeated_poster_2.png"),
+        "https://www.instagram.com/bachatavictoria/",
+        "",
+        "Bachata Victoria BC",
+        "bachata",
+        page_context_text="Next Social: March 20th",
+    )
+
+    assert first_result is True
+    assert second_result is True
+    assert scraper.llm_handler.process_calls == 1
+    assert metrics[-1]["decision_reason"] == "screenshot_repeated_poster_reuse"
 
 
 def test_prepend_image_date_hints_marks_schedule_posters(monkeypatch) -> None:
