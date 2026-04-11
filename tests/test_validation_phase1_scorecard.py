@@ -627,10 +627,58 @@ def test_write_chatbot_evaluation_review_csv_creates_flat_csv(tmp_path) -> None:
 
     assert csv_path.endswith("chatbot_evaluation_review.csv")
     with open(csv_path, encoding="utf-8") as handle:
-        text = handle.read()
-    assert "Where can I find beginner tango classes?" in text
-    assert "human_label" in text.splitlines()[0]
-    assert "review_notes" in text.splitlines()[0]
+        lines = handle.read().splitlines()
+    assert "Where can I find beginner tango classes?" in "\n".join(lines)
+    header = lines[0].split(",")
+    assert header[0] == "question"
+    assert header[1] == "sql_query"
+    assert "human_label" in header
+    assert "review_notes" in header
+
+
+def test_write_chatbot_evaluation_review_csv_rewrites_legacy_csv(tmp_path) -> None:
+    runner = _build_runner()
+    report = {
+        "review_rows": [
+            {
+                "question": "Where can I find beginner tango classes?",
+                "category": "classes",
+                "score": "",
+                "execution_success": True,
+                "result_count": 3,
+                "interpretation": "Looking for beginner tango classes.",
+                "interpretation_score": "",
+                "interpretation_issues": [],
+                "criteria_matched": [],
+                "criteria_missed": [],
+                "sql_issues": [],
+                "sql_query": "SELECT * FROM events WHERE dance_style ILIKE '%tango%'",
+                "reasoning": "",
+            }
+        ]
+    }
+
+    legacy_path = tmp_path / "chatbot_evaluation_review.csv"
+    legacy_path.write_text(
+        "question,category,score\nOld question,classes,88\n",
+        encoding="utf-8",
+    )
+
+    original_codex_review_path = validation_test_runner.codex_review_path
+    validation_test_runner.codex_review_path = lambda filename: str(tmp_path / filename)
+    try:
+        csv_path = runner._write_chatbot_evaluation_review_csv(report)
+    finally:
+        validation_test_runner.codex_review_path = original_codex_review_path
+
+    assert csv_path == str(legacy_path)
+    with open(csv_path, encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    header = lines[0].split(",")
+    assert header[0] == "question"
+    assert header[1] == "sql_query"
+    assert "human_label" in header
+    assert "Old question" not in "\n".join(lines)
 
 
 def test_build_chatbot_html_includes_row_by_row_scoring_table() -> None:

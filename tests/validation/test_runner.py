@@ -607,11 +607,9 @@ class ValidationTestRunner:
         payload = chatbot_report if isinstance(chatbot_report, dict) else {}
         review_rows = payload.get("review_rows", []) if isinstance(payload.get("review_rows"), list) else []
         output_path = codex_review_path(CHATBOT_EVALUATION_REVIEW_FILENAME)
-        existing_summary = self._summarize_binary_manual_review_csv(output_path)
-        if existing_summary.get("exists") and int(existing_summary.get("rows_missing_label", 0) or 0) > 0:
-            return output_path
         fieldnames = [
             "question",
+            "sql_query",
             "category",
             "score",
             "execution_success",
@@ -622,11 +620,22 @@ class ValidationTestRunner:
             "criteria_matched",
             "criteria_missed",
             "sql_issues",
-            "sql_query",
             "reasoning",
             "human_label",
             "review_notes",
         ]
+        existing_summary = self._summarize_binary_manual_review_csv(output_path)
+        existing_has_review_columns = False
+        if os.path.exists(output_path):
+            with open(output_path, "r", encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle)
+                existing_has_review_columns = "human_label" in (reader.fieldnames or [])
+        if (
+            existing_summary.get("exists")
+            and existing_has_review_columns
+            and int(existing_summary.get("rows_missing_label", 0) or 0) > 0
+        ):
+            return output_path
         with open(output_path, "w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()

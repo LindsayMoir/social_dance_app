@@ -371,7 +371,30 @@ def _database_event_accuracy_manual_review_status(csv_path: str | None = None) -
 
 def _chatbot_evaluation_manual_review_status(csv_path: str | None = None) -> dict:
     """Return completion status for the prior chatbot evaluation manual review CSV."""
-    return _database_event_accuracy_manual_review_status(csv_path or CHATBOT_EVALUATION_REVIEW_PATH)
+    target_path = os.path.abspath(str(csv_path or CHATBOT_EVALUATION_REVIEW_PATH))
+    if not os.path.exists(target_path):
+        return _database_event_accuracy_manual_review_status(target_path)
+
+    with open(target_path, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+
+    if "human_label" not in fieldnames:
+        return {
+            "path": target_path,
+            "exists": True,
+            "rows_total": len(rows),
+            "rows_completed": 0,
+            "rows_missing_label": 0,
+            "rows_true": 0,
+            "rows_false": 0,
+            "correctness_pct": None,
+            "complete": True,
+            "reason": "legacy_missing_review_columns",
+        }
+
+    return _database_event_accuracy_manual_review_status(target_path)
 
 
 def _persist_manual_review_classifier_accuracy(status: dict, db_handler=None) -> None:

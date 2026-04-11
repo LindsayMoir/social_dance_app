@@ -440,6 +440,30 @@ def test_chatbot_evaluation_manual_review_status_treats_empty_csv_as_non_blockin
     assert status["reason"] == "empty_file"
 
 
+def test_chatbot_evaluation_manual_review_status_treats_legacy_csv_as_non_blocking(tmp_path) -> None:
+    csv_path = tmp_path / "chatbot_evaluation_review.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["question", "sql_query", "category", "score"],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "question": "Q1",
+                "sql_query": "SELECT 1",
+                "category": "classes",
+                "score": "88",
+            }
+        )
+
+    status = pipeline._chatbot_evaluation_manual_review_status(str(csv_path))
+
+    assert status["complete"] is True
+    assert status["rows_total"] == 1
+    assert status["reason"] == "legacy_missing_review_columns"
+
+
 def test_validation_report_was_regenerated_accepts_fresh_run_report(tmp_path) -> None:
     report_path = tmp_path / "comprehensive_test_report.html"
     report_path.write_text(
