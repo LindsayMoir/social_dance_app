@@ -389,6 +389,57 @@ def test_database_event_accuracy_manual_review_status_treats_empty_csv_as_non_bl
     assert status["reason"] == "empty_file"
 
 
+def test_chatbot_evaluation_manual_review_status_marks_complete_when_all_labels_present(tmp_path) -> None:
+    csv_path = tmp_path / "chatbot_evaluation_review.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["question", "score", "human_label", "review_notes"],
+        )
+        writer.writeheader()
+        writer.writerow({"question": "Q1", "score": "88", "human_label": "correct", "review_notes": ""})
+        writer.writerow({"question": "Q2", "score": "42", "human_label": "incorrect", "review_notes": "bad SQL"})
+
+    status = pipeline._chatbot_evaluation_manual_review_status(str(csv_path))
+
+    assert status["complete"] is True
+    assert status["rows_total"] == 2
+    assert status["rows_completed"] == 2
+    assert status["rows_missing_label"] == 0
+
+
+def test_chatbot_evaluation_manual_review_status_marks_incomplete_when_labels_missing(tmp_path) -> None:
+    csv_path = tmp_path / "chatbot_evaluation_review.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["question", "score", "human_label", "review_notes"],
+        )
+        writer.writeheader()
+        writer.writerow({"question": "Q1", "score": "88", "human_label": "", "review_notes": ""})
+
+    status = pipeline._chatbot_evaluation_manual_review_status(str(csv_path))
+
+    assert status["complete"] is False
+    assert status["rows_missing_label"] == 1
+
+
+def test_chatbot_evaluation_manual_review_status_treats_empty_csv_as_non_blocking(tmp_path) -> None:
+    csv_path = tmp_path / "chatbot_evaluation_review.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["question", "score", "human_label", "review_notes"],
+        )
+        writer.writeheader()
+
+    status = pipeline._chatbot_evaluation_manual_review_status(str(csv_path))
+
+    assert status["complete"] is True
+    assert status["rows_total"] == 0
+    assert status["reason"] == "empty_file"
+
+
 def test_validation_report_was_regenerated_accepts_fresh_run_report(tmp_path) -> None:
     report_path = tmp_path / "comprehensive_test_report.html"
     report_path.write_text(

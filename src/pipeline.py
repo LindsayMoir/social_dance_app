@@ -107,6 +107,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANUAL_COVERAGE_AUDIT_PATH = os.path.join(REPO_ROOT, "data", "evaluation", "manual_coverage_audit.csv")
 DATABASE_ACCURACY_MANUAL_REVIEW_PATH = codex_review_path("database_accuracy_manual_review.csv")
 URL_ARCHETYPE_ML_CLASSIFIER_REVIEW_PATH = codex_review_path("url_archetype_ml_classifier_review.csv")
+CHATBOT_EVALUATION_REVIEW_PATH = codex_review_path("chatbot_evaluation_review.csv")
 CLASSIFIER_TRAINING_CSV_PATH = os.path.join(REPO_ROOT, "ml", "training_data", "original_td.csv")
 _LOG_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 
@@ -366,6 +367,11 @@ def _database_event_accuracy_manual_review_status(csv_path: str | None = None) -
         "complete": complete,
         "reason": "complete" if complete else "missing_human_labels",
     }
+
+
+def _chatbot_evaluation_manual_review_status(csv_path: str | None = None) -> dict:
+    """Return completion status for the prior chatbot evaluation manual review CSV."""
+    return _database_event_accuracy_manual_review_status(csv_path or CHATBOT_EVALUATION_REVIEW_PATH)
 
 
 def _persist_manual_review_classifier_accuracy(status: dict, db_handler=None) -> None:
@@ -819,29 +825,33 @@ def copy_log_files():
 
 @flow(name="Database Accuracy Manual Review Gate Step")
 def database_accuracy_manual_review_gate_step():
-    """Block the pipeline until the prior event and classifier review CSVs are completed."""
+    """Block the pipeline until the prior event, classifier, and chatbot review CSVs are completed."""
     logger.info("=" * 70)
     logger.info("DATABASE ACCURACY MANUAL REVIEW GATE STEP")
-    logger.info("Checking whether the prior database accuracy and URL classifier review CSVs are complete")
+    logger.info("Checking whether the prior database accuracy, URL classifier review, and chatbot review CSVs are complete")
     logger.info("=" * 70)
 
     while True:
         event_status = _database_event_accuracy_manual_review_status()
         classifier_status = _database_accuracy_manual_review_status(URL_ARCHETYPE_ML_CLASSIFIER_REVIEW_PATH)
+        chatbot_status = _chatbot_evaluation_manual_review_status()
         logger.info(
-            "database_accuracy_manual_review_gate_step(): event_status=%s classifier_status=%s",
+            "database_accuracy_manual_review_gate_step(): event_status=%s classifier_status=%s chatbot_status=%s",
             event_status,
             classifier_status,
+            chatbot_status,
         )
 
         event_complete = bool(event_status.get("complete"))
         classifier_complete = bool(classifier_status.get("complete"))
+        chatbot_complete = bool(chatbot_status.get("complete"))
 
-        if event_complete and classifier_complete:
+        if event_complete and classifier_complete and chatbot_complete:
             no_prior_review_reasons = {"missing_file", "empty_file"}
             if (
                 event_status.get("reason") in no_prior_review_reasons
                 and classifier_status.get("reason") in no_prior_review_reasons
+                and chatbot_status.get("reason") in no_prior_review_reasons
             ):
                 logger.info(
                     "database_accuracy_manual_review_gate_step(): No prior completed manual review CSVs found; continuing."
@@ -858,6 +868,7 @@ def database_accuracy_manual_review_gate_step():
             logger.info(
                 "database_accuracy_manual_review_gate_step(): Prior manual review CSVs complete. "
                 "Database accuracy=%s%% (%s/%s rows). Classifier correctness=%s%% (%s/%s rows). "
+                "Chatbot correctness=%s%% (%s/%s rows). "
                 "Promoted %s review rows into training CSV (%s true, %s false). Continuing.",
                 event_status.get("correctness_pct"),
                 event_status.get("rows_completed", 0),
@@ -865,6 +876,9 @@ def database_accuracy_manual_review_gate_step():
                 classifier_status.get("correctness_pct"),
                 classifier_status.get("rows_completed", 0),
                 classifier_status.get("rows_total", 0),
+                chatbot_status.get("correctness_pct"),
+                chatbot_status.get("rows_completed", 0),
+                chatbot_status.get("rows_total", 0),
                 promotion_summary.get("promoted_count", 0),
                 promotion_summary.get("promoted_true_count", 0),
                 promotion_summary.get("promoted_false_count", 0),
@@ -884,6 +898,12 @@ def database_accuracy_manual_review_gate_step():
             f"Rows completed: {classifier_status.get('rows_completed', 0)} / {classifier_status.get('rows_total', 0)}; "
             f"missing human_label: {classifier_status.get('rows_missing_label', 0)}; "
             f"false rows missing truth labels: {classifier_status.get('false_rows_missing_truth', 0)}"
+        )
+        print("Chatbot Evaluation Manual Review:")
+        print(f"CSV: {chatbot_status.get('path')}")
+        print(
+            f"Rows completed: {chatbot_status.get('rows_completed', 0)} / {chatbot_status.get('rows_total', 0)}; "
+            f"missing human_label: {chatbot_status.get('rows_missing_label', 0)}"
         )
         acknowledgment = input(
             "Complete the required CSVs, then type COMPLETE to re-check: "

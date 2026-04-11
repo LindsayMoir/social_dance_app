@@ -52,7 +52,6 @@ from scraping_validator import ScrapingValidator
 from chatbot_evaluator import (
     TestQuestionGenerator,
     ChatbotTestExecutor,
-    ChatbotScorer,
     generate_chatbot_report
 )
 from replay_matcher import ReplayMatcher
@@ -444,22 +443,25 @@ class ValidationTestRunner:
             test_results = executor.execute_all_tests(questions)
             logging.info(f"Executed {len(test_results)} tests")
 
-            # Score results
-            scorer = ChatbotScorer(self.llm_handler)
-            scored_results = scorer.score_all_results(test_results)
-            logging.info("Scoring complete")
             self._persist_validation_chatbot_metrics(test_results)
 
             # Generate report
             output_dir = self.validation_config.get('reporting', {}).get('output_dir', 'output')
-            chatbot_report = generate_chatbot_report(scored_results, output_dir)
+            chatbot_report = generate_chatbot_report(test_results, output_dir)
+            chatbot_manual_review_summary = self._persist_completed_chatbot_manual_review()
             chatbot_review_csv_path = self._write_chatbot_evaluation_review_csv(chatbot_report)
             if chatbot_review_csv_path:
                 chatbot_report["review_csv_path"] = chatbot_review_csv_path
+            chatbot_report["manual_review_summary"] = chatbot_manual_review_summary
+            chatbot_correctness_pct = self._safe_float(chatbot_manual_review_summary.get("correctness_pct"))
+            chatbot_report_summary = chatbot_report.get("summary", {}) if isinstance(chatbot_report.get("summary"), dict) else {}
+            chatbot_report_summary["average_score"] = chatbot_correctness_pct
+            chatbot_report_summary["score_basis"] = "human_review" if chatbot_correctness_pct is not None else "pending_human_review"
+            chatbot_report["summary"] = chatbot_report_summary
             results['chatbot_testing'] = chatbot_report
 
             # Check thresholds
-            avg_score = chatbot_report['summary']['average_score']
+            avg_score = chatbot_correctness_pct
             exec_rate = chatbot_report['summary']['execution_success_rate']
 
             score_threshold = chatbot_config.get('score_threshold', 70)
@@ -469,11 +471,15 @@ class ValidationTestRunner:
             results['chatbot_problem_category_gate'] = problem_gate
             self._write_chatbot_problem_category_regressions(output_dir, chatbot_report)
 
-            if avg_score < score_threshold:
+            if avg_score is not None and avg_score < score_threshold:
                 results['overall_status'] = 'FAIL'
                 logging.error(
                     f"❌ Chatbot average score ({avg_score:.1f}) "
                     f"below threshold ({score_threshold})"
+                )
+            elif avg_score is None:
+                logging.info(
+                    "Chatbot correctness threshold deferred until chatbot_evaluation_review.csv is human-scored."
                 )
             elif exec_rate < exec_threshold:
                 if results['overall_status'] == 'PASS':
@@ -601,6 +607,9 @@ class ValidationTestRunner:
         payload = chatbot_report if isinstance(chatbot_report, dict) else {}
         review_rows = payload.get("review_rows", []) if isinstance(payload.get("review_rows"), list) else []
         output_path = codex_review_path(CHATBOT_EVALUATION_REVIEW_FILENAME)
+        existing_summary = self._summarize_binary_manual_review_csv(output_path)
+        if existing_summary.get("exists") and int(existing_summary.get("rows_missing_label", 0) or 0) > 0:
+            return output_path
         fieldnames = [
             "question",
             "category",
@@ -615,6 +624,8 @@ class ValidationTestRunner:
             "sql_issues",
             "sql_query",
             "reasoning",
+            "human_label",
+            "review_notes",
         ]
         with open(output_path, "w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -631,8 +642,38 @@ class ValidationTestRunner:
                         normalized[field] = json.dumps(value, ensure_ascii=True, sort_keys=True)
                     else:
                         normalized[field] = value
+                normalized["human_label"] = ""
+                normalized["review_notes"] = ""
                 writer.writerow(normalized)
         return output_path
+
+    def _persist_completed_chatbot_manual_review(self) -> dict[str, Any]:
+        """Persist a completed chatbot manual-review CSV before generating the next sample."""
+        csv_path = codex_review_path(CHATBOT_EVALUATION_REVIEW_FILENAME)
+        summary = self._summarize_binary_manual_review_csv(csv_path)
+        rows_total = int(summary.get("rows_total", 0) or 0)
+        rows_missing_label = int(summary.get("rows_missing_label", 0) or 0)
+        correctness_pct = summary.get("correctness_pct")
+        if rows_total <= 0 or rows_missing_label != 0 or correctness_pct is None:
+            return summary
+
+        rows_true = int(summary.get("rows_true", 0) or 0)
+        rows_false = int(summary.get("rows_false", 0) or 0)
+        self.db_handler.record_metric_observation(
+            run_id=f"chatbot-review-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            metric_key="chatbot_manual_accuracy_pct",
+            metric_value_numeric=float(correctness_pct),
+            metric_unit="percent",
+            description="Share of manually reviewed chatbot evaluation rows judged correct by human scoring",
+            higher_is_better=True,
+            notes={
+                "review_csv_path": csv_path,
+                "labeled_rows": rows_true + rows_false,
+                "true_count": rows_true,
+                "false_count": rows_false,
+            },
+        )
+        return summary
 
     def _persist_validation_chatbot_metrics(self, test_results: list[dict]) -> None:
         """
@@ -5989,7 +6030,7 @@ class ValidationTestRunner:
         cost_status = self._control_status_from_checks(cost_checks)
 
         url_level_score = float((reliability_scorecard or {}).get("url_level_score", (reliability_scorecard or {}).get("score", 0)) or 0)
-        chatbot_avg_score = float(((reliability_scorecard or {}).get("metrics", {}) or {}).get("chatbot_average_score", 0) or 0)
+        chatbot_avg_score = self._safe_float(((reliability_scorecard or {}).get("metrics", {}) or {}).get("chatbot_average_score"))
         event_yield_rate = fb_ig_funnel.get("events_over_passed_rate")
         hard_failure_rate = float((llm_quality or {}).get("hard_failure_rate", 0.0) or 0.0)
 
@@ -6070,18 +6111,27 @@ class ValidationTestRunner:
             "status": event_yield_status,
             "details": event_yield_details,
         })
-        chatbot_status = "PASS"
-        if chatbot_avg_score < min_chatbot_fail:
-            chatbot_status = "FAIL"
-        elif chatbot_avg_score < min_chatbot_warn:
+        if chatbot_avg_score is None:
             chatbot_status = "WARN"
+            chatbot_actual = "N/A"
+            chatbot_delta = "pending human review"
+            chatbot_details = "Score becomes available after chatbot_evaluation_review.csv is completed."
+        else:
+            chatbot_status = "PASS"
+            if chatbot_avg_score < min_chatbot_fail:
+                chatbot_status = "FAIL"
+            elif chatbot_avg_score < min_chatbot_warn:
+                chatbot_status = "WARN"
+            chatbot_actual = f"{chatbot_avg_score:.1f}"
+            chatbot_delta = f"{chatbot_avg_score - min_chatbot_warn:+.1f} vs warn"
+            chatbot_details = "Included for end-user answer quality control."
         accuracy_checks.append({
-            "name": "Chatbot Average Score",
-            "actual": f"{chatbot_avg_score:.1f}",
+            "name": "Chatbot Human Review Score",
+            "actual": chatbot_actual,
             "target": f">= {min_chatbot_warn:.1f} warn, >= {min_chatbot_fail:.1f} fail",
-            "delta": f"{chatbot_avg_score - min_chatbot_warn:+.1f} vs warn",
+            "delta": chatbot_delta,
             "status": chatbot_status,
-            "details": "Included for end-user answer quality control.",
+            "details": chatbot_details,
         })
         hard_fail_status = "PASS"
         if hard_failure_rate > max_hard_fail_fail:
@@ -9561,6 +9611,11 @@ class ValidationTestRunner:
         performance = chatbot_performance if isinstance(chatbot_performance, dict) else {}
         testing = chatbot_testing if isinstance(chatbot_testing, dict) else {}
         testing_summary = testing.get("summary", {}) if isinstance(testing.get("summary"), dict) else {}
+        manual_review_summary = (
+            testing.get("manual_review_summary", {})
+            if isinstance(testing.get("manual_review_summary"), dict)
+            else {}
+        )
         query_count = int(performance.get("query_request_count", 0) or 0)
         confirm_count = int(performance.get("confirm_request_count", 0) or 0)
         total_requests = query_count + confirm_count
@@ -9578,11 +9633,9 @@ class ValidationTestRunner:
             under_15s_count = max(total_requests - over_15s_count, 0)
         within_15s_pct = round((under_15s_count / total_requests) * 100.0, 2) if total_requests > 0 else None
 
-        correctness_pct = (
-            round(float(testing_summary.get("average_score", 0.0) or 0.0), 2)
-            if testing_summary
-            else None
-        )
+        llm_correctness_pct = self._safe_float(testing_summary.get("average_score")) if testing_summary else None
+        manual_correctness_pct = self._safe_float(manual_review_summary.get("correctness_pct"))
+        correctness_pct = manual_correctness_pct
         sql_validity_pct = (
             round(float(testing_summary.get("execution_success_rate", 0.0) or 0.0) * 100.0, 2)
             if testing_summary
@@ -9628,6 +9681,12 @@ class ValidationTestRunner:
                 "chatbot_p50_latency_seconds": round(float(((performance.get("query_latency_ms") or {}).get("p50", 0.0) or 0.0) / 1000.0), 3),
                 "chatbot_p95_latency_seconds": round(float(((performance.get("query_latency_ms") or {}).get("p95", 0.0) or 0.0) / 1000.0), 3),
                 "chatbot_answer_correctness_pct": correctness_pct,
+                "chatbot_answer_correctness_source": "manual_review" if manual_correctness_pct is not None else "pending_human_review",
+                "chatbot_llm_graded_correctness_pct": llm_correctness_pct,
+                "chatbot_manual_review_accuracy_pct": manual_correctness_pct,
+                "chatbot_manual_review_rows_total": int(manual_review_summary.get("rows_total", 0) or 0),
+                "chatbot_manual_review_rows_missing_label": int(manual_review_summary.get("rows_missing_label", 0) or 0),
+                "chatbot_manual_review_csv_path": str(testing.get("review_csv_path", "") or ""),
                 "chatbot_sql_validity_pct": sql_validity_pct,
                 "chatbot_hallucination_rate_pct": hallucination_rate_pct,
                 "chatbot_fallback_rate_pct": None,
@@ -10307,9 +10366,31 @@ class ValidationTestRunner:
         elif key == "chatbot_quality":
             chatbot_summary = summary.get("summary", {}) if isinstance(summary.get("summary"), dict) else summary
             answer_correctness = self._safe_float(chatbot_summary.get("chatbot_answer_correctness_pct"))
+            source = str(chatbot_summary.get("chatbot_answer_correctness_source", "") or "").strip()
+            llm_correctness = self._safe_float(chatbot_summary.get("chatbot_llm_graded_correctness_pct"))
+            review_csv_path = str(chatbot_summary.get("chatbot_manual_review_csv_path", "") or "").strip()
             text = (
-                "Calculated directly from the chatbot answer-correctness percentage"
-                + (f": <code>{answer_correctness:.1f}%</code>." if answer_correctness is not None else ".")
+                "Calculated only from the human-scored chatbot review CSV."
+                + (
+                    f" Current displayed score: <code>{answer_correctness:.1f}%</code> from <code>{self._escape_html(source or 'llm_grader')}</code>."
+                    if answer_correctness is not None
+                    else ""
+                )
+                + (
+                    " This KPI remains pending until that CSV is completed."
+                    if answer_correctness is None
+                    else ""
+                )
+                + (
+                    f" The last provisional auto score was <code>{llm_correctness:.1f}%</code>, but it is no longer authoritative."
+                    if llm_correctness is not None and source == "manual_review"
+                    else ""
+                )
+                + (
+                    f" Review CSV: <code>{self._escape_html(review_csv_path)}</code>."
+                    if review_csv_path
+                    else ""
+                )
             )
         else:
             text = "Calculation note unavailable."
@@ -10619,7 +10700,7 @@ class ValidationTestRunner:
 
         chatbot = results.get('chatbot_testing') or {}
         chatbot_summary = chatbot.get('summary', {}) if isinstance(chatbot, dict) else {}
-        avg_score = float(chatbot_summary.get('average_score', 0) or 0)
+        avg_score = self._safe_float(chatbot_summary.get('average_score'))
         exec_rate = float(chatbot_summary.get('execution_success_rate', 0) or 0)
         chatbot_total_tests = int(chatbot_summary.get("total_tests", 0) or 0)
         chatbot_execution_success_count = int(round(exec_rate * chatbot_total_tests)) if chatbot_total_tests > 0 else 0
@@ -10672,7 +10753,8 @@ class ValidationTestRunner:
         # URL-level grading score: only URL/test-level quality metrics.
         url_level_score = 100.0
         url_level_score -= min(30.0, critical_failures * 3.0)
-        url_level_score -= max(0.0, min(20.0, 90.0 - avg_score))
+        if avg_score is not None:
+            url_level_score -= max(0.0, min(20.0, 90.0 - avg_score))
         url_level_score -= max(0.0, min(20.0, (1.0 - exec_rate) * 20.0))
         url_level_score -= min(15.0, attempted_failure_rate * 100.0)
         url_level_score -= min(10.0, keyword_miss_rate * 100.0)
@@ -10714,7 +10796,7 @@ class ValidationTestRunner:
                 "scrape_not_accessed_urls": scrape_not_accessed_urls,
                 "scrape_keyword_misses_after_access": scrape_keyword_misses_after_access,
                 "scrape_keyword_miss_rate_after_access": round(keyword_miss_rate, 4) if attempted_url_denominator > 0 else None,
-                "chatbot_average_score": round(avg_score, 2),
+                "chatbot_average_score": round(avg_score, 2) if avg_score is not None else None,
                 "chatbot_execution_success_rate": round(exec_rate, 4),
                 "chatbot_total_tests": chatbot_total_tests,
                 "chatbot_execution_success_count": chatbot_execution_success_count,
@@ -10744,7 +10826,7 @@ class ValidationTestRunner:
                         "scrape_not_accessed_urls": scrape_not_accessed_urls,
                         "scrape_keyword_misses_after_access": scrape_keyword_misses_after_access,
                         "scrape_keyword_miss_rate_after_access": round(keyword_miss_rate, 4) if attempted_url_denominator > 0 else None,
-                        "chatbot_average_score": round(avg_score, 2),
+                        "chatbot_average_score": round(avg_score, 2) if avg_score is not None else None,
                         "chatbot_execution_success_rate": round(exec_rate, 4),
                         "chatbot_total_tests": chatbot_total_tests,
                         "chatbot_execution_success_count": chatbot_execution_success_count,
@@ -11144,12 +11226,22 @@ class ValidationTestRunner:
 
         def check_min(
             name: str,
-            actual: float,
+            actual: float | None,
             minimum: float,
             numerator: str | None = None,
             denominator: str | None = None,
             family: str = "url_level_grading",
         ) -> None:
+            if actual is None:
+                gate_results.append({
+                    "name": name,
+                    "status": "SKIP",
+                    "detail": "metric unavailable pending human review",
+                    "family": family,
+                    "numerator": numerator,
+                    "denominator": denominator,
+                })
+                return
             ok = actual >= minimum
             gate_results.append({
                 "name": name,
@@ -11200,7 +11292,7 @@ class ValidationTestRunner:
         )
         check_min(
             "min_chatbot_average_score",
-            float(url_metrics.get("chatbot_average_score", 0) or 0),
+            self._safe_float(url_metrics.get("chatbot_average_score")),
             float(merged_thresholds["min_chatbot_average_score"]),
             numerator="chatbot_average_score",
             denominator="100",
@@ -12038,6 +12130,10 @@ class ValidationTestRunner:
             return f"<p class='error-box'>❌ Chatbot testing failed: {chatbot_data['error']}</p>"
 
         summary = chatbot_data['summary']
+        average_score = self._safe_float(summary.get('average_score'))
+        average_score_text = f"{average_score:.1f}" if average_score is not None else "Pending"
+        average_score_label = "Human Review Score" if average_score is not None else "Human Review"
+        score_distribution = summary.get('score_distribution', {}) if isinstance(summary.get('score_distribution'), dict) else {}
 
         html = f"""
         <div class="metric-container">
@@ -12046,8 +12142,8 @@ class ValidationTestRunner:
                 <div class="metric-label">Total Tests</div>
             </div>
             <div class="metric">
-                <div class="metric-value">{summary['average_score']:.1f}</div>
-                <div class="metric-label">Average Score</div>
+                <div class="metric-value">{average_score_text}</div>
+                <div class="metric-label">{average_score_label}</div>
             </div>
             <div class="metric">
                 <div class="metric-value">{summary['execution_success_rate']:.1%}</div>
@@ -12055,12 +12151,12 @@ class ValidationTestRunner:
             </div>
         </div>
 
-        <h3>Score Distribution</h3>
+        <h3>Review Status</h3>
         <table>
-            <tr><th>Score Range</th><th>Count</th></tr>
+            <tr><th>Status</th><th>Count</th></tr>
         """
 
-        for range_name, count in summary['score_distribution'].items():
+        for range_name, count in score_distribution.items():
             html += f"<tr><td>{range_name}</td><td>{count}</td></tr>"
 
         html += "</table>"
@@ -12117,11 +12213,31 @@ class ValidationTestRunner:
             review_csv_path = self._escape_html(str(chatbot_data.get("review_csv_path", "") or ""))
             if review_csv_path:
                 review_csv_name = self._escape_html(os.path.basename(str(chatbot_data.get("review_csv_path", "") or "")))
+                manual_review_summary = (
+                    chatbot_data.get("manual_review_summary", {})
+                    if isinstance(chatbot_data.get("manual_review_summary"), dict)
+                    else {}
+                )
+                manual_note = ""
+                if manual_review_summary:
+                    correctness_pct = self._safe_float(manual_review_summary.get("correctness_pct"))
+                    rows_missing = int(manual_review_summary.get("rows_missing_label", 0) or 0)
+                    if correctness_pct is not None:
+                        manual_note = (
+                            f" The latest completed human review scored chatbot correctness at {correctness_pct:.1f}%."
+                        )
+                    elif rows_missing > 0:
+                        manual_note = (
+                            f" This file still has {rows_missing} row(s) missing <code>human_label</code>."
+                        )
                 html += (
                     "<p><strong>Review instructions:</strong> "
                     "Inspect the chatbot scoring CSV to review the lowest-scoring questions, missed criteria, SQL issues, and grader reasoning. "
+                    "Fill <code>human_label</code> with <code>true</code>/<code>correct</code>/<code>yes</code>/<code>y</code>/<code>1</code> for correct chatbot outcomes, "
+                    "or <code>false</code>/<code>incorrect</code>/<code>no</code>/<code>n</code>/<code>0</code> for incorrect ones. "
+                    "Use <code>review_notes</code> to explain false rows."
                     f"You can find it at <code>{review_csv_path}</code> "
-                    f"(<code>{review_csv_name}</code>).</p>"
+                    f"(<code>{review_csv_name}</code>).{manual_note}</p>"
                 )
             html += (
                 "<h3>Row-by-Row Chatbot Scoring</h3>"

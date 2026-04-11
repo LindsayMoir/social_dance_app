@@ -583,18 +583,6 @@ def test_generate_chatbot_report_includes_review_rows() -> None:
                 "sql_query": "SELECT * FROM events WHERE dance_style ILIKE '%tango%'",
                 "execution_success": True,
                 "result_count": 3,
-                "evaluation": {
-                    "score": 88,
-                    "reasoning": "Missed the default social-dance filter.",
-                    "criteria_matched": ["dance_style"],
-                    "criteria_missed": ["timeframe"],
-                    "sql_issues": ["missing default filter"],
-                    "interpretation_evaluation": {
-                        "score": 90,
-                        "issues": ["minor ambiguity"],
-                        "passed": True,
-                    },
-                },
             }
         ],
         output_dir="output",
@@ -602,9 +590,10 @@ def test_generate_chatbot_report_includes_review_rows() -> None:
 
     assert len(report["review_rows"]) == 1
     assert report["review_rows"][0]["question"] == "Where can I find beginner tango classes?"
-    assert report["review_rows"][0]["score"] == 88
-    assert report["review_rows"][0]["criteria_missed"] == ["timeframe"]
-    assert report["review_rows"][0]["sql_issues"] == ["missing default filter"]
+    assert report["review_rows"][0]["score"] == ""
+    assert report["review_rows"][0]["criteria_missed"] == []
+    assert report["review_rows"][0]["sql_issues"] == []
+    assert report["summary"]["average_score"] is None
 
 
 def test_write_chatbot_evaluation_review_csv_creates_flat_csv(tmp_path) -> None:
@@ -614,17 +603,17 @@ def test_write_chatbot_evaluation_review_csv_creates_flat_csv(tmp_path) -> None:
             {
                 "question": "Where can I find beginner tango classes?",
                 "category": "classes",
-                "score": 88,
+                "score": "",
                 "execution_success": True,
                 "result_count": 3,
                 "interpretation": "Looking for beginner tango classes.",
-                "interpretation_score": 90,
-                "interpretation_issues": ["minor ambiguity"],
-                "criteria_matched": ["dance_style"],
-                "criteria_missed": ["timeframe"],
-                "sql_issues": ["missing default filter"],
+                "interpretation_score": "",
+                "interpretation_issues": [],
+                "criteria_matched": [],
+                "criteria_missed": [],
+                "sql_issues": [],
                 "sql_query": "SELECT * FROM events WHERE dance_style ILIKE '%tango%'",
-                "reasoning": "Missed the default social-dance filter.",
+                "reasoning": "",
             }
         ]
     }
@@ -640,7 +629,8 @@ def test_write_chatbot_evaluation_review_csv_creates_flat_csv(tmp_path) -> None:
     with open(csv_path, encoding="utf-8") as handle:
         text = handle.read()
     assert "Where can I find beginner tango classes?" in text
-    assert "missing default filter" in text
+    assert "human_label" in text.splitlines()[0]
+    assert "review_notes" in text.splitlines()[0]
 
 
 def test_build_chatbot_html_includes_row_by_row_scoring_table() -> None:
@@ -649,35 +639,77 @@ def test_build_chatbot_html_includes_row_by_row_scoring_table() -> None:
         {
             "summary": {
                 "total_tests": 1,
-                "average_score": 88.0,
+                "average_score": None,
                 "execution_success_rate": 1.0,
                 "score_distribution": {
-                    "excellent (90-100)": 0,
-                    "good (70-89)": 1,
-                    "fair (50-69)": 0,
-                    "poor (<50)": 0,
+                    "pending_human_review": 1,
                 },
             },
             "review_rows": [
                 {
                     "question": "Where can I find beginner tango classes?",
                     "sql_query": "SELECT * FROM events WHERE dance_style ILIKE '%tango%'",
-                    "score": 88,
-                    "reasoning": "Missed the default social-dance filter.",
-                    "criteria_missed": ["timeframe"],
-                    "sql_issues": ["missing default filter"],
+                    "score": "",
+                    "reasoning": "",
+                    "criteria_missed": [],
+                    "sql_issues": [],
                 }
             ],
             "review_csv_path": "/tmp/chatbot_evaluation_review.csv",
+            "manual_review_summary": {"rows_missing_label": 1, "correctness_pct": None},
         }
     )
 
     assert "Review instructions:" in html
     assert "/tmp/chatbot_evaluation_review.csv" in html
+    assert "human_label" in html
+    assert "review_notes" in html
     assert "Row-by-Row Chatbot Scoring" in html
     assert "Where can I find beginner tango classes?" in html
-    assert "Missed the default social-dance filter." in html
-    assert "missing default filter" in html
+    assert "Pending" in html
+    assert "pending_human_review" in html
+
+
+def test_build_phase1_chatbot_quality_summary_prefers_manual_review_score() -> None:
+    runner = _build_runner()
+
+    summary = runner._build_phase1_chatbot_quality_summary(
+        chatbot_performance={},
+        chatbot_testing={
+            "summary": {"average_score": 82.0, "execution_success_rate": 1.0, "total_tests": 10},
+            "review_csv_path": "/tmp/chatbot_evaluation_review.csv",
+            "manual_review_summary": {
+                "rows_total": 10,
+                "rows_missing_label": 0,
+                "correctness_pct": 90.0,
+            },
+        },
+    )
+
+    assert summary["summary"]["chatbot_answer_correctness_pct"] == 90.0
+    assert summary["summary"]["chatbot_answer_correctness_source"] == "manual_review"
+    assert summary["summary"]["chatbot_llm_graded_correctness_pct"] == 82.0
+    assert summary["summary"]["chatbot_manual_review_csv_path"] == "/tmp/chatbot_evaluation_review.csv"
+
+
+def test_build_phase1_chatbot_quality_summary_is_pending_without_manual_review() -> None:
+    runner = _build_runner()
+
+    summary = runner._build_phase1_chatbot_quality_summary(
+        chatbot_performance={},
+        chatbot_testing={
+            "summary": {"average_score": None, "execution_success_rate": 1.0, "total_tests": 10},
+            "review_csv_path": "/tmp/chatbot_evaluation_review.csv",
+            "manual_review_summary": {
+                "rows_total": 10,
+                "rows_missing_label": 10,
+                "correctness_pct": None,
+            },
+        },
+    )
+
+    assert summary["summary"]["chatbot_answer_correctness_pct"] is None
+    assert summary["summary"]["chatbot_answer_correctness_source"] == "pending_human_review"
 
 
 def test_build_phase1_scorecard_html_omits_redundant_summary_bullets() -> None:
