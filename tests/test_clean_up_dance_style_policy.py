@@ -74,3 +74,15 @@ def test_update_dance_style_live_music_keeps_explicit_style_from_event_text() ->
 
     assert updated.iloc[0] == "salsa"
     assert bool(updated.iloc[1]) is True
+
+
+def test_normalize_binary_label_series_extracts_binary_values_from_messy_strings() -> None:
+    labels = pd.Series(["0", "1", "博士候选人: 0", "Label=1", "invalid"])
+
+    normalized = CleanUp._normalize_binary_label_series(labels)
+
+    assert normalized.iloc[0] == 0
+    assert normalized.iloc[1] == 1
+    assert normalized.iloc[2] == 0
+    assert normalized.iloc[3] == 1
+    assert pd.isna(normalized.iloc[4])

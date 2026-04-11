@@ -157,6 +157,23 @@ class CleanUp:
             logging.error(f"brave_search(): Failed to fetch results for {query}: {e}")
             return pd.DataFrame(columns=["event_name", "url"])
 
+    @staticmethod
+    def _normalize_binary_label_series(labels: pd.Series) -> pd.Series:
+        """Normalize messy LLM label values down to nullable binary integers."""
+        normalized = labels.copy()
+
+        if pd.api.types.is_numeric_dtype(normalized):
+            normalized = pd.to_numeric(normalized, errors="coerce")
+        else:
+            extracted = (
+                normalized.astype(str)
+                .str.extract(r"(?<!\d)([01])(?!\d)", expand=False)
+            )
+            normalized = pd.to_numeric(extracted, errors="coerce")
+
+        normalized = normalized.where(normalized.isin([0, 1]))
+        return normalized.astype("Int64")
+
 
     async def login_to_facebook(self, page, browser) -> bool:
             """
@@ -1990,7 +2007,21 @@ Examples:
         
         # Create review CSV with canonical and duplicate addresses grouped
         review_df = df_merged[df_merged['Label'].notna()].copy()
-        # Convert Label to int to handle string parsing from LLM
+        review_df['Label'] = self._normalize_binary_label_series(review_df['Label'])
+        invalid_label_rows = int(review_df['Label'].isna().sum())
+        if invalid_label_rows:
+            logging.warning(
+                "merge_and_save_address_results(): Dropping %s row(s) with invalid Label values after normalization.",
+                invalid_label_rows,
+            )
+            review_df = review_df[review_df['Label'].notna()].copy()
+
+        if review_df.empty:
+            logging.warning(
+                "merge_and_save_address_results(): No valid address dedup review rows remained after Label normalization."
+            )
+            return 0
+
         review_df['Label'] = review_df['Label'].astype(int)
         review_df['status'] = review_df['Label'].map({0: 'CANONICAL', 1: 'PROPOSED_DUPLICATE'})
         review_df = review_df[['address_id', 'full_address', 'building_name', 'street_number', 'street_name', 
