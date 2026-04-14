@@ -4,8 +4,13 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from classifier_training_promoter import promote_training_candidates
-from classifier_training_promoter import promote_manual_review_training_rows, summarize_manual_review_csv
+from classifier_training_promoter import (
+    migrate_legacy_classifier_review_csv,
+    migrate_legacy_classifier_review_row,
+    promote_manual_review_training_rows,
+    promote_training_candidates,
+    summarize_manual_review_csv,
+)
 
 
 def _write_training_csv(path) -> None:
@@ -75,6 +80,11 @@ def _write_manual_review_csv(path) -> None:
                 "classifier_predicted_archetype",
                 "classifier_predicted_owner_step",
                 "human_label",
+                "human_should_scrape",
+                "human_owner_step_correct",
+                "human_archetype_correct",
+                "human_extraction_outcome_correct",
+                "human_has_recoverable_event_data",
                 "human_truth_archetype",
                 "human_truth_owner_step",
                 "review_notes",
@@ -89,6 +99,11 @@ def _write_manual_review_csv(path) -> None:
                 "classifier_predicted_archetype": "simple_page",
                 "classifier_predicted_owner_step": "scraper.py",
                 "human_label": "true",
+                "human_should_scrape": "true",
+                "human_owner_step_correct": "true",
+                "human_archetype_correct": "true",
+                "human_extraction_outcome_correct": "true",
+                "human_has_recoverable_event_data": "true",
                 "human_truth_archetype": "",
                 "human_truth_owner_step": "",
                 "review_notes": "good",
@@ -102,6 +117,11 @@ def _write_manual_review_csv(path) -> None:
                 "classifier_predicted_archetype": "simple_page",
                 "classifier_predicted_owner_step": "scraper.py",
                 "human_label": "correct",
+                "human_should_scrape": "true",
+                "human_owner_step_correct": "true",
+                "human_archetype_correct": "true",
+                "human_extraction_outcome_correct": "true",
+                "human_has_recoverable_event_data": "true",
                 "human_truth_archetype": "",
                 "human_truth_owner_step": "",
                 "review_notes": "good",
@@ -115,6 +135,11 @@ def _write_manual_review_csv(path) -> None:
                 "classifier_predicted_archetype": "simple_page",
                 "classifier_predicted_owner_step": "scraper.py",
                 "human_label": "false",
+                "human_should_scrape": "true",
+                "human_owner_step_correct": "false",
+                "human_archetype_correct": "false",
+                "human_extraction_outcome_correct": "false",
+                "human_has_recoverable_event_data": "true",
                 "human_truth_archetype": "complicated_page",
                 "human_truth_owner_step": "rd_ext.py",
                 "review_notes": "listing page",
@@ -128,6 +153,11 @@ def _write_manual_review_csv(path) -> None:
                 "classifier_predicted_archetype": "simple_page",
                 "classifier_predicted_owner_step": "scraper.py",
                 "human_label": "incorrect",
+                "human_should_scrape": "true",
+                "human_owner_step_correct": "false",
+                "human_archetype_correct": "false",
+                "human_extraction_outcome_correct": "false",
+                "human_has_recoverable_event_data": "true",
                 "human_truth_archetype": "complicated_page",
                 "human_truth_owner_step": "rd_ext.py",
                 "review_notes": "listing page",
@@ -322,18 +352,145 @@ def test_summarize_manual_review_csv_counts_false_rows_missing_truth(tmp_path) -
     with open(review_csv, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["url", "human_label", "human_truth_archetype", "human_truth_owner_step"],
+            fieldnames=[
+                "url",
+                "human_label",
+                "human_should_scrape",
+                "human_owner_step_correct",
+                "human_archetype_correct",
+                "human_extraction_outcome_correct",
+                "human_has_recoverable_event_data",
+                "human_truth_archetype",
+                "human_truth_owner_step",
+            ],
         )
         writer.writeheader()
-        writer.writerow({"url": "https://example.org/a", "human_label": "true", "human_truth_archetype": "", "human_truth_owner_step": ""})
-        writer.writerow({"url": "https://example.org/b", "human_label": "false", "human_truth_archetype": "", "human_truth_owner_step": ""})
+        writer.writerow({
+            "url": "https://example.org/a",
+            "human_label": "true",
+            "human_should_scrape": "true",
+            "human_owner_step_correct": "true",
+            "human_archetype_correct": "true",
+            "human_extraction_outcome_correct": "true",
+            "human_has_recoverable_event_data": "true",
+            "human_truth_archetype": "",
+            "human_truth_owner_step": "",
+        })
+        writer.writerow({
+            "url": "https://example.org/b",
+            "human_label": "false",
+            "human_should_scrape": "true",
+            "human_owner_step_correct": "false",
+            "human_archetype_correct": "false",
+            "human_extraction_outcome_correct": "false",
+            "human_has_recoverable_event_data": "true",
+            "human_truth_archetype": "",
+            "human_truth_owner_step": "",
+        })
 
     summary = summarize_manual_review_csv(review_csv)
 
     assert summary["rows_true"] == 1
     assert summary["rows_false"] == 1
     assert summary["false_rows_missing_truth"] == 1
+    assert summary["component_rows_missing"] == 0
     assert summary["correctness_pct"] == 50.0
+
+
+def test_summarize_manual_review_csv_counts_missing_component_fields(tmp_path) -> None:
+    review_csv = tmp_path / "manual_review.csv"
+    with open(review_csv, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "url",
+                "human_label",
+                "human_should_scrape",
+                "human_owner_step_correct",
+                "human_archetype_correct",
+                "human_extraction_outcome_correct",
+                "human_has_recoverable_event_data",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow({
+            "url": "https://example.org/a",
+            "human_label": "true",
+            "human_should_scrape": "true",
+            "human_owner_step_correct": "true",
+            "human_archetype_correct": "",
+            "human_extraction_outcome_correct": "true",
+            "human_has_recoverable_event_data": "true",
+        })
+
+    summary = summarize_manual_review_csv(review_csv)
+
+    assert summary["uses_richer_schema"] is True
+    assert summary["component_rows_missing"] == 1
+
+
+def test_migrate_legacy_classifier_review_row_preserves_old_labels_and_derives_obvious_fields() -> None:
+    migrated = migrate_legacy_classifier_review_row(
+        {
+            "run_id": "run-1",
+            "sample_bucket": "false_candidate",
+            "url": "https://example.org/event",
+            "classifier_predicted_owner_step": "scraper.py",
+            "classifier_predicted_archetype": "google_calendar",
+            "human_label": "false",
+            "human_truth_archetype": "simple_page",
+            "human_truth_owner_step": "scraper.py",
+            "review_notes": "Not actually a calendar page.",
+        }
+    )
+
+    assert migrated["human_label"] == "false"
+    assert migrated["human_owner_step_correct"] == "True"
+    assert migrated["human_archetype_correct"] == "False"
+    assert migrated["human_should_scrape"] == ""
+    assert migrated["human_truth_archetype"] == "simple_page"
+
+
+def test_migrate_legacy_classifier_review_csv_writes_richer_schema_file(tmp_path) -> None:
+    source_csv = tmp_path / "legacy.csv"
+    target_csv = tmp_path / "migrated.csv"
+    with open(source_csv, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "run_id",
+                "sample_bucket",
+                "url",
+                "classifier_predicted_archetype",
+                "classifier_predicted_owner_step",
+                "human_label",
+                "human_truth_archetype",
+                "human_truth_owner_step",
+                "review_notes",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "run_id": "run-1",
+                "sample_bucket": "true_candidate",
+                "url": "https://example.org/event",
+                "classifier_predicted_archetype": "simple_page",
+                "classifier_predicted_owner_step": "scraper.py",
+                "human_label": "true",
+                "human_truth_archetype": "",
+                "human_truth_owner_step": "",
+                "review_notes": "good",
+            }
+        )
+
+    result = migrate_legacy_classifier_review_csv(source_path=source_csv, target_path=target_csv)
+
+    assert result["rows_written"] == 1
+    with open(target_csv, newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["human_should_scrape"] == "True"
+    assert rows[0]["human_archetype_correct"] == "True"
 
 
 def test_promote_manual_review_training_rows_appends_two_true_and_two_false_without_duplicates(tmp_path) -> None:

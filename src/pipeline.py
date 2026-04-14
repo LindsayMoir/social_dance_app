@@ -30,6 +30,7 @@ from utils.chatbot_metrics_sync_utils import (
     utc_now_iso_seconds,
 )
 from classifier_training_promoter import (
+    is_manual_review_instruction_row,
     parse_manual_review_label,
     promote_manual_review_training_rows,
     summarize_manual_review_csv,
@@ -258,6 +259,8 @@ def _database_accuracy_manual_review_status(csv_path: str | None = None) -> dict
             "rows_true": 0,
             "rows_false": 0,
             "false_rows_missing_truth": 0,
+            "component_rows_missing": 0,
+            "uses_richer_schema": False,
             "correctness_pct": None,
             "complete": True,
             "reason": "missing_file",
@@ -274,13 +277,22 @@ def _database_accuracy_manual_review_status(csv_path: str | None = None) -> dict
             "rows_true": 0,
             "rows_false": 0,
             "false_rows_missing_truth": 0,
+            "component_rows_missing": 0,
+            "uses_richer_schema": False,
             "correctness_pct": None,
             "complete": True,
             "reason": "empty_file",
         }
     rows_missing_label = int(summary.get("rows_missing_label", 0) or 0)
     false_rows_missing_truth = int(summary.get("false_rows_missing_truth", 0) or 0)
-    complete = rows_total > 0 and rows_missing_label == 0 and false_rows_missing_truth == 0
+    component_rows_missing = int(summary.get("component_rows_missing", 0) or 0)
+    uses_richer_schema = bool(summary.get("uses_richer_schema"))
+    complete = (
+        rows_total > 0
+        and rows_missing_label == 0
+        and false_rows_missing_truth == 0
+        and component_rows_missing == 0
+    )
     return {
         "path": target_path,
         "exists": True,
@@ -290,12 +302,18 @@ def _database_accuracy_manual_review_status(csv_path: str | None = None) -> dict
         "rows_true": int(summary.get("rows_true", 0) or 0),
         "rows_false": int(summary.get("rows_false", 0) or 0),
         "false_rows_missing_truth": false_rows_missing_truth,
+        "component_rows_missing": component_rows_missing,
+        "uses_richer_schema": uses_richer_schema,
         "correctness_pct": summary.get("correctness_pct"),
         "complete": complete,
         "reason": (
             "complete"
             if complete
-            else ("missing_false_truth_labels" if false_rows_missing_truth else "missing_human_labels")
+            else (
+                "missing_false_truth_labels"
+                if false_rows_missing_truth
+                else ("missing_component_labels" if component_rows_missing else "missing_human_labels")
+            )
         ),
     }
 
@@ -318,7 +336,11 @@ def _database_event_accuracy_manual_review_status(csv_path: str | None = None) -
         }
 
     with open(target_path, "r", encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle))
+        rows = [
+            row
+            for row in csv.DictReader(handle)
+            if not is_manual_review_instruction_row(row)
+        ]
 
     rows_total = len(rows)
     if rows_total <= 0:
@@ -378,7 +400,7 @@ def _chatbot_evaluation_manual_review_status(csv_path: str | None = None) -> dic
     with open(target_path, "r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         fieldnames = list(reader.fieldnames or [])
-        rows = list(reader)
+        rows = [row for row in reader if not is_manual_review_instruction_row(row)]
 
     if "human_label" not in fieldnames:
         return {

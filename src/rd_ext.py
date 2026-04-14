@@ -175,6 +175,11 @@ def _derive_rd_ext_effective_keywords(text: str, configured_keywords: list[str] 
     return ["live music"]
 
 
+def _rd_ext_keywords_found(effective_keywords: list[str] | str) -> bool:
+    """Return whether rd_ext identified a meaningful keyword set for telemetry."""
+    return bool(_split_rd_ext_keywords(effective_keywords))
+
+
 async def _wait_for_login_completion(
     page,
     login_url: str,
@@ -331,6 +336,55 @@ def _looks_like_clickable_calendar_box_label(text: str) -> bool:
     return True
 
 
+def _looks_like_calendar_detail_cta(text: str, href: str = "") -> bool:
+    """Return True when a revealed calendar detail CTA likely leads to event detail."""
+    normalized_text = re.sub(r"\s+", " ", str(text or "")).strip().lower()
+    normalized_href = str(href or "").strip().lower()
+    if not normalized_text and not normalized_href:
+        return False
+
+    blocked_text = {
+        "buy tickets",
+        "tickets",
+        "add to calendar",
+        "share",
+        "share this event",
+        "month",
+        "week",
+        "day",
+        "agenda",
+        "close",
+    }
+    if normalized_text in blocked_text:
+        return False
+
+    positive_text_markers = (
+        "learn more",
+        "more details",
+        "event details",
+        "view details",
+        "details",
+        "read more",
+        "full details",
+    )
+    if any(marker in normalized_text for marker in positive_text_markers):
+        return True
+
+    if _looks_like_child_event_url(normalized_href):
+        return True
+
+    try:
+        parsed = urlparse(normalized_href)
+    except Exception:
+        parsed = None
+    if parsed and parsed.scheme in {"http", "https"}:
+        path = (parsed.path or "").strip().lower().rstrip("/")
+        if path and not _is_obvious_non_event_navigation_path(path) and path.count("/") >= 2:
+            return True
+
+    return False
+
+
 def _build_synthetic_calendar_detail_url(calendar_url: str, event_label: str, index: int) -> str:
     """Create a stable synthetic child URL when a calendar click reveals detail without navigation."""
     normalized_label = re.sub(r"[^a-z0-9]+", "-", str(event_label or "").strip().lower()).strip("-")
@@ -339,6 +393,73 @@ def _build_synthetic_calendar_detail_url(calendar_url: str, event_label: str, in
     digest = md5(f"{calendar_url}|{normalized_label}|{index}".encode("utf-8")).hexdigest()[:10]
     separator = "&" if "?" in calendar_url else "?"
     return f"{calendar_url}{separator}calendar_click={digest}#{normalized_label}"
+
+
+def _extract_candidate_calendar_detail_cta_urls(html: str, base_url: str) -> list[str]:
+    """Extract likely event-detail CTA URLs from revealed calendar detail HTML."""
+    soup = BeautifulSoup(str(html or ""), "html.parser")
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for anchor in soup.find_all("a", href=True):
+        href = str(anchor.get("href") or "").strip()
+        text = re.sub(r"\s+", " ", anchor.get_text(" ", strip=True)).strip()
+        abs_url = urljoin(base_url, href)
+        if not _looks_like_calendar_detail_cta(text, abs_url):
+            continue
+        if is_social_media_url(abs_url) or is_calendar_export_url(abs_url):
+            continue
+        if abs_url in seen:
+            continue
+        seen.add(abs_url)
+        candidates.append(abs_url)
+    return candidates
+
+
+def _extract_revealed_calendar_event_blocks(html: str, base_url: str) -> list[dict[str, str]]:
+    """Split a revealed day panel into per-event blocks with local detail CTAs."""
+    soup = BeautifulSoup(str(html or ""), "html.parser")
+    block_selectors = (
+        ".tribe-events-calendar-month__calendar-event-details",
+        ".fc-popover .fc-daygrid-event-harness",
+        ".fc-popover .fc-event",
+        "[data-event-id]",
+        "[data-mecid]",
+    )
+    blocks: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for selector in block_selectors:
+        for node in soup.select(selector):
+            text = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+            if not _looks_like_clickable_calendar_box_label(text):
+                continue
+            candidate_urls = _extract_candidate_calendar_detail_cta_urls(str(node), base_url)
+            primary_url = candidate_urls[0] if candidate_urls else ""
+            key = (text.lower(), primary_url.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            blocks.append(
+                {
+                    "label": text,
+                    "detail_url": primary_url,
+                    "html": str(node),
+                }
+            )
+
+    if blocks:
+        return blocks
+
+    candidate_urls = _extract_candidate_calendar_detail_cta_urls(str(html or ""), base_url)
+    if candidate_urls:
+        return [
+            {
+                "label": "",
+                "detail_url": candidate_urls[0],
+                "html": str(html or ""),
+            }
+        ]
+    return []
 
 
 def _looks_like_event_iframe_text(text: str) -> bool:
@@ -1281,6 +1402,26 @@ class ReadExtract:
                 )
                 continue
 
+            revealed_blocks = await self._extract_revealed_calendar_event_blocks(
+                calendar_url=calendar_url,
+                fallback_label=label,
+            )
+            if revealed_blocks:
+                for block_index, block in enumerate(revealed_blocks, start=1):
+                    detail_text, output_url = await self._follow_revealed_calendar_event_block(
+                        calendar_url=calendar_url,
+                        fallback_label=str(block.get("label") or label),
+                        fallback_index=(index * 100) + block_index,
+                        detail_url=str(block.get("detail_url") or "").strip(),
+                    )
+                    if not detail_text or output_url in seen_output_urls:
+                        continue
+                    seen_output_urls.add(output_url)
+                    event_data.append((output_url, detail_text))
+                continue
+
+            await self._follow_click_revealed_detail_cta(calendar_url=calendar_url)
+
             detail_text = await self._extract_click_revealed_event_detail_text(
                 calendar_url=calendar_url,
                 fallback_label=label,
@@ -1300,6 +1441,136 @@ class ReadExtract:
             event_data.append((output_url, detail_text))
 
         return event_data
+
+    async def _extract_revealed_calendar_event_blocks(self, calendar_url: str, fallback_label: str) -> list[dict[str, str]]:
+        """Parse the currently opened day panel into per-event blocks with local detail CTAs."""
+        modal_selectors = (
+            "[role='dialog']",
+            ".modal",
+            ".mfp-wrap",
+            ".mfp-content",
+            ".ui-dialog",
+            ".tribe-events-calendar-month__calendar-event-details",
+            ".fc-popover",
+        )
+        best_blocks: list[dict[str, str]] = []
+        for selector in modal_selectors:
+            try:
+                locator = self.page.locator(selector)
+                count = await locator.count()
+            except Exception:
+                continue
+            for index in range(min(count, 5)):
+                handle = locator.nth(index)
+                try:
+                    if not await handle.is_visible():
+                        continue
+                    container_html = await handle.inner_html()
+                except Exception:
+                    continue
+                blocks = _extract_revealed_calendar_event_blocks(container_html, calendar_url)
+                if len(blocks) > len(best_blocks):
+                    best_blocks = blocks
+        if best_blocks:
+            return best_blocks
+
+        try:
+            content = await self.page.content()
+        except Exception:
+            return []
+        fallback_blocks = _extract_revealed_calendar_event_blocks(content, calendar_url)
+        if fallback_blocks:
+            return fallback_blocks
+        if fallback_label:
+            return [{"label": fallback_label, "detail_url": "", "html": ""}]
+        return []
+
+    async def _follow_revealed_calendar_event_block(
+        self,
+        *,
+        calendar_url: str,
+        fallback_label: str,
+        fallback_index: int,
+        detail_url: str,
+    ) -> tuple[str, str]:
+        """Follow one revealed event block to its detail page when possible and return extracted text."""
+        if detail_url:
+            try:
+                await self.page.goto(detail_url, timeout=15000)
+                await self.page.wait_for_load_state("domcontentloaded")
+                await self.page.wait_for_timeout(600)
+            except Exception as exc:
+                logging.info(
+                    "_follow_revealed_calendar_event_block(): failed following detail url from %s to %s: %s",
+                    calendar_url,
+                    detail_url,
+                    exc,
+                )
+        else:
+            await self._follow_click_revealed_detail_cta(calendar_url=calendar_url)
+
+        detail_text = await self._extract_click_revealed_event_detail_text(
+            calendar_url=calendar_url,
+            fallback_label=fallback_label,
+        )
+        current_url = str(getattr(self.page, "url", "") or "").strip()
+        output_url = (
+            current_url
+            if current_url and current_url.rstrip("/") != calendar_url.rstrip("/")
+            else _build_synthetic_calendar_detail_url(calendar_url, fallback_label, fallback_index)
+        )
+        return detail_text, output_url
+
+    async def _follow_click_revealed_detail_cta(self, calendar_url: str) -> None:
+        """Follow a revealed Learn more/details CTA when a calendar entry opens an intermediate layer."""
+        current_url = str(getattr(self.page, "url", "") or "").strip()
+        if current_url and current_url.rstrip("/") != calendar_url.rstrip("/"):
+            return
+
+        modal_selectors = (
+            "[role='dialog']",
+            ".modal",
+            ".mfp-wrap",
+            ".mfp-content",
+            ".ui-dialog",
+            ".tribe-events-calendar-month__calendar-event-details",
+            ".fc-popover",
+        )
+
+        for selector in modal_selectors:
+            try:
+                locator = self.page.locator(selector)
+                count = await locator.count()
+            except Exception:
+                continue
+            for index in range(min(count, 5)):
+                handle = locator.nth(index)
+                try:
+                    if not await handle.is_visible():
+                        continue
+                    container_html = await handle.inner_html()
+                except Exception:
+                    continue
+                candidate_urls = _extract_candidate_calendar_detail_cta_urls(container_html, calendar_url)
+                for target_url in candidate_urls:
+                    try:
+                        await self.page.goto(target_url, timeout=15000)
+                        await self.page.wait_for_load_state("domcontentloaded")
+                        await self.page.wait_for_timeout(600)
+                        logging.info(
+                            "_follow_click_revealed_detail_cta(): followed detail CTA from %s to %s",
+                            calendar_url,
+                            target_url,
+                        )
+                        return
+                    except Exception as exc:
+                        logging.info(
+                            "_follow_click_revealed_detail_cta(): failed following detail CTA from %s to %s: %s",
+                            calendar_url,
+                            target_url,
+                            exc,
+                        )
+                        continue
 
     async def _extract_click_revealed_event_detail_text(self, calendar_url: str, fallback_label: str) -> str:
         """Capture authoritative event detail text after clicking a calendar entry."""
@@ -1551,9 +1822,7 @@ async def _process_edge_case_urls(
                     prompt_type = resolve_prompt_type(event_url, fallback_prompt_type=url)
                     normalized_text = str(text or "")
                     effective_keywords = _derive_rd_ext_effective_keywords(normalized_text, keywords)
-                    found_keywords = any(
-                        keyword != "live music" for keyword in effective_keywords
-                    )
+                    found_keywords = _rd_ext_keywords_found(effective_keywords)
                     llm_result = llm_handler.process_llm_response(
                         event_url,
                         parent_url,
@@ -1604,9 +1873,7 @@ async def _process_edge_case_urls(
                 prompt_type = resolve_prompt_type(url, fallback_prompt_type=url)
                 normalized_text = str(extracted or "")
                 effective_keywords = _derive_rd_ext_effective_keywords(normalized_text, keywords)
-                found_keywords = any(
-                    keyword != "live music" for keyword in effective_keywords
-                )
+                found_keywords = _rd_ext_keywords_found(effective_keywords)
                 llm_result = None
                 if normalized_text:
                     llm_result = llm_handler.process_llm_response(

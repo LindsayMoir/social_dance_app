@@ -19,6 +19,41 @@ from page_classifier import classify_page_with_confidence
 _EMAIL_INPUT_RE = re.compile(r"^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$", re.IGNORECASE)
 _TRUE_REVIEW_LABELS = {"true", "correct", "yes", "y", "1"}
 _FALSE_REVIEW_LABELS = {"false", "incorrect", "no", "n", "0"}
+_INSTRUCTION_PREFIX = "# "
+_COMPONENT_REVIEW_FIELDS = (
+    "human_should_scrape",
+    "human_owner_step_correct",
+    "human_archetype_correct",
+    "human_extraction_outcome_correct",
+    "human_has_recoverable_event_data",
+)
+_RICHER_CLASSIFIER_REVIEW_FIELDNAMES = [
+    "run_id",
+    "sample_bucket",
+    "url",
+    "parent_url",
+    "source",
+    "handled_by",
+    "classifier_stage",
+    "classifier_predicted_owner_step",
+    "classifier_predicted_archetype",
+    "classifier_predicted_subtype",
+    "classifier_confidence",
+    "keywords",
+    "decision_reason",
+    "routing_reason",
+    "events_written",
+    "survived_to_end",
+    "human_label",
+    "human_should_scrape",
+    "human_owner_step_correct",
+    "human_archetype_correct",
+    "human_extraction_outcome_correct",
+    "human_has_recoverable_event_data",
+    "human_truth_archetype",
+    "human_truth_owner_step",
+    "review_notes",
+]
 
 
 def promote_training_candidates(
@@ -125,6 +160,17 @@ def parse_manual_review_label(value: Any) -> bool | None:
     return None
 
 
+def is_manual_review_instruction_row(row: dict[str, Any] | None) -> bool:
+    """Return True when a CSV row is an appended instruction/footer row."""
+    if not isinstance(row, dict):
+        return False
+    first_non_empty = next(
+        (str(value or "").strip() for value in row.values() if str(value or "").strip()),
+        "",
+    )
+    return first_non_empty.startswith(_INSTRUCTION_PREFIX)
+
+
 def summarize_manual_review_csv(path: str | Path) -> dict[str, Any]:
     """Summarize a scored manual-review CSV for gating and trend reporting."""
     review_path = Path(path)
@@ -138,10 +184,13 @@ def summarize_manual_review_csv(path: str | Path) -> dict[str, Any]:
             "rows_false": 0,
             "rows_unknown_label": 0,
             "false_rows_missing_truth": 0,
+            "component_rows_missing": 0,
+            "uses_richer_schema": False,
             "correctness_pct": None,
         }
 
     rows = _read_csv_rows(review_path)
+    rows = [row for row in rows if not is_manual_review_instruction_row(row)]
     rows_total = len(rows)
     rows_completed = 0
     rows_missing_label = 0
@@ -149,7 +198,19 @@ def summarize_manual_review_csv(path: str | Path) -> dict[str, Any]:
     rows_false = 0
     rows_unknown_label = 0
     false_rows_missing_truth = 0
+    component_rows_missing = 0
+    uses_richer_schema = False
     for row in rows:
+        if any(field in row for field in _COMPONENT_REVIEW_FIELDS):
+            uses_richer_schema = True
+            missing_component_field = False
+            for field in _COMPONENT_REVIEW_FIELDS:
+                if field not in row:
+                    continue
+                if parse_manual_review_label(row.get(field)) is None:
+                    missing_component_field = True
+            if missing_component_field:
+                component_rows_missing += 1
         parsed = parse_manual_review_label(row.get("human_label"))
         if parsed is None:
             label_text = str(row.get("human_label") or "").strip()
@@ -180,7 +241,64 @@ def summarize_manual_review_csv(path: str | Path) -> dict[str, Any]:
         "rows_false": rows_false,
         "rows_unknown_label": rows_unknown_label,
         "false_rows_missing_truth": false_rows_missing_truth,
+        "component_rows_missing": component_rows_missing,
+        "uses_richer_schema": uses_richer_schema,
         "correctness_pct": correctness_pct,
+    }
+
+
+def migrate_legacy_classifier_review_row(review_row: dict[str, Any]) -> dict[str, Any]:
+    """Map a legacy v0 classifier review row into the richer schema."""
+    migrated = {field: "" for field in _RICHER_CLASSIFIER_REVIEW_FIELDNAMES}
+    for field in _RICHER_CLASSIFIER_REVIEW_FIELDNAMES:
+        if field in review_row:
+            migrated[field] = review_row.get(field, "")
+
+    parsed_label = parse_manual_review_label(review_row.get("human_label"))
+    predicted_archetype = str(review_row.get("classifier_predicted_archetype") or "").strip()
+    predicted_owner_step = str(review_row.get("classifier_predicted_owner_step") or "").strip()
+    truth_archetype = str(review_row.get("human_truth_archetype") or "").strip()
+    truth_owner_step = str(review_row.get("human_truth_owner_step") or "").strip()
+    events_written = str(review_row.get("events_written") or "").strip()
+    survived_to_end = parse_manual_review_label(review_row.get("survived_to_end"))
+
+    if parsed_label is True:
+        migrated["human_should_scrape"] = "True"
+        migrated["human_owner_step_correct"] = "True"
+        migrated["human_archetype_correct"] = "True"
+        if survived_to_end is True or events_written not in {"", "0"}:
+            migrated["human_extraction_outcome_correct"] = "True"
+            migrated["human_has_recoverable_event_data"] = "True"
+    elif parsed_label is False:
+        if truth_owner_step:
+            migrated["human_owner_step_correct"] = str(truth_owner_step == predicted_owner_step)
+        if truth_archetype:
+            migrated["human_archetype_correct"] = str(truth_archetype == predicted_archetype)
+        if truth_archetype.lower() == "other":
+            migrated["human_should_scrape"] = "False"
+
+    return migrated
+
+
+def migrate_legacy_classifier_review_csv(
+    *,
+    source_path: str | Path,
+    target_path: str | Path,
+) -> dict[str, Any]:
+    """Convert a legacy classifier review CSV into the richer schema."""
+    source = Path(source_path)
+    target = Path(target_path)
+    rows = _read_csv_rows(source)
+    migrated_rows = [migrate_legacy_classifier_review_row(row) for row in rows]
+    with target.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=_RICHER_CLASSIFIER_REVIEW_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(migrated_rows)
+        writer.writerow({"run_id": "# INSTRUCTIONS: This file was migrated from v0. Blank richer fields still require human completion where needed."})
+    return {
+        "source_path": str(source),
+        "target_path": str(target),
+        "rows_written": len(migrated_rows),
     }
 
 
@@ -275,7 +393,11 @@ def promote_manual_review_training_rows(
 
 def _read_csv_rows(path: Path) -> list[dict[str, Any]]:
     with path.open(newline="", encoding="utf-8") as handle:
-        return list(csv.DictReader(handle))
+        return [
+            row
+            for row in csv.DictReader(handle)
+            if not is_manual_review_instruction_row(row)
+        ]
 
 
 def _build_training_csv_row_from_manual_review(
@@ -315,12 +437,19 @@ def _build_training_csv_row_from_manual_review(
         or ""
     ).strip()
 
+    owner_step_correct = parse_manual_review_label(review_row.get("human_owner_step_correct"))
+    archetype_correct = parse_manual_review_label(review_row.get("human_archetype_correct"))
     truth_archetype = str(review_row.get("human_truth_archetype") or "").strip()
     truth_owner_step = str(review_row.get("human_truth_owner_step") or "").strip()
-    if parsed_label:
-        truth_archetype = truth_archetype or predicted_archetype
+    if owner_step_correct is False and not truth_owner_step:
+        return None, "false_row_missing_truth_owner_step"
+    if archetype_correct is False and not truth_archetype:
+        return None, "false_row_missing_truth_archetype"
+    if owner_step_correct is not False:
         truth_owner_step = truth_owner_step or predicted_owner_step
-    elif not truth_archetype or not truth_owner_step:
+    if archetype_correct is not False:
+        truth_archetype = truth_archetype or predicted_archetype
+    if not truth_archetype or not truth_owner_step:
         return None, "false_row_missing_truth_labels"
 
     parsed = urlparse(url)

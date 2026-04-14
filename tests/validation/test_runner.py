@@ -81,6 +81,7 @@ from classifier_training_queue import (
     filter_classifier_review_candidates,
 )
 from classifier_training_promoter import parse_manual_review_label
+from classifier_training_promoter import is_manual_review_instruction_row
 from db import DatabaseHandler
 from evaluation_holdout import load_dev_urls, load_gold_holdout_urls, normalize_evaluation_url
 from llm import LLMHandler
@@ -654,7 +655,35 @@ class ValidationTestRunner:
                 normalized["human_label"] = ""
                 normalized["review_notes"] = ""
                 writer.writerow(normalized)
+            self._append_review_csv_instruction_rows(
+                writer=writer,
+                fieldnames=fieldnames,
+                instruction_lines=[
+                    "INSTRUCTIONS: Review each chatbot result and fill human_label with True or False.",
+                    "Mark True when the SQL/result behavior correctly answers the question. Mark False when it does not.",
+                    "Use review_notes to explain what is wrong for any False row.",
+                ],
+            )
         return output_path
+
+    def _append_review_csv_instruction_rows(
+        self,
+        *,
+        writer: csv.DictWriter,
+        fieldnames: list[str],
+        instruction_lines: list[str],
+    ) -> None:
+        """Append comment-style instruction rows that downstream CSV readers can ignore."""
+        if not fieldnames:
+            return
+        first_field = str(fieldnames[0])
+        for line in instruction_lines:
+            text = str(line or "").strip()
+            if not text:
+                continue
+            row = {field: "" for field in fieldnames}
+            row[first_field] = f"# {text}"
+            writer.writerow(row)
 
     def _persist_completed_chatbot_manual_review(self) -> dict[str, Any]:
         """Persist a completed chatbot manual-review CSV before generating the next sample."""
@@ -1247,20 +1276,22 @@ class ValidationTestRunner:
                     "run_id": run_id,
                     "notes": notes,
                 }
-                if metric_key == "total_llm_run_cost_usd" and run_id:
+                if run_id:
                     latest_by_run_id[run_id] = item
                     continue
                 history.append(item)
             except Exception:
                 continue
-        if metric_key == "total_llm_run_cost_usd" and latest_by_run_id:
+        if latest_by_run_id:
             for item in latest_by_run_id.values():
-                notes = item.get("notes", {})
-                trusted = True
-                if isinstance(notes, dict) and "trusted" in notes:
-                    trusted = bool(notes.get("trusted"))
-                if trusted:
-                    history.append(item)
+                if metric_key == "total_llm_run_cost_usd":
+                    notes = item.get("notes", {})
+                    trusted = True
+                    if isinstance(notes, dict) and "trusted" in notes:
+                        trusted = bool(notes.get("trusted"))
+                    if not trusted:
+                        continue
+                history.append(item)
             history.sort(key=lambda item: str(item.get("timestamp", "")))
         return history
 
@@ -1502,6 +1533,8 @@ class ValidationTestRunner:
                 title="Scraper Access Success % Trend",
                 days=180,
                 value_format="percent",
+                max_runs=4,
+                y_axis_min_override=90.0,
                 series=[
                     {"metric_key": "scraper_scraper_access_success_rate_pct", "label": "scraper", "color": "#1f77b4"},
                     {"metric_key": "scraper_fb_access_success_rate_pct", "label": "fb", "color": "#ff7f0e"},
@@ -1514,6 +1547,8 @@ class ValidationTestRunner:
                 title="Scraper Text Extraction % Trend",
                 days=180,
                 value_format="percent",
+                max_runs=4,
+                y_axis_min_override=90.0,
                 series=[
                     {"metric_key": "scraper_scraper_text_extracted_rate_pct", "label": "scraper", "color": "#1f77b4"},
                     {"metric_key": "scraper_fb_text_extracted_rate_pct", "label": "fb", "color": "#ff7f0e"},
@@ -1560,7 +1595,7 @@ class ValidationTestRunner:
         return (
             "<div class='metric-container'>"
             f"<div class='metric'><div class='metric-value'>{len(steps)}</div><div class='metric-label'>Scrapers Reporting</div></div>"
-            f"<div class='metric'><div class='metric-value'>{self._escape_html(str(scraper_telemetry_summary.get('run_id', '')))}</div><div class='metric-label'>Run ID</div></div>"
+            f"<div class='metric metric-wide'><div class='metric-value metric-value-normal'>{self._escape_html(str(scraper_telemetry_summary.get('run_id', '')))}</div><div class='metric-label'>Run ID</div></div>"
             "</div>"
             "<h3>Current Run Scraper Telemetry</h3>"
             "<table><tr><th>Scraper</th><th>Total URLs</th><th>Access Attempts</th><th>Access %</th><th>Text %</th><th>Keyword %</th><th>URLs With Events %</th><th>Extraction Success %</th><th>Events Written</th></tr>"
@@ -2156,6 +2191,7 @@ class ValidationTestRunner:
         llm_extraction_quality = self._summarize_llm_extraction_quality(results.get('timestamp'))
         chatbot_performance_summary = self._summarize_chatbot_performance(results.get('timestamp'))
         chatbot_metrics_sync_summary = self._summarize_chatbot_metrics_sync(results.get('timestamp'))
+        chatbot_testing_results = results.get('chatbot_testing') if isinstance(results, dict) else {}
         accuracy_replay_summary = results.get("accuracy_replay") if isinstance(results, dict) else {}
         database_accuracy_manual_review = results.get("database_accuracy_manual_review") if isinstance(results, dict) else {}
         classifier_manual_review = results.get("classifier_manual_review") if isinstance(results, dict) else {}
@@ -2191,7 +2227,7 @@ class ValidationTestRunner:
         )
         chatbot_quality_summary = self._build_phase1_chatbot_quality_summary(
             chatbot_performance=chatbot_performance_summary,
-            chatbot_testing=results.get('chatbot_testing'),
+            chatbot_testing=chatbot_testing_results,
         )
         event_data_quality_summary = self._summarize_event_data_quality()
         field_accuracy_summary = self._summarize_field_accuracy(accuracy_replay_summary)
@@ -2342,7 +2378,9 @@ class ValidationTestRunner:
         .status-fail {{ color: #dc3545; font-weight: bold; font-size: 1.3em; }}
         .metric-container {{ display: flex; flex-wrap: wrap; margin: 20px 0; }}
         .metric {{ flex: 0 0 200px; margin: 10px 20px 10px 0; padding: 15px; background-color: #f8f9fa; border-radius: 5px; border-left: 4px solid #007bff; }}
+        .metric-wide {{ flex-basis: 320px; }}
         .metric-value {{ font-size: 2em; font-weight: bold; color: #007bff; }}
+        .metric-value-normal {{ font-size: 1em; font-weight: normal; color: #333; word-break: break-word; overflow-wrap: anywhere; }}
         .metric-label {{ font-size: 0.9em; color: #666; margin-top: 5px; }}
         table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
         th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
@@ -2373,20 +2411,20 @@ class ValidationTestRunner:
         <h2>3. URL Archetype ML Classifier Review</h2>
         {self._build_classifier_manual_review_html(classifier_manual_review)}
 
-        <h2>4. Image Date Rejections</h2>
+        <h2>4. Chatbot Quality</h2>
+        {self._build_chatbot_html(chatbot_testing_results)}
+
+        <h2>5. Image Date Rejections</h2>
         {self._build_image_date_rejections_html(image_date_rejection_summary)}
 
-        <h2>5. Completeness KPIs</h2>
+        <h2>6. Completeness KPIs</h2>
         {self._build_completeness_kpis_only_html(control_panel_summary)}
 
-        <h2>6. KPI Scorecard</h2>
+        <h2>7. KPI Scorecard</h2>
         {self._build_phase1_scorecard_html(run_scorecard)}
 
-        <h2>7. Phase 2 Integrity Coverage</h2>
+        <h2>8. Phase 2 Integrity Coverage</h2>
         {self._build_phase2_integrity_html(coverage_summary)}
-
-        <h2>8. Recommendation Plan</h2>
-        {self._build_recommendation_plan_html(recommendation_plan)}
 
         <hr style="margin: 40px 0;">
         <p style="text-align: center; color: #999; font-size: 0.9em;">
@@ -3515,27 +3553,6 @@ class ValidationTestRunner:
                     f"{int(row.get('count', 0) or 0)}</li>"
                 )
             html += "</ul>"
-
-        html += (
-            "<table><tr>"
-            "<th>URL</th><th>Event</th><th>Start Date</th><th>Reason</th>"
-            "<th>Poster Type</th><th>Detected Date</th><th>Schedule Dates</th>"
-            "</tr>"
-        )
-        for row in rejection_summary.get("rejections", []) or []:
-            schedule_dates = ", ".join(str(item) for item in (row.get("schedule_dates") or []) if str(item).strip())
-            html += (
-                "<tr class='problematic'>"
-                f"<td>{self._escape_html(str(row.get('url', '')))}</td>"
-                f"<td>{self._escape_html(str(row.get('event_name', '')))}</td>"
-                f"<td>{self._escape_html(str(row.get('start_date', '')))}</td>"
-                f"<td>{self._escape_html(str(row.get('reason', '')))}</td>"
-                f"<td>{self._escape_html(str(row.get('poster_type', '')))}</td>"
-                f"<td>{self._escape_html(str(row.get('detected_date', '')))}</td>"
-                f"<td>{self._escape_html(schedule_dates)}</td>"
-                "</tr>"
-            )
-        html += "</table>"
         return html
 
     def _build_phase3_honest_evaluation_html(
@@ -4773,6 +4790,37 @@ class ValidationTestRunner:
 
         return self._infer_latest_pipeline_run_id(report_timestamp)
 
+    def _get_recent_validation_run_ids(self, *, hours_back: int = 168, limit: int = 10) -> list[str]:
+        """Return recent non-empty pipeline run_ids from DB telemetry, newest first."""
+        if not getattr(self, "db_handler", None):
+            return []
+        end_ts = datetime.now()
+        start_ts = end_ts - timedelta(hours=max(1, int(hours_back or 168)))
+        try:
+            rows = self.db_handler.execute_query(
+                """
+                SELECT run_id, MAX(time_stamp) AS latest_ts
+                FROM url_scrape_metrics
+                WHERE COALESCE(NULLIF(TRIM(run_id), ''), '') <> ''
+                  AND LOWER(COALESCE(NULLIF(TRIM(run_id), ''), '')) <> 'na'
+                  AND time_stamp >= :start_ts
+                  AND time_stamp <= :end_ts
+                GROUP BY run_id
+                ORDER BY latest_ts DESC
+                LIMIT :limit
+                """,
+                {"start_ts": start_ts, "end_ts": end_ts, "limit": max(1, int(limit or 10))},
+                statement_timeout_ms=15000,
+            ) or []
+        except Exception:
+            return []
+        run_ids: list[str] = []
+        for row in rows:
+            value = str(row[0] or "").strip()
+            if value and value.lower() != "na":
+                run_ids.append(value)
+        return run_ids
+
     def _summarize_pipeline_runtime(self, report_timestamp: str | None, run_id: str) -> dict:
         """Approximate end-to-end runtime using top-level log timestamps for one run_id."""
         summary = {
@@ -4971,6 +5019,44 @@ class ValidationTestRunner:
             totals["cost_usd"] = cost
             totals["requests"] = reqs
             totals["tokens"] = toks
+        return totals
+
+    def _extract_openrouter_key_daily_totals(self, payload: Any) -> dict:
+        """Best-effort parser for OpenRouter current-key daily usage payloads."""
+        totals = {"cost_usd": None, "requests": None, "tokens": None}
+        if not isinstance(payload, dict):
+            return totals
+
+        row = payload.get("data")
+        if isinstance(row, dict):
+            candidate = row
+        else:
+            candidate = payload
+
+        if not isinstance(candidate, dict):
+            return totals
+
+        for key in ("usage_daily", "byok_usage_daily", "usage"):
+            value = self._safe_float(candidate.get(key))
+            if value is not None:
+                totals["cost_usd"] = value
+                break
+
+        for key in ("requests_daily", "request_count_daily", "num_requests_daily", "requests"):
+            value = self._safe_int(candidate.get(key))
+            if value is not None:
+                totals["requests"] = value
+                break
+
+        token_candidates = [
+            self._safe_int(candidate.get("tokens_daily")),
+            self._safe_int(candidate.get("total_tokens_daily")),
+            self._safe_int(candidate.get("tokens")),
+            self._safe_int(candidate.get("total_tokens")),
+        ]
+        token_values = [value for value in token_candidates if value is not None]
+        if token_values:
+            totals["tokens"] = sum(token_values)
         return totals
 
     def _apply_snapshot_delta_cost(self, provider: str, summary: dict, output_dir: str | None) -> dict:
@@ -5429,6 +5515,11 @@ class ValidationTestRunner:
                 "or OPENROUTER_API_KEY."
             )
             return summary
+        openrouter_inference_key = (
+            os.getenv("OPENROUTER_API_KEY")
+            or os.getenv("OPENROUTER_API" + "_KEY")
+            or openrouter_key
+        )
 
         try:
             import requests  # type: ignore
@@ -5499,6 +5590,57 @@ class ValidationTestRunner:
                 }
             )
             return summary
+
+        current_day_blocked = "completed" in last_error.lower() and "utc" in last_error.lower()
+        if current_day_blocked:
+            key_endpoint = "https://openrouter.ai/api/v1/key"
+            try:
+                resp = requests.get(
+                    key_endpoint,
+                    headers={
+                        "Authorization": f"Bearer {openrouter_inference_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=15,
+                )
+                if resp.status_code < 400:
+                    payload = resp.json()
+                    parsed = self._extract_openrouter_key_daily_totals(payload)
+                    if parsed.get("cost_usd") is not None:
+                        fallback_summary = dict(summary)
+                        fallback_summary.update(
+                            {
+                                "available": True,
+                                "endpoint_used": key_endpoint,
+                                "cost_usd": parsed.get("cost_usd"),
+                                "requests": parsed.get("requests"),
+                                "tokens": parsed.get("tokens"),
+                                "cost_basis": "current_key_usage_daily",
+                                "error": "",
+                            }
+                        )
+                        return self._apply_snapshot_delta_cost("openrouter", fallback_summary, output_dir)
+                    last_error = (
+                        f"{key_endpoint} returned no parseable daily usage fields"
+                    )
+                else:
+                    key_detail = ""
+                    try:
+                        payload = resp.json()
+                        if isinstance(payload, dict):
+                            error_obj = payload.get("error")
+                            if isinstance(error_obj, dict):
+                                key_detail = str(error_obj.get("message", "")).strip()
+                            elif isinstance(error_obj, str):
+                                key_detail = error_obj.strip()
+                    except Exception:
+                        key_detail = ""
+                    last_error = (
+                        f"{key_endpoint} HTTP {resp.status_code}"
+                        + (f": {key_detail}" if key_detail else "")
+                    )
+            except Exception as e:
+                last_error = f"{key_endpoint} request failed: {e}"
 
         summary["error"] = last_error or "OpenRouter activity returned no parseable totals for the covered UTC day(s)"
         return summary
@@ -6683,7 +6825,11 @@ class ValidationTestRunner:
             }
 
         with open(path, "r", encoding="utf-8", newline="") as handle:
-            rows = list(csv.DictReader(handle))
+            rows = [
+                row
+                for row in csv.DictReader(handle)
+                if not is_manual_review_instruction_row(row)
+            ]
 
         rows_total = len(rows)
         rows_completed = 0
@@ -6753,7 +6899,11 @@ class ValidationTestRunner:
         existing_summary = self._summarize_binary_manual_review_csv(csv_path)
         if existing_summary.get("exists") and int(existing_summary.get("rows_missing_label", 0) or 0) > 0:
             with open(csv_path, "r", encoding="utf-8", newline="") as handle:
-                rows = list(csv.DictReader(handle))
+                rows = [
+                    row
+                    for row in csv.DictReader(handle)
+                    if not is_manual_review_instruction_row(row)
+                ]
             return {
                 "status": "READY",
                 "mode": "manual_review",
@@ -6765,7 +6915,40 @@ class ValidationTestRunner:
             }
 
         sample_limit = max(int(limit or 10), 1)
-        query = """
+        domain_query = """
+            WITH eligible_events AS (
+                SELECT
+                    lower(split_part(regexp_replace(regexp_replace(trim(url), '^https?://', '', 'i'), '^www\\.', '', 'i'), '/', 1)) AS domain
+                FROM events
+                WHERE COALESCE(NULLIF(TRIM(url), ''), '') <> ''
+                  AND COALESCE(NULLIF(TRIM(event_name), ''), '') <> ''
+                  AND start_date IS NOT NULL
+                  AND start_date >= CURRENT_DATE
+                  AND lower(trim(url)) NOT LIKE 'https://www.google.com/calendar/%'
+                  AND lower(trim(url)) NOT LIKE 'http://www.google.com/calendar/%'
+                  AND lower(trim(url)) NOT LIKE 'https://calendar.google.com/%'
+                  AND lower(trim(url)) NOT LIKE 'http://calendar.google.com/%'
+            )
+            SELECT DISTINCT domain
+            FROM eligible_events
+            WHERE COALESCE(NULLIF(TRIM(domain), ''), '') <> ''
+            ORDER BY RANDOM()
+            LIMIT :limit
+        """
+        selected_domains = [
+            str(row[0]).strip().lower()
+            for row in (
+                self.db_handler.execute_query(
+                    domain_query,
+                    {"limit": sample_limit},
+                    statement_timeout_ms=15000,
+                )
+                or []
+            )
+            if row and str(row[0] or "").strip()
+        ]
+
+        candidate_query = """
             SELECT
                 event_id,
                 event_name,
@@ -6778,23 +6961,28 @@ class ValidationTestRunner:
                 dance_style,
                 location,
                 url,
-                description
+                description,
+                lower(split_part(regexp_replace(regexp_replace(trim(url), '^https?://', '', 'i'), '^www\\.', '', 'i'), '/', 1)) AS domain
             FROM events
             WHERE COALESCE(NULLIF(TRIM(url), ''), '') <> ''
               AND COALESCE(NULLIF(TRIM(event_name), ''), '') <> ''
               AND start_date IS NOT NULL
               AND start_date >= CURRENT_DATE
+              AND lower(trim(url)) NOT LIKE 'https://www.google.com/calendar/%'
+              AND lower(trim(url)) NOT LIKE 'http://www.google.com/calendar/%'
+              AND lower(trim(url)) NOT LIKE 'https://calendar.google.com/%'
+              AND lower(trim(url)) NOT LIKE 'http://calendar.google.com/%'
+              AND lower(split_part(regexp_replace(regexp_replace(trim(url), '^https?://', '', 'i'), '^www\\.', '', 'i'), '/', 1)) = ANY(:domains)
             ORDER BY RANDOM()
-            LIMIT :limit
         """
         candidate_rows = (
             self.db_handler.execute_query(
-                query,
-                {"limit": max(sample_limit * 8, 50)},
+                candidate_query,
+                {"domains": selected_domains},
                 statement_timeout_ms=15000,
             )
             or []
-        )
+        ) if selected_domains else []
         columns = [
             "event_id",
             "event_name",
@@ -6808,13 +6996,13 @@ class ValidationTestRunner:
             "location",
             "url",
             "description",
+            "domain",
         ]
         normalized_rows: list[dict[str, Any]] = []
         seen_domains: set[str] = set()
         for row in candidate_rows:
             payload = {column: row[idx] if idx < len(row) else None for idx, column in enumerate(columns)}
-            url = str(payload.get("url") or "").strip()
-            domain = (urlparse(url).netloc or "").lower().strip()
+            domain = str(payload.get("domain") or "").strip().lower()
             if not domain or domain in seen_domains:
                 continue
             seen_domains.add(domain)
@@ -6825,11 +7013,20 @@ class ValidationTestRunner:
             if len(normalized_rows) >= sample_limit:
                 break
 
-        fieldnames = columns + ["domain", "human_label", "review_notes"]
+        fieldnames = columns + ["human_label", "review_notes"]
         with open(csv_path, "w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(normalized_rows)
+            self._append_review_csv_instruction_rows(
+                writer=writer,
+                fieldnames=fieldnames,
+                instruction_lines=[
+                    "INSTRUCTIONS: Review each event row against the source URL and fill human_label with True or False.",
+                    "Mark True when the stored event row is accurate. Mark False when the database row is wrong.",
+                    "Use review_notes to describe the problem for any False row.",
+                ],
+            )
 
         return {
             "status": "READY",
@@ -6842,7 +7039,7 @@ class ValidationTestRunner:
 
     def _build_classifier_manual_review_sample(self, run_id: str, limit: int = 10) -> dict:
         """Build and persist a URL-level manual review sample for classifier correctness checks."""
-        safe_run_id = str(run_id or "").strip()
+        requested_run_id = str(run_id or "").strip()
         sample_limit = max(int(limit or 10), 2)
         success_limit = max(1, sample_limit // 2)
         miss_limit = max(1, sample_limit - success_limit)
@@ -6855,7 +7052,7 @@ class ValidationTestRunner:
                   AND eda.event_id IS NULL
                   AND COALESCE(NULLIF(TRIM(ewa.url), ''), NULLIF(TRIM(ewa.parent_url), '')) IS NOT NULL
             )
-            SELECT DISTINCT ON (usm.link)
+            SELECT
                 usm.run_id,
                 'true_candidate' AS sample_bucket,
                 usm.link AS url,
@@ -6881,11 +7078,11 @@ class ValidationTestRunner:
               AND COALESCE(usm.keywords_found, FALSE)
               AND COALESCE(usm.events_written, 0) > 0
               AND COALESCE(NULLIF(TRIM(usm.link), ''), '') <> ''
-            ORDER BY usm.link, RANDOM()
+            ORDER BY RANDOM()
             LIMIT :limit
         """
         negative_query = """
-            SELECT DISTINCT ON (usm.link)
+            SELECT
                 usm.run_id,
                 'false_candidate' AS sample_bucket,
                 usm.link AS url,
@@ -6908,25 +7105,39 @@ class ValidationTestRunner:
               AND COALESCE(usm.keywords_found, FALSE)
               AND COALESCE(usm.events_written, 0) = 0
               AND COALESCE(NULLIF(TRIM(usm.link), ''), '') <> ''
-            ORDER BY usm.link, RANDOM()
+            ORDER BY RANDOM()
             LIMIT :limit
         """
-        positive_rows = (
-            self.db_handler.execute_query(
-                positive_query,
-                {"run_id": safe_run_id, "limit": success_limit},
-                statement_timeout_ms=15000,
+        candidate_run_ids: list[str] = []
+        if requested_run_id:
+            candidate_run_ids.append(requested_run_id)
+        for candidate in self._get_recent_validation_run_ids(limit=10):
+            if candidate not in candidate_run_ids:
+                candidate_run_ids.append(candidate)
+
+        selected_run_id = requested_run_id
+        positive_rows: list[Any] = []
+        negative_rows: list[Any] = []
+        for candidate_run_id in candidate_run_ids:
+            positive_rows = (
+                self.db_handler.execute_query(
+                    positive_query,
+                    {"run_id": candidate_run_id, "limit": max(success_limit * 20, 50)},
+                    statement_timeout_ms=15000,
+                )
+                or []
             )
-            or []
-        )
-        negative_rows = (
-            self.db_handler.execute_query(
-                negative_query,
-                {"run_id": safe_run_id, "limit": miss_limit},
-                statement_timeout_ms=15000,
+            negative_rows = (
+                self.db_handler.execute_query(
+                    negative_query,
+                    {"run_id": candidate_run_id, "limit": max(miss_limit * 20, 50)},
+                    statement_timeout_ms=15000,
+                )
+                or []
             )
-            or []
-        )
+            if positive_rows or negative_rows:
+                selected_run_id = candidate_run_id
+                break
         columns = [
             "run_id",
             "sample_bucket",
@@ -6947,21 +7158,41 @@ class ValidationTestRunner:
         ]
         normalized_rows: list[dict[str, object]] = []
         seen_urls: set[str] = set()
-        for row in list(positive_rows) + list(negative_rows):
-            payload = {column: row[idx] if idx < len(row) else None for idx, column in enumerate(columns)}
-            normalized_url = normalize_evaluation_url(payload.get("url"))
-            if not normalized_url or normalized_url in seen_urls:
-                continue
-            seen_urls.add(normalized_url)
-            payload["human_label"] = ""
-            payload["human_truth_archetype"] = ""
-            payload["human_truth_owner_step"] = ""
-            payload["review_notes"] = ""
-            normalized_rows.append(payload)
+        deduped_positive_rows: list[dict[str, object]] = []
+        deduped_negative_rows: list[dict[str, object]] = []
+        for bucket_rows, target_rows in (
+            (list(positive_rows), deduped_positive_rows),
+            (list(negative_rows), deduped_negative_rows),
+        ):
+            for row in bucket_rows:
+                payload = {column: row[idx] if idx < len(row) else None for idx, column in enumerate(columns)}
+                normalized_url = normalize_evaluation_url(payload.get("url"))
+                if not normalized_url or normalized_url in seen_urls:
+                    continue
+                seen_urls.add(normalized_url)
+                payload["human_label"] = ""
+                payload["human_should_scrape"] = ""
+                payload["human_owner_step_correct"] = ""
+                payload["human_truth_owner_step"] = ""
+                payload["human_archetype_correct"] = ""
+                payload["human_truth_archetype"] = ""
+                payload["human_extraction_outcome_correct"] = ""
+                payload["human_has_recoverable_event_data"] = ""
+                payload["review_notes"] = ""
+                target_rows.append(payload)
+        random.shuffle(deduped_positive_rows)
+        random.shuffle(deduped_negative_rows)
+        for row in deduped_positive_rows[:success_limit] + deduped_negative_rows[:miss_limit]:
+            normalized_rows.append(dict(row))
 
         csv_path = codex_review_path(URL_ARCHETYPE_ML_CLASSIFIER_REVIEW_FILENAME)
         fieldnames = columns + [
             "human_label",
+            "human_should_scrape",
+            "human_owner_step_correct",
+            "human_archetype_correct",
+            "human_extraction_outcome_correct",
+            "human_has_recoverable_event_data",
             "human_truth_archetype",
             "human_truth_owner_step",
             "review_notes",
@@ -6970,6 +7201,18 @@ class ValidationTestRunner:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(normalized_rows)
+            self._append_review_csv_instruction_rows(
+                writer=writer,
+                fieldnames=fieldnames,
+                instruction_lines=[
+                    "INSTRUCTIONS: Fill human_label as the overall classifier judgment for the row: True only when the page should be scraped, the owner step is correct, and the archetype is correct.",
+                    "Also fill human_should_scrape, human_owner_step_correct, human_archetype_correct, human_extraction_outcome_correct, and human_has_recoverable_event_data with True or False.",
+                    "If human_owner_step_correct is False, fill human_truth_owner_step. If human_archetype_correct is False, fill human_truth_archetype.",
+                    "Allowed human_truth_archetype values: simple_page, incomplete_event, complicated_page, google_calendar, other.",
+                    "Allowed human_truth_owner_step values: scraper.py, rd_ext.py, fb.py, ebs.py, emails.py.",
+                    "Use review_notes to explain the mistake for any False row.",
+                ],
+            )
 
         return {
             "status": "READY",
@@ -6978,11 +7221,11 @@ class ValidationTestRunner:
             "rows_returned": len(normalized_rows),
             "csv_path": csv_path,
             "rows": normalized_rows,
-            "run_id": safe_run_id,
+            "run_id": selected_run_id,
         }
 
     def _build_database_accuracy_manual_review_html(self, sample: dict | None) -> str:
-        """Render a human-review table for database accuracy sampling."""
+        """Render instructions for database accuracy sampling."""
         if not isinstance(sample, dict) or not sample:
             return "<p class='error-box'>❌ Manual database accuracy sample unavailable.</p>"
         if sample.get("error"):
@@ -6995,27 +7238,6 @@ class ValidationTestRunner:
         csv_path = self._escape_html(str(sample.get("csv_path", "") or ""))
         sample_size = int(sample.get("rows_returned", len(rows)) or 0)
         csv_name = self._escape_html(os.path.basename(str(sample.get("csv_path", "") or "")))
-        table_rows: list[str] = []
-        for idx, row in enumerate(rows, start=1):
-            if not isinstance(row, dict):
-                continue
-            table_rows.append(
-                "<tr>"
-                f"<td>{idx}</td>"
-                f"<td>{self._escape_html(str(row.get('domain', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('event_name', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('source', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('start_date', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('start_time', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('event_type', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('dance_style', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('location', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('url', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('description', '') or ''))}</td>"
-                "<td></td>"
-                "<td></td>"
-                "</tr>"
-            )
 
         return (
             f"<p>Review these {sample_size} sampled event rows from the final <code>events</code> table and record your labels in "
@@ -7027,16 +7249,10 @@ class ValidationTestRunner:
             "<p><strong>Manual review CSV locations:</strong> "
             f"Database event review: <code>{csv_path}</code>. "
             f"URL archetype ML classifier review: <code>{self._escape_html(codex_review_path(URL_ARCHETYPE_ML_CLASSIFIER_REVIEW_FILENAME))}</code>.</p>"
-            "<table><tr>"
-            "<th>#</th><th>Domain</th><th>Event Name</th><th>Source</th><th>Start Date</th><th>Start Time</th>"
-            "<th>Event Type</th><th>Dance Style</th><th>Location</th><th>URL</th><th>Description</th>"
-            "<th>Human Label</th><th>Review Notes</th>"
-            "</tr>"
-            f"{''.join(table_rows)}</table>"
         )
 
     def _build_classifier_manual_review_html(self, sample: dict | None) -> str:
-        """Render a human-review table for classifier audit sampling."""
+        """Render instructions for classifier audit sampling."""
         if not isinstance(sample, dict) or not sample:
             return "<p class='error-box'>❌ Classifier manual review sample unavailable.</p>"
         if sample.get("error"):
@@ -7049,49 +7265,22 @@ class ValidationTestRunner:
         csv_path = self._escape_html(str(sample.get("csv_path", "") or ""))
         sample_size = int(sample.get("rows_returned", len(rows)) or 0)
         csv_name = self._escape_html(os.path.basename(str(sample.get("csv_path", "") or "")))
-        table_rows: list[str] = []
-        for idx, row in enumerate(rows, start=1):
-            if not isinstance(row, dict):
-                continue
-            table_rows.append(
-                "<tr>"
-                f"<td>{idx}</td>"
-                f"<td>{self._escape_html(str(row.get('sample_bucket', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('source', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('handled_by', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('url', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('classifier_stage', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('classifier_predicted_archetype', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('classifier_predicted_owner_step', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('events_written', '') or ''))}</td>"
-                f"<td>{self._escape_html(str(row.get('survived_to_end', '') or ''))}</td>"
-                "<td></td>"
-                "<td></td>"
-                "<td></td>"
-                "<td></td>"
-                "</tr>"
-            )
 
         return (
             f"<p>Review these {sample_size} sampled URLs for URL archetype ML classifier correctness and record your labels in "
             f"<code>{csv_path}</code>. The <code>sample_bucket</code> column splits the sample between URLs that produced surviving events and URLs that had keywords but produced no surviving events.</p>"
             "<p><strong>Scoring instructions:</strong> Open each URL on the internet and decide whether the classifier/scrape decision was correct. "
             f"For this workflow use <code>{csv_name}</code> at <code>{csv_path}</code>. "
-            "Set <code>human_label</code> to one of <code>true</code>, <code>correct</code>, <code>yes</code>, <code>y</code>, or <code>1</code> when the classifier/routing choice was correct, "
-            "or one of <code>false</code>, <code>incorrect</code>, <code>no</code>, <code>n</code>, or <code>0</code> when it was not. "
-            "For every false row, also fill <code>human_truth_archetype</code> and <code>human_truth_owner_step</code> so the reviewed row can be promoted into classifier training. "
+            "Set <code>human_label</code> to one of <code>true</code>, <code>correct</code>, <code>yes</code>, <code>y</code>, or <code>1</code> only when the page should be scraped, the owner step is correct, and the archetype is correct, "
+            "or one of <code>false</code>, <code>incorrect</code>, <code>no</code>, <code>n</code>, or <code>0</code> when the overall classifier judgment was wrong. "
+            "Also fill <code>human_should_scrape</code>, <code>human_owner_step_correct</code>, <code>human_archetype_correct</code>, <code>human_extraction_outcome_correct</code>, and <code>human_has_recoverable_event_data</code>. "
+            "If <code>human_owner_step_correct</code> is false, fill <code>human_truth_owner_step</code>. If <code>human_archetype_correct</code> is false, fill <code>human_truth_archetype</code>. "
             "Accepted <code>human_truth_archetype</code> values are <code>simple_page</code>, <code>incomplete_event</code>, <code>complicated_page</code>, <code>google_calendar</code>, and <code>other</code>. "
             "Accepted <code>human_truth_owner_step</code> values are <code>scraper.py</code>, <code>rd_ext.py</code>, <code>fb.py</code>, <code>ebs.py</code>, and <code>emails.py</code>. "
             "Use <code>review_notes</code> to explain the mistake.</p>"
             "<p><strong>Manual review CSV locations:</strong> "
             f"Database event review: <code>{self._escape_html(codex_review_path(DATABASE_EVENT_ACCURACY_MANUAL_REVIEW_FILENAME))}</code>. "
             f"URL archetype ML classifier review: <code>{csv_path}</code>.</p>"
-            "<table><tr>"
-            "<th>#</th><th>Sample Bucket</th><th>Source</th><th>Handled By</th><th>URL</th><th>Classifier Stage</th>"
-            "<th>Predicted Archetype</th><th>Predicted Owner Step</th><th>Events Written</th><th>Survived To End</th>"
-            "<th>Human Label</th><th>Human Truth Archetype</th><th>Human Truth Owner Step</th><th>Review Notes</th>"
-            "</tr>"
-            f"{''.join(table_rows)}</table>"
         )
 
     def _build_metric_trend_svg(
@@ -7126,14 +7315,15 @@ class ValidationTestRunner:
         min_v = min(values)
         max_v = max(values)
         span = (max_v - min_v) if (max_v - min_v) > 1e-9 else 1.0
+        y_axis_min = min_v if (max_v - min_v) > 1e-9 else min_v - (span / 2.0)
+        y_axis_max = max_v if (max_v - min_v) > 1e-9 else max_v + (span / 2.0)
+        y_axis_span = (y_axis_max - y_axis_min) if (y_axis_max - y_axis_min) > 1e-9 else 1.0
         coords: list[tuple[float, float]] = []
         for idx, point in enumerate(points):
             x = pad_left + (idx / max(1, len(points) - 1)) * inner_w
-            y = pad_top + (1.0 - ((point["value"] - min_v) / span)) * inner_h
+            y = pad_top + (1.0 - ((point["value"] - y_axis_min) / y_axis_span)) * inner_h
             coords.append((x, y))
         polyline = " ".join(f"{x:.2f},{y:.2f}" for x, y in coords)
-        first_label = self._escape_html(str(points[0]["timestamp"])[:10])
-        last_label = self._escape_html(str(points[-1]["timestamp"])[:10])
 
         def _fmt(value: float) -> str:
             if value_format == "percent":
@@ -7145,6 +7335,31 @@ class ValidationTestRunner:
             if value_format == "count":
                 return f"{int(round(value))}"
             return f"{value:.2f}"
+
+        x_tick_indices = self._select_axis_tick_indices(len(points), max_ticks=5)
+        x_tick_labels: list[str] = []
+        for idx in x_tick_indices:
+            x = pad_left + (idx / max(1, len(points) - 1)) * inner_w
+            label = self._escape_html(str(points[idx]["timestamp"])[:10])
+            anchor = "middle"
+            if idx == 0:
+                anchor = "start"
+            elif idx == len(points) - 1:
+                anchor = "end"
+            x_tick_labels.append(
+                f"<line x1='{x:.2f}' y1='{height - pad_bottom}' x2='{x:.2f}' y2='{height - pad_bottom + 5}' stroke='#999'/>"
+                f"<text x='{x:.2f}' y='{height - 7}' text-anchor='{anchor}' font-size='11' fill='#666'>{label}</text>"
+            )
+
+        y_ticks = self._build_numeric_axis_ticks(y_axis_min, y_axis_max, max_ticks=5)
+        y_tick_labels: list[str] = []
+        for tick in y_ticks:
+            y = pad_top + (1.0 - ((tick - y_axis_min) / y_axis_span)) * inner_h
+            y_tick_labels.append(
+                f"<line x1='{pad_left - 4}' y1='{y:.2f}' x2='{pad_left}' y2='{y:.2f}' stroke='#999'/>"
+                f"<line x1='{pad_left}' y1='{y:.2f}' x2='{width - pad_right}' y2='{y:.2f}' stroke='#e6e6e6' stroke-dasharray='2,2'/>"
+                f"<text x='6' y='{y + 4:.2f}' font-size='11' fill='#666'>{self._escape_html(_fmt(tick))}</text>"
+            )
 
         summary_html = self._build_single_metric_trend_summary_html(
             title=title,
@@ -7160,11 +7375,9 @@ class ValidationTestRunner:
             f"<rect x='0' y='0' width='{width}' height='{height}' fill='#ffffff'/>"
             f"<line x1='{pad_left}' y1='{pad_top}' x2='{pad_left}' y2='{height - pad_bottom}' stroke='#999'/>"
             f"<line x1='{pad_left}' y1='{height - pad_bottom}' x2='{width - pad_right}' y2='{height - pad_bottom}' stroke='#999'/>"
+            f"{''.join(y_tick_labels)}"
             f"<polyline points='{polyline}' fill='none' stroke='#007bff' stroke-width='2.5'/>"
-            f"<text x='6' y='{pad_top + 9}' font-size='11' fill='#666'>{self._escape_html(_fmt(max_v))}</text>"
-            f"<text x='6' y='{height - pad_bottom}' font-size='11' fill='#666'>{self._escape_html(_fmt(min_v))}</text>"
-            f"<text x='{pad_left}' y='{height - 7}' font-size='11' fill='#666'>{first_label}</text>"
-            f"<text x='{width - 92}' y='{height - 7}' font-size='11' fill='#666'>{last_label}</text>"
+            f"{''.join(x_tick_labels)}"
             "</svg>"
             f"{summary_html}"
         )
@@ -7176,6 +7389,8 @@ class ValidationTestRunner:
         title: str,
         days: int = 120,
         value_format: str = "percent",
+        max_runs: int | None = None,
+        y_axis_min_override: float | None = None,
     ) -> str:
         """Render multiple DB-backed metric trends on a shared inline SVG."""
         prepared_series: list[dict[str, Any]] = []
@@ -7197,9 +7412,12 @@ class ValidationTestRunner:
                     continue
                 day_label = ts[:10]
                 points.append({"timestamp": ts, "day_label": day_label, "value": float(value)})
-                all_values.append(float(value))
-                all_labels.add(day_label)
+            if max_runs is not None and max_runs > 0 and len(points) > max_runs:
+                points = points[-max_runs:]
             if points:
+                for point in points:
+                    all_values.append(float(point["value"]))
+                    all_labels.add(str(point["day_label"]))
                 prepared_series.append(
                     {
                         "metric_key": metric_key,
@@ -7232,8 +7450,12 @@ class ValidationTestRunner:
         min_v = min(all_values)
         max_v = max(all_values)
         span = (max_v - min_v) if (max_v - min_v) > 1e-9 else 1.0
-        first_label = self._escape_html(ordered_labels[0])
-        last_label = self._escape_html(ordered_labels[-1])
+        y_axis_min = min_v if (max_v - min_v) > 1e-9 else min_v - (span / 2.0)
+        if y_axis_min_override is not None:
+            y_axis_min = min(y_axis_min, float(y_axis_min_override))
+            y_axis_min = max(y_axis_min, float(y_axis_min_override))
+        y_axis_max = max_v if (max_v - min_v) > 1e-9 else max_v + (span / 2.0)
+        y_axis_span = (y_axis_max - y_axis_min) if (y_axis_max - y_axis_min) > 1e-9 else 1.0
 
         def _fmt(value: float) -> str:
             if value_format == "percent":
@@ -7253,7 +7475,7 @@ class ValidationTestRunner:
             coords: list[tuple[float, float]] = []
             for point in item["points"]:
                 x = pad_left + label_positions[point["day_label"]] * inner_w
-                y = pad_top + (1.0 - ((point["value"] - min_v) / span)) * inner_h
+                y = pad_top + (1.0 - ((point["value"] - y_axis_min) / y_axis_span)) * inner_h
                 coords.append((x, y))
             polyline = " ".join(f"{x:.2f},{y:.2f}" for x, y in coords)
             polylines.append(
@@ -7280,6 +7502,31 @@ class ValidationTestRunner:
                 "</text>"
             )
 
+        x_tick_indices = self._select_axis_tick_indices(len(ordered_labels), max_ticks=5)
+        x_tick_labels: list[str] = []
+        for idx in x_tick_indices:
+            label = ordered_labels[idx]
+            x = pad_left + label_positions[label] * inner_w
+            anchor = "middle"
+            if idx == 0:
+                anchor = "start"
+            elif idx == len(ordered_labels) - 1:
+                anchor = "end"
+            x_tick_labels.append(
+                f"<line x1='{x:.2f}' y1='{height - pad_bottom}' x2='{x:.2f}' y2='{height - pad_bottom + 5}' stroke='#999'/>"
+                f"<text x='{x:.2f}' y='{height - 7}' text-anchor='{anchor}' font-size='11' fill='#666'>{self._escape_html(label)}</text>"
+            )
+
+        y_ticks = self._build_numeric_axis_ticks(y_axis_min, y_axis_max, max_ticks=5)
+        y_tick_labels: list[str] = []
+        for tick in y_ticks:
+            y = pad_top + (1.0 - ((tick - y_axis_min) / y_axis_span)) * inner_h
+            y_tick_labels.append(
+                f"<line x1='{pad_left - 4}' y1='{y:.2f}' x2='{pad_left}' y2='{y:.2f}' stroke='#999'/>"
+                f"<line x1='{pad_left}' y1='{y:.2f}' x2='{width - pad_right}' y2='{y:.2f}' stroke='#e6e6e6' stroke-dasharray='2,2'/>"
+                f"<text x='6' y='{y + 4:.2f}' font-size='11' fill='#666'>{self._escape_html(_fmt(tick))}</text>"
+            )
+
         summary_html = self._build_multi_metric_trend_summary_html(
             title=title,
             prepared_series=prepared_series,
@@ -7294,14 +7541,12 @@ class ValidationTestRunner:
             f"<rect x='0' y='0' width='{width}' height='{height}' fill='#ffffff'/>"
             f"<line x1='{pad_left}' y1='{pad_top}' x2='{pad_left}' y2='{height - pad_bottom}' stroke='#999'/>"
             f"<line x1='{pad_left}' y1='{height - pad_bottom}' x2='{width - pad_right}' y2='{height - pad_bottom}' stroke='#999'/>"
+            f"{''.join(y_tick_labels)}"
             f"{''.join(polylines)}"
             f"{''.join(point_markers)}"
             f"{''.join(legend_items)}"
             f"{sparse_history_note}"
-            f"<text x='6' y='{pad_top + 9}' font-size='11' fill='#666'>{self._escape_html(_fmt(max_v))}</text>"
-            f"<text x='6' y='{height - pad_bottom}' font-size='11' fill='#666'>{self._escape_html(_fmt(min_v))}</text>"
-            f"<text x='{pad_left}' y='{height - 7}' font-size='11' fill='#666'>{first_label}</text>"
-            f"<text x='{width - 92}' y='{height - 7}' font-size='11' fill='#666'>{last_label}</text>"
+            f"{''.join(x_tick_labels)}"
             "</svg>"
             f"{summary_html}"
         )
@@ -7318,6 +7563,48 @@ class ValidationTestRunner:
         if value_format == "count":
             return f"{int(round(value))}"
         return f"{value:.2f}"
+
+    @staticmethod
+    def _select_axis_tick_indices(total_points: int, max_ticks: int = 5) -> list[int]:
+        """Select evenly spaced axis tick indices across the plotted points."""
+        if total_points <= 0:
+            return []
+        if total_points == 1:
+            return [0]
+        tick_count = max(2, min(max_ticks, total_points))
+        if tick_count >= total_points:
+            return list(range(total_points))
+        indices = {
+            int(round(position * (total_points - 1) / (tick_count - 1)))
+            for position in range(tick_count)
+        }
+        indices.update({0, total_points - 1})
+        return sorted(index for index in indices if 0 <= index < total_points)
+
+    @staticmethod
+    def _build_numeric_axis_ticks(min_value: float, max_value: float, max_ticks: int = 5) -> list[float]:
+        """Build evenly distributed numeric axis tick values."""
+        if max_value < min_value:
+            min_value, max_value = max_value, min_value
+        if abs(max_value - min_value) < 1e-9:
+            center = float(min_value)
+            if abs(center) < 1e-9:
+                min_value = 0.0
+                max_value = 1.0
+            else:
+                delta = max(abs(center) * 0.2, 1.0)
+                min_value = center - delta
+                max_value = center + delta
+
+        tick_count = max(2, max_ticks)
+        step = (max_value - min_value) / float(tick_count - 1)
+        ticks: list[float] = []
+        for idx in range(tick_count):
+            value = round(min_value + step * idx, 6)
+            if ticks and abs(ticks[-1] - value) < 1e-9:
+                continue
+            ticks.append(value)
+        return ticks
 
     def _describe_trend_delta(self, points: list[dict[str, float]], value_format: str) -> str:
         """Return a plain-English description of the latest change vs the prior point."""
@@ -9552,6 +9839,14 @@ class ValidationTestRunner:
         }
         trusted_cost_values = [value for value in provider_costs.values() if value is not None]
         total_cost_usd = round(sum(trusted_cost_values), 6) if trusted_cost_values else None
+        zero_only_costs = bool(trusted_cost_values) and all(abs(value) < 1e-9 for value in trusted_cost_values)
+        missing_provider_cost = any(
+            self._safe_float(provider.get("cost_usd")) is None
+            for provider in (openrouter, openai)
+        )
+        zero_cost_without_evidence = zero_only_costs and missing_provider_cost
+        if zero_cost_without_evidence:
+            total_cost_usd = None
         total_requests = sum(provider_requests.values())
         total_tokens = sum(provider_tokens.values())
         successful_replay_urls = int(replay.get("true_count", 0) or 0)
@@ -12131,157 +12426,52 @@ class ValidationTestRunner:
         return html
 
     def _build_chatbot_html(self, chatbot_data: dict) -> str:
-        """Build HTML for chatbot testing section."""
+        """Build HTML for chatbot manual review instructions."""
         if not chatbot_data:
             return "<p class='error-box'>❌ Chatbot testing did not run</p>"
 
         if 'error' in chatbot_data:
             return f"<p class='error-box'>❌ Chatbot testing failed: {chatbot_data['error']}</p>"
 
-        summary = chatbot_data['summary']
-        average_score = self._safe_float(summary.get('average_score'))
-        average_score_text = f"{average_score:.1f}" if average_score is not None else "Pending"
-        average_score_label = "Human Review Score" if average_score is not None else "Human Review"
-        score_distribution = summary.get('score_distribution', {}) if isinstance(summary.get('score_distribution'), dict) else {}
-
-        html = f"""
-        <div class="metric-container">
-            <div class="metric">
-                <div class="metric-value">{summary['total_tests']}</div>
-                <div class="metric-label">Total Tests</div>
-            </div>
-            <div class="metric">
-                <div class="metric-value">{average_score_text}</div>
-                <div class="metric-label">{average_score_label}</div>
-            </div>
-            <div class="metric">
-                <div class="metric-value">{summary['execution_success_rate']:.1%}</div>
-                <div class="metric-label">Execution Success</div>
-            </div>
-        </div>
-
-        <h3>Review Status</h3>
-        <table>
-            <tr><th>Status</th><th>Count</th></tr>
-        """
-
-        for range_name, count in score_distribution.items():
-            html += f"<tr><td>{range_name}</td><td>{count}</td></tr>"
-
-        html += "</table>"
-        category_gate = chatbot_data.get("category_gate") if isinstance(chatbot_data, dict) else None
-        if isinstance(category_gate, dict):
-            gate_status = str(category_gate.get("status", "PASS") or "PASS").upper()
-            gate_class = {
-                "PASS": "status-pass",
-                "WARNING": "status-warning",
-                "FAIL": "status-fail",
-            }.get(gate_status, "status-warning")
-            html += (
-                "<p><strong>Problem Category Gate:</strong> "
-                f"<span class='{gate_class}'>{self._escape_html(gate_status)}</span> "
-                f"({self._escape_html(str(category_gate.get('detail', '')))}"
-                ")</p>"
-            )
-
-        if chatbot_data.get('problematic_questions'):
-            html += "<h3>Problematic Questions (Score < 50)</h3>"
-            html += "<table><tr><th>Question</th><th>Category</th><th>Score</th><th>Reasoning</th></tr>"
-            for q in chatbot_data['problematic_questions'][:10]:  # Show top 10
-                html += f"""
-                <tr class="problematic">
-                    <td>{q['question']}</td>
-                    <td>{q['category']}</td>
-                    <td>{q['score']}</td>
-                    <td>{q['reasoning'][:100]}...</td>
-                </tr>
-                """
-            html += "</table>"
-
-        # New: Problem Categories (score < 90)
-        if chatbot_data.get('problem_categories'):
-            html += "<h3>Problem Categories (Score < 90)</h3>"
-            for cat in chatbot_data['problem_categories']:
-                html += f"<h4>{cat['name']} ({cat['count']} issues)</h4>"
-                example_q = cat.get('example', {}).get('question', '')
-                example_reason = cat.get('example', {}).get('reason', '')
-                html += f"<p><strong>Example:</strong> {example_q}<br><em>{example_reason}</em></p>"
-                example_sql = cat.get('example', {}).get('sql', '')
-                if example_sql:
-                    html += f"<pre style=\"white-space: pre-wrap; background:#f8f9fa; padding:10px; border-radius:4px; border:1px solid #eee;\"><code>{example_sql}</code></pre>"
-                if cat.get('questions'):
-                    html += "<ul>"
-                    for qtext in cat['questions']:
-                        html += f"<li>{qtext}</li>"
-                    html += "</ul>"
-                if cat.get('recommendation'):
-                    html += f"<p><strong>Recommendation:</strong> {cat['recommendation']}</p>"
-
+        summary = chatbot_data['summary'] if isinstance(chatbot_data.get('summary'), dict) else {}
+        total_tests = int(summary.get('total_tests', 0) or 0)
+        exec_rate = float(summary.get('execution_success_rate', 0.0) or 0.0)
         review_rows = chatbot_data.get("review_rows") if isinstance(chatbot_data, dict) else None
-        if isinstance(review_rows, list) and review_rows:
-            review_csv_path = self._escape_html(str(chatbot_data.get("review_csv_path", "") or ""))
-            if review_csv_path:
-                review_csv_name = self._escape_html(os.path.basename(str(chatbot_data.get("review_csv_path", "") or "")))
-                manual_review_summary = (
-                    chatbot_data.get("manual_review_summary", {})
-                    if isinstance(chatbot_data.get("manual_review_summary"), dict)
-                    else {}
-                )
-                manual_note = ""
-                if manual_review_summary:
-                    correctness_pct = self._safe_float(manual_review_summary.get("correctness_pct"))
-                    rows_missing = int(manual_review_summary.get("rows_missing_label", 0) or 0)
-                    if correctness_pct is not None:
-                        manual_note = (
-                            f" The latest completed human review scored chatbot correctness at {correctness_pct:.1f}%."
-                        )
-                    elif rows_missing > 0:
-                        manual_note = (
-                            f" This file still has {rows_missing} row(s) missing <code>human_label</code>."
-                        )
-                html += (
-                    "<p><strong>Review instructions:</strong> "
-                    "Inspect the chatbot scoring CSV to review the lowest-scoring questions, missed criteria, SQL issues, and grader reasoning. "
-                    "Fill <code>human_label</code> with <code>true</code>/<code>correct</code>/<code>yes</code>/<code>y</code>/<code>1</code> for correct chatbot outcomes, "
-                    "or <code>false</code>/<code>incorrect</code>/<code>no</code>/<code>n</code>/<code>0</code> for incorrect ones. "
-                    "Use <code>review_notes</code> to explain false rows."
-                    f"You can find it at <code>{review_csv_path}</code> "
-                    f"(<code>{review_csv_name}</code>).{manual_note}</p>"
-                )
-            html += (
-                "<h3>Row-by-Row Chatbot Scoring</h3>"
-                "<table><tr>"
-                "<th>#</th><th>Question</th><th>Generated SQL</th><th>Score</th>"
-                "<th>Scorer Reasoning</th><th>Criteria Missed</th><th>SQL Issues</th>"
-                "</tr>"
-            )
-            for idx, row in enumerate(review_rows, start=1):
-                question = self._escape_html(str(row.get("question", "") or ""))
-                sql_query = self._escape_html(str(row.get("sql_query", "") or ""))
-                reasoning = self._escape_html(str(row.get("reasoning", "") or ""))
-                criteria_missed = ", ".join(str(item) for item in (row.get("criteria_missed") or []) if str(item).strip())
-                sql_issues = ", ".join(str(item) for item in (row.get("sql_issues") or []) if str(item).strip())
-                score_value = row.get("score")
-                try:
-                    score_num = float(score_value)
-                    row_class = " class=\"problematic\"" if score_num < 90.0 else ""
-                    score_text = f"{score_num:.1f}"
-                except Exception:
-                    row_class = ""
-                    score_text = self._escape_html(str(score_value or ""))
-                html += (
-                    f"<tr{row_class}>"
-                    f"<td>{idx}</td>"
-                    f"<td>{question}</td>"
-                    f"<td><pre style=\"white-space: pre-wrap; background:#f8f9fa; padding:8px; border-radius:4px; border:1px solid #eee;\"><code>{sql_query}</code></pre></td>"
-                    f"<td>{score_text}</td>"
-                    f"<td>{reasoning}</td>"
-                    f"<td>{self._escape_html(criteria_missed)}</td>"
-                    f"<td>{self._escape_html(sql_issues)}</td>"
-                    "</tr>"
-                )
-            html += "</table>"
+        review_csv_path = self._escape_html(str(chatbot_data.get("review_csv_path", "") or ""))
+        review_csv_name = self._escape_html(os.path.basename(str(chatbot_data.get("review_csv_path", "") or "")))
+        manual_review_summary = (
+            chatbot_data.get("manual_review_summary", {})
+            if isinstance(chatbot_data.get("manual_review_summary"), dict)
+            else {}
+        )
+        correctness_pct = self._safe_float(manual_review_summary.get("correctness_pct"))
+        rows_missing = int(manual_review_summary.get("rows_missing_label", 0) or 0)
+        if correctness_pct is not None:
+            correctness_text = f"{correctness_pct:.1f}%"
+        elif isinstance(review_rows, list) and review_rows:
+            correctness_text = "Pending human review"
+        else:
+            correctness_text = "Unavailable"
 
+        html = (
+            f"<p><strong>Chatbot correctness:</strong> {self._escape_html(correctness_text)}<br>"
+            f"<strong>Total Tests:</strong> {total_tests}<br>"
+            f"<strong>Execution Success Rate:</strong> {exec_rate:.1%}</p>"
+        )
+        if review_csv_path:
+            pending_note = (
+                f" This file still has {rows_missing} row(s) missing <code>human_label</code>."
+                if rows_missing > 0
+                else ""
+            )
+            html += (
+                "<p><strong>Scoring instructions:</strong> "
+                "Open the chatbot review CSV and score each chatbot outcome by filling <code>human_label</code>. "
+                "Use <code>true</code>/<code>correct</code>/<code>yes</code>/<code>y</code>/<code>1</code> for correct outcomes, "
+                "or <code>false</code>/<code>incorrect</code>/<code>no</code>/<code>n</code>/<code>0</code> for incorrect ones. "
+                "Use <code>review_notes</code> to explain false rows. "
+                f"For this workflow use <code>{review_csv_name}</code> at <code>{review_csv_path}</code>.{pending_note}</p>"
+            )
         return html
 
     def _build_chatbot_performance_html(self, perf_data: dict) -> str:

@@ -5,13 +5,17 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from rd_ext import (
+    _extract_candidate_calendar_detail_cta_urls,
+    _extract_revealed_calendar_event_blocks,
     _build_synthetic_calendar_detail_url,
     _derive_rd_ext_effective_keywords,
     _get_login_probe_url,
     _is_embedded_event_iframe_url,
+    _looks_like_calendar_detail_cta,
     _looks_like_event_iframe_text,
     _looks_like_clickable_calendar_box_label,
     _looks_like_child_event_url,
+    _rd_ext_keywords_found,
     _should_attempt_content_reveal_click,
     _should_follow_same_domain_child_link,
     ReadExtract,
@@ -119,6 +123,10 @@ def test_derive_rd_ext_effective_keywords_falls_back_to_live_music() -> None:
     assert effective == ["live music"]
 
 
+def test_rd_ext_keywords_found_counts_live_music_fallback() -> None:
+    assert _rd_ext_keywords_found(["live music"]) is True
+
+
 def test_should_follow_same_domain_child_link_skips_navigation_pages() -> None:
     base_url = "https://www.theemporia.ca/events"
 
@@ -178,6 +186,54 @@ def test_looks_like_clickable_calendar_box_label_filters_calendar_ui_noise() -> 
     assert not _looks_like_clickable_calendar_box_label("Month")
     assert not _looks_like_clickable_calendar_box_label("Apr 21")
     assert not _looks_like_clickable_calendar_box_label("12")
+
+
+def test_looks_like_calendar_detail_cta_identifies_detail_navigation() -> None:
+    assert _looks_like_calendar_detail_cta("Learn more", "")
+    assert _looks_like_calendar_detail_cta("Event Details", "")
+    assert _looks_like_calendar_detail_cta("", "https://www.bardandbanker.com/live-music/miguelito-valdes")
+    assert not _looks_like_calendar_detail_cta("Buy tickets", "https://example.com/tickets")
+    assert not _looks_like_calendar_detail_cta("Add to Calendar", "https://calendar.google.com")
+
+
+def test_extract_candidate_calendar_detail_cta_urls_prefers_detail_links() -> None:
+    html = """
+    <div class="tribe-events-calendar-month__calendar-event-details">
+      <a href="/live-music/miguelito-valdes-band">Learn more</a>
+      <a href="/tickets">Buy tickets</a>
+      <a href="https://calendar.google.com/calendar/event?eid=abc">Add to Calendar</a>
+    </div>
+    """
+    urls = _extract_candidate_calendar_detail_cta_urls(
+        html,
+        "https://www.bardandbanker.com/live-music",
+    )
+
+    assert urls == ["https://www.bardandbanker.com/live-music/miguelito-valdes-band"]
+
+
+def test_extract_revealed_calendar_event_blocks_pairs_local_detail_ctas() -> None:
+    html = """
+    <div class="fc-popover">
+      <div class="fc-event">
+        <div>Miguelito Valdes + band</div>
+        <a href="/live-music/miguelito-valdes-band">Learn more</a>
+      </div>
+      <div class="fc-event">
+        <div>St. Cecilia</div>
+        <a href="/live-music/st-cecilia">Learn more</a>
+      </div>
+    </div>
+    """
+    blocks = _extract_revealed_calendar_event_blocks(
+        html,
+        "https://www.bardandbanker.com/live-music",
+    )
+
+    assert len(blocks) == 2
+    assert blocks[0]["detail_url"] == "https://www.bardandbanker.com/live-music/miguelito-valdes-band"
+    assert "Miguelito" in blocks[0]["label"]
+    assert blocks[1]["detail_url"] == "https://www.bardandbanker.com/live-music/st-cecilia"
 
 
 def test_build_synthetic_calendar_detail_url_is_stable_and_readable() -> None:

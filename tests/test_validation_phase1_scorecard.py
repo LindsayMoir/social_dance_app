@@ -72,9 +72,13 @@ def _stub_code_version(runner: ValidationTestRunner) -> None:
 def test_build_database_accuracy_manual_review_sample_writes_rows(tmp_path) -> None:
     runner = _build_runner()
     runner.db_handler = _FakeDbHandler()
-    runner.db_handler.query_map["FROM events"] = [
-        (101, "Friday Social", "2026-04-10", "19:00:00", "2026-04-10", "22:00:00", "Source A", "social dance", "salsa", "Hall A", "https://example.com/a", "desc a"),
-        (102, "Saturday Social", "2026-04-11", "20:00:00", "2026-04-11", "23:00:00", "Source B", "live music", "swing", "Hall B", "https://other.example.org/b", "desc b"),
+    runner.db_handler.query_map["SELECT DISTINCT domain"] = [
+        ("example.com",),
+        ("other.example.org",),
+    ]
+    runner.db_handler.query_map["= ANY(:domains)"] = [
+        (101, "Friday Social", "2026-04-10", "19:00:00", "2026-04-10", "22:00:00", "Source A", "social dance", "salsa", "Hall A", "https://example.com/a", "desc a", "example.com"),
+        (102, "Saturday Social", "2026-04-11", "20:00:00", "2026-04-11", "23:00:00", "Source B", "live music", "swing", "Hall B", "https://other.example.org/b", "desc b", "other.example.org"),
     ]
 
     original_codex_review_path = validation_test_runner.codex_review_path
@@ -89,6 +93,68 @@ def test_build_database_accuracy_manual_review_sample_writes_rows(tmp_path) -> N
     assert os.path.exists(sample["csv_path"])
     assert sample["rows"][0]["human_label"] == ""
     assert sample["rows"][0]["domain"] == "example.com"
+
+
+def test_build_database_accuracy_manual_review_sample_fills_to_limit_from_distinct_domains(tmp_path) -> None:
+    runner = _build_runner()
+
+    class FakeDb:
+        def execute_query(self, query, params=None, statement_timeout_ms=None):
+            normalized = " ".join(str(query).split())
+            if "SELECT DISTINCT domain" in normalized:
+                return [
+                    ("a.com",),
+                    ("b.com",),
+                    ("c.com",),
+                ]
+            if "= ANY(:domains)" in normalized:
+                return [
+                    (1, "A Event", "2026-04-10", "19:00:00", "2026-04-10", "22:00:00", "A", "social dance", "salsa", "Hall A", "https://a.com/1", "desc", "a.com"),
+                    (2, "B Event", "2026-04-11", "19:00:00", "2026-04-11", "22:00:00", "B", "social dance", "swing", "Hall B", "https://b.com/1", "desc", "b.com"),
+                    (3, "C Event", "2026-04-12", "19:00:00", "2026-04-12", "22:00:00", "C", "social dance", "tango", "Hall C", "https://c.com/1", "desc", "c.com"),
+                ]
+            raise AssertionError(normalized)
+
+    runner.db_handler = FakeDb()
+
+    original_codex_review_path = validation_test_runner.codex_review_path
+    validation_test_runner.codex_review_path = lambda filename: str(tmp_path / filename)
+    try:
+        sample = runner._build_database_accuracy_manual_review_sample(limit=3)
+    finally:
+        validation_test_runner.codex_review_path = original_codex_review_path
+
+    assert sample["rows_returned"] == 3
+    assert {row["domain"] for row in sample["rows"]} == {"a.com", "b.com", "c.com"}
+
+
+def test_build_database_accuracy_manual_review_sample_excludes_google_calendar_rows(tmp_path) -> None:
+    runner = _build_runner()
+
+    class FakeDb:
+        def execute_query(self, query, params=None, statement_timeout_ms=None):
+            normalized = " ".join(str(query).split())
+            if "SELECT DISTINCT domain" in normalized:
+                assert "NOT LIKE 'https://www.google.com/calendar/%'" in normalized
+                return [("bardandbanker.com",)]
+            if "= ANY(:domains)" in normalized:
+                assert "NOT LIKE 'https://www.google.com/calendar/%'" in normalized
+                return [
+                    (1987, "St. Cecilia", "2026-04-22", "20:30:00", "2026-04-22", "", "Bard and Banker", "live music", "", "Bard & Banker, CA", "https://www.bardandbanker.com/live-music?calendar_click=abc", "", "bardandbanker.com"),
+                ]
+            raise AssertionError(normalized)
+
+    runner.db_handler = FakeDb()
+
+    original_codex_review_path = validation_test_runner.codex_review_path
+    validation_test_runner.codex_review_path = lambda filename: str(tmp_path / filename)
+    try:
+        sample = runner._build_database_accuracy_manual_review_sample(limit=1)
+    finally:
+        validation_test_runner.codex_review_path = original_codex_review_path
+
+    assert sample["rows_returned"] == 1
+    assert sample["rows"][0]["domain"] == "bardandbanker.com"
 
 
 def test_phase1_scorecard_database_accuracy_is_manual_review_only() -> None:
@@ -148,9 +214,8 @@ def test_build_database_accuracy_manual_review_html_renders_review_table() -> No
     )
 
     assert "sampled event rows from the final" in html
-    assert "Friday Social" in html
-    assert "example.com" in html
-    assert "Human Label" in html
+    assert "Friday Social" not in html
+    assert "example.com" not in html
     assert "/tmp/database_accuracy_manual_review.csv" in html
     assert "Scoring instructions:" in html
     assert "human_label" in html
@@ -183,16 +248,97 @@ def test_build_classifier_manual_review_html_renders_review_table() -> None:
     )
 
     assert "classifier correctness" in html
-    assert "true_candidate" in html
-    assert "Human Truth Archetype" in html
+    assert "true_candidate" not in html
     assert "/tmp/url_archetype_ml_classifier_review.csv" in html
     assert "Scoring instructions:" in html
     assert "human_truth_owner_step" in html
+    assert "human_should_scrape" in html
+    assert "human_archetype_correct" in html
     assert "database_event_accuracy_manual_review.csv" in html
     assert "simple_page" in html
     assert "complicated_page" in html
     assert "scraper.py" in html
     assert "rd_ext.py" in html
+
+
+def test_build_classifier_manual_review_sample_falls_back_to_recent_run_with_candidates(tmp_path) -> None:
+    runner = _build_runner()
+
+    class FakeDb:
+        def execute_query(self, query, params=None, statement_timeout_ms=None):
+            normalized = " ".join(str(query).split())
+            run_id = (params or {}).get("run_id")
+            if "GROUP BY run_id" in normalized:
+                return [
+                    ("run-new", datetime(2026, 4, 11, 16, 11, 55)),
+                    ("run-old", datetime(2026, 4, 6, 23, 35, 54)),
+                ]
+            if "true_candidate" in normalized:
+                if run_id == "run-new":
+                    return []
+                return [
+                    ("run-old", "true_candidate", "https://example.com/a", "", "Source A", "scraper.py", "ml", "scraper.py", "simple_page", "", 0.9, "swing", "ok", "ok", 1, True),
+                ]
+            if "false_candidate" in normalized:
+                if run_id == "run-new":
+                    return []
+                return [
+                    ("run-old", "false_candidate", "https://example.com/b", "", "Source B", "rd_ext.py", "ml", "rd_ext.py", "complicated_page", "", 0.6, "live music", "miss", "miss", 0, False),
+                ]
+            raise AssertionError(normalized)
+
+    runner.db_handler = FakeDb()
+
+    original_codex_review_path = validation_test_runner.codex_review_path
+    validation_test_runner.codex_review_path = lambda filename: str(tmp_path / filename)
+    try:
+        sample = runner._build_classifier_manual_review_sample(run_id="run-new", limit=10)
+    finally:
+        validation_test_runner.codex_review_path = original_codex_review_path
+
+    assert sample["run_id"] == "run-old"
+    assert sample["rows_returned"] == 2
+    assert all("human_should_scrape" in row for row in sample["rows"])
+    assert all("human_archetype_correct" in row for row in sample["rows"])
+
+
+def test_manual_review_sample_csvs_append_instruction_rows(tmp_path) -> None:
+    runner = _build_runner()
+
+    class FakeDb:
+        def execute_query(self, query, params=None, statement_timeout_ms=None):
+            normalized = " ".join(str(query).split())
+            if "FROM events" in normalized:
+                return [
+                    (101, "Friday Social", "2026-04-10", "19:00:00", "2026-04-10", "22:00:00", "Source A", "social dance", "salsa", "Hall A", "https://example.com/a", "desc a"),
+                ]
+            run_id = (params or {}).get("run_id")
+            if "GROUP BY run_id" in normalized:
+                return [("run-old", datetime(2026, 4, 11, 16, 11, 55))]
+            if "true_candidate" in normalized:
+                return [
+                    ("run-old", "true_candidate", "https://example.com/a", "", "Source A", "scraper.py", "ml", "scraper.py", "simple_page", "", 0.9, "swing", "ok", "ok", 1, True),
+                ]
+            if "false_candidate" in normalized:
+                return [
+                    ("run-old", "false_candidate", "https://example.com/b", "", "Source B", "rd_ext.py", "ml", "rd_ext.py", "complicated_page", "", 0.6, "live music", "miss", "miss", 0, False),
+                ]
+            raise AssertionError((normalized, run_id))
+
+    runner.db_handler = FakeDb()
+
+    original_codex_review_path = validation_test_runner.codex_review_path
+    validation_test_runner.codex_review_path = lambda filename: str(tmp_path / filename)
+    try:
+        event_sample = runner._build_database_accuracy_manual_review_sample(limit=1)
+        classifier_sample = runner._build_classifier_manual_review_sample(run_id="run-old", limit=2)
+    finally:
+        validation_test_runner.codex_review_path = original_codex_review_path
+
+    for sample in (event_sample, classifier_sample):
+        with open(sample["csv_path"], encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        assert any("# INSTRUCTIONS:" in line for line in lines[-6:])
 
 
 def test_infer_latest_pipeline_run_id_reads_archived_pipeline_logs(tmp_path, monkeypatch) -> None:
@@ -447,6 +593,82 @@ def test_resolve_provider_cost_utc_dates_uses_covered_utc_days() -> None:
     assert utc_dates == ["2026-04-01"]
 
 
+def test_summarize_openrouter_run_cost_falls_back_to_current_key_daily_usage(tmp_path, monkeypatch) -> None:
+    runner = _build_runner()
+
+    class _FakeResponse:
+        def __init__(self, status_code: int, payload: dict) -> None:
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self) -> dict:
+            return self._payload
+
+    call_log: list[tuple[str, dict | None]] = []
+
+    def _fake_get(url: str, headers=None, params=None, timeout=None):  # type: ignore[no-untyped-def]
+        call_log.append((url, params))
+        if url.endswith("/activity"):
+            return _FakeResponse(400, {"error": {"message": "Date must be within the last 30 (completed) UTC days"}})
+        if url.endswith("/key"):
+            return _FakeResponse(200, {"data": {"usage_daily": 3.25}})
+        raise AssertionError(url)
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(get=_fake_get))
+
+    applied: list[dict] = []
+
+    def _fake_apply(provider: str, summary: dict, output_dir: str | None) -> dict:
+        applied.append({"provider": provider, **summary})
+        patched = dict(summary)
+        patched["cost_usd"] = 1.8
+        patched["cost_basis"] = "delta_from_snapshot"
+        return patched
+
+    runner._apply_snapshot_delta_cost = _fake_apply  # type: ignore[method-assign]
+
+    summary = runner._summarize_openrouter_run_cost(
+        report_timestamp="2026-04-07T13:59:03",
+        pipeline_runtime={"start_ts": "2026-04-06 20:28:22", "end_ts": "2026-04-07 13:40:00"},
+        output_dir=str(tmp_path),
+    )
+
+    assert summary["available"] is True
+    assert summary["endpoint_used"] == "https://openrouter.ai/api/v1/key"
+    assert summary["cost_usd"] == 1.8
+    assert summary["cost_basis"] == "delta_from_snapshot"
+    assert applied and applied[0]["cost_usd"] == 3.25
+    assert any(url.endswith("/activity") for url, _ in call_log)
+    assert any(url.endswith("/key") for url, _ in call_log)
+
+
+def test_phase1_llm_cost_summary_rejects_zero_total_when_provider_missing() -> None:
+    runner = _build_runner()
+
+    llm_cost_summary = runner._build_phase1_llm_cost_summary(
+        openrouter_cost={
+            "available": False,
+            "cost_usd": None,
+            "requests": None,
+            "tokens": None,
+            "error": "OpenRouter activity endpoint requires completed UTC day",
+        },
+        openai_cost={
+            "available": True,
+            "cost_usd": 0.0,
+            "requests": None,
+            "tokens": None,
+            "endpoint_used": "https://api.openai.com/v1/organization/costs",
+        },
+        accuracy_replay={},
+        llm_activity_summary={"top_models": [], "top_files": []},
+    )
+
+    assert llm_cost_summary["summary"]["total_usd"] is None
+    assert llm_cost_summary["by_provider"]["openai_usd"] == 0.0
+
+
 def test_build_phase1_telemetry_integrity_summary_uses_db_handler() -> None:
     runner = _build_runner()
     fake_db = _FakeDbHandler()
@@ -681,7 +903,41 @@ def test_write_chatbot_evaluation_review_csv_rewrites_legacy_csv(tmp_path) -> No
     assert "Old question" not in "\n".join(lines)
 
 
-def test_build_chatbot_html_includes_row_by_row_scoring_table() -> None:
+def test_write_chatbot_evaluation_review_csv_appends_instruction_rows(tmp_path) -> None:
+    runner = _build_runner()
+    report = {
+        "review_rows": [
+            {
+                "question": "Where can I find beginner tango classes?",
+                "category": "classes",
+                "score": "",
+                "execution_success": True,
+                "result_count": 3,
+                "interpretation": "Looking for beginner tango classes.",
+                "interpretation_score": "",
+                "interpretation_issues": [],
+                "criteria_matched": [],
+                "criteria_missed": [],
+                "sql_issues": [],
+                "sql_query": "SELECT * FROM events WHERE dance_style ILIKE '%tango%'",
+                "reasoning": "",
+            }
+        ]
+    }
+
+    original_codex_review_path = validation_test_runner.codex_review_path
+    validation_test_runner.codex_review_path = lambda filename: str(tmp_path / filename)
+    try:
+        csv_path = runner._write_chatbot_evaluation_review_csv(report)
+    finally:
+        validation_test_runner.codex_review_path = original_codex_review_path
+
+    with open(csv_path, encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    assert any(line.startswith("# INSTRUCTIONS:") for line in lines[-3:])
+
+
+def test_build_chatbot_html_points_to_review_csv_without_row_dump() -> None:
     runner = _build_runner()
     html = runner._build_chatbot_html(
         {
@@ -708,14 +964,13 @@ def test_build_chatbot_html_includes_row_by_row_scoring_table() -> None:
         }
     )
 
-    assert "Review instructions:" in html
+    assert "Scoring instructions:" in html
     assert "/tmp/chatbot_evaluation_review.csv" in html
     assert "human_label" in html
     assert "review_notes" in html
-    assert "Row-by-Row Chatbot Scoring" in html
-    assert "Where can I find beginner tango classes?" in html
+    assert "Where can I find beginner tango classes?" not in html
     assert "Pending" in html
-    assert "pending_human_review" in html
+    assert "Execution Success Rate" in html
 
 
 def test_build_phase1_chatbot_quality_summary_prefers_manual_review_score() -> None:
@@ -937,9 +1192,8 @@ def test_build_image_date_rejections_html_renders_rows() -> None:
     )
 
     assert "Total rejected rows:</strong> 2" in html
-    assert "Tuesday Night WCS Dance" in html
     assert "unresolved_image_date_conflict" in html
-    assert "single_event" in html
+    assert "Tuesday Night WCS Dance" not in html
 
 
 def test_summarize_image_date_rejections_reads_structured_log_payload(tmp_path) -> None:
@@ -1078,6 +1332,24 @@ def test_load_metric_history_skips_empty_classifier_usage_placeholder_runs() -> 
     assert history[0]["run_id"] == "20260324-abc"
 
 
+def test_load_metric_history_dedupes_latest_observation_per_run_id() -> None:
+    runner = _build_runner()
+    runner.db_handler = SimpleNamespace(
+        execute_query=lambda query, params=None: [
+            ("2026-04-06T23:35:54", 9.0, "20260406-202822-40c67542", '{"source": "fb_block_summary"}'),
+            ("2026-04-07T14:06:48", 9.0, "20260406-202822-40c67542", '{"source": "fb_block_summary"}'),
+            ("2026-04-11T16:11:55", 9.0, "20260411-124402-e7be966e", '{"source": "fb_block_summary"}'),
+        ]
+    )
+
+    history = runner._load_metric_history("fb_private_unavailable_attempts", days=180)
+
+    assert len(history) == 2
+    assert history[0]["run_id"] == "20260406-202822-40c67542"
+    assert history[0]["timestamp"] == "2026-04-07T14:06:48"
+    assert history[1]["run_id"] == "20260411-124402-e7be966e"
+
+
 def test_build_multi_metric_trend_svg_classifier_usage_explains_metric() -> None:
     runner = _build_runner()
     history = {
@@ -1136,6 +1408,104 @@ def test_build_metric_trend_svg_database_event_accuracy_explains_metric() -> Non
     assert "share of manually reviewed event rows judged accurate" in html
     assert "accurate_rows / labeled_rows * 100" in html
     assert "based on 10 labeled row(s)" in html
+    assert "90.0%" in html
+
+
+def test_build_metric_trend_svg_renders_intermediate_axis_ticks() -> None:
+    runner = _build_runner()
+    runner._load_metric_history = lambda metric_key, days=90: [  # type: ignore[method-assign]
+        {"timestamp": "2026-03-20T10:00:00", "value": 10.0},
+        {"timestamp": "2026-03-22T10:00:00", "value": 20.0},
+        {"timestamp": "2026-03-24T10:00:00", "value": 30.0},
+        {"timestamp": "2026-03-26T10:00:00", "value": 40.0},
+        {"timestamp": "2026-03-28T10:00:00", "value": 50.0},
+    ]
+
+    html = runner._build_metric_trend_svg(
+        metric_key="total_llm_run_cost_usd",
+        title="Cost Trend (Total Cost per Run)",
+        days=180,
+        value_format="usd",
+    )
+
+    assert "2026-03-20" in html
+    assert "2026-03-24" in html
+    assert "2026-03-28" in html
+    assert "$10.00" in html
+    assert "$30.00" in html
+    assert "$50.00" in html
+
+
+def test_build_multi_metric_trend_svg_renders_intermediate_axis_ticks() -> None:
+    runner = _build_runner()
+    history = {
+        "classifier_ml_usage_pct": [
+            {"timestamp": "2026-03-20T10:00:00", "value": 12.0},
+            {"timestamp": "2026-03-22T10:00:00", "value": 24.0},
+            {"timestamp": "2026-03-24T10:00:00", "value": 36.0},
+            {"timestamp": "2026-03-26T10:00:00", "value": 48.0},
+            {"timestamp": "2026-03-28T10:00:00", "value": 60.0},
+        ],
+        "classifier_manual_correctness_pct": [
+            {"timestamp": "2026-03-20T10:00:00", "value": 70.0},
+            {"timestamp": "2026-03-24T10:00:00", "value": 80.0},
+            {"timestamp": "2026-03-28T10:00:00", "value": 90.0},
+        ],
+    }
+    runner._load_metric_history = lambda metric_key, days=90: history.get(metric_key, [])  # type: ignore[method-assign]
+
+    html = runner._build_multi_metric_trend_svg(
+        title="Classifier Usage",
+        days=180,
+        value_format="percent",
+        series=[
+            {"metric_key": "classifier_ml_usage_pct", "label": "ML Usage %", "color": "#d94841"},
+            {"metric_key": "classifier_manual_correctness_pct", "label": "Manual Correctness %", "color": "#1f77b4"},
+        ],
+    )
+
+    assert "2026-03-20" in html
+    assert "2026-03-24" in html
+    assert "2026-03-28" in html
+    assert "12.0%" in html
+    assert "51.0%" in html or "48.0%" in html
+    assert "90.0%" in html
+
+
+def test_scraper_access_and_text_trends_use_latest_four_runs_and_tighter_floor() -> None:
+    runner = _build_runner()
+
+    def _history(metric_key, days=180):  # type: ignore[no-untyped-def]
+        if metric_key.startswith("scraper_") and (
+            "access_success_rate_pct" in metric_key or "text_extracted_rate_pct" in metric_key
+        ):
+            return [
+                {"timestamp": "2026-03-20T10:00:00", "value": 0.0},
+                {"timestamp": "2026-03-23T10:00:00", "value": 95.0},
+                {"timestamp": "2026-03-28T10:00:00", "value": 96.0},
+                {"timestamp": "2026-04-02T10:00:00", "value": 97.0},
+                {"timestamp": "2026-04-07T10:00:00", "value": 98.0},
+            ]
+        return []
+
+    runner._load_metric_history = _history  # type: ignore[method-assign]
+
+    html = runner._build_scraper_telemetry_html(
+        {
+            "run_id": "run-123",
+            "steps": {
+                "scraper": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1},
+                "fb": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1},
+                "rd_ext": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1},
+                "ebs": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1},
+                "images": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1, "fallback_used_count": 0, "fallback_usage_rate_pct": 0.0, "urls_with_events_count": 1, "extraction_success_count": 1},
+            },
+        }
+    )
+
+    assert "2026-03-20" not in html
+    assert "2026-03-23" in html
+    assert "2026-04-07" in html
     assert "90.0%" in html
 
 
@@ -1198,6 +1568,8 @@ def test_generate_html_report_omits_replay_based_sections(tmp_path) -> None:
         runner._build_top_trend_dashboard_html = lambda runtime_summary=None: "<div>dashboard</div>"  # type: ignore[method-assign]
         runner._build_scraper_telemetry_html = lambda summary=None: "<div>telemetry</div>"  # type: ignore[method-assign]
         runner._build_database_accuracy_manual_review_html = lambda sample=None: "<div>manual review</div>"  # type: ignore[method-assign]
+        runner._build_classifier_manual_review_html = lambda sample=None: "<div>classifier review</div>"  # type: ignore[method-assign]
+        runner._build_chatbot_html = lambda summary=None: "<div>chatbot quality</div>"  # type: ignore[method-assign]
         runner._build_image_date_rejections_html = lambda summary=None: "<div>image date rejections</div>"  # type: ignore[method-assign]
         runner._build_completeness_kpis_only_html = lambda panel=None: "<div>completeness</div>"  # type: ignore[method-assign]
         runner._build_phase1_scorecard_html = lambda scorecard=None: "<div>scorecard</div>"  # type: ignore[method-assign]
@@ -1220,7 +1592,8 @@ def test_generate_html_report_omits_replay_based_sections(tmp_path) -> None:
     assert "Phase 3 Honest Evaluation" not in html
     assert "Domain Evaluation" not in html
     assert "Parser Improvement Workflow" not in html
-    assert "<h2>7. Recommendation Plan</h2>" in html
+    assert "<h2>4. Chatbot Quality</h2>" in html
+    assert "Recommendation Plan" not in html
 
 
 def test_build_runtime_step_breakdown_html_limits_to_seven_rows() -> None:
