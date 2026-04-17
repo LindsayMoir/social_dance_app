@@ -179,6 +179,95 @@ def test_process_llm_response_drops_rows_still_missing_start_date(monkeypatch) -
     assert writes == []
 
 
+def test_process_llm_response_fills_missing_start_date_from_url_slug(monkeypatch) -> None:
+    handler = LLMHandler.__new__(LLMHandler)
+    handler.config = {"crawling": {"prompt_max_length": 5000}}
+    writes: list[pd.DataFrame] = []
+    handler.db_handler = SimpleNamespace(
+        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
+    )
+
+    monkeypatch.setattr(
+        handler,
+        "generate_prompt",
+        lambda url, extracted_text, prompt_type: ("prompt text", "event_extraction"),
+    )
+    monkeypatch.setattr(
+        handler,
+        "query_llm",
+        lambda url, prompt_attempt, schema_type, return_metadata=True: (
+            '{"events":[{"event_name":"Rum Ragged","day_of_week":"","description":"x"*120}]}'
+            .replace('"x"*120', "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+            {"provider": "test", "model": "fake"},
+        ),
+    )
+    monkeypatch.setattr(
+        handler,
+        "extract_and_parse_json",
+        lambda llm_response, url, schema_type: [
+            {"event_name": "Rum Ragged", "day_of_week": ""},
+        ],
+    )
+
+    result = handler.process_llm_response(
+        "https://gotothecoda.com/show/rum_ragged_17apr26",
+        "",
+        "Friday, Apr 17 Doors at 6:00 PM Show starts at 6:30 PM",
+        "The Coda",
+        ["live music"],
+        "default",
+    )
+
+    assert result == EventWriteResult(success=True, events_written=1, decision_reason="llm_success")
+    assert len(writes) == 1
+    assert writes[0].iloc[0]["start_date"] == "2026-04-17"
+    assert writes[0].iloc[0]["day_of_week"] == "Friday"
+
+
+def test_process_llm_response_does_not_override_existing_start_date_with_url_slug(monkeypatch) -> None:
+    handler = LLMHandler.__new__(LLMHandler)
+    handler.config = {"crawling": {"prompt_max_length": 5000}}
+    writes: list[pd.DataFrame] = []
+    handler.db_handler = SimpleNamespace(
+        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
+    )
+
+    monkeypatch.setattr(
+        handler,
+        "generate_prompt",
+        lambda url, extracted_text, prompt_type: ("prompt text", "event_extraction"),
+    )
+    monkeypatch.setattr(
+        handler,
+        "query_llm",
+        lambda url, prompt_attempt, schema_type, return_metadata=True: (
+            '{"events":[{"event_name":"Recurring Event","start_date":"2026-04-24","day_of_week":"Friday","description":"x"*120}]}'
+            .replace('"x"*120', "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+            {"provider": "test", "model": "fake"},
+        ),
+    )
+    monkeypatch.setattr(
+        handler,
+        "extract_and_parse_json",
+        lambda llm_response, url, schema_type: [
+            {"event_name": "Recurring Event", "start_date": "2026-04-24", "day_of_week": "Friday"},
+        ],
+    )
+
+    result = handler.process_llm_response(
+        "https://gotothecoda.com/show/recurring_event_17apr26",
+        "",
+        "Recurring Friday social",
+        "Example Source",
+        ["dance"],
+        "default",
+    )
+
+    assert result == EventWriteResult(success=True, events_written=1, decision_reason="llm_success")
+    assert len(writes) == 1
+    assert writes[0].iloc[0]["start_date"] == "2026-04-24"
+
+
 def test_process_llm_response_accepts_compact_json_event_payload(monkeypatch) -> None:
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}

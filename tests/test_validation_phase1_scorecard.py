@@ -479,6 +479,7 @@ def test_persist_completed_database_event_accuracy_review_records_metric(tmp_pat
 def test_build_scraper_telemetry_html_uses_images_event_yield_chart_and_detail() -> None:
     runner = _build_runner()
     runner._build_multi_metric_trend_svg = lambda **kwargs: f"<section>{kwargs['title']}</section>"  # type: ignore[method-assign]
+    runner._summarize_scraper_discovery_depth_domains = lambda run_id, limit=10: []  # type: ignore[method-assign]
 
     html = runner._build_scraper_telemetry_html(
         {
@@ -496,6 +497,10 @@ def test_build_scraper_telemetry_html_uses_images_event_yield_chart_and_detail()
                     "events_written_total": 4,
                     "fallback_usage_rate_pct": 12.5,
                     "fallback_used_count": 1,
+                    "avg_discovery_depth": 1.0,
+                    "success_avg_discovery_depth": 1.0,
+                    "failure_avg_discovery_depth": 1.0,
+                    "max_discovery_depth": 1,
                 }
             }
         }
@@ -503,6 +508,7 @@ def test_build_scraper_telemetry_html_uses_images_event_yield_chart_and_detail()
 
     assert "Images Event Yield % Trend" in html
     assert "Images Event Yield Detail" in html
+    assert "Discovery Depth by Step" in html
     assert "URLs With Events" in html
     assert "Images OCR / Vision Success % Trend" not in html
     assert "Images OCR / Vision Detail" not in html
@@ -1358,7 +1364,7 @@ def test_build_multi_metric_trend_svg_classifier_usage_explains_metric() -> None
             {"timestamp": "2026-03-24T10:00:00", "value": 15.0},
         ],
         "classifier_manual_correctness_pct": [
-            {"timestamp": "2026-03-24T10:00:00", "value": 75.0, "notes": {"labeled_rows": 8}},
+            {"timestamp": "2026-04-15T10:00:00", "value": 75.0, "notes": {"labeled_rows": 8}},
         ],
     }
     runner._load_metric_history = lambda metric_key, days=90: history.get(metric_key, [])  # type: ignore[method-assign]
@@ -1386,7 +1392,8 @@ def test_build_multi_metric_trend_svg_classifier_usage_explains_metric() -> None
     assert "ml_classified_urls / total_classified_urls * 100" in html
     assert "runs with no classifier data are excluded rather than plotted as 0%" in html
     assert "Manual review correctness from the scored CSV is 75.0%" in html
-    assert "Manual Correctness %: 75.0%" in html
+    assert "ML Usage %: latest point is <strong>15.0%</strong> on <strong>2026-03-24</strong>." in html
+    assert "Manual Correctness %: latest point is <strong>75.0%</strong> on <strong>2026-04-15</strong>." in html
     assert "previous run with classifier data" in html
 
 
@@ -1474,6 +1481,7 @@ def test_build_multi_metric_trend_svg_renders_intermediate_axis_ticks() -> None:
 
 def test_scraper_access_and_text_trends_use_latest_four_runs_and_tighter_floor() -> None:
     runner = _build_runner()
+    runner._summarize_scraper_discovery_depth_domains = lambda run_id, limit=10: []  # type: ignore[method-assign]
 
     def _history(metric_key, days=180):  # type: ignore[no-untyped-def]
         if metric_key.startswith("scraper_") and (
@@ -1494,11 +1502,11 @@ def test_scraper_access_and_text_trends_use_latest_four_runs_and_tighter_floor()
         {
             "run_id": "run-123",
             "steps": {
-                "scraper": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1},
-                "fb": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1},
-                "rd_ext": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1},
-                "ebs": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1},
-                "images": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1, "fallback_used_count": 0, "fallback_usage_rate_pct": 0.0, "urls_with_events_count": 1, "extraction_success_count": 1},
+                "scraper": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1, "avg_discovery_depth": 1.0, "success_avg_discovery_depth": 1.0, "failure_avg_discovery_depth": None, "max_discovery_depth": 1},
+                "fb": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1, "avg_discovery_depth": 1.0, "success_avg_discovery_depth": 1.0, "failure_avg_discovery_depth": None, "max_discovery_depth": 1},
+                "rd_ext": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1, "avg_discovery_depth": 2.0, "success_avg_discovery_depth": 2.0, "failure_avg_discovery_depth": None, "max_discovery_depth": 2},
+                "ebs": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1, "avg_discovery_depth": 1.0, "success_avg_discovery_depth": 1.0, "failure_avg_discovery_depth": None, "max_discovery_depth": 1},
+                "images": {"total_urls": 1, "access_attempted_count": 1, "access_success_rate_pct": 98.0, "text_extracted_rate_pct": 98.0, "keyword_hit_rate_pct": 98.0, "url_event_hit_rate_pct": 98.0, "extraction_success_rate_pct": 98.0, "events_written_total": 1, "fallback_used_count": 0, "fallback_usage_rate_pct": 0.0, "urls_with_events_count": 1, "extraction_success_count": 1, "avg_discovery_depth": 1.0, "success_avg_discovery_depth": 1.0, "failure_avg_discovery_depth": None, "max_discovery_depth": 1},
             },
         }
     )
@@ -1507,6 +1515,43 @@ def test_scraper_access_and_text_trends_use_latest_four_runs_and_tighter_floor()
     assert "2026-03-23" in html
     assert "2026-04-07" in html
     assert "90.0%" in html
+
+
+def test_summarize_scraper_step_telemetry_includes_discovery_depth_fields() -> None:
+    runner = _build_runner()
+    fake_db = _FakeDbHandler()
+    fake_db.query_map["FROM url_scrape_metrics"] = [
+        {
+            "step_norm": "rd_ext",
+            "total_urls": 10,
+            "access_attempted_count": 10,
+            "access_success_count": 9,
+            "text_extracted_count": 8,
+            "keywords_found_count": 7,
+            "extraction_attempted_count": 6,
+            "extraction_success_count": 5,
+            "urls_with_events_count": 4,
+            "events_written_total": 11,
+            "ocr_attempted_count": 0,
+            "ocr_success_count": 0,
+            "vision_attempted_count": 0,
+            "vision_success_count": 0,
+            "fallback_used_count": 0,
+            "avg_discovery_depth": 2.4,
+            "success_avg_discovery_depth": 3.0,
+            "failure_avg_discovery_depth": 1.8,
+            "max_discovery_depth": 3,
+        },
+    ]
+    runner.db_handler = fake_db
+
+    summary = runner._summarize_scraper_step_telemetry("run-123")
+
+    rd_ext = summary["steps"]["rd_ext"]
+    assert rd_ext["avg_discovery_depth"] == 2.4
+    assert rd_ext["success_avg_discovery_depth"] == 3.0
+    assert rd_ext["failure_avg_discovery_depth"] == 1.8
+    assert rd_ext["max_discovery_depth"] == 3
 
 
 def test_generate_html_report_omits_replay_based_sections(tmp_path) -> None:
@@ -2073,6 +2118,9 @@ def test_persist_scraper_step_telemetry_metrics_records_trend_keys() -> None:
                     "keyword_hit_rate_pct": 60.0,
                     "extraction_success_rate_pct": 50.0,
                     "url_event_hit_rate_pct": 40.0,
+                    "avg_discovery_depth": 2.2,
+                    "success_avg_discovery_depth": 2.8,
+                    "failure_avg_discovery_depth": 1.6,
                     "ocr_success_rate_pct": None,
                     "vision_success_rate_pct": None,
                     "fallback_usage_rate_pct": None,
@@ -2083,6 +2131,9 @@ def test_persist_scraper_step_telemetry_metrics_records_trend_keys() -> None:
                     "keyword_hit_rate_pct": 75.0,
                     "extraction_success_rate_pct": 65.0,
                     "url_event_hit_rate_pct": 55.0,
+                    "avg_discovery_depth": 1.0,
+                    "success_avg_discovery_depth": 1.0,
+                    "failure_avg_discovery_depth": 1.0,
                     "ocr_success_rate_pct": 88.0,
                     "vision_success_rate_pct": 44.0,
                     "fallback_usage_rate_pct": 22.0,
@@ -2094,6 +2145,9 @@ def test_persist_scraper_step_telemetry_metrics_records_trend_keys() -> None:
     metric_keys = {call["metric_key"] for call in fake_db.calls}
     assert "scraper_rd_ext_access_success_rate_pct" in metric_keys
     assert "scraper_rd_ext_extraction_success_rate_pct" in metric_keys
+    assert "scraper_rd_ext_avg_discovery_depth" in metric_keys
+    assert "scraper_rd_ext_success_avg_discovery_depth" in metric_keys
+    assert "scraper_rd_ext_failure_avg_discovery_depth" in metric_keys
     assert "scraper_images_access_success_rate_pct" in metric_keys
     assert "scraper_images_ocr_success_rate_pct" in metric_keys
     assert "scraper_images_vision_success_rate_pct" in metric_keys

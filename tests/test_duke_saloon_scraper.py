@@ -83,7 +83,7 @@ async def test_duke_saloon_scraper():
         events_failed = 0
         event_details = []
 
-        for idx, (event_url, event_text) in enumerate(event_data, 1):
+        for idx, (event_url, event_text, _discovery_depth) in enumerate(event_data, 1):
             print(f"\n[{idx}/{len(event_data)}] Processing: {event_url}")
             print(f"   Text length: {len(event_text)} characters")
 

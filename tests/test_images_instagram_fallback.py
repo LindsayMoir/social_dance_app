@@ -1497,6 +1497,44 @@ def test_record_image_metric_writes_structured_ocr_vision_fields() -> None:
     assert written[0]["fallback_used"] is False
 
 
+def test_record_image_metric_does_not_count_success_without_attempt() -> None:
+    scraper = ImageScraper.__new__(ImageScraper)
+    scraper.logger = logging.getLogger("test.images")
+    scraper.run_id = "run-123"
+    scraper.step_name = "images"
+    scraper.telemetry_counts = images.Counter()
+
+    written: list[dict] = []
+    scraper.db_handler = SimpleNamespace(write_url_scrape_metric=lambda row: written.append(row))
+
+    scraper._record_image_metric(
+        link="https://www.instagram.com/p/ABC123/",
+        parent_url="https://www.instagram.com/bachatavictoria/",
+        source="Bachata Victoria",
+        keywords="bachata",
+        archetype="image_url",
+        access_attempted=False,
+        access_succeeded=True,
+        extraction_attempted=False,
+        extraction_succeeded=False,
+        extraction_skipped=True,
+        decision_reason="events_already_exist",
+        text_extracted=False,
+        keywords_found=False,
+        events_written=0,
+        ocr_attempted=False,
+        ocr_succeeded=False,
+        vision_attempted=False,
+        vision_succeeded=False,
+        fallback_used=False,
+    )
+
+    assert scraper.telemetry_counts["access_attempted"] == 0
+    assert scraper.telemetry_counts["access_succeeded"] == 0
+    assert written[0]["access_attempted"] is False
+    assert written[0]["access_succeeded"] is False
+
+
 def test_log_processing_summary_reports_rates(caplog) -> None:
     scraper = ImageScraper.__new__(ImageScraper)
     scraper.logger = logging.getLogger("test.images")

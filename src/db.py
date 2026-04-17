@@ -420,6 +420,7 @@ class DatabaseHandler():
                 vision_attempted BOOLEAN,
                 vision_succeeded BOOLEAN,
                 fallback_used BOOLEAN,
+                discovery_depth_observed INTEGER,
                 links_discovered INTEGER,
                 links_followed INTEGER,
                 time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -448,6 +449,9 @@ class DatabaseHandler():
             self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS vision_attempted BOOLEAN")
             self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS vision_succeeded BOOLEAN")
             self.execute_query("ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS fallback_used BOOLEAN")
+            self.execute_query(
+                "ALTER TABLE url_scrape_metrics ADD COLUMN IF NOT EXISTS discovery_depth_observed INTEGER"
+            )
             self.execute_query(
                 "CREATE INDEX IF NOT EXISTS idx_url_scrape_metrics_run_id ON url_scrape_metrics(run_id)"
             )
@@ -2252,6 +2256,17 @@ class DatabaseHandler():
         if not isinstance(metric, dict):
             return
 
+        parent_url = str(metric.get("parent_url", "") or "").strip()
+        raw_depth = metric.get("discovery_depth_observed", None)
+        discovery_depth_observed = max(
+            1,
+            int(
+                raw_depth
+                if raw_depth is not None
+                else (2 if parent_url else 1)
+            ),
+        )
+
         keywords = metric.get("keywords", "")
         if not isinstance(keywords, str):
             if isinstance(keywords, (list, tuple, set)):
@@ -2263,7 +2278,7 @@ class DatabaseHandler():
             "run_id": str(metric.get("run_id", "") or "").strip() or None,
             "step_name": str(metric.get("step_name", "") or "").strip() or None,
             "link": str(metric.get("link", "") or "").strip() or None,
-            "parent_url": str(metric.get("parent_url", "") or "").strip() or None,
+            "parent_url": parent_url or None,
             "source": str(metric.get("source", "") or "").strip() or None,
             "keywords": keywords,
             "archetype": str(metric.get("archetype", "") or "").strip() or None,
@@ -2294,6 +2309,7 @@ class DatabaseHandler():
             "vision_attempted": bool(metric.get("vision_attempted", False)),
             "vision_succeeded": bool(metric.get("vision_succeeded", False)),
             "fallback_used": bool(metric.get("fallback_used", False)),
+            "discovery_depth_observed": discovery_depth_observed,
             "links_discovered": int(metric.get("links_discovered", 0) or 0),
             "links_followed": int(metric.get("links_followed", 0) or 0),
             "time_stamp": metric.get("time_stamp", datetime.now()),

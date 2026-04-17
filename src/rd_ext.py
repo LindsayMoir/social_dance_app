@@ -92,6 +92,7 @@ def _record_rd_ext_scrape_metric(
     text_extracted: bool,
     keywords_found: bool,
     events_written: int,
+    discovery_depth_observed: int = 1,
     links_discovered: int = 0,
     links_followed: int = 0,
 ) -> None:
@@ -117,6 +118,7 @@ def _record_rd_ext_scrape_metric(
                 "text_extracted": text_extracted,
                 "keywords_found": keywords_found,
                 "events_written": int(events_written or 0),
+                "discovery_depth_observed": max(1, int(discovery_depth_observed or 1)),
                 "ocr_attempted": False,
                 "ocr_succeeded": False,
                 "vision_attempted": False,
@@ -178,6 +180,13 @@ def _derive_rd_ext_effective_keywords(text: str, configured_keywords: list[str] 
 def _rd_ext_keywords_found(effective_keywords: list[str] | str) -> bool:
     """Return whether rd_ext identified a meaningful keyword set for telemetry."""
     return bool(_split_rd_ext_keywords(effective_keywords))
+
+
+def _observed_discovery_depth(link: str, parent_url: str = "", explicit_depth: int | None = None) -> int:
+    """Return a normalized observed discovery depth for the current scrape target."""
+    if explicit_depth is not None:
+        return max(1, int(explicit_depth))
+    return 2 if str(parent_url or "").strip() else 1
 
 
 async def _wait_for_login_completion(
@@ -358,6 +367,17 @@ def _looks_like_calendar_detail_cta(text: str, href: str = "") -> bool:
     if normalized_text in blocked_text:
         return False
 
+    blocked_href_markers = (
+        "opentable.",
+        "/reservations",
+        "reservation",
+        "book-a-table",
+        "book-table",
+        "/book",
+    )
+    if any(marker in normalized_href for marker in blocked_href_markers):
+        return False
+
     positive_text_markers = (
         "learn more",
         "more details",
@@ -378,6 +398,9 @@ def _looks_like_calendar_detail_cta(text: str, href: str = "") -> bool:
     except Exception:
         parsed = None
     if parsed and parsed.scheme in {"http", "https"}:
+        host = (parsed.netloc or "").strip().lower()
+        if "opentable." in host:
+            return False
         path = (parsed.path or "").strip().lower().rstrip("/")
         if path and not _is_obvious_non_event_navigation_path(path) and path.count("/") >= 2:
             return True
@@ -395,7 +418,12 @@ def _build_synthetic_calendar_detail_url(calendar_url: str, event_label: str, in
     return f"{calendar_url}{separator}calendar_click={digest}#{normalized_label}"
 
 
-def _extract_candidate_calendar_detail_cta_urls(html: str, base_url: str) -> list[str]:
+def _extract_candidate_calendar_detail_cta_urls(
+    html: str,
+    base_url: str,
+    *,
+    require_explicit_text: bool = False,
+) -> list[str]:
     """Extract likely event-detail CTA URLs from revealed calendar detail HTML."""
     soup = BeautifulSoup(str(html or ""), "html.parser")
     candidates: list[str] = []
@@ -404,6 +432,8 @@ def _extract_candidate_calendar_detail_cta_urls(html: str, base_url: str) -> lis
         href = str(anchor.get("href") or "").strip()
         text = re.sub(r"\s+", " ", anchor.get_text(" ", strip=True)).strip()
         abs_url = urljoin(base_url, href)
+        if require_explicit_text and not _looks_like_calendar_detail_cta(text, ""):
+            continue
         if not _looks_like_calendar_detail_cta(text, abs_url):
             continue
         if is_social_media_url(abs_url) or is_calendar_export_url(abs_url):
@@ -413,6 +443,57 @@ def _extract_candidate_calendar_detail_cta_urls(html: str, base_url: str) -> lis
         seen.add(abs_url)
         candidates.append(abs_url)
     return candidates
+
+
+def _looks_like_sufficient_revealed_calendar_event_detail(text: str) -> bool:
+    """Return True when a clicked calendar panel already contains enough event detail to extract directly."""
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip().lower()
+    if len(normalized) < 60:
+        return False
+
+    has_weekday = any(
+        marker in normalized
+        for marker in ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+    )
+    has_month = any(
+        marker in normalized
+        for marker in (
+            "january",
+            "february",
+            "march",
+            "april",
+            "may",
+            "june",
+            "july",
+            "august",
+            "september",
+            "october",
+            "november",
+            "december",
+            "jan ",
+            "feb ",
+            "mar ",
+            "apr ",
+            "jun ",
+            "jul ",
+            "aug ",
+            "sep ",
+            "oct ",
+            "nov ",
+            "dec ",
+        )
+    )
+    has_date_number = bool(re.search(r"\b\d{1,2}(st|nd|rd|th)?\b", normalized))
+    has_time = bool(re.search(r"\b\d{1,2}(:\d{2})?\s*(a\.?m\.?|p\.?m\.?)\b", normalized))
+    has_location_signal = any(
+        marker in normalized for marker in (" at ", " location", "venue", "address", "street", "st.", "ave", "road")
+    )
+    has_detail_signal = any(
+        marker in normalized for marker in ("description", "about", "join us", "live music", "doors", "show")
+    )
+
+    has_date_signal = (has_weekday or has_month) and has_date_number
+    return has_date_signal and (has_time or has_location_signal or has_detail_signal)
 
 
 def _extract_revealed_calendar_event_blocks(html: str, base_url: str) -> list[dict[str, str]]:
@@ -433,7 +514,13 @@ def _extract_revealed_calendar_event_blocks(html: str, base_url: str) -> list[di
             text = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
             if not _looks_like_clickable_calendar_box_label(text):
                 continue
-            candidate_urls = _extract_candidate_calendar_detail_cta_urls(str(node), base_url)
+            candidate_urls = _extract_candidate_calendar_detail_cta_urls(
+                str(node),
+                base_url,
+                require_explicit_text=True,
+            )
+            if not candidate_urls and not _looks_like_sufficient_revealed_calendar_event_detail(text):
+                continue
             primary_url = candidate_urls[0] if candidate_urls else ""
             key = (text.lower(), primary_url.lower())
             if key in seen:
@@ -450,7 +537,11 @@ def _extract_revealed_calendar_event_blocks(html: str, base_url: str) -> list[di
     if blocks:
         return blocks
 
-    candidate_urls = _extract_candidate_calendar_detail_cta_urls(str(html or ""), base_url)
+    candidate_urls = _extract_candidate_calendar_detail_cta_urls(
+        str(html or ""),
+        base_url,
+        require_explicit_text=True,
+    )
     if candidate_urls:
         return [
             {
@@ -503,6 +594,55 @@ def get_db_handler():
     return db_handler
 
 
+def _should_follow_layered_calendar_detail_url(target_url: str) -> bool:
+    """Return True when a layered calendar CTA target passes the shared URL filters."""
+    normalized_url = str(target_url or "").strip()
+    if not normalized_url:
+        return False
+
+    try:
+        handler = get_db_handler()
+    except Exception as exc:
+        logging.warning(
+            "_should_follow_layered_calendar_detail_url(): failed to initialize db handler for %s: %s",
+            normalized_url,
+            exc,
+        )
+        return False
+
+    try:
+        if handler.avoid_domains(normalized_url):
+            logging.info(
+                "_should_follow_layered_calendar_detail_url(): skipping blacklisted layered calendar CTA target %s",
+                normalized_url,
+            )
+            return False
+    except Exception as exc:
+        logging.warning(
+            "_should_follow_layered_calendar_detail_url(): blacklist check failed for %s: %s",
+            normalized_url,
+            exc,
+        )
+        return False
+
+    try:
+        if not handler.should_process_url(normalized_url):
+            logging.info(
+                "_should_follow_layered_calendar_detail_url(): shared URL gate skipped layered calendar CTA target %s",
+                normalized_url,
+            )
+            return False
+    except Exception as exc:
+        logging.warning(
+            "_should_follow_layered_calendar_detail_url(): shared URL gate failed for %s: %s",
+            normalized_url,
+            exc,
+        )
+        return False
+
+    return True
+
+
 def extract_edge_case_url_series(df: pd.DataFrame) -> pd.Series:
     """
     Return the URL series from edge-case input data.
@@ -537,6 +677,7 @@ class ReadExtract:
         self.context = None
         self.page = None
         self.logged_in = False
+        self.observed_depth_by_url: dict[str, int] = {}
 
     def _next_weekday_date(self, weekday_name: str, include_today: bool = True) -> date:
         """
@@ -1032,6 +1173,8 @@ class ReadExtract:
             str or dict: Text content if single, or dict of {url: text} if multiple
         """
         logging.info(f"extract_from_url(): Processing {url} (multiple={multiple})")
+        if not hasattr(self, "observed_depth_by_url") or not isinstance(self.observed_depth_by_url, dict):
+            self.observed_depth_by_url = {}
 
         if is_social_media_url(url):
             logging.info("extract_from_url(): Skipping social media URL (fb/ig): %s", url)
@@ -1062,7 +1205,14 @@ class ReadExtract:
                 logging.info(f"extract_from_url(): Detected {venue_name}, using calendar event extraction")
                 event_data = await self.extract_calendar_events(url, venue_name=venue_name)
                 if event_data:
-                    results = {event_url: event_text for event_url, event_text in event_data}
+                    results = {}
+                    for event_url, event_text, discovery_depth in event_data:
+                        results[event_url] = event_text
+                        self.observed_depth_by_url[str(event_url)] = _observed_discovery_depth(
+                            event_url,
+                            parent_url=url,
+                            explicit_depth=discovery_depth,
+                        )
                     logging.info(f"extract_from_url(): Returning {len(results)} {venue_name} events as dict for multi-event processing")
                     return results
                 else:
@@ -1104,6 +1254,7 @@ class ReadExtract:
 
             text = await self.extract_event_text(link)
             results[link] = text
+            self.observed_depth_by_url[str(link)] = _observed_discovery_depth(link, parent_url=url)
 
         if len(results) == 1:
             return main_text
@@ -1220,7 +1371,7 @@ class ReadExtract:
             venue_name (str): Venue name for logging (e.g., "The Coda", "The Loft")
 
         Returns:
-            list: List of tuples (event_url, event_text) for each event found
+            list: List of tuples (event_url, event_text, discovery_depth) for each event found
         """
         event_data = []
 
@@ -1312,7 +1463,7 @@ class ReadExtract:
                     event_text = ' '.join(soup.stripped_strings)
 
                     if event_text:
-                        event_data.append((event_url, event_text))
+                        event_data.append((event_url, event_text, 2))
                         logging.info(f"extract_calendar_events({venue_name}): Extracted {len(event_text)} chars from event {idx}")
                     else:
                         logging.warning(f"extract_calendar_events({venue_name}): No text extracted from {event_url}")
@@ -1331,9 +1482,9 @@ class ReadExtract:
             logging.error(f"extract_calendar_events({venue_name}): Failed to extract events: {e}")
             return event_data
 
-    async def _extract_click_revealed_calendar_events(self, calendar_url: str, venue_name: str) -> list[tuple[str, str]]:
+    async def _extract_click_revealed_calendar_events(self, calendar_url: str, venue_name: str) -> list[tuple[str, str, int]]:
         """Extract event detail from clickable calendar entries when no child URLs are exposed."""
-        event_data: list[tuple[str, str]] = []
+        event_data: list[tuple[str, str, int]] = []
         seen_keys: set[str] = set()
         candidate_selectors = (
             ".fc-event",
@@ -1417,7 +1568,7 @@ class ReadExtract:
                     if not detail_text or output_url in seen_output_urls:
                         continue
                     seen_output_urls.add(output_url)
-                    event_data.append((output_url, detail_text))
+                    event_data.append((output_url, detail_text, 3))
                 continue
 
             await self._follow_click_revealed_detail_cta(calendar_url=calendar_url)
@@ -1438,7 +1589,13 @@ class ReadExtract:
             if output_url in seen_output_urls:
                 continue
             seen_output_urls.add(output_url)
-            event_data.append((output_url, detail_text))
+            event_data.append(
+                (
+                    output_url,
+                    detail_text,
+                    3 if output_url.rstrip("/") != calendar_url.rstrip("/") else 2,
+                )
+            )
 
         return event_data
 
@@ -1495,19 +1652,34 @@ class ReadExtract:
     ) -> tuple[str, str]:
         """Follow one revealed event block to its detail page when possible and return extracted text."""
         if detail_url:
-            try:
-                await self.page.goto(detail_url, timeout=15000)
-                await self.page.wait_for_load_state("domcontentloaded")
-                await self.page.wait_for_timeout(600)
-            except Exception as exc:
+            if not _should_follow_layered_calendar_detail_url(detail_url):
                 logging.info(
-                    "_follow_revealed_calendar_event_block(): failed following detail url from %s to %s: %s",
+                    "_follow_revealed_calendar_event_block(): refusing layered calendar detail navigation from %s to %s based on shared URL filters",
                     calendar_url,
                     detail_url,
+                )
+                detail_url = ""
+            else:
+                try:
+                    await self.page.goto(detail_url, timeout=15000)
+                    await self.page.wait_for_load_state("domcontentloaded")
+                    await self.page.wait_for_timeout(600)
+                except Exception as exc:
+                    logging.info(
+                        "_follow_revealed_calendar_event_block(): failed following detail url from %s to %s: %s",
+                        calendar_url,
+                        detail_url,
+                        exc,
+                    )
+        if not detail_url:
+            try:
+                await self._follow_click_revealed_detail_cta(calendar_url=calendar_url)
+            except Exception as exc:
+                logging.info(
+                    "_follow_revealed_calendar_event_block(): failed fallback CTA follow from %s: %s",
+                    calendar_url,
                     exc,
                 )
-        else:
-            await self._follow_click_revealed_detail_cta(calendar_url=calendar_url)
 
         detail_text = await self._extract_click_revealed_event_detail_text(
             calendar_url=calendar_url,
@@ -1551,8 +1723,19 @@ class ReadExtract:
                     container_html = await handle.inner_html()
                 except Exception:
                     continue
-                candidate_urls = _extract_candidate_calendar_detail_cta_urls(container_html, calendar_url)
+                candidate_urls = _extract_candidate_calendar_detail_cta_urls(
+                    container_html,
+                    calendar_url,
+                    require_explicit_text=True,
+                )
                 for target_url in candidate_urls:
+                    if not _should_follow_layered_calendar_detail_url(target_url):
+                        logging.info(
+                            "_follow_click_revealed_detail_cta(): refusing layered calendar CTA target from %s to %s based on shared URL filters",
+                            calendar_url,
+                            target_url,
+                        )
+                        continue
                     try:
                         await self.page.goto(target_url, timeout=15000)
                         await self.page.wait_for_load_state("domcontentloaded")
@@ -1779,6 +1962,7 @@ async def _process_edge_case_urls(
                 )
                 continue
             extracted = await read_extract.extract_from_url(url, multiple_flag)
+            base_depth = _observed_discovery_depth(url)
 
             # If multiple events were found (i.e. extracted is a dict), process each event separately.
             if isinstance(extracted, dict):
@@ -1815,6 +1999,7 @@ async def _process_edge_case_urls(
                             text_extracted=False,
                             keywords_found=False,
                             events_written=0,
+                            discovery_depth_observed=_observed_discovery_depth(event_url, parent_url=url),
                         )
                         continue
                     followed_count += 1
@@ -1849,6 +2034,11 @@ async def _process_edge_case_urls(
                         text_extracted=bool(normalized_text),
                         keywords_found=found_keywords,
                         events_written=llm_events_written,
+                        discovery_depth_observed=_observed_discovery_depth(
+                            event_url,
+                            parent_url=url,
+                            explicit_depth=read_extract.observed_depth_by_url.get(str(event_url)),
+                        ),
                     )
                 _record_rd_ext_scrape_metric(
                     db_handler,
@@ -1865,6 +2055,9 @@ async def _process_edge_case_urls(
                     text_extracted=bool(extracted),
                     keywords_found=successful_events > 0,
                     events_written=successful_events,
+                    discovery_depth_observed=max(
+                        [base_depth, *[int(read_extract.observed_depth_by_url.get(str(event_url), 2)) for event_url in extracted]]
+                    ),
                     links_discovered=len(extracted),
                     links_followed=followed_count,
                 )
@@ -1901,6 +2094,10 @@ async def _process_edge_case_urls(
                     text_extracted=bool(normalized_text),
                     keywords_found=found_keywords,
                     events_written=events_written,
+                    discovery_depth_observed=_observed_discovery_depth(
+                        url,
+                        explicit_depth=read_extract.observed_depth_by_url.get(str(url), base_depth),
+                    ),
                 )
     finally:
         await read_extract.close()

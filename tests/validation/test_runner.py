@@ -1354,7 +1354,19 @@ class ValidationTestRunner:
                 SUM(CASE WHEN ocr_succeeded THEN 1 ELSE 0 END) AS ocr_success_count,
                 SUM(CASE WHEN vision_attempted THEN 1 ELSE 0 END) AS vision_attempted_count,
                 SUM(CASE WHEN vision_succeeded THEN 1 ELSE 0 END) AS vision_success_count,
-                SUM(CASE WHEN fallback_used THEN 1 ELSE 0 END) AS fallback_used_count
+                SUM(CASE WHEN fallback_used THEN 1 ELSE 0 END) AS fallback_used_count,
+                AVG(COALESCE(discovery_depth_observed, CASE WHEN COALESCE(NULLIF(TRIM(parent_url), ''), '') <> '' THEN 2 ELSE 1 END)) AS avg_discovery_depth,
+                AVG(
+                    CASE WHEN COALESCE(events_written, 0) > 0
+                    THEN COALESCE(discovery_depth_observed, CASE WHEN COALESCE(NULLIF(TRIM(parent_url), ''), '') <> '' THEN 2 ELSE 1 END)
+                    END
+                ) AS success_avg_discovery_depth,
+                AVG(
+                    CASE WHEN COALESCE(events_written, 0) <= 0
+                    THEN COALESCE(discovery_depth_observed, CASE WHEN COALESCE(NULLIF(TRIM(parent_url), ''), '') <> '' THEN 2 ELSE 1 END)
+                    END
+                ) AS failure_avg_discovery_depth,
+                MAX(COALESCE(discovery_depth_observed, CASE WHEN COALESCE(NULLIF(TRIM(parent_url), ''), '') <> '' THEN 2 ELSE 1 END)) AS max_discovery_depth
             FROM url_scrape_metrics
             WHERE run_id = :run_id
             GROUP BY 1
@@ -1396,6 +1408,22 @@ class ValidationTestRunner:
                 "vision_attempted_count": vision_attempted_count,
                 "vision_success_count": int(mapping.get("vision_success_count", 0) or 0),
                 "fallback_used_count": int(mapping.get("fallback_used_count", 0) or 0),
+                "avg_discovery_depth": (
+                    round(float(mapping.get("avg_discovery_depth", 0.0) or 0.0), 2)
+                    if mapping.get("avg_discovery_depth") is not None
+                    else None
+                ),
+                "success_avg_discovery_depth": (
+                    round(float(mapping.get("success_avg_discovery_depth", 0.0) or 0.0), 2)
+                    if mapping.get("success_avg_discovery_depth") is not None
+                    else None
+                ),
+                "failure_avg_discovery_depth": (
+                    round(float(mapping.get("failure_avg_discovery_depth", 0.0) or 0.0), 2)
+                    if mapping.get("failure_avg_discovery_depth") is not None
+                    else None
+                ),
+                "max_discovery_depth": int(mapping.get("max_discovery_depth", 0) or 0),
                 "access_success_rate_pct": _pct("access_success_count", access_attempted_count),
                 "text_extracted_rate_pct": _pct("text_extracted_count", access_attempted_count),
                 "keyword_hit_rate_pct": _pct("keywords_found_count", int(mapping.get("text_extracted_count", 0) or 0)),
@@ -1411,6 +1439,46 @@ class ValidationTestRunner:
             "run_id": normalized_run_id,
             "steps": steps,
         }
+
+    def _summarize_scraper_discovery_depth_domains(self, run_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Summarize domains with the highest observed discovery depth for the current run."""
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_run_id or not getattr(self, "db_handler", None):
+            return []
+        query = """
+            SELECT
+                LOWER(REPLACE(SPLIT_PART(SPLIT_PART(COALESCE(link, ''), '://', 2), '/', 1), 'www.', '')) AS domain,
+                COUNT(*) AS url_count,
+                ROUND(AVG(COALESCE(discovery_depth_observed, CASE WHEN COALESCE(NULLIF(TRIM(parent_url), ''), '') <> '' THEN 2 ELSE 1 END))::numeric, 2) AS avg_discovery_depth,
+                MAX(COALESCE(discovery_depth_observed, CASE WHEN COALESCE(NULLIF(TRIM(parent_url), ''), '') <> '' THEN 2 ELSE 1 END)) AS max_discovery_depth,
+                SUM(CASE WHEN COALESCE(events_written, 0) > 0 THEN 1 ELSE 0 END) AS success_count,
+                SUM(CASE WHEN COALESCE(events_written, 0) <= 0 THEN 1 ELSE 0 END) AS failure_count
+            FROM url_scrape_metrics
+            WHERE run_id = :run_id
+              AND COALESCE(link, '') <> ''
+            GROUP BY 1
+            HAVING LOWER(REPLACE(SPLIT_PART(SPLIT_PART(COALESCE(link, ''), '://', 2), '/', 1), 'www.', '')) <> ''
+            ORDER BY avg_discovery_depth DESC, max_discovery_depth DESC, url_count DESC, domain ASC
+            LIMIT :limit
+        """
+        try:
+            rows = self.db_handler.execute_query(query, {"run_id": normalized_run_id, "limit": int(limit)}) or []
+        except Exception:
+            return []
+        summary: list[dict[str, Any]] = []
+        for row in rows:
+            mapping = dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
+            summary.append(
+                {
+                    "domain": str(mapping.get("domain", "") or "").strip(),
+                    "url_count": int(mapping.get("url_count", 0) or 0),
+                    "avg_discovery_depth": round(float(mapping.get("avg_discovery_depth", 0.0) or 0.0), 2),
+                    "max_discovery_depth": int(mapping.get("max_discovery_depth", 0) or 0),
+                    "success_count": int(mapping.get("success_count", 0) or 0),
+                    "failure_count": int(mapping.get("failure_count", 0) or 0),
+                }
+            )
+        return summary
 
     def _persist_scraper_step_telemetry_metrics(
         self,
@@ -1448,6 +1516,24 @@ class ValidationTestRunner:
                     metric_unit="percent",
                     description=f"Scraper telemetry for {step_name}: {description_suffix}",
                     higher_is_better=higher_is_better,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+            for metric_name, description_suffix in (
+                ("avg_discovery_depth", "average observed discovery depth"),
+                ("success_avg_discovery_depth", "average observed discovery depth for URLs yielding events"),
+                ("failure_avg_discovery_depth", "average observed discovery depth for URLs yielding no events"),
+            ):
+                value = payload.get(metric_name)
+                if value is None:
+                    continue
+                self.db_handler.record_metric_observation(
+                    run_id=str(run_id or ""),
+                    metric_key=f"scraper_{step_name}_{metric_name}",
+                    metric_value_numeric=float(value),
+                    metric_unit="depth",
+                    description=f"Scraper telemetry for {step_name}: {description_suffix}",
+                    higher_is_better=False,
                     window_start=window_start,
                     window_end=window_end,
                 )
@@ -1510,7 +1596,36 @@ class ValidationTestRunner:
                 f"<td>{self._escape_html(str(payload.get('keyword_hit_rate_pct', 'N/A')))}%</td>"
                 f"<td>{self._escape_html(str(payload.get('url_event_hit_rate_pct', 'N/A')))}%</td>"
                 f"<td>{self._escape_html(str(payload.get('extraction_success_rate_pct', 'N/A')))}%</td>"
+                f"<td>{self._escape_html(str(payload.get('avg_discovery_depth', 'N/A')))}</td>"
                 f"<td>{int(payload.get('events_written_total', 0) or 0)}</td>"
+                "</tr>"
+            )
+
+        discovery_depth_rows = []
+        for step_name in ("scraper", "fb", "rd_ext", "ebs", "images"):
+            payload = steps.get(step_name)
+            if not payload:
+                continue
+            discovery_depth_rows.append(
+                "<tr>"
+                f"<td>{self._escape_html(step_name)}</td>"
+                f"<td>{self._escape_html(str(payload.get('avg_discovery_depth', 'N/A')))}</td>"
+                f"<td>{self._escape_html(str(payload.get('success_avg_discovery_depth', 'N/A')))}</td>"
+                f"<td>{self._escape_html(str(payload.get('failure_avg_discovery_depth', 'N/A')))}</td>"
+                f"<td>{int(payload.get('max_discovery_depth', 0) or 0)}</td>"
+                "</tr>"
+            )
+        domain_depth_summary = self._summarize_scraper_discovery_depth_domains(scraper_telemetry_summary.get("run_id", ""))
+        domain_depth_rows = []
+        for item in domain_depth_summary:
+            domain_depth_rows.append(
+                "<tr>"
+                f"<td>{self._escape_html(str(item.get('domain', '')))}</td>"
+                f"<td>{int(item.get('url_count', 0) or 0)}</td>"
+                f"<td>{self._escape_html(str(item.get('avg_discovery_depth', 'N/A')))}</td>"
+                f"<td>{int(item.get('max_discovery_depth', 0) or 0)}</td>"
+                f"<td>{int(item.get('success_count', 0) or 0)}</td>"
+                f"<td>{int(item.get('failure_count', 0) or 0)}</td>"
                 "</tr>"
             )
 
@@ -1582,6 +1697,29 @@ class ValidationTestRunner:
                 ],
             ),
             self._build_multi_metric_trend_svg(
+                title="Scraper Discovery Depth Trend",
+                days=180,
+                value_format="number",
+                series=[
+                    {"metric_key": "scraper_scraper_avg_discovery_depth", "label": "scraper", "color": "#1f77b4"},
+                    {"metric_key": "scraper_fb_avg_discovery_depth", "label": "fb", "color": "#ff7f0e"},
+                    {"metric_key": "scraper_rd_ext_avg_discovery_depth", "label": "rd_ext", "color": "#2ca02c"},
+                    {"metric_key": "scraper_ebs_avg_discovery_depth", "label": "ebs", "color": "#d62728"},
+                    {"metric_key": "scraper_images_avg_discovery_depth", "label": "images", "color": "#9467bd"},
+                ],
+            ),
+            self._build_multi_metric_trend_svg(
+                title="Scraper Discovery Depth Success vs Failure",
+                days=180,
+                value_format="number",
+                series=[
+                    {"metric_key": "scraper_scraper_success_avg_discovery_depth", "label": "scraper success", "color": "#1f77b4"},
+                    {"metric_key": "scraper_scraper_failure_avg_discovery_depth", "label": "scraper failure", "color": "#9ecae1"},
+                    {"metric_key": "scraper_rd_ext_success_avg_discovery_depth", "label": "rd_ext success", "color": "#2ca02c"},
+                    {"metric_key": "scraper_rd_ext_failure_avg_discovery_depth", "label": "rd_ext failure", "color": "#98df8a"},
+                ],
+            ),
+            self._build_multi_metric_trend_svg(
                 title="Images Event Yield % Trend",
                 days=180,
                 value_format="percent",
@@ -1598,8 +1736,17 @@ class ValidationTestRunner:
             f"<div class='metric metric-wide'><div class='metric-value metric-value-normal'>{self._escape_html(str(scraper_telemetry_summary.get('run_id', '')))}</div><div class='metric-label'>Run ID</div></div>"
             "</div>"
             "<h3>Current Run Scraper Telemetry</h3>"
-            "<table><tr><th>Scraper</th><th>Total URLs</th><th>Access Attempts</th><th>Access %</th><th>Text %</th><th>Keyword %</th><th>URLs With Events %</th><th>Extraction Success %</th><th>Events Written</th></tr>"
+            "<table><tr><th>Scraper</th><th>Total URLs</th><th>Access Attempts</th><th>Access %</th><th>Text %</th><th>Keyword %</th><th>URLs With Events %</th><th>Extraction Success %</th><th>Avg Depth</th><th>Events Written</th></tr>"
             f"{''.join(current_rows)}"
+            "</table>"
+            "<h3>Discovery Depth by Step</h3>"
+            "<table><tr><th>Scraper</th><th>Avg Depth</th><th>Success Avg Depth</th><th>Failure Avg Depth</th><th>Max Depth</th></tr>"
+            f"{''.join(discovery_depth_rows)}"
+            "</table>"
+            "<h3>Discovery Depth by Domain</h3>"
+            "<p>Current-run domains with the deepest observed discovery paths, plus successful and failed URL counts.</p>"
+            "<table><tr><th>Domain</th><th>URLs</th><th>Avg Depth</th><th>Max Depth</th><th>Successes</th><th>Failures</th></tr>"
+            f"{''.join(domain_depth_rows)}"
             "</table>"
             f"{image_detail_html}"
             f"{''.join(trend_sections)}"
@@ -6929,9 +7076,12 @@ class ValidationTestRunner:
                   AND lower(trim(url)) NOT LIKE 'https://calendar.google.com/%'
                   AND lower(trim(url)) NOT LIKE 'http://calendar.google.com/%'
             )
-            SELECT DISTINCT domain
-            FROM eligible_events
-            WHERE COALESCE(NULLIF(TRIM(domain), ''), '') <> ''
+            SELECT domain
+            FROM (
+                SELECT DISTINCT domain
+                FROM eligible_events
+                WHERE COALESCE(NULLIF(TRIM(domain), ''), '') <> ''
+            ) distinct_domains
             ORDER BY RANDOM()
             LIMIT :limit
         """
@@ -7666,20 +7816,29 @@ class ValidationTestRunner:
         value_format: str,
     ) -> str:
         """Render a deterministic textual explanation beneath a multi-series trend chart."""
-        latest_day = self._escape_html(ordered_labels[-1])
         latest_parts: list[str] = []
         direction_parts: list[str] = []
+        series_latest_parts: list[str] = []
         for item in prepared_series:
             points = item.get("points", [])
             if not points:
                 continue
-            latest_value = self._format_trend_value(float(points[-1]["value"]), value_format)
-            latest_parts.append(f"{self._escape_html(str(item['label']))}: {self._escape_html(latest_value)}")
+            latest_point = points[-1]
+            latest_value = self._format_trend_value(float(latest_point["value"]), value_format)
+            latest_day = self._escape_html(str(latest_point["day_label"]))
+            latest_parts.append(
+                f"{self._escape_html(str(item['label']))}: {self._escape_html(latest_value)} on {latest_day}"
+            )
+            series_latest_parts.append(
+                f"{self._escape_html(str(item['label']))}: latest point is <strong>{self._escape_html(latest_value)}</strong> "
+                f"on <strong>{latest_day}</strong>."
+            )
             direction_parts.append(
                 f"{self._escape_html(str(item['label']))}: {self._describe_trend_delta(points, value_format)}"
             )
         latest_sentence = "; ".join(latest_parts) if latest_parts else "No latest values are available."
         direction_sentence = " ".join(direction_parts)
+        series_latest_sentence = " ".join(series_latest_parts)
         if title == "Classifier Usage":
             correctness = self._load_latest_metric_observation("classifier_manual_correctness_pct", days=365)
             if correctness:
@@ -7703,8 +7862,7 @@ class ValidationTestRunner:
                 "runs with no classifier data are excluded rather than plotted as 0%. "
                 "Use it to track how often ML is being invoked versus rule or structural routing. "
                 f"{correctness_sentence}"
-                f"The latest recorded day is <strong>{latest_day}</strong>. "
-                f"Latest value: {latest_sentence}. "
+                f"{series_latest_sentence} "
                 "The change statement compares against the previous run with classifier data. "
                 f"{direction_sentence}"
                 "</p>"
@@ -7712,7 +7870,7 @@ class ValidationTestRunner:
         return (
             "<p class='metric-trend-summary'>"
             f"This graph compares related metrics over roughly the last {int(days)} days. "
-            f"The latest recorded day is <strong>{latest_day}</strong>. "
+            f"{series_latest_sentence} "
             f"Latest values: {latest_sentence}. "
             f"{direction_sentence}"
             "</p>"

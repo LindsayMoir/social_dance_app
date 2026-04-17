@@ -16,6 +16,7 @@ from rd_ext import (
     _looks_like_clickable_calendar_box_label,
     _looks_like_child_event_url,
     _rd_ext_keywords_found,
+    _should_follow_layered_calendar_detail_url,
     _should_attempt_content_reveal_click,
     _should_follow_same_domain_child_link,
     ReadExtract,
@@ -212,6 +213,22 @@ def test_extract_candidate_calendar_detail_cta_urls_prefers_detail_links() -> No
     assert urls == ["https://www.bardandbanker.com/live-music/miguelito-valdes-band"]
 
 
+def test_extract_candidate_calendar_detail_cta_urls_requires_explicit_detail_text_when_requested() -> None:
+    html = """
+    <div class="tribe-events-calendar-month__calendar-event-details">
+      <a href="/live-music/miguelito-valdes-band">Miguelito Valdes + band</a>
+      <a href="https://www.opentable.com/r/bard-and-banker">Reserve</a>
+    </div>
+    """
+    urls = _extract_candidate_calendar_detail_cta_urls(
+        html,
+        "https://www.bardandbanker.com/live-music",
+        require_explicit_text=True,
+    )
+
+    assert urls == []
+
+
 def test_extract_revealed_calendar_event_blocks_pairs_local_detail_ctas() -> None:
     html = """
     <div class="fc-popover">
@@ -236,6 +253,61 @@ def test_extract_revealed_calendar_event_blocks_pairs_local_detail_ctas() -> Non
     assert blocks[1]["detail_url"] == "https://www.bardandbanker.com/live-music/st-cecilia"
 
 
+def test_extract_revealed_calendar_event_blocks_ignores_booking_links_without_local_learn_more() -> None:
+    html = """
+    <div class="fc-popover">
+      <div class="fc-event">
+        <div>Miguelito Valdes + band</div>
+        <a href="https://www.opentable.com/r/bard-and-banker">Reserve</a>
+      </div>
+    </div>
+    """
+    blocks = _extract_revealed_calendar_event_blocks(
+        html,
+        "https://www.bardandbanker.com/live-music",
+    )
+
+    assert blocks == []
+
+
+def test_extract_revealed_calendar_event_blocks_keeps_sufficient_clicked_panel_without_learn_more() -> None:
+    html = """
+    <div class="fc-popover">
+      <div class="fc-event">
+        <div>Miguelito Valdes + band</div>
+        <div>Friday, April 25 8:30 PM</div>
+        <div>Bard and Banker, 1022 Government St</div>
+        <div>Live music in the lounge.</div>
+      </div>
+    </div>
+    """
+    blocks = _extract_revealed_calendar_event_blocks(
+        html,
+        "https://www.bardandbanker.com/live-music",
+    )
+
+    assert len(blocks) == 1
+    assert blocks[0]["detail_url"] == ""
+    assert "Miguelito" in blocks[0]["label"]
+
+
+def test_should_follow_layered_calendar_detail_url_uses_shared_url_filters(monkeypatch) -> None:
+    class _FakeDb:
+        @staticmethod
+        def avoid_domains(url: str) -> bool:
+            return "opentable.com" in url
+
+        @staticmethod
+        def should_process_url(url: str) -> bool:
+            return "skip-me.com" not in url
+
+    monkeypatch.setattr("rd_ext.get_db_handler", lambda: _FakeDb())
+
+    assert _should_follow_layered_calendar_detail_url("https://www.bardandbanker.com/live-music/miguelito") is True
+    assert _should_follow_layered_calendar_detail_url("https://www.opentable.com/r/bard-and-banker") is False
+    assert _should_follow_layered_calendar_detail_url("https://skip-me.com/event") is False
+
+
 def test_build_synthetic_calendar_detail_url_is_stable_and_readable() -> None:
     url = _build_synthetic_calendar_detail_url(
         "https://www.bardandbanker.com/live-music",
@@ -258,7 +330,10 @@ def test_extract_from_url_routes_bard_listing_to_calendar_event_extraction(monke
     async def _fake_extract_calendar_events(url: str, venue_name: str = "Calendar"):
         assert url == "https://www.bardandbanker.com/live-music"
         assert venue_name == "Bard and Banker"
-        return [("https://example.com/event-1", "Event One"), ("https://example.com/event-2", "Event Two")]
+        return [
+            ("https://example.com/event-1", "Event One", 3),
+            ("https://example.com/event-2", "Event Two", 3),
+        ]
 
     monkeypatch.setattr("rd_ext.get_db_handler", lambda: _FakeDb())
     monkeypatch.setattr(extractor, "extract_calendar_events", _fake_extract_calendar_events)

@@ -296,6 +296,46 @@ class LLMHandler:
         except Exception:
             return ""
 
+    def _extract_url_fallback_date(self, url: str) -> str:
+        """Extract a deterministic fallback date from the URL when it encodes one explicitly."""
+        normalized_url = str(url or "").strip().lower()
+        if not normalized_url:
+            return ""
+
+        iso_match = re.search(r"/(20\d{2})-(\d{2})-(\d{2})(?:/|$|[?#])", normalized_url)
+        if iso_match:
+            return f"{iso_match.group(1)}-{iso_match.group(2)}-{iso_match.group(3)}"
+
+        month_map = {
+            "jan": 1,
+            "feb": 2,
+            "mar": 3,
+            "apr": 4,
+            "may": 5,
+            "jun": 6,
+            "jul": 7,
+            "aug": 8,
+            "sep": 9,
+            "oct": 10,
+            "nov": 11,
+            "dec": 12,
+        }
+        compact_match = re.search(
+            r"(?:^|[^0-9])(?P<day>\d{1,2})(?P<month>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(?P<year>\d{2})(?:[^0-9]|$)",
+            normalized_url,
+        )
+        if compact_match:
+            month_value = month_map.get(str(compact_match.group("month") or "").lower())
+            if month_value:
+                year_value = 2000 + int(compact_match.group("year"))
+                day_value = int(compact_match.group("day"))
+                try:
+                    return datetime(year_value, month_value, day_value).strftime("%Y-%m-%d")
+                except Exception:
+                    return ""
+
+        return ""
+
     def _normalize_event_rows_before_write(
         self,
         *,
@@ -351,6 +391,23 @@ class LLMHandler:
             url=url,
             extracted_text=extracted_text,
         )
+
+        fallback_url_date = self._extract_url_fallback_date(url)
+        if fallback_url_date:
+            missing_start_mask = working_df["start_date"].eq("")
+            if bool(missing_start_mask.any()):
+                fill_count = int(missing_start_mask.sum())
+                working_df.loc[missing_start_mask, "start_date"] = fallback_url_date
+                blank_weekday_mask = missing_start_mask & working_df["day_of_week"].eq("")
+                fallback_weekday = self._weekday_for_iso_date(fallback_url_date)
+                if fallback_weekday and bool(blank_weekday_mask.any()):
+                    working_df.loc[blank_weekday_mask, "day_of_week"] = fallback_weekday
+                logging.info(
+                    "process_llm_response: normalized_missing_start_date_from_url url=%s fallback_date=%s count=%d",
+                    url,
+                    fallback_url_date,
+                    fill_count,
+                )
 
         before_drop = len(working_df)
         working_df = working_df[working_df["start_date"].ne("")].copy()

@@ -2897,9 +2897,11 @@ class ImageScraper:
     ) -> None:
         """Persist image-stage telemetry and update per-run counters."""
         self._ensure_image_telemetry_state()
+        normalized_access_attempted = bool(access_attempted)
+        normalized_access_succeeded = bool(normalized_access_attempted and access_succeeded)
         self.telemetry_counts["total_urls"] += 1
-        self.telemetry_counts["access_attempted"] += int(access_attempted)
-        self.telemetry_counts["access_succeeded"] += int(access_succeeded)
+        self.telemetry_counts["access_attempted"] += int(normalized_access_attempted)
+        self.telemetry_counts["access_succeeded"] += int(normalized_access_succeeded)
         self.telemetry_counts["text_extracted"] += int(text_extracted)
         self.telemetry_counts["keywords_found"] += int(keywords_found)
         self.telemetry_counts["urls_with_events"] += int(events_written > 0)
@@ -2926,8 +2928,8 @@ class ImageScraper:
                     "decision_reason": decision_reason,
                     "handled_by": "images.py",
                     "routing_reason": decision_reason,
-                    "access_attempted": access_attempted,
-                    "access_succeeded": access_succeeded,
+                    "access_attempted": normalized_access_attempted,
+                    "access_succeeded": normalized_access_succeeded,
                     "text_extracted": text_extracted,
                     "keywords_found": keywords_found,
                     "events_written": events_written,
