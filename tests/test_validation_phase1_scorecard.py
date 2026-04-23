@@ -190,6 +190,7 @@ def test_phase1_scorecard_database_accuracy_is_manual_review_only() -> None:
 
 def test_build_database_accuracy_manual_review_html_renders_review_table() -> None:
     runner = _build_runner()
+    runner._build_metric_trend_svg = lambda **kwargs: "<div>db accuracy trend</div>"  # type: ignore[method-assign]
 
     html = runner._build_database_accuracy_manual_review_html(
         {
@@ -214,6 +215,7 @@ def test_build_database_accuracy_manual_review_html_renders_review_table() -> No
     )
 
     assert "sampled event rows from the final" in html
+    assert "db accuracy trend" in html
     assert "Friday Social" not in html
     assert "example.com" not in html
     assert "/tmp/database_accuracy_manual_review.csv" in html
@@ -225,6 +227,7 @@ def test_build_database_accuracy_manual_review_html_renders_review_table() -> No
 
 def test_build_classifier_manual_review_html_renders_review_table() -> None:
     runner = _build_runner()
+    runner._build_metric_trend_svg = lambda **kwargs: "<div>classifier accuracy trend</div>"  # type: ignore[method-assign]
 
     html = runner._build_classifier_manual_review_html(
         {
@@ -248,6 +251,7 @@ def test_build_classifier_manual_review_html_renders_review_table() -> None:
     )
 
     assert "classifier correctness" in html
+    assert "classifier accuracy trend" in html
     assert "true_candidate" not in html
     assert "/tmp/url_archetype_ml_classifier_review.csv" in html
     assert "Scoring instructions:" in html
@@ -945,15 +949,27 @@ def test_write_chatbot_evaluation_review_csv_appends_instruction_rows(tmp_path) 
 
 def test_build_chatbot_html_points_to_review_csv_without_row_dump() -> None:
     runner = _build_runner()
+    runner._build_metric_trend_svg = lambda **kwargs: "<div>chatbot accuracy trend</div>"  # type: ignore[method-assign]
+    runner._build_multi_metric_trend_svg = lambda **kwargs: "<div>chatbot decision trend</div>"  # type: ignore[method-assign]
     html = runner._build_chatbot_html(
         {
             "summary": {
                 "total_tests": 1,
                 "average_score": None,
                 "execution_success_rate": 1.0,
+                "chatbot_deterministic_sql_pct": 75.0,
+                "chatbot_llm_sql_fallback_pct": 25.0,
+                "chatbot_clarification_required_pct": 10.0,
+                "chatbot_refinement_merge_pct": 20.0,
                 "score_distribution": {
                     "pending_human_review": 1,
                 },
+            },
+            "decision_counts": {
+                "deterministic_sql": 3,
+                "llm_sql_fallback": 1,
+                "clarification_required": 1,
+                "refinement_merge": 2,
             },
             "review_rows": [
                 {
@@ -971,12 +987,15 @@ def test_build_chatbot_html_points_to_review_csv_without_row_dump() -> None:
     )
 
     assert "Scoring instructions:" in html
+    assert "chatbot accuracy trend" in html
+    assert "chatbot decision trend" in html
     assert "/tmp/chatbot_evaluation_review.csv" in html
     assert "human_label" in html
     assert "review_notes" in html
     assert "Where can I find beginner tango classes?" not in html
     assert "Pending" in html
     assert "Execution Success Rate" in html
+    assert "Decision routing snapshot:" in html
 
 
 def test_build_phase1_chatbot_quality_summary_prefers_manual_review_score() -> None:
@@ -1001,6 +1020,40 @@ def test_build_phase1_chatbot_quality_summary_prefers_manual_review_score() -> N
     assert summary["summary"]["chatbot_manual_review_csv_path"] == "/tmp/chatbot_evaluation_review.csv"
 
 
+def test_build_phase1_chatbot_quality_summary_includes_decision_percentages() -> None:
+    runner = _build_runner()
+
+    summary = runner._build_phase1_chatbot_quality_summary(
+        chatbot_performance={
+            "query_request_count": 10,
+            "confirm_request_count": 2,
+            "query_latency_ms": {"p50": 1000.0, "p95": 4000.0},
+            "unfinished_request_count": 0,
+            "decision_summary": {
+                "counts": {
+                    "deterministic_sql": 6,
+                    "llm_sql_fallback": 2,
+                    "clarification_required": 1,
+                    "refinement_merge": 3,
+                },
+                "percentages": {
+                    "deterministic_sql_pct": 75.0,
+                    "llm_sql_fallback_pct": 25.0,
+                    "clarification_required_pct": 10.0,
+                    "refinement_merge_pct": 30.0,
+                },
+            },
+        },
+        chatbot_testing={"summary": {"total_tests": 5, "execution_success_rate": 0.8}},
+    )
+
+    assert summary["summary"]["chatbot_deterministic_sql_pct"] == 75.0
+    assert summary["summary"]["chatbot_llm_sql_fallback_pct"] == 25.0
+    assert summary["summary"]["chatbot_clarification_required_pct"] == 10.0
+    assert summary["summary"]["chatbot_refinement_merge_pct"] == 30.0
+    assert summary["decision_counts"]["deterministic_sql"] == 6
+
+
 def test_build_phase1_chatbot_quality_summary_is_pending_without_manual_review() -> None:
     runner = _build_runner()
 
@@ -1019,6 +1072,31 @@ def test_build_phase1_chatbot_quality_summary_is_pending_without_manual_review()
 
     assert summary["summary"]["chatbot_answer_correctness_pct"] is None
     assert summary["summary"]["chatbot_answer_correctness_source"] == "pending_human_review"
+
+
+def test_persist_phase1_scorecard_metrics_records_chatbot_decision_metrics() -> None:
+    runner = _build_runner()
+    runner.db_handler = _FakeDbHandler()
+
+    runner._persist_phase1_scorecard_metrics(
+        run_id="run-123",
+        runtime_summary={"end_ts": "2026-04-22T12:00:00"},
+        llm_cost_summary={"summary": {}},
+        chatbot_quality_summary={
+            "summary": {
+                "chatbot_deterministic_sql_pct": 70.0,
+                "chatbot_llm_sql_fallback_pct": 30.0,
+                "chatbot_clarification_required_pct": 12.5,
+                "chatbot_refinement_merge_pct": 22.0,
+            }
+        },
+    )
+
+    metric_keys = {call["metric_key"] for call in runner.db_handler.calls}
+    assert "phase1_chatbot_deterministic_sql_pct" in metric_keys
+    assert "phase1_chatbot_llm_sql_fallback_pct" in metric_keys
+    assert "phase1_chatbot_clarification_required_pct" in metric_keys
+    assert "phase1_chatbot_refinement_merge_pct" in metric_keys
 
 
 def test_build_phase1_scorecard_html_omits_redundant_summary_bullets() -> None:
@@ -1144,6 +1222,9 @@ def test_build_fb_block_health_html_renders_private_unavailable_triage() -> None
                 {"category": "event_detail_page", "count": 1},
                 {"category": "group_post_events_tab", "count": 1},
             ],
+            "promoted_stale_blocked_urls_artifact_path": "/mnt/d/GitHub/social_dance_app/output/codex_review/promoted_stale_facebook_blocked_urls.txt",
+            "promoted_stale_blocked_urls_count": 5,
+            "promoted_stale_blocked_urls_threshold": 3,
             "private_unavailable_sources": [
                 {
                     "source_key": "group:cubansalsaclub",
@@ -1173,6 +1254,8 @@ def test_build_fb_block_health_html_renders_private_unavailable_triage() -> None
     assert "Important Source Triage" in html
     assert "group:cubansalsaclub" in html
     assert "group_post_events_tab" in html
+    assert "For a list of the current promoted stale blocked URLs go to this file:" in html
+    assert "/mnt/d/GitHub/social_dance_app/output/codex_review/promoted_stale_facebook_blocked_urls.txt" in html
 
 
 def test_build_image_date_rejections_html_renders_rows() -> None:

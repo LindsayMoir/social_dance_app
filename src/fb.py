@@ -559,7 +559,7 @@ def partition_facebook_seed_urls_for_processing(
             kept_indices.append(idx)
             continue
         decision_reason = str(get_should_process_decision_reason(normalized_link) or "")
-        if decision_reason == "skip_stale_facebook_event_detail":
+        if decision_reason in {"skip_stale_facebook_event_detail", "skip_stale_facebook_blocked_url"}:
             stats["skipped_stale_event_detail_rows"] += 1
         elif decision_reason == "skip_rejected_old_facebook_event_detail":
             stats["skipped_rejected_old_event_detail_rows"] += 1
@@ -620,7 +620,7 @@ def partition_facebook_event_links_for_processing(
             kept_links.append(normalized_link)
             continue
         decision_reason = str(get_should_process_decision_reason(normalized_link) or "")
-        if decision_reason == "skip_stale_facebook_event_detail":
+        if decision_reason in {"skip_stale_facebook_event_detail", "skip_stale_facebook_blocked_url"}:
             stats["skipped_stale_event_detail_rows"] += 1
         elif decision_reason == "skip_rejected_old_facebook_event_detail":
             stats["skipped_rejected_old_event_detail_rows"] += 1

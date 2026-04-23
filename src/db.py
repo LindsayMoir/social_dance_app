@@ -369,6 +369,7 @@ class DatabaseHandler():
             logging.info("__init__(): Skipping urls_gb and raw_locations table creation on production")
         self._should_process_decision_counters: Counter = Counter()
         self._last_should_process_reason_by_url: Dict[str, str] = {}
+        self._fb_stale_blocked_urls_cache: Optional[set[str]] = None
 
 
     def set_llm_handler(self, llm_handler):
@@ -6318,6 +6319,125 @@ class DatabaseHandler():
             return True, reason
         return False, None
 
+    def _facebook_blocked_url_stale_consecutive_runs(self) -> int:
+        """Return the configured number of consecutive blocked runs required for stale skipping."""
+        try:
+            configured = int(
+                self.config.get("crawling", {}).get("fb_blocked_url_stale_consecutive_runs", 3) or 3
+            )
+        except Exception:
+            configured = 3
+        return max(1, configured)
+
+    def _load_fb_stale_blocked_urls(self) -> set[str]:
+        """
+        Build a stale Facebook blocked-URL set from consecutive validation-run block history.
+
+        A URL enters this derived blocklist once it appears with
+        `private_or_unavailable_content` in N consecutive runs, where N is configurable.
+        """
+        required_runs = self._facebook_blocked_url_stale_consecutive_runs()
+        if required_runs <= 0:
+            return set()
+
+        try:
+            run_history_df = self.read_sql_df(
+                text(
+                    """
+                    SELECT
+                        run_id,
+                        MAX(COALESCE(occurrence_ts, created_at)) AS latest_seen_at
+                    FROM fb_block_occurrences
+                    WHERE blocked_reason = :blocked_reason
+                    GROUP BY run_id
+                    ORDER BY latest_seen_at DESC
+                    LIMIT :run_limit
+                    """
+                ),
+                params={
+                    "blocked_reason": "private_or_unavailable_content",
+                    "run_limit": required_runs,
+                },
+            )
+        except Exception as exc:
+            logging.warning("_load_fb_stale_blocked_urls(): failed to load run history: %s", exc)
+            return set()
+
+        if run_history_df.empty or len(run_history_df.index) < required_runs:
+            return set()
+
+        run_ids = [str(value or "").strip() for value in run_history_df["run_id"].tolist() if str(value or "").strip()]
+        if len(run_ids) < required_runs:
+            return set()
+
+        per_run_urls: list[set[str]] = []
+        for run_id in run_ids:
+            try:
+                occurrences_df = self.read_sql_df(
+                    text(
+                        """
+                        SELECT DISTINCT requested_url
+                        FROM fb_block_occurrences
+                        WHERE blocked_reason = :blocked_reason
+                          AND run_id = :run_id
+                        """
+                    ),
+                    params={
+                        "blocked_reason": "private_or_unavailable_content",
+                        "run_id": run_id,
+                    },
+                )
+            except Exception as exc:
+                logging.warning(
+                    "_load_fb_stale_blocked_urls(): failed to load blocked URLs for run_id=%s: %s",
+                    run_id,
+                    exc,
+                )
+                return set()
+
+            normalized_urls = {
+                self._normalize_for_compare(str(url or "").strip())
+                for url in occurrences_df.get("requested_url", pd.Series(dtype="object")).tolist()
+                if str(url or "").strip()
+            }
+            per_run_urls.append(normalized_urls)
+
+        if not per_run_urls:
+            return set()
+
+        stale_urls = set.intersection(*per_run_urls)
+        if stale_urls:
+            logging.info(
+                "_load_fb_stale_blocked_urls(): loaded %s stale blocked Facebook URL(s) from %s consecutive runs.",
+                len(stale_urls),
+                required_runs,
+            )
+        return stale_urls
+
+    def _get_fb_stale_blocked_urls(self) -> set[str]:
+        """Return cached stale Facebook blocked URLs, loading once per handler lifecycle."""
+        cached = getattr(self, "_fb_stale_blocked_urls_cache", None)
+        if cached is None:
+            cached = self._load_fb_stale_blocked_urls()
+            self._fb_stale_blocked_urls_cache = cached
+        return cached
+
+    def _should_skip_stale_fb_blocked_url(self, normalized_url: str) -> tuple[bool, Optional[str]]:
+        """Skip Facebook URLs that have been blocked in the last N consecutive validation runs."""
+        parsed = urlparse(normalized_url or "")
+        host = (parsed.netloc or "").lower()
+        if "facebook.com" not in host:
+            return False, None
+
+        stale_urls = self._get_fb_stale_blocked_urls()
+        if not stale_urls:
+            return False, None
+
+        comparable_url = self._normalize_for_compare(normalized_url)
+        if comparable_url in stale_urls:
+            return True, "skip_stale_facebook_blocked_url"
+        return False, None
+
 
     def _old_only_rejection_reason_for_url(self, normalized_url: str) -> Optional[str]:
         """
@@ -6506,6 +6626,18 @@ class DatabaseHandler():
                 stale_reason,
             )
             decision = stale_reason or "skip_stale_static_event_detail"
+            self._record_should_process_decision(decision)
+            self._set_last_should_process_reason(generic_norm, decision)
+            return False
+
+        should_skip_blocked, blocked_reason = self._should_skip_stale_fb_blocked_url(normalized_url)
+        if should_skip_blocked:
+            logging.info(
+                "should_process_url: URL %s skipped due to repeated Facebook blocked-content history (%s).",
+                normalized_url[:100] + "...",
+                blocked_reason,
+            )
+            decision = blocked_reason or "skip_stale_facebook_blocked_url"
             self._record_should_process_decision(decision)
             self._set_last_should_process_reason(generic_norm, decision)
             return False

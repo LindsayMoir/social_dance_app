@@ -18,6 +18,7 @@ crawling:
   fb_block_cooldown_base_seconds: 1200
   fb_block_cooldown_max_seconds: 7200
   fb_block_failures_before_cooldown: 1
+  fb_blocked_url_stale_consecutive_runs: 3
   fb_block_state_max_scopes: 800
   fb_block_state_ttl_days: 45
   fb_event_links_per_base_limit: 5

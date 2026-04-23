@@ -13,6 +13,7 @@ class DummyDB(DatabaseHandler):
             'input': {'urls': 'data/urls'},
             'constants': {'black_list_domains': 'data/other/black_list_domains.csv'},
             'clean_up': {'old_events': 3},
+            'crawling': {'fb_blocked_url_stale_consecutive_runs': 3},
         }
         # Minimal init without heavy DB connections
         self.config = cfg
@@ -23,6 +24,9 @@ class DummyDB(DatabaseHandler):
         self._should_process_decision_counters = Counter()
         self._last_should_process_reason_by_url = {}
         self._history_start_dates = {}
+        self._fb_stale_blocked_urls_cache = None
+        self._fb_block_run_history_rows = []
+        self._fb_block_occurrence_rows_by_run_id = {}
 
     def execute_query(self, query, params=None):
         if "FROM events_history" in str(query):
@@ -30,6 +34,18 @@ class DummyDB(DatabaseHandler):
             if key in self._history_start_dates:
                 return [(self._history_start_dates[key],)]
         return []
+
+    def read_sql_df(self, query, params=None):
+        query_str = str(query)
+        params = params or {}
+        if "FROM fb_block_occurrences" not in query_str:
+            return pd.DataFrame()
+        if "GROUP BY run_id" in query_str:
+            rows = list(self._fb_block_run_history_rows)
+            return pd.DataFrame(rows, columns=["run_id", "latest_seen_at"])
+        run_id = params.get("run_id")
+        rows = list(self._fb_block_occurrence_rows_by_run_id.get(run_id, []))
+        return pd.DataFrame(rows, columns=["requested_url"])
 
 
 def test_whitelist_prefix_match_subpath():
@@ -146,6 +162,55 @@ def test_should_skip_previously_rejected_old_facebook_event_detail_url():
     counts = db.get_should_process_decision_counts()
     assert counts.get("skip_rejected_old_facebook_event_detail", 0) >= 1
     assert db.get_should_process_decision_reason(url) == "skip_rejected_old_facebook_event_detail"
+
+
+def test_should_skip_facebook_url_after_three_consecutive_blocked_runs():
+    db = DummyDB()
+    url = "https://www.facebook.com/groups/cubansalsaclub/posts/26145054348414416/events/"
+    norm_url = db.normalize_url(url)
+    db.urls_df = pd.DataFrame(
+        [{"link": norm_url, "parent_url": "", "source": "fb", "keywords": [], "relevant": False, "crawl_try": 1, "time_stamp": datetime.now()}]
+    )
+    db.urls_gb = pd.DataFrame([{"link": norm_url, "hit_ratio": 1.0, "crawl_try": 1}])
+    db._fb_block_run_history_rows = [
+        ("run-3", datetime(2026, 4, 15, 10, 0, 0)),
+        ("run-2", datetime(2026, 4, 11, 10, 0, 0)),
+        ("run-1", datetime(2026, 4, 6, 10, 0, 0)),
+    ]
+    db._fb_block_occurrence_rows_by_run_id = {
+        "run-3": [(url,)],
+        "run-2": [(url,)],
+        "run-1": [(url,)],
+    }
+
+    assert db.should_process_url(url) is False
+    counts = db.get_should_process_decision_counts()
+    assert counts.get("skip_stale_facebook_blocked_url", 0) >= 1
+    assert db.get_should_process_decision_reason(url) == "skip_stale_facebook_blocked_url"
+
+
+def test_should_not_skip_facebook_url_when_blocked_runs_are_not_consecutive():
+    db = DummyDB()
+    url = "https://www.facebook.com/events/909522138040202/"
+    other_url = "https://www.facebook.com/events/111111111111111/"
+    norm_url = db.normalize_url(url)
+    db.urls_df = pd.DataFrame(
+        [{"link": norm_url, "parent_url": "", "source": "fb", "keywords": [], "relevant": False, "crawl_try": 1, "time_stamp": datetime.now()}]
+    )
+    db.urls_gb = pd.DataFrame([{"link": norm_url, "hit_ratio": 1.0, "crawl_try": 1}])
+    db._fb_block_run_history_rows = [
+        ("run-3", datetime(2026, 4, 15, 10, 0, 0)),
+        ("run-2", datetime(2026, 4, 11, 10, 0, 0)),
+        ("run-1", datetime(2026, 4, 6, 10, 0, 0)),
+    ]
+    db._fb_block_occurrence_rows_by_run_id = {
+        "run-3": [(url,)],
+        "run-2": [(other_url,)],
+        "run-1": [(url,)],
+    }
+
+    assert db.should_process_url(url) is True
+    assert db.get_should_process_decision_reason(url) == "process_strong_hit_ratio_or_early_retry"
 
 
 def test_should_not_apply_stale_static_skip_to_instagram_profile_page():

@@ -511,6 +511,7 @@ class ValidationTestRunner:
         try:
             review_run_id = self._resolve_validation_run_id(results.get("timestamp"))
             self._persist_completed_database_event_accuracy_review()
+            self._persist_completed_classifier_manual_review()
             database_accuracy_manual_review = self._build_database_accuracy_manual_review_sample(limit=10)
             classifier_manual_review = self._build_classifier_manual_review_sample(run_id=review_run_id, limit=10)
             results["database_accuracy_manual_review"] = database_accuracy_manual_review
@@ -703,6 +704,34 @@ class ValidationTestRunner:
             metric_value_numeric=float(correctness_pct),
             metric_unit="percent",
             description="Share of manually reviewed chatbot evaluation rows judged correct by human scoring",
+            higher_is_better=True,
+            notes={
+                "review_csv_path": csv_path,
+                "labeled_rows": rows_true + rows_false,
+                "true_count": rows_true,
+                "false_count": rows_false,
+            },
+        )
+        return summary
+
+    def _persist_completed_classifier_manual_review(self) -> dict[str, Any]:
+        """Persist a completed classifier manual-review CSV before generating the next sample."""
+        csv_path = codex_review_path(URL_ARCHETYPE_ML_CLASSIFIER_REVIEW_FILENAME)
+        summary = self._summarize_binary_manual_review_csv(csv_path)
+        rows_total = int(summary.get("rows_total", 0) or 0)
+        rows_missing_label = int(summary.get("rows_missing_label", 0) or 0)
+        correctness_pct = summary.get("correctness_pct")
+        if rows_total <= 0 or rows_missing_label != 0 or correctness_pct is None:
+            return summary
+
+        rows_true = int(summary.get("rows_true", 0) or 0)
+        rows_false = int(summary.get("rows_false", 0) or 0)
+        self.db_handler.record_metric_observation(
+            run_id=f"classifier-review-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            metric_key="classifier_manual_accuracy_pct",
+            metric_value_numeric=float(correctness_pct),
+            metric_unit="percent",
+            description="Share of manually reviewed URL archetype classifier rows judged correct by human scoring",
             higher_is_better=True,
             notes={
                 "review_csv_path": csv_path,
@@ -1709,17 +1738,6 @@ class ValidationTestRunner:
                 ],
             ),
             self._build_multi_metric_trend_svg(
-                title="Scraper Discovery Depth Success vs Failure",
-                days=180,
-                value_format="number",
-                series=[
-                    {"metric_key": "scraper_scraper_success_avg_discovery_depth", "label": "scraper success", "color": "#1f77b4"},
-                    {"metric_key": "scraper_scraper_failure_avg_discovery_depth", "label": "scraper failure", "color": "#9ecae1"},
-                    {"metric_key": "scraper_rd_ext_success_avg_discovery_depth", "label": "rd_ext success", "color": "#2ca02c"},
-                    {"metric_key": "scraper_rd_ext_failure_avg_discovery_depth", "label": "rd_ext failure", "color": "#98df8a"},
-                ],
-            ),
-            self._build_multi_metric_trend_svg(
                 title="Images Event Yield % Trend",
                 days=180,
                 value_format="percent",
@@ -1742,11 +1760,6 @@ class ValidationTestRunner:
             "<h3>Discovery Depth by Step</h3>"
             "<table><tr><th>Scraper</th><th>Avg Depth</th><th>Success Avg Depth</th><th>Failure Avg Depth</th><th>Max Depth</th></tr>"
             f"{''.join(discovery_depth_rows)}"
-            "</table>"
-            "<h3>Discovery Depth by Domain</h3>"
-            "<p>Current-run domains with the deepest observed discovery paths, plus successful and failed URL counts.</p>"
-            "<table><tr><th>Domain</th><th>URLs</th><th>Avg Depth</th><th>Max Depth</th><th>Successes</th><th>Failures</th></tr>"
-            f"{''.join(domain_depth_rows)}"
             "</table>"
             f"{image_detail_html}"
             f"{''.join(trend_sections)}"
@@ -2324,6 +2337,35 @@ class ValidationTestRunner:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self._make_json_safe(payload), f, indent=2)
 
+    def _write_promoted_stale_fb_blocked_urls_artifact(self) -> dict[str, Any]:
+        """Persist the currently promoted stale Facebook blocked URLs to a text artifact."""
+        artifact_path = os.path.abspath(codex_review_path("promoted_stale_facebook_blocked_urls.txt"))
+        urls: list[str] = []
+        threshold = 3
+        if getattr(self, "db_handler", None):
+            try:
+                if hasattr(self.db_handler, "_facebook_blocked_url_stale_consecutive_runs"):
+                    threshold = int(self.db_handler._facebook_blocked_url_stale_consecutive_runs())
+                if hasattr(self.db_handler, "_get_fb_stale_blocked_urls"):
+                    urls = sorted(str(url or "").strip() for url in self.db_handler._get_fb_stale_blocked_urls() if str(url or "").strip())
+            except Exception as exc:
+                logging.warning("_write_promoted_stale_fb_blocked_urls_artifact(): failed to load promoted URLs: %s", exc)
+                urls = []
+
+        with open(artifact_path, "w", encoding="utf-8") as f:
+            f.write(f"# Promoted stale Facebook blocked URLs\n")
+            f.write(f"# Generated at: {datetime.now().isoformat()}\n")
+            f.write(f"# Consecutive blocked-run threshold: {threshold}\n")
+            f.write(f"# URL count: {len(urls)}\n")
+            for url in urls:
+                f.write(f"{url}\n")
+
+        return {
+            "artifact_path": artifact_path,
+            "url_count": len(urls),
+            "consecutive_run_threshold": threshold,
+        }
+
     def _generate_html_report(self, results: dict) -> None:
         """
         Generate HTML report combining both validations.
@@ -2346,6 +2388,11 @@ class ValidationTestRunner:
         classifier_performance_summary = results.get("classifier_performance") if isinstance(results, dict) else {}
         scraper_network_summary = self._summarize_scraper_network_health(results.get('timestamp'))
         fb_block_summary = self._summarize_fb_block_health(results.get('timestamp'))
+        promoted_stale_fb_urls_artifact = self._write_promoted_stale_fb_blocked_urls_artifact()
+        if isinstance(fb_block_summary, dict):
+            fb_block_summary["promoted_stale_blocked_urls_artifact_path"] = promoted_stale_fb_urls_artifact.get("artifact_path")
+            fb_block_summary["promoted_stale_blocked_urls_count"] = promoted_stale_fb_urls_artifact.get("url_count", 0)
+            fb_block_summary["promoted_stale_blocked_urls_threshold"] = promoted_stale_fb_urls_artifact.get("consecutive_run_threshold", 3)
         fb_ig_funnel_summary = self._summarize_fb_ig_url_funnel(results.get('timestamp'), fb_block_summary)
         suspicious_deletes_summary = self._summarize_suspicious_deletes(results.get('timestamp'))
         report_run_id = self._resolve_validation_run_id(
@@ -2610,6 +2657,7 @@ class ValidationTestRunner:
         self._dump_json_file(runtime_summary_path, runtime_summary)
         llm_cost_summary_path = codex_review_path('llm_cost_summary.json')
         self._dump_json_file(llm_cost_summary_path, llm_cost_summary)
+        promoted_stale_fb_urls_path = str(promoted_stale_fb_urls_artifact.get("artifact_path", "") or "")
         chatbot_quality_summary_path = chatbot_path('chatbot_quality_summary.json')
         self._dump_json_file(chatbot_quality_summary_path, chatbot_quality_summary)
         event_data_quality_summary_path = codex_review_path('event_data_quality_summary.json')
@@ -2671,6 +2719,7 @@ class ValidationTestRunner:
         logging.info(f"Run control panel saved: {control_panel_path}")
         logging.info(f"Runtime summary saved: {runtime_summary_path}")
         logging.info(f"LLM cost summary saved: {llm_cost_summary_path}")
+        logging.info(f"Promoted stale Facebook blocked URLs saved: {promoted_stale_fb_urls_path}")
         logging.info(f"Chatbot quality summary saved: {chatbot_quality_summary_path}")
         logging.info(f"Event data quality summary saved: {event_data_quality_summary_path}")
         logging.info(f"Field accuracy summary saved: {field_accuracy_summary_path}")
@@ -7388,8 +7437,15 @@ class ValidationTestRunner:
         csv_path = self._escape_html(str(sample.get("csv_path", "") or ""))
         sample_size = int(sample.get("rows_returned", len(rows)) or 0)
         csv_name = self._escape_html(os.path.basename(str(sample.get("csv_path", "") or "")))
+        trend_html = self._build_metric_trend_svg(
+            metric_key="database_event_manual_accuracy_pct",
+            title="Database Event Accuracy Trend",
+            days=180,
+            value_format="percent",
+        )
 
         return (
+            f"{trend_html}"
             f"<p>Review these {sample_size} sampled event rows from the final <code>events</code> table and record your labels in "
             f"<code>{csv_path}</code>. Rows are sampled across different URL domains so this check is not dominated by one source family.</p>"
             "<p><strong>Scoring instructions:</strong> Open the source URL on the internet, compare it to the database row, and fill in the CSV. "
@@ -7415,8 +7471,15 @@ class ValidationTestRunner:
         csv_path = self._escape_html(str(sample.get("csv_path", "") or ""))
         sample_size = int(sample.get("rows_returned", len(rows)) or 0)
         csv_name = self._escape_html(os.path.basename(str(sample.get("csv_path", "") or "")))
+        trend_html = self._build_metric_trend_svg(
+            metric_key="classifier_manual_accuracy_pct",
+            title="URL Archetype ML Classifier Accuracy Trend",
+            days=180,
+            value_format="percent",
+        )
 
         return (
+            f"{trend_html}"
             f"<p>Review these {sample_size} sampled URLs for URL archetype ML classifier correctness and record your labels in "
             f"<code>{csv_path}</code>. The <code>sample_bucket</code> column splits the sample between URLs that produced surviving events and URLs that had keywords but produced no surviving events.</p>"
             "<p><strong>Scoring instructions:</strong> Open each URL on the internet and decide whether the classifier/scrape decision was correct. "
@@ -8682,6 +8745,10 @@ class ValidationTestRunner:
             r"chatbot_trace_sql:\s*request_id=(\S+)\s+endpoint=(\S+)\s+stage=(\S+)\s+sql=(.*)$",
             re.IGNORECASE,
         )
+        decision_re = re.compile(
+            r"chatbot_trace_decision:\s*request_id=(\S+)\s+endpoint=(\S+)\s+decision=(\S+)(?:\s+(.*))?$",
+            re.IGNORECASE,
+        )
 
         def _parse_kv(extra: str) -> dict[str, str]:
             out: dict[str, str] = {}
@@ -8700,6 +8767,58 @@ class ValidationTestRunner:
             idx = int(round((percentile / 100.0) * (len(scoped) - 1)))
             idx = max(0, min(len(scoped) - 1, idx))
             return float(scoped[idx])
+
+        def _compute_decision_summary(entries: list[dict[str, Any]], query_request_count: int) -> dict[str, Any]:
+            sql_source_entries = [
+                entry for entry in entries
+                if str(entry.get("endpoint", "")) == "/query" and str(entry.get("decision", "")) == "sql_source"
+            ]
+            parse_path_entries = [
+                entry for entry in entries
+                if str(entry.get("endpoint", "")) == "/query" and str(entry.get("decision", "")) == "parse_path"
+            ]
+            clarification_entries = [
+                entry for entry in entries
+                if str(entry.get("endpoint", "")) == "/query" and str(entry.get("decision", "")) == "clarification_required"
+            ]
+
+            deterministic_sql_count = sum(
+                1 for entry in sql_source_entries
+                if str((entry.get("fields") or {}).get("source", "")) == "deterministic_constraints"
+            )
+            llm_fallback_count = sum(
+                1 for entry in sql_source_entries
+                if str((entry.get("fields") or {}).get("source", "")) == "llm_fallback"
+            )
+            refinement_merge_count = sum(
+                1 for entry in parse_path_entries
+                if str((entry.get("fields") or {}).get("mode", "")) == "refinement_merge"
+            )
+            parse_decision_count = len(parse_path_entries)
+            clarification_count = len(clarification_entries)
+            sql_source_count = len(sql_source_entries)
+
+            def _pct(numerator: int, denominator: int) -> float | None:
+                if denominator <= 0:
+                    return None
+                return round((numerator / denominator) * 100.0, 2)
+
+            return {
+                "counts": {
+                    "sql_source_decisions": sql_source_count,
+                    "deterministic_sql": deterministic_sql_count,
+                    "llm_sql_fallback": llm_fallback_count,
+                    "parse_path_decisions": parse_decision_count,
+                    "refinement_merge": refinement_merge_count,
+                    "clarification_required": clarification_count,
+                },
+                "percentages": {
+                    "deterministic_sql_pct": _pct(deterministic_sql_count, sql_source_count),
+                    "llm_sql_fallback_pct": _pct(llm_fallback_count, sql_source_count),
+                    "refinement_merge_pct": _pct(refinement_merge_count, parse_decision_count),
+                    "clarification_required_pct": _pct(clarification_count, query_request_count),
+                },
+            }
 
         def _compute_status(query_latencies: list[float], unresolved_count: int) -> tuple[str, list[str], float, float, float, int, int]:
             query_p95_local = _percentile(query_latencies, 95) if query_latencies else 0.0
@@ -8852,6 +8971,10 @@ class ValidationTestRunner:
                         "sql_count": traced_sql_count,
                         "slow_request_count": len(slow_entries),
                     },
+                    "decision_summary": {
+                        "counts": {},
+                        "percentages": {},
+                    },
                     "stage_latency_summary": stage_summary,
                     "status": status,
                     "status_reasons": reasons,
@@ -8880,6 +9003,7 @@ class ValidationTestRunner:
         query_entries: list[dict] = []
         confirm_entries: list[dict] = []
         trace_by_request: dict[str, dict[str, str]] = {}
+        decision_entries: list[dict[str, Any]] = []
         scanned_lines = 0
 
         for path in existing_paths:
@@ -8942,6 +9066,22 @@ class ValidationTestRunner:
                             sql_text = (m_sql.group(4) or "").strip()
                             trace_by_request.setdefault(req_id, {})["sql"] = sql_text
                             continue
+
+                        m_decision = decision_re.search(line)
+                        if m_decision:
+                            req_id = m_decision.group(1).strip()
+                            endpoint = m_decision.group(2).strip()
+                            decision = m_decision.group(3).strip()
+                            extra = (m_decision.group(4) or "").strip()
+                            decision_entries.append(
+                                {
+                                    "request_id": req_id,
+                                    "endpoint": endpoint,
+                                    "decision": decision,
+                                    "fields": _parse_kv(extra),
+                                }
+                            )
+                            continue
             except Exception as e:
                 logging.warning("_summarize_chatbot_performance: Failed to parse %s: %s", path, e)
 
@@ -9000,6 +9140,7 @@ class ValidationTestRunner:
 
         traced_question_count = sum(1 for e in slow_entries if e.get("question"))
         traced_sql_count = sum(1 for e in slow_entries if e.get("sql"))
+        decision_summary = _compute_decision_summary(decision_entries, len(query_entries))
 
         return {
             "source": "logs",
@@ -9031,6 +9172,7 @@ class ValidationTestRunner:
                 "sql_count": traced_sql_count,
                 "slow_request_count": len(slow_entries),
             },
+            "decision_summary": decision_summary,
             "stage_latency_summary": stage_summary,
             "status": status,
             "status_reasons": reasons,
@@ -9744,6 +9886,16 @@ class ValidationTestRunner:
                 + self._escape_html(", ".join(category_bits))
                 + "</p>"
             )
+        artifact_path = str(fb_data.get("promoted_stale_blocked_urls_artifact_path", "") or "").strip()
+        if artifact_path:
+            promoted_count = int(fb_data.get("promoted_stale_blocked_urls_count", 0) or 0)
+            promoted_threshold = int(fb_data.get("promoted_stale_blocked_urls_threshold", 3) or 3)
+            html += (
+                f"<p><strong>Promoted stale blocked URLs:</strong> {promoted_count} URL(s) currently promoted "
+                f"at the {promoted_threshold}-consecutive-run threshold. "
+                f"For a list of the current promoted stale blocked URLs go to this file: "
+                f"<code>{self._escape_html(artifact_path)}</code>.</p>"
+            )
         if private_unavailable_sources:
             rows = []
             for entry in private_unavailable_sources:
@@ -10130,6 +10282,9 @@ class ValidationTestRunner:
             if total_requests > 0
             else None
         )
+        decision_summary = performance.get("decision_summary", {}) if isinstance(performance.get("decision_summary"), dict) else {}
+        decision_percentages = decision_summary.get("percentages", {}) if isinstance(decision_summary.get("percentages"), dict) else {}
+        decision_counts = decision_summary.get("counts", {}) if isinstance(decision_summary.get("counts"), dict) else {}
 
         return {
             "available": bool(testing_summary) or bool(performance.get("query_request_count")) or bool(performance.get("confirm_request_count")),
@@ -10154,11 +10309,23 @@ class ValidationTestRunner:
                 "chatbot_fallback_rate_pct": None,
                 "chatbot_confirm_request_share_pct": confirm_request_share_pct,
                 "chatbot_user_visible_error_rate_pct": user_visible_error_rate_pct,
+                "chatbot_deterministic_sql_pct": self._safe_float(decision_percentages.get("deterministic_sql_pct")),
+                "chatbot_llm_sql_fallback_pct": self._safe_float(decision_percentages.get("llm_sql_fallback_pct")),
+                "chatbot_clarification_required_pct": self._safe_float(decision_percentages.get("clarification_required_pct")),
+                "chatbot_refinement_merge_pct": self._safe_float(decision_percentages.get("refinement_merge_pct")),
             },
             "sample_sizes": {
                 "query_requests": query_count,
                 "confirm_requests": confirm_count,
                 "graded_responses": int(testing_summary.get("total_tests", 0) or 0),
+            },
+            "decision_counts": {
+                "sql_source_decisions": int(decision_counts.get("sql_source_decisions", 0) or 0),
+                "deterministic_sql": int(decision_counts.get("deterministic_sql", 0) or 0),
+                "llm_sql_fallback": int(decision_counts.get("llm_sql_fallback", 0) or 0),
+                "parse_path_decisions": int(decision_counts.get("parse_path_decisions", 0) or 0),
+                "refinement_merge": int(decision_counts.get("refinement_merge", 0) or 0),
+                "clarification_required": int(decision_counts.get("clarification_required", 0) or 0),
             },
             "status": str(performance.get("status", "") or ""),
             "status_reasons": performance.get("status_reasons", []) if isinstance(performance.get("status_reasons"), list) else [],
@@ -10218,6 +10385,34 @@ class ValidationTestRunner:
                 "seconds",
                 "Phase 1 scorecard: chatbot p95 latency in seconds",
                 False,
+            ),
+            (
+                "phase1_chatbot_deterministic_sql_pct",
+                ((chatbot_quality_summary.get("summary") or {}).get("chatbot_deterministic_sql_pct") if isinstance(chatbot_quality_summary.get("summary"), dict) else None),
+                "percent",
+                "Phase 1 scorecard: share of chatbot SQL routing decisions handled by deterministic constraints",
+                True,
+            ),
+            (
+                "phase1_chatbot_llm_sql_fallback_pct",
+                ((chatbot_quality_summary.get("summary") or {}).get("chatbot_llm_sql_fallback_pct") if isinstance(chatbot_quality_summary.get("summary"), dict) else None),
+                "percent",
+                "Phase 1 scorecard: share of chatbot SQL routing decisions that required LLM fallback",
+                False,
+            ),
+            (
+                "phase1_chatbot_clarification_required_pct",
+                ((chatbot_quality_summary.get("summary") or {}).get("chatbot_clarification_required_pct") if isinstance(chatbot_quality_summary.get("summary"), dict) else None),
+                "percent",
+                "Phase 1 scorecard: share of chatbot query requests that required clarification",
+                False,
+            ),
+            (
+                "phase1_chatbot_refinement_merge_pct",
+                ((chatbot_quality_summary.get("summary") or {}).get("chatbot_refinement_merge_pct") if isinstance(chatbot_quality_summary.get("summary"), dict) else None),
+                "percent",
+                "Phase 1 scorecard: share of chatbot parse-path decisions using structured refinement merge",
+                True,
             ),
         ]
         coverage_info = coverage_summary if isinstance(coverage_summary, dict) else {}
@@ -12611,10 +12806,66 @@ class ValidationTestRunner:
         else:
             correctness_text = "Unavailable"
 
+        trend_html = self._build_metric_trend_svg(
+            metric_key="chatbot_manual_accuracy_pct",
+            title="Chatbot Accuracy Trend",
+            days=180,
+            value_format="percent",
+        )
+        decision_trend_html = self._build_multi_metric_trend_svg(
+            title="Chatbot Decision Routing Trends",
+            days=180,
+            value_format="percent",
+            series=[
+                {
+                    "metric_key": "phase1_chatbot_deterministic_sql_pct",
+                    "label": "Deterministic SQL %",
+                    "color": "#2b8a3e",
+                },
+                {
+                    "metric_key": "phase1_chatbot_llm_sql_fallback_pct",
+                    "label": "LLM SQL Fallback %",
+                    "color": "#d9480f",
+                },
+                {
+                    "metric_key": "phase1_chatbot_clarification_required_pct",
+                    "label": "Clarification Required %",
+                    "color": "#7950f2",
+                },
+                {
+                    "metric_key": "phase1_chatbot_refinement_merge_pct",
+                    "label": "Refinement Merge %",
+                    "color": "#1c7ed6",
+                },
+            ],
+        )
+        chatbot_summary = chatbot_data.get("summary", {}) if isinstance(chatbot_data.get("summary"), dict) else {}
+        decision_counts = chatbot_data.get("decision_counts", {}) if isinstance(chatbot_data.get("decision_counts"), dict) else {}
+        deterministic_sql_pct = self._safe_float(chatbot_summary.get("chatbot_deterministic_sql_pct"))
+        llm_sql_fallback_pct = self._safe_float(chatbot_summary.get("chatbot_llm_sql_fallback_pct"))
+        clarification_required_pct = self._safe_float(chatbot_summary.get("chatbot_clarification_required_pct"))
+        refinement_merge_pct = self._safe_float(chatbot_summary.get("chatbot_refinement_merge_pct"))
+
+        def _fmt_pct(value: float | None) -> str:
+            return f"{value:.1f}%" if value is not None else "Unavailable"
+
         html = (
+            f"{trend_html}"
+            f"{decision_trend_html}"
             f"<p><strong>Chatbot correctness:</strong> {self._escape_html(correctness_text)}<br>"
             f"<strong>Total Tests:</strong> {total_tests}<br>"
             f"<strong>Execution Success Rate:</strong> {exec_rate:.1%}</p>"
+        )
+        html += (
+            "<p><strong>Decision routing snapshot:</strong> "
+            f"Deterministic SQL {_fmt_pct(deterministic_sql_pct)}, "
+            f"LLM SQL fallback {_fmt_pct(llm_sql_fallback_pct)}, "
+            f"Clarification required {_fmt_pct(clarification_required_pct)}, "
+            f"Refinement merge {_fmt_pct(refinement_merge_pct)}."
+            f" Counts: deterministic={int(decision_counts.get('deterministic_sql', 0) or 0)}, "
+            f"llm_fallback={int(decision_counts.get('llm_sql_fallback', 0) or 0)}, "
+            f"clarifications={int(decision_counts.get('clarification_required', 0) or 0)}, "
+            f"refinement_merges={int(decision_counts.get('refinement_merge', 0) or 0)}.</p>"
         )
         if review_csv_path:
             pending_note = (

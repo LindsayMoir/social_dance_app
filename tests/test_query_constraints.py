@@ -89,3 +89,90 @@ def test_clarification_merges_live_music_and_coda_location() -> None:
     sql_l = sql.lower()
     assert "event_type ilike '%live music%'" in sql_l
     assert "location ilike '%coda%'" in sql_l or "source ilike '%coda%'" in sql_l
+
+
+def test_derive_constraints_recurring_weekday_city_style_and_limit() -> None:
+    constraints = derive_constraints_from_text(
+        "Where can I dance on Tuesdays in Victoria for West Coast Swing? Show me 5.",
+        "2026-03-09",
+    )
+    assert constraints["weekday_filters"] == [1]
+    assert constraints["is_recurring_weekday"] is True
+    assert "west coast swing" in constraints["include_styles"]
+    assert "victoria" in constraints["city_terms"]
+    assert "victoria" in constraints["location_terms"]
+    assert constraints["limit"] == 5
+    assert constraints["start_date"] == ""
+    assert constraints["end_date"] == ""
+
+
+def test_build_sql_from_constraints_includes_weekday_and_url_location() -> None:
+    constraints = derive_constraints_from_text(
+        "Where can I dance on Tuesdays in Victoria for West Coast Swing?",
+        "2026-03-09",
+    )
+    sql = build_sql_from_constraints(constraints)
+    assert sql is not None
+    sql_l = sql.lower()
+    assert "extract(dow from start_date) in (1)" in sql_l
+    assert "dance_style ilike '%west coast swing%'" in sql_l
+    assert "location ilike '%victoria%'" in sql_l
+    assert "source ilike '%victoria%'" in sql_l
+    assert "url ilike '%victoria%'" in sql_l
+
+
+def test_build_sql_from_constraints_uses_explicit_limit() -> None:
+    constraints = derive_constraints_from_text(
+        "Give me 7 salsa events in Victoria this week",
+        "2026-03-09",
+    )
+    sql = build_sql_from_constraints(constraints)
+    assert sql is not None
+    assert sql.lower().endswith("limit 7")
+
+
+def test_derive_constraints_marks_singular_weekday_as_needing_clarification() -> None:
+    constraints = derive_constraints_from_text(
+        "Where can I dance on Tuesday in Victoria for salsa?",
+        "2026-03-09",
+    )
+    assert constraints["clarification_needed"] is True
+    assert constraints["clarification_message"] == "Do you mean next Tuesday or every Tuesday?"
+    assert "weekday_scope" in constraints["ambiguity_reasons"]
+
+
+def test_refinement_also_style_broadens_existing_styles() -> None:
+    base = derive_constraints_from_text("show me salsa events in Victoria this week", "2026-03-09")
+    updated = derive_constraints_from_text(
+        "also bachata",
+        "2026-03-09",
+        base_constraints=base,
+    )
+    assert "salsa" in updated["include_styles"]
+    assert "bachata" in updated["include_styles"]
+    assert updated["start_date"] == base["start_date"]
+    assert "victoria" in updated["location_terms"]
+
+
+def test_refinement_only_event_type_replaces_previous_event_type() -> None:
+    base = derive_constraints_from_text("show me salsa social dances in Victoria", "2026-03-09")
+    updated = derive_constraints_from_text(
+        "only classes",
+        "2026-03-09",
+        base_constraints=base,
+    )
+    assert updated["include_event_types"] == ["class"]
+    assert "salsa" in updated["include_styles"]
+
+
+def test_refinement_excluding_style_preserves_other_constraints() -> None:
+    base = derive_constraints_from_text("show me salsa or bachata events in Victoria this week", "2026-03-09")
+    updated = derive_constraints_from_text(
+        "not salsa",
+        "2026-03-09",
+        base_constraints=base,
+    )
+    assert "salsa" in updated["exclude_styles"]
+    assert "salsa" not in updated["include_styles"]
+    assert "bachata" in updated["include_styles"]
+    assert "victoria" in updated["location_terms"]

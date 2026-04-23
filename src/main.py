@@ -40,6 +40,7 @@ from llm import LLMHandler  # Import the LLMHandler module
 from db import DatabaseHandler, ensure_chatbot_metrics_schema  # Import DB helpers
 from conversation_manager import ConversationManager  # Import ConversationManager
 from query_constraints import (
+    QueryConstraints,
     build_sql_from_constraints,
     constraints_to_query_text,
     derive_constraints_from_text,
@@ -129,12 +130,64 @@ class ChatbotLLMTimeoutError(RuntimeError):
     """Raised when the chatbot hedged provider chain exceeds max wait time."""
 
 
+class ChatbotUnsupportedQueryError(RuntimeError):
+    """Raised when a query cannot be represented safely by deterministic or fallback paths."""
+
+
+class ChatbotInvalidQueryError(RuntimeError):
+    """Raised when the system cannot construct a valid SQL query for a supported request."""
+
+
+class ChatbotExecutionError(RuntimeError):
+    """Raised when execution fails after a valid query has been produced."""
+
+
 def _chatbot_traffic_timeout_message() -> str:
     """User-facing fallback when all chatbot provider windows time out."""
     return (
         "I'm experiencing heavy traffic right now and couldn't complete your request within 45 seconds. "
-        "Please try again in a moment. "
+        "Please try again in a moment. If your query is complex, start broader with style or event type plus time, "
+        "for example: 'Where can I dance tomorrow night?', 'Any salsa this weekend?', or 'Any live music tonight?'. "
         f"{CHATBOT_WAIT_NOTICE}"
+    )
+
+
+def _chatbot_unsupported_query_message() -> str:
+    """User-facing response for unsupported search semantics."""
+    return (
+        "I couldn't turn that request into a safe event search. "
+        "I work best when you start broad with dance style or event type plus time. "
+        "Try something like 'Where can I dance tomorrow night?', 'Any salsa this weekend?', or 'Any live music on Friday?'. "
+        "Only add location later if you need to narrow the list."
+    )
+
+
+def _chatbot_invalid_query_message() -> str:
+    """User-facing response for internal query-construction failure."""
+    return (
+        "I understood part of your request, but I couldn't convert this version into a valid search. "
+        "Please restate it more simply as style or event type plus time, "
+        "for example: 'salsa tomorrow night', 'live music this weekend', or 'Where can I dance on Friday?'. "
+        "If that works, you can add one extra filter afterward."
+    )
+
+
+def _chatbot_zero_results_message() -> str:
+    """User-facing response when a valid confirmed query returns no rows."""
+    return (
+        "I ran that search successfully but found no matching events. "
+        "That query may be too specific. Try removing one or two restrictions and start broader with style or live music plus time, "
+        "for example: 'Any salsa this weekend?' or 'Where can I dance tomorrow night?'. "
+        "Only add location if you still need to narrow the results."
+    )
+
+
+def _chatbot_execution_error_message() -> str:
+    """User-facing response for execution failures after query construction."""
+    return (
+        "I built the search, but I couldn't execute it successfully right now. "
+        "Please try the same query again in a moment. If this keeps happening, simplify it to style or event type plus time, "
+        "like 'salsa this weekend' or 'live music tonight', and then add filters one at a time only if needed."
     )
 
 
@@ -274,6 +327,26 @@ def _persist_request_trace(request_id: str, user_input: str | None = None, sql_s
                 )
     except Exception as e:
         logging.warning("chatbot_metrics_db: failed to persist trace (%s): %s", request_id, e)
+
+
+def _log_chatbot_decision(request_id: str, endpoint: str, decision: str, **fields) -> None:
+    """Log structured chatbot routing and fallback decisions for observability."""
+    if fields:
+        detail = " ".join(f"{k}={v}" for k, v in fields.items())
+        logging.info(
+            "chatbot_trace_decision: request_id=%s endpoint=%s decision=%s %s",
+            request_id,
+            endpoint,
+            decision,
+            detail,
+        )
+    else:
+        logging.info(
+            "chatbot_trace_decision: request_id=%s endpoint=%s decision=%s",
+            request_id,
+            endpoint,
+            decision,
+        )
 
 
 def _new_request_id(prefix: str) -> str:
@@ -849,6 +922,99 @@ def _force_style_in_interpretation(text: str, user_text: str) -> str:
     # Fallback: append style note
     return text.rstrip('.') + f" (style: {', '.join(styles)})."
 
+
+def _format_constraint_date(date_text: str) -> str:
+    """Render YYYY-MM-DD dates in a user-facing format."""
+    try:
+        return datetime.strptime(date_text, "%Y-%m-%d").strftime("%A, %B %d, %Y").replace(" 0", " ")
+    except Exception:
+        return date_text
+
+
+def _render_deterministic_interpretation(constraints_dict: dict, fallback_text: str) -> str | None:
+    """Render a deterministic interpretation from parsed constraints when supported."""
+    constraints = QueryConstraints.from_dict(constraints_dict)
+    if constraints.clarification_needed:
+        return None
+    if not any(
+        [
+            constraints.temporal_phrase,
+            constraints.start_date,
+            constraints.end_date,
+            constraints.weekday_filters,
+            constraints.include_styles,
+            constraints.exclude_styles,
+            constraints.include_event_types,
+            constraints.exclude_event_types,
+            constraints.location_terms,
+            constraints.limit,
+        ]
+    ):
+        return None
+
+    subject = "all dance events" if constraints.all_styles else "dance events"
+    if constraints.include_styles:
+        subject = f"{', '.join(constraints.include_styles)} dance events"
+
+    detail_parts: list[str] = []
+    if constraints.include_event_types:
+        detail_parts.append(f"including {', '.join(constraints.include_event_types)}")
+    if constraints.exclude_event_types:
+        detail_parts.append(f"excluding {', '.join(constraints.exclude_event_types)}")
+    if constraints.exclude_styles:
+        detail_parts.append(f"excluding {', '.join(constraints.exclude_styles)}")
+
+    location_terms = constraints.city_terms or constraints.venue_terms or constraints.source_terms or constraints.location_terms
+    if location_terms:
+        detail_parts.append(f"in {' or '.join(location_terms)}")
+
+    if constraints.weekday_filters and constraints.is_recurring_weekday:
+        weekday_names = [
+            name.title() + "s"
+            for name, dow in {
+                "Monday": 0,
+                "Tuesday": 1,
+                "Wednesday": 2,
+                "Thursday": 3,
+                "Friday": 4,
+                "Saturday": 5,
+                "Sunday": 6,
+            }.items()
+            if dow in constraints.weekday_filters
+        ]
+        if weekday_names:
+            detail_parts.append(f"on {' or '.join(weekday_names)}")
+
+    if constraints.start_date and constraints.end_date:
+        if constraints.start_date == constraints.end_date:
+            detail_parts.append(f"on {_format_constraint_date(constraints.start_date)}")
+        else:
+            detail_parts.append(
+                f"from {_format_constraint_date(constraints.start_date)} to {_format_constraint_date(constraints.end_date)}"
+            )
+    elif constraints.temporal_phrase:
+        detail_parts.append(constraints.temporal_phrase)
+
+    if constraints.time_filter:
+        detail_parts.append(f"after {constraints.time_filter[:5]}")
+    if constraints.end_time_filter:
+        detail_parts.append(f"before {constraints.end_time_filter[:5]}")
+    if constraints.limit:
+        detail_parts.append(f"limited to {constraints.limit} results")
+
+    detail_text = " ".join(detail_parts).strip()
+    if detail_text:
+        return f"My understanding is that you want to see {subject} {detail_text}."
+    return f"My understanding is that you want to see {subject}."
+
+
+def _clarification_response_from_constraints(constraints_dict: dict) -> str | None:
+    """Return a targeted clarification message from parser-detected ambiguity."""
+    constraints = QueryConstraints.from_dict(constraints_dict)
+    if constraints.clarification_needed and constraints.clarification_message:
+        return constraints.clarification_message
+    return None
+
 def generate_interpretation(user_query: str, config: dict, request_id: str | None = None) -> str:
     """
     Generate a natural language interpretation of the user's search intent.
@@ -1103,8 +1269,21 @@ def process_confirmation(request: ConfirmationRequest):
                 constraint_sql = build_sql_from_constraints(pending_constraints)
                 if constraint_sql:
                     sanitized_query = constraint_sql
+                    _log_chatbot_decision(
+                        request_id,
+                        "/confirm",
+                        "sql_source",
+                        source="deterministic_constraints",
+                    )
 
             if not sanitized_query.upper().startswith("SELECT"):
+                _log_chatbot_decision(
+                    request_id,
+                    "/confirm",
+                    "sql_source",
+                    source="llm_fallback",
+                    reason="missing_or_invalid_pending_sql",
+                )
                 # Rebuild prompt and regenerate SQL now that the user confirmed intent
                 prompts_cfg = config.get('prompts', {})
                 contextual_cfg = prompts_cfg.get('contextual_sql', {})
@@ -1195,8 +1374,15 @@ def process_confirmation(request: ConfirmationRequest):
                 if deterministic_sql:
                     sanitized_query = deterministic_sql
                     logging.info("CONFIRMATION: Using deterministic SQL fallback.")
+                    _log_chatbot_decision(
+                        request_id,
+                        "/confirm",
+                        "sql_recovery",
+                        source="deterministic_constraints",
+                        reason="sql_validation_failed",
+                    )
                 else:
-                    raise ValueError("Could not generate a valid SQL query from confirmation.")
+                    raise ChatbotUnsupportedQueryError("Could not generate a valid SQL query from confirmation.")
 
             # Final enforcement: ensure default social dance is included unless explicitly restricted
             cq_final = pending_query.get('combined_query') or pending_query.get('user_input') or ''
@@ -1214,7 +1400,7 @@ def process_confirmation(request: ConfirmationRequest):
                 is_valid=is_valid_sql,
             )
             if not is_valid_sql:
-                raise ValueError(f"Unable to build a valid query for this request. Validation: {validation_error}")
+                raise ChatbotInvalidQueryError(f"Unable to build a valid query for this request. Validation: {validation_error}")
 
             display_sql = _format_sql_for_display(sanitized_query)
             logging.info(f"CONFIRMATION: Executing confirmed query: {sanitized_query}")
@@ -1232,7 +1418,7 @@ def process_confirmation(request: ConfirmationRequest):
                 sql_query=sanitized_query,
             )
             if rows is None:
-                raise ValueError("Query execution failed before result retrieval.")
+                raise ChatbotExecutionError("Query execution failed before result retrieval.")
             if not rows:
                 data = []
             else:
@@ -1254,6 +1440,18 @@ def process_confirmation(request: ConfirmationRequest):
             
             conversation_manager.clear_pending_query(conversation_id)
             
+            if not data:
+                result_type = "confirmed_zero_results"
+                _finish_confirmation_timing()
+                return {
+                    "sql_query": display_sql,
+                    "data": [],
+                    "message": _chatbot_zero_results_message(),
+                    "conversation_id": conversation_id,
+                    "confirmed": True,
+                    "failure_type": "zero_results",
+                }
+
             result_type = "confirmed_results"
             _finish_confirmation_timing()
             return {
@@ -1269,19 +1467,59 @@ def process_confirmation(request: ConfirmationRequest):
             conversation_manager.clear_pending_query(conversation_id)
             result_type = "confirm_llm_timeout"
             _finish_confirmation_timing()
-            raise HTTPException(
-                status_code=503,
-                detail=_chatbot_traffic_timeout_message(),
-            )
+            return {
+                "message": _chatbot_traffic_timeout_message(),
+                "conversation_id": conversation_id,
+                "confirmed": False,
+                "failure_type": "timeout",
+                "retry_recommended": True,
+            }
+        except ChatbotUnsupportedQueryError as err:
+            logging.error("CONFIRMATION: Unsupported query semantics: %s", err)
+            conversation_manager.clear_pending_query(conversation_id)
+            result_type = "confirm_unsupported_query"
+            _finish_confirmation_timing()
+            return {
+                "message": _chatbot_unsupported_query_message(),
+                "conversation_id": conversation_id,
+                "confirmed": False,
+                "failure_type": "unsupported_query",
+            }
+        except ChatbotInvalidQueryError as err:
+            logging.error("CONFIRMATION: Invalid query generation: %s", err)
+            conversation_manager.clear_pending_query(conversation_id)
+            result_type = "confirm_invalid_query"
+            _finish_confirmation_timing()
+            return {
+                "message": _chatbot_invalid_query_message(),
+                "conversation_id": conversation_id,
+                "confirmed": False,
+                "failure_type": "invalid_query",
+            }
+        except ChatbotExecutionError as err:
+            logging.error("CONFIRMATION: Query execution failed: %s", err)
+            conversation_manager.clear_pending_query(conversation_id)
+            result_type = "confirm_execution_error"
+            _finish_confirmation_timing()
+            return {
+                "message": _chatbot_execution_error_message(),
+                "conversation_id": conversation_id,
+                "confirmed": False,
+                "failure_type": "execution_error",
+                "retry_recommended": True,
+            }
         except Exception as db_err:
             logging.error("CONFIRMATION: Query execution pipeline failed: %s", db_err)
             conversation_manager.clear_pending_query(conversation_id)
             result_type = "confirm_error"
             _finish_confirmation_timing()
-            raise HTTPException(
-                status_code=500,
-                detail="I couldn't run that search right now. Please try again with a slightly reworded request."
-            )
+            return {
+                "message": _chatbot_execution_error_message(),
+                "conversation_id": conversation_id,
+                "confirmed": False,
+                "failure_type": "internal_error",
+                "retry_recommended": True,
+            }
     
     elif confirmation == "clarify":
         # Handle clarification.
@@ -1309,8 +1547,42 @@ def process_confirmation(request: ConfirmationRequest):
             updated_constraints = base_constraints
 
         rewritten_query = constraints_to_query_text(updated_constraints, fallback_text=clarification_input)
-        interpretation = generate_interpretation(rewritten_query, config, request_id=request_id)
-        interpretation = _force_style_in_interpretation(interpretation, rewritten_query)
+        clarification_message = _clarification_response_from_constraints(updated_constraints)
+        if clarification_message:
+            ambiguity_reasons = ",".join((updated_constraints or {}).get("ambiguity_reasons") or [])
+            _log_chatbot_decision(
+                request_id,
+                "/confirm",
+                "clarification_required",
+                reasons=ambiguity_reasons or "unspecified",
+            )
+            result_type = "clarify_followup_required"
+            _finish_confirmation_timing()
+            return {
+                "message": clarification_message,
+                "interpretation": clarification_message,
+                "confirmation_required": False,
+                "clarification_required": True,
+                "conversation_id": conversation_id,
+            }
+
+        interpretation = _render_deterministic_interpretation(updated_constraints, rewritten_query)
+        if interpretation is None:
+            _log_chatbot_decision(
+                request_id,
+                "/confirm",
+                "interpretation_source",
+                source="llm_fallback",
+            )
+            interpretation = generate_interpretation(rewritten_query, config, request_id=request_id)
+            interpretation = _force_style_in_interpretation(interpretation, rewritten_query)
+        else:
+            _log_chatbot_decision(
+                request_id,
+                "/confirm",
+                "interpretation_source",
+                source="deterministic_constraints",
+            )
 
         sql_from_constraints = build_sql_from_constraints(updated_constraints)
         if sql_from_constraints:
@@ -1329,7 +1601,11 @@ def process_confirmation(request: ConfirmationRequest):
         )
         conversation_manager.update_conversation_context(
             conversation_id,
-            {"last_search_query": "", "concatenation_count": 1},
+            {
+                "last_search_query": rewritten_query,
+                "concatenation_count": 1,
+                "last_search_constraints": updated_constraints,
+            },
         )
         result_type = "clarify_updated"
         _finish_confirmation_timing()
@@ -1398,6 +1674,9 @@ def process_query(request: QueryRequest):
     conversation_id = None
     intent = None
     entities = {}
+    prompt = ""
+    history_text = ""
+    context = {}
     
     if use_contextual_prompt:
         context_started = _log_timing_start(
@@ -1430,12 +1709,7 @@ def process_query(request: QueryRequest):
             
             # Get updated recent messages INCLUDING the current user message
             recent_messages_updated = conversation_manager.get_recent_messages(conversation_id, limit=5)
-            
-            # Use contextual prompt template
-            prompt_file_path = os.path.join(base_dir, 'prompts', 'contextual_sql_prompt.txt')
-            with open(prompt_file_path, "r") as file:
-                base_prompt = file.read()
-            
+
             # Format conversation history for prompt (include current user message)
             history_text = "\n".join([
                 f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
@@ -1450,26 +1724,54 @@ def process_query(request: QueryRequest):
             
             # Handle query concatenation for refinements (up to 5 parts)
             if intent == 'refinement':
-                # Get the current combined query and concatenation count from context
+                # Merge the refinement into the last parsed constraints instead of concatenating text.
                 current_combined_query = context.get('last_search_query', '')
+                current_constraints = context.get('pending_constraints') or context.get('last_search_constraints') or {}
                 concatenation_count = context.get('concatenation_count', 1)
-                
-                if current_combined_query and concatenation_count < 5:
-                    # Concatenate current combined query with new input
-                    combined_query = f"{current_combined_query} {user_input}"
+
+                if current_constraints and current_combined_query and concatenation_count < 5:
+                    refined_constraints = derive_constraints_from_text(
+                        user_input,
+                        current_date,
+                        base_constraints=current_constraints,
+                    )
+                    combined_query = constraints_to_query_text(refined_constraints, fallback_text=user_input)
                     concatenation_count += 1
-                    logging.info(f"REFINEMENT #{concatenation_count}: Combining '{current_combined_query}' + '{user_input}' = '{combined_query}'")
+                    context['last_search_constraints'] = refined_constraints
+                    logging.info(
+                        "REFINEMENT #%s: Merged structured constraints for '%s' into '%s'",
+                        concatenation_count,
+                        user_input,
+                        current_combined_query,
+                    )
+                    _log_chatbot_decision(
+                        request_id,
+                        "/query",
+                        "refinement_merge",
+                        merge_source="last_search_constraints",
+                        concatenation_count=concatenation_count,
+                    )
                 elif concatenation_count >= 5:
-                    # Max concatenations reached, treat as new search
                     combined_query = user_input
                     concatenation_count = 1
                     logging.info(f"REFINEMENT: Max concatenations (5) reached, treating as new search: '{user_input}'")
+                    _log_chatbot_decision(
+                        request_id,
+                        "/query",
+                        "refinement_reset",
+                        reason="max_concatenations",
+                    )
                 else:
                     combined_query = user_input
                     concatenation_count = 1
-                    logging.warning("REFINEMENT: No original query found in context, using current input only")
-                
-                # Update context with the new combined query and count
+                    logging.warning("REFINEMENT: No original constraints found in context, using current input only")
+                    _log_chatbot_decision(
+                        request_id,
+                        "/query",
+                        "refinement_fallback",
+                        reason="missing_prior_constraints",
+                    )
+
                 context['last_search_query'] = combined_query
                 context['concatenation_count'] = concatenation_count
             else:
@@ -1478,23 +1780,9 @@ def process_query(request: QueryRequest):
                 # Store the query and reset concatenation count for future refinements
                 context['last_search_query'] = user_input
                 context['concatenation_count'] = 1
+                context['last_search_constraints'] = {}
                 logging.info(f"NEW SEARCH: Storing query: '{user_input}' (concatenation count reset to 1)")
-            
-            # Construct contextual prompt
-            prompt = base_prompt.format(
-                context_info=str(context),
-                conversation_history=history_text,
-                intent=intent,
-                entities=str(entities),
-                current_date=current_date,
-                current_day_of_week=current_day_of_week
-            )
-            prompt += f"\n\nCurrent User Question: \"{combined_query}\""
-            
-            # DEBUG: Log the full prompt to see what's being sent to LLM
-            logging.info("=== FULL PROMPT BEING SENT TO LLM ===")
-            logging.info(prompt)
-            logging.info("=== END PROMPT ===")
+                _log_chatbot_decision(request_id, "/query", "fresh_parse", intent=intent or "search")
             
         except Exception as e:
             logging.error(f"Error with contextual conversation: {e}")
@@ -1516,7 +1804,99 @@ def process_query(request: QueryRequest):
             "fallback_prompt_preparation",
             has_session=False,
         )
-        # Use contextual SQL prompt even in fallback (no history/context)
+        # Minimal context for non-session queries
+        pacific_tz = ZoneInfo("America/Los_Angeles")
+        now_pacific = datetime.now(pacific_tz)
+        current_date = now_pacific.strftime("%Y-%m-%d")
+        current_day_of_week = now_pacific.isoweekday()  # Monday=1, Sunday=7
+        _log_timing_end(request_id, "/query", "fallback_prompt_preparation", fallback_prompt_started)
+
+    query_for_interpretation = combined_query if use_contextual_prompt else user_input
+    if use_contextual_prompt and intent == 'refinement':
+        pending_constraints = context.get('last_search_constraints') or derive_constraints_from_text(
+            user_input,
+            current_date,
+            base_constraints=context.get('pending_constraints') or context.get('last_search_constraints') or {},
+        )
+        _log_chatbot_decision(
+            request_id,
+            "/query",
+            "parse_path",
+            mode="refinement_merge",
+            has_constraints=bool(pending_constraints),
+        )
+    else:
+        pending_constraints = derive_constraints_from_text(
+            query_for_interpretation,
+            current_date,
+        )
+        _log_chatbot_decision(
+            request_id,
+            "/query",
+            "parse_path",
+            mode="fresh_parse",
+            has_constraints=bool(pending_constraints),
+        )
+    clarification_message = _clarification_response_from_constraints(pending_constraints)
+    if clarification_message:
+        ambiguity_reasons = ",".join((pending_constraints or {}).get("ambiguity_reasons") or [])
+        _log_chatbot_decision(
+            request_id,
+            "/query",
+            "clarification_required",
+            reasons=ambiguity_reasons or "unspecified",
+        )
+        result_type = "clarification_required"
+        _finish_query_timing()
+        return {
+            "message": clarification_message,
+            "interpretation": clarification_message,
+            "confirmation_required": False,
+            "clarification_required": True,
+            "conversation_id": conversation_id if use_contextual_prompt else None,
+            "intent": intent if use_contextual_prompt else None,
+        }
+    sql_query = build_sql_from_constraints(pending_constraints)
+    if sql_query:
+        logging.info("QUERY: Using deterministic SQL from parsed constraints before LLM generation.")
+        _log_chatbot_decision(
+            request_id,
+            "/query",
+            "sql_source",
+            source="deterministic_constraints",
+        )
+    else:
+        if not any(
+            bool((pending_constraints or {}).get(key))
+            for key in (
+                "start_date",
+                "end_date",
+                "weekday_filters",
+                "include_styles",
+                "exclude_styles",
+                "include_event_types",
+                "exclude_event_types",
+                "location_terms",
+                "venue_terms",
+                "city_terms",
+                "source_terms",
+                "limit",
+            )
+        ) and not str(query_for_interpretation or "").strip():
+            result_type = "unsupported_query"
+            _finish_query_timing()
+            return {
+                "message": _chatbot_unsupported_query_message(),
+                "confirmation_required": False,
+                "failure_type": "unsupported_query",
+            }
+        _log_chatbot_decision(
+            request_id,
+            "/query",
+            "sql_source",
+            source="llm_fallback",
+            reason="no_deterministic_sql",
+        )
         prompts_cfg = config.get('prompts', {})
         contextual_cfg = prompts_cfg.get('contextual_sql', {})
         contextual_path_rel = (
@@ -1524,7 +1904,6 @@ def process_query(request: QueryRequest):
             else 'prompts/contextual_sql_prompt.txt'
         )
         prompt_file_path = os.path.join(base_dir, contextual_path_rel)
-
         try:
             with open(prompt_file_path, "r") as file:
                 base_prompt = file.read()
@@ -1534,50 +1913,40 @@ def process_query(request: QueryRequest):
             _finish_query_timing()
             raise HTTPException(status_code=500, detail="Error reading contextual SQL prompt file.")
 
-        # Minimal context for non-session queries
-        pacific_tz = ZoneInfo("America/Los_Angeles")
-        now_pacific = datetime.now(pacific_tz)
-        current_date = now_pacific.strftime("%Y-%m-%d")
-        current_day_of_week = now_pacific.isoweekday()  # Monday=1, Sunday=7
-
         prompt = base_prompt.format(
-            context_info="",
-            conversation_history="",
-            intent="search",
-            entities="{}",
+            context_info=str(context) if use_contextual_prompt else "",
+            conversation_history=history_text if use_contextual_prompt else "",
+            intent=intent if use_contextual_prompt else "search",
+            entities=str(entities) if use_contextual_prompt else "{}",
             current_date=current_date,
-            current_day_of_week=current_day_of_week
+            current_day_of_week=current_day_of_week,
+            query_for_interpretation=query_for_interpretation,
         )
-        prompt += f"\n\nCurrent User Question: \"{user_input}\""
-
-        # DEBUG: Log that we're using contextual prompt in fallback
-        logging.info("=== USING CONTEXTUAL PROMPT (FALLBACK) ===")
         logging.info("=== FULL PROMPT BEING SENT TO LLM ===")
         logging.info(prompt)
         logging.info("=== END PROMPT ===")
-        _log_timing_end(request_id, "/query", "fallback_prompt_preparation", fallback_prompt_started)
-    
-    logging.info(f"Constructed Prompt: {prompt}")
+        logging.info(f"Constructed Prompt: {prompt}")
 
-    # Query the language model for a raw SQL query with date calculator tool support
-    from date_calculator import CALCULATE_DATE_RANGE_TOOL
-    try:
-        sql_query = _query_llm_timed(
-            request_id=request_id,
-            endpoint="/query",
-            stage="sql_generation_primary",
-            request_url='chatbot',
-            prompt=prompt,
-            tools=[CALCULATE_DATE_RANGE_TOOL],
-        )
-    except ChatbotLLMTimeoutError:
-        result_type = "llm_timeout"
-        _finish_query_timing()
-        return {
-            "message": _chatbot_traffic_timeout_message(),
-            "confirmation_required": False,
-            "retry_recommended": True,
-        }
+        # Query the language model for a raw SQL query with date calculator tool support
+        from date_calculator import CALCULATE_DATE_RANGE_TOOL
+        try:
+            sql_query = _query_llm_timed(
+                request_id=request_id,
+                endpoint="/query",
+                stage="sql_generation_primary",
+                request_url='chatbot',
+                prompt=prompt,
+                tools=[CALCULATE_DATE_RANGE_TOOL],
+            )
+        except ChatbotLLMTimeoutError:
+            result_type = "llm_timeout"
+            _finish_query_timing()
+            return {
+                "message": _chatbot_traffic_timeout_message(),
+                "confirmation_required": False,
+                "failure_type": "timeout",
+                "retry_recommended": True,
+            }
     logging.info(f"Raw SQL Query: {sql_query}")
 
     # Always generate interpretation and confirmation, even if SQL didn't come back yet
@@ -1622,6 +1991,12 @@ def process_query(request: QueryRequest):
                 if not _sql_has_illegal_date_arithmetic(sanitized_query2):
                     sanitized_query = sanitized_query2
                     logging.info("Preflight: Successfully regenerated SQL without illegal date arithmetic.")
+                    _log_chatbot_decision(
+                        request_id,
+                        "/query",
+                        "sql_retry_success",
+                        retry_stage="strict_date_fix",
+                    )
                     logging.info(
                         "chatbot_trace_sql: request_id=%s endpoint=/query stage=sql_strict_retry sql=%s",
                         request_id,
@@ -1643,6 +2018,13 @@ def process_query(request: QueryRequest):
             if deterministic_sql:
                 sanitized_query = deterministic_sql
                 logging.info("Preflight: Built deterministic SQL from constraints after non-SELECT LLM output.")
+                _log_chatbot_decision(
+                    request_id,
+                    "/query",
+                    "sql_recovery",
+                    source="deterministic_constraints",
+                    reason="llm_non_select_output",
+                )
                 logging.info(
                     "chatbot_trace_sql: request_id=%s endpoint=/query stage=sql_constraints_fallback sql=%s",
                     request_id,
@@ -1671,6 +2053,7 @@ def process_query(request: QueryRequest):
                     return {
                         "message": _chatbot_traffic_timeout_message(),
                         "confirmation_required": False,
+                        "failure_type": "timeout",
                         "retry_recommended": True,
                     }
 
@@ -1683,6 +2066,12 @@ def process_query(request: QueryRequest):
                     if s3.upper().startswith("SELECT") and not _sql_has_illegal_date_arithmetic(s3):
                         sanitized_query = s3
                         logging.info("Preflight: Successfully regenerated a valid SELECT SQL.")
+                        _log_chatbot_decision(
+                            request_id,
+                            "/query",
+                            "sql_retry_success",
+                            retry_stage="select_only_retry",
+                        )
                         logging.info(
                             "chatbot_trace_sql: request_id=%s endpoint=/query stage=sql_select_retry sql=%s",
                             request_id,
@@ -1692,25 +2081,34 @@ def process_query(request: QueryRequest):
 
     # Generate natural language interpretation and always confirm intent
     try:
-        if use_contextual_prompt:
-            query_for_interpretation = combined_query
-        else:
-            query_for_interpretation = user_input
-
-        interpretation = generate_interpretation(
+        interpretation = _render_deterministic_interpretation(
+            pending_constraints,
             query_for_interpretation,
-            config,
-            request_id=request_id,
         )
-        interpretation = _force_style_in_interpretation(interpretation, query_for_interpretation)
+        if interpretation is None:
+            _log_chatbot_decision(
+                request_id,
+                "/query",
+                "interpretation_source",
+                source="llm_fallback",
+            )
+            interpretation = generate_interpretation(
+                query_for_interpretation,
+                config,
+                request_id=request_id,
+            )
+            interpretation = _force_style_in_interpretation(interpretation, query_for_interpretation)
+        else:
+            _log_chatbot_decision(
+                request_id,
+                "/query",
+                "interpretation_source",
+                source="deterministic_constraints",
+            )
         logging.info(f"Generated interpretation: {interpretation}")
 
         if use_contextual_prompt and session_token:
             try:
-                pending_constraints = derive_constraints_from_text(
-                    query_for_interpretation,
-                    current_date,
-                )
                 if pending_constraints:
                     deterministic_sql = build_sql_from_constraints(pending_constraints)
                     if deterministic_sql:
@@ -1726,7 +2124,8 @@ def process_query(request: QueryRequest):
                 )
                 search_context = {
                     "last_search_query": context.get('last_search_query', combined_query),
-                    "concatenation_count": context.get('concatenation_count', 1)
+                    "concatenation_count": context.get('concatenation_count', 1),
+                    "last_search_constraints": pending_constraints,
                 }
                 conversation_manager.update_conversation_context(conversation_id, search_context)
             except Exception as e:
@@ -1757,15 +2156,17 @@ def process_query(request: QueryRequest):
         return {
             "message": _chatbot_traffic_timeout_message(),
             "confirmation_required": False,
+            "failure_type": "timeout",
             "retry_recommended": True,
         }
     except Exception as e:
         logging.error(f"Error generating interpretation: {e}")
-        result_type = "confirmation_fallback"
+        result_type = "invalid_query"
         return {
-            "message": f"I understand you want to search for: {user_input}. Please confirm if this is correct.",
-            "confirmation_required": True,
-            "simple_confirmation": True
+            "message": _chatbot_invalid_query_message(),
+            "confirmation_required": False,
+            "failure_type": "invalid_query",
+            "retry_recommended": False,
         }
     finally:
         _finish_query_timing()

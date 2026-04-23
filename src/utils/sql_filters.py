@@ -56,7 +56,7 @@ def _is_excluded_style_mention(text: str, start_idx: int) -> bool:
     window = text[max(0, start_idx - 24):start_idx]
     return bool(
         re.search(
-            r"(?:\bno\s+|\bwithout\s+|\bexcluding?\s+|\bexcept\s+)$",
+            r"(?:\bnot\s+|\bno\s+|\bwithout\s+|\bexcluding?\s+|\bexcept\s+)$",
             window,
             flags=re.IGNORECASE,
         )
