@@ -50,6 +50,9 @@ _US_STATE_OR_TERRITORY_CODES: Final[frozenset[str]] = frozenset(
     }
 )
 
+_BLOCKED_EVENT_URL_DOMAINS: Final[frozenset[str]] = frozenset({"example.com"})
+_EVENT_URL_REACHABILITY_TIMEOUT_SECONDS: Final[float] = 6.0
+
 CHATBOT_METRICS_SCHEMA_QUERIES: Final[tuple[str, ...]] = (
     """
     CREATE TABLE IF NOT EXISTS chatbot_request_metrics (
@@ -3710,6 +3713,92 @@ class DatabaseHandler():
         return value_str.startswith("http://") or value_str.startswith("https://")
 
     @staticmethod
+    def _has_blocked_event_url_domain(value: Any) -> bool:
+        """Return True when value is an HTTP(S) URL from a blocked event domain."""
+        if value is None:
+            return False
+        value_str = str(value).strip()
+        if not DatabaseHandler._looks_like_http_url(value_str):
+            return False
+        parsed = urlparse(value_str)
+        host = (parsed.hostname or "").strip().lower()
+        if not host:
+            return False
+        return any(
+            host == blocked_domain or host.endswith(f".{blocked_domain}")
+            for blocked_domain in _BLOCKED_EVENT_URL_DOMAINS
+        )
+
+    @staticmethod
+    def _normalize_event_url_for_identity(value: Any) -> str:
+        """Return a lightweight normalized URL identity for row/source URL comparison."""
+        if value is None:
+            return ""
+        value_str = str(value).strip()
+        if not value_str:
+            return ""
+        parsed = urlparse(value_str)
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+        path = (parsed.path or "").rstrip("/")
+        if not scheme or not host:
+            return value_str.rstrip("/").lower()
+        return f"{scheme}://{host}{path}".lower()
+
+    def _event_url_needs_reachability_check(self, event_url: Any, fallback_urls: List[str]) -> bool:
+        """Return True when an event row URL appears independently formulated from the fetched source URL."""
+        event_url_str = str(event_url or "").strip()
+        if not self._looks_like_http_url(event_url_str):
+            return False
+        event_identity = self._normalize_event_url_for_identity(event_url_str)
+        fallback_identities = {
+            self._normalize_event_url_for_identity(fallback_url)
+            for fallback_url in fallback_urls
+            if self._looks_like_http_url(fallback_url)
+        }
+        if not fallback_identities:
+            return False
+        return bool(event_identity and event_identity not in fallback_identities)
+
+    def _event_url_is_reachable(self, event_url: str) -> bool:
+        """Return True when an event URL responds with a non-error HTTP status."""
+        if not self._looks_like_http_url(event_url):
+            return False
+        headers = {"User-Agent": "DanceScoopBot/1.0 (+https://dancescoop.com)"}
+        for method in ("head", "get"):
+            try:
+                request_func = getattr(requests, method)
+                response = request_func(
+                    event_url,
+                    allow_redirects=True,
+                    headers=headers,
+                    timeout=_EVENT_URL_REACHABILITY_TIMEOUT_SECONDS,
+                )
+            except requests.RequestException as exc:
+                logging.info(
+                    "_event_url_is_reachable: %s failed for %s: %s",
+                    method.upper(),
+                    event_url,
+                    exc,
+                )
+                continue
+
+            status_code = int(getattr(response, "status_code", 0) or 0)
+            if status_code in {403, 405} and method == "head":
+                continue
+            if 200 <= status_code < 400:
+                return True
+            logging.info(
+                "_event_url_is_reachable: %s returned HTTP %d for %s",
+                method.upper(),
+                status_code,
+                event_url,
+            )
+            if status_code == 404:
+                return False
+        return False
+
+    @staticmethod
     def _extract_email(value: Any) -> Optional[str]:
         """Return normalized email address when present in value; otherwise None."""
         if value is None:
@@ -3735,6 +3824,8 @@ class DatabaseHandler():
         - Fallback to call-level `default_url` (the page/event URL being processed).
         - Fallback to `parent_url` when it is HTTP(S).
         - For email ingestion rows, allow storing an email address when no HTTP URL exists.
+        - Validate row-level HTTP URLs that differ from the fetched source URL.
+        - Drop rows whose final URL is from a blocked placeholder/test domain.
         - Drop non-email rows that still have no URL after fallback.
         """
         if df is None or df.empty:
@@ -3751,9 +3842,9 @@ class DatabaseHandler():
         source_norm = str(source or "").strip().lower()
 
         fallback_url = ""
-        if self._looks_like_http_url(default_url_norm):
+        if self._looks_like_http_url(default_url_norm) and not self._has_blocked_event_url_domain(default_url_norm):
             fallback_url = default_url_norm
-        elif self._looks_like_http_url(parent_url_norm):
+        elif self._looks_like_http_url(parent_url_norm) and not self._has_blocked_event_url_domain(parent_url_norm):
             fallback_url = parent_url_norm
 
         default_email = self._extract_email(default_url_norm)
@@ -3761,12 +3852,21 @@ class DatabaseHandler():
 
         dropped_non_email = 0
         dropped_email = 0
+        dropped_blocked_domain = 0
+        replaced_unreachable_formulated_url = 0
+        dropped_unreachable_formulated_url = 0
         keep_rows: List[bool] = []
         normalized_urls: List[Optional[str]] = []
+        fallback_candidates = [
+            candidate
+            for candidate in (default_url_norm, parent_url_norm)
+            if self._looks_like_http_url(candidate) and not self._has_blocked_event_url_domain(candidate)
+        ]
 
         for _, row in working_df.iterrows():
             row_url = "" if pd.isna(row.get("url")) else str(row.get("url", "")).strip()
             row_source = "" if pd.isna(row.get("source")) else str(row.get("source", "")).strip().lower()
+            row_event_name = "" if pd.isna(row.get("event_name")) else str(row.get("event_name", "")).strip()
 
             is_email_context = (
                 "email" in row_source
@@ -3775,12 +3875,43 @@ class DatabaseHandler():
             )
 
             final_url = row_url
+            if final_url and self._has_blocked_event_url_domain(final_url):
+                final_url = ""
             if not final_url:
                 if fallback_url:
                     final_url = fallback_url
                 elif is_email_context:
                     row_email = self._extract_email(row_url) or self._extract_email(row_source)
                     final_url = row_email or default_email or source_email or ""
+
+            if (
+                row_url
+                and final_url == row_url
+                and self._event_url_needs_reachability_check(final_url, fallback_candidates)
+                and not self._event_url_is_reachable(final_url)
+            ):
+                logging.warning(
+                    "_enforce_event_url_values: formulated row URL is unreachable; "
+                    "event_name=%s row_url=%s fallback_url=%s source=%s",
+                    row_event_name,
+                    row_url,
+                    fallback_url,
+                    source,
+                )
+                if fallback_url:
+                    final_url = fallback_url
+                    replaced_unreachable_formulated_url += 1
+                else:
+                    dropped_unreachable_formulated_url += 1
+                    keep_rows.append(False)
+                    normalized_urls.append(None)
+                    continue
+
+            if final_url and self._has_blocked_event_url_domain(final_url):
+                dropped_blocked_domain += 1
+                keep_rows.append(False)
+                normalized_urls.append(None)
+                continue
 
             if final_url:
                 keep_rows.append(True)
@@ -3794,11 +3925,21 @@ class DatabaseHandler():
             keep_rows.append(False)
             normalized_urls.append(None)
 
-        if dropped_non_email or dropped_email:
+        if (
+            dropped_non_email
+            or dropped_email
+            or dropped_blocked_domain
+            or replaced_unreachable_formulated_url
+            or dropped_unreachable_formulated_url
+        ):
             logging.warning(
-                "_enforce_event_url_values: dropped rows with missing URL (non_email=%d email=%d)",
+                "_enforce_event_url_values: dropped rows with missing or blocked URL "
+                "(non_email=%d email=%d blocked_domain=%d unreachable_replaced=%d unreachable_dropped=%d)",
                 dropped_non_email,
                 dropped_email,
+                dropped_blocked_domain,
+                replaced_unreachable_formulated_url,
+                dropped_unreachable_formulated_url,
             )
 
         filtered_df = working_df.loc[keep_rows].copy().reset_index(drop=True)
