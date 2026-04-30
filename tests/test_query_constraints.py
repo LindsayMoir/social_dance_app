@@ -1,6 +1,7 @@
 import os
 import sys
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from query_constraints import build_sql_from_constraints, derive_constraints_from_text
@@ -119,6 +120,33 @@ def test_build_sql_from_constraints_includes_weekday_and_url_location() -> None:
     assert "location ilike '%victoria%'" in sql_l
     assert "source ilike '%victoria%'" in sql_l
     assert "url ilike '%victoria%'" in sql_l
+    assert "victorias" not in sql_l
+
+
+def test_build_sql_from_constraints_matches_singular_venue_for_plural_query() -> None:
+    constraints = derive_constraints_from_text(
+        "bachata classes at Method Studios",
+        "2026-03-09",
+    )
+    sql = build_sql_from_constraints(constraints)
+    assert sql is not None
+    sql_l = sql.lower()
+    assert "dance_style ilike '%bachata%'" in sql_l
+    assert "event_type ilike '%class%'" in sql_l
+    assert "location ilike '%method studios%'" in sql_l
+    assert "location ilike '%method studio%'" in sql_l
+
+
+def test_build_sql_from_constraints_matches_plural_venue_for_singular_query() -> None:
+    constraints = derive_constraints_from_text(
+        "salsa at Method Studio",
+        "2026-03-09",
+    )
+    sql = build_sql_from_constraints(constraints)
+    assert sql is not None
+    sql_l = sql.lower()
+    assert "location ilike '%method studio%'" in sql_l
+    assert "location ilike '%method studios%'" in sql_l
 
 
 def test_build_sql_from_constraints_uses_explicit_limit() -> None:

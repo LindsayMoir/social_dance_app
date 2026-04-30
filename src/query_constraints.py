@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from copy import deepcopy
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-import re
 from typing import Any, Dict, List
 
 from date_calculator import resolve_temporal_from_text
@@ -219,6 +218,36 @@ def _clean_extracted_term(raw: str) -> str:
     return term
 
 
+def _location_term_variants(term: str) -> List[str]:
+    """Return conservative singular/plural variants for a location search term."""
+    cleaned = re.sub(r"\s+", " ", str(term or "").strip().lower())
+    if not cleaned:
+        return []
+
+    variants = [cleaned]
+    if cleaned in _KNOWN_CITY_TERMS:
+        return variants
+
+    words = cleaned.split()
+    final_word = words[-1] if words else ""
+    if len(final_word) < 4:
+        return variants
+
+    alternate_final_word = ""
+    if final_word.endswith("ies") and len(final_word) > 4:
+        alternate_final_word = f"{final_word[:-3]}y"
+    elif final_word.endswith("s") and not final_word.endswith("ss"):
+        alternate_final_word = final_word[:-1]
+    elif final_word.endswith("y"):
+        alternate_final_word = f"{final_word[:-1]}ies"
+    else:
+        alternate_final_word = f"{final_word}s"
+
+    if alternate_final_word and alternate_final_word != final_word:
+        variants.append(" ".join([*words[:-1], alternate_final_word]))
+    return list(dict.fromkeys(variants))
+
+
 def _extract_recurring_weekday_filters(text: str) -> tuple[List[int], bool]:
     """Detect recurring weekday intent such as 'Tuesdays' or 'every Tuesday'."""
     text_l = str(text or "").lower()
@@ -348,7 +377,6 @@ def _derive_atomic_constraints_from_text(text: str, current_date: str) -> QueryC
     """Parse only the provided text into a fresh constraints object."""
     constraints = QueryConstraints()
     user_text = str(text or "").strip()
-    user_text_l = user_text.lower()
 
     resolved = resolve_temporal_from_text(user_text, current_date)
     if resolved:
@@ -392,7 +420,12 @@ def _derive_atomic_constraints_from_text(text: str, current_date: str) -> QueryC
     return constraints
 
 
-def _merge_constraints(base: QueryConstraints, update: QueryConstraints, user_text: str, is_clarification: bool) -> QueryConstraints:
+def _merge_constraints(
+    base: QueryConstraints,
+    update: QueryConstraints,
+    user_text: str,
+    is_clarification: bool,
+) -> QueryConstraints:
     """Merge a refinement/clarification delta into existing constraints."""
     merged = QueryConstraints.from_dict(base.to_dict())
     user_text_l = str(user_text or "").lower()
@@ -587,15 +620,24 @@ def build_sql_from_constraints(constraints_dict: Dict[str, Any], limit: int = DE
     if location_terms:
         location_filters = []
         for term in location_terms:
-            safe_term = term.replace("'", "")
-            location_filters.append(
-                "("
-                f"location ILIKE '%{safe_term}%' OR "
-                f"source ILIKE '%{safe_term}%' OR "
-                f"url ILIKE '%{safe_term}%'"
-                ")"
+            term_filters = []
+            for variant in _location_term_variants(term):
+                safe_variant = variant.replace("'", "")
+                term_filters.append(
+                    "("
+                    f"location ILIKE '%{safe_variant}%' OR "
+                    f"source ILIKE '%{safe_variant}%' OR "
+                    f"url ILIKE '%{safe_variant}%'"
+                    ")"
+                )
+            if term_filters:
+                location_filters.append(
+                    "(" + " OR ".join(term_filters) + ")"
+                )
+        if location_filters:
+            filters.append(
+                "( " + " OR ".join(location_filters) + " )"
             )
-        filters.append("( " + " OR ".join(location_filters) + " )")
 
     if not filters:
         return None
