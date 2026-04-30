@@ -1,8 +1,9 @@
+import importlib
+import logging
 import os
 import sys
 import types
-import importlib
-import logging
+
 
 # Ensure env vars for LLM init don't crash import
 os.environ.setdefault('OPENAI_API_KEY', 'test-key')
@@ -25,8 +26,6 @@ sys.modules['db'] = mod
 
 # Use src on path like other tests
 sys.path.insert(0, 'src')
-
-from utils.sql_filters import enforce_dance_style  # sanity import
 
 # Import main app
 app_main = importlib.import_module('main')
@@ -133,6 +132,30 @@ def test_process_query_uses_deterministic_sql_for_supported_compound_query(monke
     assert "victoria" in (resp.get("interpretation") or "").lower()
 
 
+def test_process_query_uses_deterministic_sql_for_undated_venue_class_query(monkeypatch):
+    def _raise_if_called(*_args, **_kwargs):
+        raise AssertionError("LLM SQL generation should not run for supported deterministic queries")
+
+    monkeypatch.setattr(app_main, "_query_llm_timed", _raise_if_called)
+    monkeypatch.setattr(
+        app_main,
+        "generate_interpretation",
+        lambda *_args, **_kwargs: "Searching upcoming bachata classes at The Loft.",
+    )
+
+    req = app_main.QueryRequest(user_input="bachata classes at The Loft")
+    resp = app_main.process_query(req)
+    sql = (resp.get("sql_query") or "").lower()
+    assert resp.get("clarification_required") is not True
+    assert "start_date >=" in sql
+    assert "start_date <=" in sql
+    assert "dance_style ilike '%bachata%'" in sql
+    assert "event_type ilike '%class%'" in sql
+    assert "location ilike '%loft%'" in sql
+    assert "source ilike '%loft%'" in sql
+    assert "url ilike '%loft%'" in sql
+
+
 def test_process_query_returns_targeted_clarification_for_ambiguous_weekday(monkeypatch, caplog):
     def _raise_if_called(*_args, **_kwargs):
         raise AssertionError("LLM should not run when parser already knows clarification is required")
@@ -168,7 +191,11 @@ def test_process_query_refinement_merges_constraints_structurally(monkeypatch, c
     )
     monkeypatch.setattr(app_main, "get_conversation_manager", lambda: conversation_manager)
     monkeypatch.setattr(app_main, "generate_interpretation", lambda *_args, **_kwargs: "unused")
-    monkeypatch.setattr(app_main, "_query_llm_timed", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("LLM should not run")))
+    monkeypatch.setattr(
+        app_main,
+        "_query_llm_timed",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("LLM should not run")),
+    )
 
     req = app_main.QueryRequest(user_input="also bachata", session_token="tok-1")
     with caplog.at_level(logging.INFO):

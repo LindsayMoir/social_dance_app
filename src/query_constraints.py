@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
-from typing import Any, Dict, List
+from datetime import datetime, timedelta
+from typing import Any, Dict, Final, List
 
 from date_calculator import resolve_temporal_from_text
 from utils.sql_filters import (
@@ -15,6 +15,7 @@ from utils.sql_filters import (
 
 
 DEFAULT_RESULT_LIMIT = 30
+DEFAULT_UNDATED_CONCRETE_SEARCH_DAYS: Final[int] = 30
 
 
 @dataclass
@@ -355,6 +356,34 @@ def _date_span_days(start_date: str, end_date: str) -> int:
     return max(0, (end_dt - start_dt).days + 1)
 
 
+def _apply_default_window_for_concrete_query(constraints: QueryConstraints, current_date: str) -> None:
+    """Default specific undated searches to a bounded upcoming window."""
+    if constraints.start_date or constraints.end_date or constraints.weekday_filters:
+        return
+    if constraints.clarification_needed:
+        return
+
+    has_concrete_subject = bool(constraints.include_styles or constraints.include_event_types)
+    has_concrete_scope = bool(
+        constraints.location_terms
+        or constraints.venue_terms
+        or constraints.city_terms
+        or constraints.source_terms
+    )
+    if not (has_concrete_subject and has_concrete_scope):
+        return
+
+    try:
+        start_dt = datetime.strptime(current_date, "%Y-%m-%d")
+    except ValueError:
+        return
+
+    end_dt = start_dt + timedelta(days=DEFAULT_UNDATED_CONCRETE_SEARCH_DAYS - 1)
+    constraints.temporal_phrase = f"upcoming {DEFAULT_UNDATED_CONCRETE_SEARCH_DAYS} days"
+    constraints.start_date = start_dt.strftime("%Y-%m-%d")
+    constraints.end_date = end_dt.strftime("%Y-%m-%d")
+
+
 def _has_any_keyword(text_l: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in text_l for keyword in keywords)
 
@@ -417,6 +446,7 @@ def _derive_atomic_constraints_from_text(text: str, current_date: str) -> QueryC
         constraints.clarification_needed = True
         constraints.clarification_message = clarification_message
         constraints.ambiguity_reasons = ambiguity_reasons
+    _apply_default_window_for_concrete_query(constraints, current_date)
     return constraints
 
 

@@ -133,8 +133,41 @@ def test_build_sql_from_constraints_matches_singular_venue_for_plural_query() ->
     sql_l = sql.lower()
     assert "dance_style ilike '%bachata%'" in sql_l
     assert "event_type ilike '%class%'" in sql_l
+    assert "start_date >= '2026-03-09'" in sql_l
+    assert "start_date <= '2026-04-07'" in sql_l
     assert "location ilike '%method studios%'" in sql_l
     assert "location ilike '%method studio%'" in sql_l
+
+
+def test_concrete_venue_class_query_without_timeframe_gets_default_window() -> None:
+    constraints = derive_constraints_from_text(
+        "bachata classes at The Loft",
+        "2026-04-30",
+    )
+    assert constraints["temporal_phrase"] == "upcoming 30 days"
+    assert constraints["start_date"] == "2026-04-30"
+    assert constraints["end_date"] == "2026-05-29"
+    assert "bachata" in constraints["include_styles"]
+    assert constraints["include_event_types"] == ["class"]
+    assert any("loft" in term for term in constraints["location_terms"])
+    assert constraints["clarification_needed"] is False
+
+    sql = build_sql_from_constraints(constraints)
+    assert sql is not None
+    sql_l = sql.lower()
+    assert "start_date >= '2026-04-30'" in sql_l
+    assert "start_date <= '2026-05-29'" in sql_l
+    assert "dance_style ilike '%bachata%'" in sql_l
+    assert "event_type ilike '%class%'" in sql_l
+    assert "location ilike '%loft%'" in sql_l
+
+
+def test_generic_query_without_timeframe_does_not_get_default_window() -> None:
+    constraints = derive_constraints_from_text("Where can I dance?", "2026-04-30")
+    assert constraints["start_date"] == ""
+    assert constraints["end_date"] == ""
+    assert constraints["temporal_phrase"] == ""
+    assert build_sql_from_constraints(constraints) is None
 
 
 def test_build_sql_from_constraints_matches_plural_venue_for_singular_query() -> None:

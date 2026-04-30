@@ -2202,7 +2202,11 @@ class ImageScraper:
             extraction_attempted=True,
             extraction_succeeded=vision_success,
             extraction_skipped=False,
-            decision_reason="screenshot_ocr_llm_no_events",
+            decision_reason=self._image_llm_failure_decision_reason(
+                "screenshot_ocr",
+                llm_result,
+                "screenshot_ocr_llm_no_events",
+            ),
             text_extracted=True,
             keywords_found=True,
             events_written=vision_events_written,
@@ -2213,6 +2217,14 @@ class ImageScraper:
             fallback_used=True,
         )
         return vision_success
+
+    @staticmethod
+    def _image_llm_failure_decision_reason(prefix: str, llm_result: object, default_reason: str) -> str:
+        """Map structured LLM write failures into image telemetry reason codes."""
+        reason = str(getattr(llm_result, "decision_reason", "") or "").strip()
+        if not reason:
+            return default_reason
+        return f"{prefix}_{reason}"
 
 
     def process_image_url(
@@ -2639,7 +2651,11 @@ class ImageScraper:
                 extraction_attempted=True,
                 extraction_succeeded=vision_success,
                 extraction_skipped=False,
-                decision_reason="ocr_llm_no_events",
+                decision_reason=self._image_llm_failure_decision_reason(
+                    "ocr",
+                    llm_result,
+                    "ocr_llm_no_events",
+                ),
                 text_extracted=True,
                 keywords_found=True,
                 events_written=vision_events_written,

@@ -52,6 +52,59 @@ _US_STATE_OR_TERRITORY_CODES: Final[frozenset[str]] = frozenset(
 
 _BLOCKED_EVENT_URL_DOMAINS: Final[frozenset[str]] = frozenset({"example.com"})
 _EVENT_URL_REACHABILITY_TIMEOUT_SECONDS: Final[float] = 6.0
+_LOCAL_EVENT_TEXT_MARKERS: Final[tuple[str, ...]] = (
+    "victoria",
+    "british columbia",
+    " v8",
+    "v8w",
+    "v8v",
+    "v8t",
+    "v8x",
+    "v8y",
+    "v9a",
+    "v9b",
+    "v9c",
+    "v9e",
+    "v9z",
+    "saanich",
+    "esquimalt",
+    "sidney",
+    "langford",
+    "colwood",
+    "oak bay",
+    "view royal",
+    "vancouver island",
+    "method studio",
+    "the loft",
+    "loft pub",
+    "coda",
+    "wicket hall",
+)
+_NONLOCAL_EVENT_TEXT_MARKERS: Final[tuple[str, ...]] = (
+    "poland",
+    "warsaw",
+    "krakow",
+    "gdansk",
+    "portugal",
+    "lisbon",
+    "porto",
+    "europe",
+)
+_INSUFFICIENT_EVENT_NAME_VALUES: Final[frozenset[str]] = frozenset(
+    {
+        "",
+        "event",
+        "events",
+        "dance",
+        "dance event",
+        "no events",
+        "no events found",
+        "unknown",
+        "unknown event",
+        "n/a",
+        "none",
+    }
+)
 
 CHATBOT_METRICS_SCHEMA_QUERIES: Final[tuple[str, ...]] = (
     """
@@ -2934,6 +2987,126 @@ class DatabaseHandler():
             sample_locations,
         )
         return working_df.loc[~disqualify_mask].reset_index(drop=True)
+
+    @staticmethod
+    def _normalize_event_quality_text(value: Any) -> str:
+        """Normalize event text for lightweight locality and quality checks."""
+        text_value = str(value or "").strip().lower()
+        if not text_value or text_value in {"nan", "nat", "none", "null", "<na>"}:
+            return ""
+        return re.sub(r"\s+", " ", text_value)
+
+    @classmethod
+    def _event_row_text(cls, row: pd.Series, *, source: str, url: str, parent_url: str) -> str:
+        """Combine row and crawl context fields used by event quality gates."""
+        fields = [
+            row.get("event_name"),
+            row.get("location"),
+            row.get("description"),
+            row.get("source"),
+            source,
+            row.get("url"),
+            url,
+            parent_url,
+        ]
+        return " ".join(cls._normalize_event_quality_text(value) for value in fields if value is not None)
+
+    @classmethod
+    def _has_local_event_signal(cls, text_value: str) -> bool:
+        """Return True when text contains a Greater Victoria / BC locality signal."""
+        normalized_text = f" {cls._normalize_event_quality_text(text_value)} "
+        if re.search(r"\b(?:bc|b\.c\.)\b", normalized_text):
+            return True
+        return any(marker in normalized_text for marker in _LOCAL_EVENT_TEXT_MARKERS)
+
+    @classmethod
+    def _has_nonlocal_event_signal(cls, text_value: str) -> bool:
+        """Return True when text clearly points outside the intended local crawl area."""
+        normalized_text = f" {cls._normalize_event_quality_text(text_value)} "
+        has_country_code = re.search(r"\b(?:pl|pt)\b", normalized_text)
+        has_event_scope = re.search(r"\b(?:country|conference|festival)\b", normalized_text)
+        if has_country_code and has_event_scope:
+            return True
+        return any(marker in normalized_text for marker in _NONLOCAL_EVENT_TEXT_MARKERS)
+
+    @classmethod
+    def _is_social_image_context(cls, *, source: str, url: str, parent_url: str) -> bool:
+        """Return True for image/OCR rows coming from broad social keyword search."""
+        context = cls._normalize_event_quality_text(" ".join([source or "", url or "", parent_url or ""]))
+        return "instagram_keyword_search" in context or "instagram.com" in context
+
+    @classmethod
+    def _event_row_has_minimum_write_data(cls, row: pd.Series) -> bool:
+        """Require enough structured data to avoid writing keyword-only OCR hallucinations."""
+        event_name = cls._normalize_event_quality_text(row.get("event_name"))
+        if event_name in _INSUFFICIENT_EVENT_NAME_VALUES:
+            return False
+        if not cls._normalize_event_quality_text(row.get("start_date")):
+            return False
+        return any(
+            cls._normalize_event_quality_text(row.get(column))
+            for column in ("location", "description", "start_time", "end_time")
+        )
+
+    def _filter_event_rows_for_write_quality(
+        self,
+        df: pd.DataFrame,
+        *,
+        source: str,
+        url: str,
+        parent_url: str,
+        context: str,
+        enforce_social_locality: bool = True,
+    ) -> tuple[pd.DataFrame, Optional[str]]:
+        """
+        Drop rows that are too weak or explicitly out of local scope before insertion.
+
+        The social-image locality check is intentionally stricter because Instagram keyword
+        search can surface global dance content whose OCR text happens to match dance terms.
+        """
+        if df is None or df.empty:
+            return pd.DataFrame() if df is None else df, None
+
+        working_df = df.copy()
+        social_image_context = enforce_social_locality and self._is_social_image_context(
+            source=source,
+            url=url,
+            parent_url=parent_url,
+        )
+        keep_rows: List[bool] = []
+        rejection_counts: Counter[str] = Counter()
+
+        for _, row in working_df.iterrows():
+            combined_text = self._event_row_text(row, source=source, url=url, parent_url=parent_url)
+            row_source = self._normalize_event_quality_text(row.get("source") or source)
+
+            if not self._event_row_has_minimum_write_data(row):
+                keep_rows.append(False)
+                rejection_counts["insufficient_event_data"] += 1
+                continue
+            if self._has_nonlocal_event_signal(combined_text):
+                keep_rows.append(False)
+                rejection_counts["out_of_scope_location"] += 1
+                continue
+            if social_image_context and not self._has_local_event_signal(f"{combined_text} {row_source}"):
+                keep_rows.append(False)
+                rejection_counts["social_image_missing_locality"] += 1
+                continue
+            keep_rows.append(True)
+
+        if not rejection_counts:
+            return working_df, None
+
+        logging.warning(
+            "_filter_event_rows_for_write_quality: Dropped %d/%d event row(s) during %s. reasons=%s",
+            sum(rejection_counts.values()),
+            len(working_df),
+            context,
+            dict(rejection_counts),
+        )
+        filtered = working_df.loc[keep_rows].reset_index(drop=True)
+        dominant_reason = rejection_counts.most_common(1)[0][0] if filtered.empty else None
+        return filtered, dominant_reason
     
 
     def populate_from_db_or_fallback(self, location_str, postal_code):
@@ -3503,6 +3676,22 @@ class DatabaseHandler():
             logging.info("write_events_to_db: No events remain after US ZIP pre-filter, skipping address processing.")
             self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now(), "us_postal_code_location"])
             return 0
+        df, quality_rejection_reason = self._filter_event_rows_for_write_quality(
+            df,
+            source=source,
+            url=url,
+            parent_url=parent_url,
+            context="pre_address",
+            enforce_social_locality=False,
+        )
+        if df.empty:
+            logging.info(
+                "write_events_to_db: No events remain after pre-address quality filtering, skipping address processing."
+            )
+            self.write_url_to_db(
+                [url, parent_url, source, keywords, False, 1, datetime.now(), quality_rejection_reason]
+            )
+            return 0
 
         # Drop old events before expensive address resolution.
         rows_before_old_filter = len(df)
@@ -3530,6 +3719,19 @@ class DatabaseHandler():
         if df.empty:
             logging.info("write_events_to_db: No events remain after US ZIP post-filter, skipping write.")
             self.write_url_to_db([url, parent_url, source, keywords, False, 1, datetime.now(), "us_postal_code_location"])
+            return 0
+        df, quality_rejection_reason = self._filter_event_rows_for_write_quality(
+            df,
+            source=source,
+            url=url,
+            parent_url=parent_url,
+            context="post_address",
+        )
+        if df.empty:
+            logging.info("write_events_to_db: No events remain after post-address quality filtering, skipping write.")
+            self.write_url_to_db(
+                [url, parent_url, source, keywords, False, 1, datetime.now(), quality_rejection_reason]
+            )
             return 0
 
         # Remove rows that are incomplete after address normalization.
@@ -3760,6 +3962,59 @@ class DatabaseHandler():
             return False
         return bool(event_identity and event_identity not in fallback_identities)
 
+    @staticmethod
+    def _event_url_has_detail_path(value: Any) -> bool:
+        """Return True when a URL path looks like a specific event detail URL."""
+        try:
+            path = (urlparse(str(value or "").strip()).path or "").strip().lower()
+        except Exception:
+            return False
+        path = path.rstrip("/")
+        if not path:
+            return False
+        if path in {"/event", "/events"}:
+            return False
+        if any(token in path for token in ("/events/month", "/events/list", "/calendar", "/schedule")):
+            return False
+        return any(token in path for token in ("/event/", "/events/", "/show/", "/tickets/", "/nm_event/"))
+
+    def _event_url_needs_trust_check(
+        self,
+        event_url: Any,
+        fallback_urls: List[str],
+        *,
+        row_source: Any,
+        fallback_source: Any,
+    ) -> bool:
+        """
+        Return True when a row URL lacks fetched-source provenance or source-domain affinity.
+
+        Fetched/default URLs are trusted. Formulated child URLs under a fetched parent are
+        probed. When no fetched fallback exists, source-matching domains are trusted and
+        source-mismatched domains are probed before insert.
+        """
+        event_url_str = str(event_url or "").strip()
+        if not self._looks_like_http_url(event_url_str):
+            return False
+        if self._event_url_needs_reachability_check(event_url_str, fallback_urls):
+            return True
+
+        fallback_identities = {
+            self._normalize_event_url_for_identity(fallback_url)
+            for fallback_url in fallback_urls
+            if self._looks_like_http_url(fallback_url)
+        }
+        if fallback_identities:
+            return False
+
+        source_matches_url = (
+            self._source_matches_event_url(row_source, event_url_str)
+            or self._source_matches_event_url(fallback_source, event_url_str)
+        )
+        if source_matches_url and not self._event_url_has_detail_path(event_url_str):
+            return False
+        return True
+
     def _event_url_is_reachable(self, event_url: str) -> bool:
         """Return True when an event URL responds with a non-error HTTP status."""
         if not self._looks_like_http_url(event_url):
@@ -3884,14 +4139,14 @@ class DatabaseHandler():
                     row_email = self._extract_email(row_url) or self._extract_email(row_source)
                     final_url = row_email or default_email or source_email or ""
 
-            if (
-                row_url
-                and final_url == row_url
-                and self._event_url_needs_reachability_check(final_url, fallback_candidates)
-                and not self._event_url_is_reachable(final_url)
-            ):
+            if row_url and final_url == row_url and self._event_url_needs_trust_check(
+                final_url,
+                fallback_candidates,
+                row_source=row_source,
+                fallback_source=source,
+            ) and not self._event_url_is_reachable(final_url):
                 logging.warning(
-                    "_enforce_event_url_values: formulated row URL is unreachable; "
+                    "_enforce_event_url_values: untrusted row URL is unreachable; "
                     "event_name=%s row_url=%s fallback_url=%s source=%s",
                     row_event_name,
                     row_url,

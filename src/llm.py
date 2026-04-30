@@ -823,7 +823,9 @@ class LLMHandler:
             )
 
         if not kept_rows:
-            return working_df.iloc[0:0].copy()
+            empty_df = working_df.iloc[0:0].copy()
+            empty_df.attrs["drop_reason"] = "image_date_conflict"
+            return empty_df
         return pd.DataFrame(kept_rows)
 
     @staticmethod
@@ -1090,6 +1092,7 @@ class LLMHandler:
                         )
                     except Exception as _e:
                         logging.warning(f"process_llm_response: Failed to apply image date resolution logic: {_e}")
+                    image_date_drop_reason = str(events_df.attrs.get("drop_reason") or "").strip()
                     events_df = self._normalize_event_rows_before_write(
                         events_df=events_df,
                         url=url,
@@ -1100,9 +1103,12 @@ class LLMHandler:
                             "def process_llm_response: URL %s dropped all parsed events after image/date normalization.",
                             url,
                         )
-                        return EventWriteResult(success=False, events_written=0, decision_reason="invalid_or_missing_start_date")
-                    events_written = int(len(events_df))
-                    self.db_handler.write_events_to_db(
+                        return EventWriteResult(
+                            success=False,
+                            events_written=0,
+                            decision_reason=image_date_drop_reason or "invalid_or_missing_start_date",
+                        )
+                    events_written = self.db_handler.write_events_to_db(
                         events_df,
                         url,
                         parent_url,
@@ -1113,7 +1119,21 @@ class LLMHandler:
                         prompt_type=schema_type,
                         decision_reason="llm_success",
                     )
-                    logging.info(f"def process_llm_response: URL {url} marked as relevant with events written to the database.")
+                    if events_written <= 0:
+                        logging.warning(
+                            "def process_llm_response: URL %s parsed events but write_events_to_db rejected all rows.",
+                            url,
+                        )
+                        return EventWriteResult(
+                            success=False,
+                            events_written=0,
+                            decision_reason="write_rejected_no_valid_events",
+                        )
+                    logging.info(
+                        "def process_llm_response: URL %s marked as relevant with %d events written to the database.",
+                        url,
+                        events_written,
+                    )
                     return EventWriteResult(
                         success=True,
                         events_written=events_written,

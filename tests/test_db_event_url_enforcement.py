@@ -195,19 +195,19 @@ def test_enforce_event_url_values_keeps_reachable_formulated_child_url(monkeypat
     assert out.loc[0, "url"] == "https://theloftpub.com/event/weekly-salsa-social/"
 
 
-def test_enforce_event_url_values_does_not_probe_row_url_without_fetched_source_fallback(monkeypatch) -> None:
+def test_enforce_event_url_values_does_not_probe_source_matching_listing_url_without_fallback(monkeypatch) -> None:
     handler = DatabaseHandler.__new__(DatabaseHandler)
 
     def fail_if_called(_url: str) -> bool:
-        raise AssertionError("reachability should not be checked without a fetched source fallback")
+        raise AssertionError("reachability should not be checked for source-matching listing URLs")
 
     monkeypatch.setattr(handler, "_event_url_is_reachable", fail_if_called)
     df = pd.DataFrame(
         [
             {
-                "event_name": "Imported URL Event",
+                "event_name": "Imported Listing Event",
                 "source": "Venue D",
-                "url": "https://venue.example/event/imported-url-event/",
+                "url": "https://venue.example/calendar/",
             },
         ]
     )
@@ -220,4 +220,95 @@ def test_enforce_event_url_values_does_not_probe_row_url_without_fetched_source_
     )
 
     assert len(out) == 1
-    assert out.loc[0, "url"] == "https://venue.example/event/imported-url-event/"
+    assert out.loc[0, "url"] == "https://venue.example/calendar/"
+
+
+def test_enforce_event_url_values_drops_unreachable_source_matching_detail_url_without_fallback(monkeypatch) -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    checked_urls: list[str] = []
+
+    def fake_reachable(url: str) -> bool:
+        checked_urls.append(url)
+        return False
+
+    monkeypatch.setattr(handler, "_event_url_is_reachable", fake_reachable)
+    df = pd.DataFrame(
+        [
+            {
+                "event_name": "Weekly Salsa Social",
+                "source": "The Loft Pub Victoria",
+                "url": "https://theloftpub.com/event/weekly-salsa-social/",
+            },
+        ]
+    )
+
+    out = handler._enforce_event_url_values(
+        df,
+        default_url="",
+        parent_url="",
+        source="The Loft Pub Victoria",
+    )
+
+    assert checked_urls == ["https://theloftpub.com/event/weekly-salsa-social/"]
+    assert out.empty
+
+
+def test_enforce_event_url_values_drops_unreachable_source_mismatched_url_without_fallback(monkeypatch) -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    checked_urls: list[str] = []
+
+    def fake_reachable(url: str) -> bool:
+        checked_urls.append(url)
+        return False
+
+    monkeypatch.setattr(handler, "_event_url_is_reachable", fake_reachable)
+    df = pd.DataFrame(
+        [
+            {
+                "event_name": "Rhythm Train",
+                "source": "The Loft Pub Victoria",
+                "url": "https://liveentertainmentvictoria.com/event/rhythm-train/",
+            },
+        ]
+    )
+
+    out = handler._enforce_event_url_values(
+        df,
+        default_url="",
+        parent_url="",
+        source="The Loft Pub Victoria",
+    )
+
+    assert checked_urls == ["https://liveentertainmentvictoria.com/event/rhythm-train/"]
+    assert out.empty
+
+
+def test_enforce_event_url_values_keeps_reachable_source_mismatched_url_without_fallback(monkeypatch) -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    checked_urls: list[str] = []
+
+    def fake_reachable(url: str) -> bool:
+        checked_urls.append(url)
+        return True
+
+    monkeypatch.setattr(handler, "_event_url_is_reachable", fake_reachable)
+    df = pd.DataFrame(
+        [
+            {
+                "event_name": "External Ticket Event",
+                "source": "Venue Name",
+                "url": "https://tickets.example.org/event/external-ticket-event/",
+            },
+        ]
+    )
+
+    out = handler._enforce_event_url_values(
+        df,
+        default_url="",
+        parent_url="",
+        source="Venue Name",
+    )
+
+    assert checked_urls == ["https://tickets.example.org/event/external-ticket-event/"]
+    assert len(out) == 1
+    assert out.loc[0, "url"] == "https://tickets.example.org/event/external-ticket-event/"

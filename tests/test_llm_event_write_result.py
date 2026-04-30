@@ -11,6 +11,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from llm import EventWriteResult, LLMHandler
 
 
+def _capture_write(writes: list[pd.DataFrame]):
+    def _write(df: pd.DataFrame, *_args, **_kwargs) -> int:
+        writes.append(df.copy())
+        return len(df)
+
+    return _write
+
+
 def test_event_write_result_bool_tracks_success() -> None:
     assert bool(EventWriteResult(success=True, events_written=3, decision_reason="ok")) is True
     assert bool(EventWriteResult(success=False, events_written=0, decision_reason="miss")) is False
@@ -20,9 +28,7 @@ def test_process_llm_response_returns_written_event_count(monkeypatch) -> None:
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
-    handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
-    )
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
 
     monkeypatch.setattr(
         handler,
@@ -96,9 +102,7 @@ def test_process_llm_response_normalizes_relative_day_of_week_before_write(monke
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
-    handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
-    )
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
 
     monkeypatch.setattr(
         handler,
@@ -140,9 +144,7 @@ def test_process_llm_response_drops_rows_still_missing_start_date(monkeypatch) -
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
-    handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
-    )
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
 
     monkeypatch.setattr(
         handler,
@@ -183,9 +185,7 @@ def test_process_llm_response_fills_missing_start_date_from_url_slug(monkeypatch
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
-    handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
-    )
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
 
     monkeypatch.setattr(
         handler,
@@ -228,9 +228,7 @@ def test_process_llm_response_does_not_override_existing_start_date_with_url_slu
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
-    handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
-    )
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
 
     monkeypatch.setattr(
         handler,
@@ -272,9 +270,7 @@ def test_process_llm_response_accepts_compact_json_event_payload(monkeypatch) ->
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
-    handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
-    )
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
 
     monkeypatch.setattr(
         handler,
@@ -339,9 +335,7 @@ def test_process_llm_response_fills_missing_image_date_from_detected_hint(monkey
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
-    handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
-    )
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
 
     monkeypatch.setattr(
         handler,
@@ -383,9 +377,7 @@ def test_process_llm_response_drops_unresolved_image_date_conflict(monkeypatch) 
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
-    handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
-    )
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
 
     monkeypatch.setattr(
         handler,
@@ -425,9 +417,7 @@ def test_process_llm_response_expands_schedule_poster_dates(monkeypatch) -> None
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
-    handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
-    )
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
 
     monkeypatch.setattr(
         handler,
@@ -476,9 +466,7 @@ def test_process_llm_response_keeps_schedule_poster_rows_without_single_date_con
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
-    handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
-    )
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
 
     monkeypatch.setattr(
         handler,
@@ -531,9 +519,7 @@ def test_process_llm_response_uses_facebook_header_date_over_conflicting_llm_dat
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
-    handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
-    )
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
 
     monkeypatch.setattr(
         handler,
@@ -584,9 +570,7 @@ def test_process_llm_response_keeps_non_facebook_dates_unchanged(monkeypatch) ->
     handler = LLMHandler.__new__(LLMHandler)
     handler.config = {"crawling": {"prompt_max_length": 5000}}
     writes: list[pd.DataFrame] = []
-    handler.db_handler = SimpleNamespace(
-        write_events_to_db=lambda df, *_args, **_kwargs: writes.append(df.copy())
-    )
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
 
     monkeypatch.setattr(
         handler,
@@ -627,3 +611,55 @@ def test_process_llm_response_keeps_non_facebook_dates_unchanged(monkeypatch) ->
     assert len(writes) == 1
     assert writes[0].iloc[0]["start_date"] == "2026-04-18"
     assert writes[0].iloc[0]["day_of_week"] == "Friday"
+
+
+def test_process_llm_response_reports_write_rejection_when_database_writes_zero_rows(monkeypatch) -> None:
+    handler = LLMHandler.__new__(LLMHandler)
+    handler.config = {"crawling": {"prompt_max_length": 5000}}
+    handler.db_handler = SimpleNamespace(write_events_to_db=lambda *_args, **_kwargs: 0)
+    description = (
+        "long enough description to exceed the minimum response threshold "
+        "for parsing validation."
+    )
+
+    monkeypatch.setattr(
+        handler,
+        "generate_prompt",
+        lambda url, extracted_text, prompt_type: ("prompt text", "event_extraction"),
+    )
+    monkeypatch.setattr(
+        handler,
+        "query_llm",
+        lambda url, prompt_attempt, schema_type, return_metadata=True: (
+            '{"events":[{"event_name":"Local Dance","start_date":"2026-05-01","location":"Victoria, BC",'
+            f'"description":"{description}"}}]}}',
+            {"provider": "test", "model": "fake"},
+        ),
+    )
+    monkeypatch.setattr(
+        handler,
+        "extract_and_parse_json",
+        lambda llm_response, url, schema_type: [
+            {
+                "event_name": "Local Dance",
+                "start_date": "2026-05-01",
+                "location": "Victoria, BC",
+                "description": description,
+            },
+        ],
+    )
+
+    result = handler.process_llm_response(
+        "https://example.com/event",
+        "",
+        "Local dance May 1 in Victoria BC",
+        "Example Source",
+        ["dance"],
+        "default",
+    )
+
+    assert result == EventWriteResult(
+        success=False,
+        events_written=0,
+        decision_reason="write_rejected_no_valid_events",
+    )
