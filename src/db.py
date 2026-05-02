@@ -4291,7 +4291,7 @@ class DatabaseHandler():
                     start_date_value = pd.to_datetime(start_date, errors="coerce")
                     if pd.isna(start_date_value):
                         continue
-                    working_df.at[idx, "end_date"] = (start_date_value + timedelta(days=1)).date()
+                    working_df.at[idx, "end_date"] = pd.to_datetime(start_date_value, errors="coerce") + timedelta(days=1)
                     rollover_count += 1
             except Exception:
                 continue

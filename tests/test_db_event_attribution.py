@@ -1,4 +1,9 @@
+"""Tests for database attribution helpers."""
+
+# ruff: noqa: I001
+
 import sys
+import warnings
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -256,7 +261,7 @@ def test_write_events_to_db_records_canonical_write_attribution(monkeypatch) -> 
 
 
 def test_write_events_to_db_aligns_recurring_weekday_dates_before_insert(monkeypatch) -> None:
-    handler = _make_handler(old_days=30)
+    handler = _make_handler(old_days=365)
     handler._rename_google_calendar_columns = lambda df: df
     handler._keywords_to_specific_dance_styles = lambda _keywords: ""
     handler._resolve_event_source_label = lambda source, url, parent_url: source or "Deb Rhymer"
@@ -388,6 +393,25 @@ def test_write_events_to_db_rolls_overnight_end_date(monkeypatch) -> None:
 
     monkeypatch.delenv("DS_RUN_ID", raising=False)
     monkeypatch.delenv("DS_STEP_NAME", raising=False)
+
+
+def test_normalize_overnight_end_dates_does_not_warn_on_datetime64_columns() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    df = pd.DataFrame(
+        {
+            "start_date": pd.to_datetime(["2026-05-10"]),
+            "end_date": pd.to_datetime(["2026-05-10"]),
+            "start_time": [datetime.strptime("21:00", "%H:%M").time()],
+            "end_time": [datetime.strptime("02:00", "%H:%M").time()],
+        }
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = handler._normalize_overnight_end_dates(df)
+
+    assert not any(issubclass(item.category, FutureWarning) for item in caught)
+    assert pd.to_datetime(out.iloc[0]["end_date"]).date().isoformat() == "2026-05-11"
 
 
 def test_build_phase1_telemetry_integrity_report_treats_step_mismatch_as_advisory() -> None:
