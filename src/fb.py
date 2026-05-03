@@ -669,7 +669,14 @@ class FacebookEventScraper():
         # Create a single context & page, reusing 'facebook_auth.json'
         # Uses Render Secret Files path if available, otherwise local path
         self.facebook_auth_path = get_auth_file('facebook')
-        self.context = self.browser.new_context(storage_state=self.facebook_auth_path)
+        if self.facebook_auth_path and os.path.exists(self.facebook_auth_path):
+            self.context = self.browser.new_context(storage_state=self.facebook_auth_path)
+        else:
+            logging.warning(
+                "Facebook auth file not found at %s; starting with a fresh browser context.",
+                self.facebook_auth_path,
+            )
+            self.context = self.browser.new_context()
         self.page = self.context.new_page()
         # keep a stable reference for re‑use
         self.logged_in_page = self.page

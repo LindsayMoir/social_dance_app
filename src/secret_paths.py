@@ -24,11 +24,12 @@ Usage:
     # Returns temp file path with contents from database or filesystem
 """
 
-import os
 import json
-import tempfile
 import logging
+import os
+import tempfile
 from typing import Optional
+
 
 def get_secret_path(filename: str, local_path: str = None) -> str:
     """
@@ -72,8 +73,9 @@ def get_secret_path(filename: str, local_path: str = None) -> str:
 def _get_db_connection():
     """Get database connection using centralized db_config."""
     try:
-        from db_config import get_database_config
         from sqlalchemy import create_engine
+
+        from db_config import get_database_config
         connection_string, _ = get_database_config()
         return create_engine(connection_string)
     except Exception as e:
@@ -234,6 +236,86 @@ def sync_auth_to_db(file_path: str, service_name: str = None) -> bool:
     except Exception as e:
         logging.error(f"Failed to sync {service_name} auth to database: {e}")
         return False
+
+
+def delete_auth_from_db(service: str) -> bool:
+    """Delete a service's auth row from auth_storage."""
+    engine = _get_db_connection()
+    if not engine:
+        return False
+
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(
+                text("DELETE FROM auth_storage WHERE service_name = :service"),
+                {"service": service.lower()},
+            )
+            conn.commit()
+        logging.info("Deleted auth row for '%s' from database", service)
+        return True
+    except Exception as e:
+        logging.warning("Failed to delete auth row for '%s' from database: %s", service, e)
+        return False
+
+
+def purge_auth_artifacts(
+    service: str,
+    file_path: str | None = None,
+    include_render_secret: bool = False,
+) -> dict[str, bool]:
+    """
+    Remove stored auth artifacts for a service.
+
+    Deletes the database row and any writable local auth files so the next
+    authentication attempt starts from a clean slate.
+    """
+    service = service.lower()
+    results = {
+        "db_deleted": delete_auth_from_db(service),
+        "file_deleted": False,
+        "fallback_deleted": False,
+        "render_secret_deleted": False,
+    }
+
+    candidate_paths: list[str] = []
+    if file_path:
+        candidate_paths.append(file_path)
+    candidate_paths.append(f"{service}_auth.json")
+
+    seen_paths: set[str] = set()
+    for candidate in candidate_paths:
+        path = os.path.abspath(candidate)
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+                logging.info("Deleted auth file for '%s': %s", service, path)
+                if file_path and os.path.abspath(file_path) == path:
+                    results["file_deleted"] = True
+                else:
+                    results["fallback_deleted"] = True
+            except Exception as e:
+                logging.warning("Failed to delete auth file for '%s' at %s: %s", service, path, e)
+
+    if include_render_secret:
+        render_secret_path = f"/etc/secrets/{service}_auth.json"
+        if os.path.isfile(render_secret_path):
+            try:
+                os.remove(render_secret_path)
+                logging.info("Deleted render secret auth file for '%s': %s", service, render_secret_path)
+                results["render_secret_deleted"] = True
+            except Exception as e:
+                logging.warning(
+                    "Failed to delete render secret auth file for '%s' at %s: %s",
+                    service,
+                    render_secret_path,
+                    e,
+                )
+
+    return results
 
 
 def is_render_environment() -> bool:

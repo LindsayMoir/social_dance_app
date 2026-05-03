@@ -1,12 +1,14 @@
 import asyncio
+import logging
 import sys
 import types
 from contextlib import contextmanager
-import logging
+
 
 sys.path.insert(0, "src")
 
 import credential_validator as cv
+import secret_paths
 from credential_validator import _load_facebook_group_probe_urls
 
 
@@ -214,6 +216,84 @@ def test_validate_facebook_brings_page_to_front_when_headful(monkeypatch):
 
     assert result["valid"] is True
     assert "bring_to_front" in actions
+
+
+def test_validate_facebook_purges_stale_auth_and_retries(monkeypatch, tmp_path):
+    @contextmanager
+    def _noop_headless(_headless):
+        yield
+
+    purge_calls: list[tuple[str, str | None]] = []
+
+    class _DummyPage:
+        def __init__(self, login_on_first_pass: bool):
+            self.url = "https://www.facebook.com/login" if login_on_first_pass else "https://www.facebook.com/"
+            self._login_on_first_pass = login_on_first_pass
+
+        def goto(self, *_args, **_kwargs):
+            self.url = "https://www.facebook.com/login" if self._login_on_first_pass else "https://www.facebook.com/"
+            return None
+
+        def bring_to_front(self):
+            return None
+
+        def wait_for_timeout(self, _ms):
+            return None
+
+    class _DummyBrowser:
+        def close(self):
+            return None
+
+    class _DummyPlaywright:
+        def stop(self):
+            return None
+
+    class _DummyScraper:
+        created = 0
+
+        def __init__(self, *args, **kwargs):
+            type(self).created += 1
+            login_on_first_pass = type(self).created == 1
+            self.facebook_auth_path = str(tmp_path / "facebook_auth.json")
+            self.page = _DummyPage(login_on_first_pass=login_on_first_pass)
+            self.browser = _DummyBrowser()
+            self.playwright = _DummyPlaywright()
+            self.login_success = True
+            self.config = {"crawling": {"headless": False}}
+
+        def navigate_and_maybe_login(self, _url, max_attempts=1):
+            return True
+
+    monkeypatch.setattr(cv, "_temporary_headless_config", _noop_headless)
+    monkeypatch.setattr(cv, "_load_facebook_group_probe_urls", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        cv,
+        "config",
+        {
+            "testing": {
+                "validation": {
+                    "scraping": {
+                        "facebook_group_probe_enforce": False,
+                        "facebook_group_probe_retry_once": False,
+                        "facebook_group_manual_review": False,
+                    }
+                }
+            }
+        },
+    )
+    monkeypatch.setitem(sys.modules, "fb", types.SimpleNamespace(FacebookEventScraper=_DummyScraper))
+    monkeypatch.setattr(
+        secret_paths,
+        "purge_auth_artifacts",
+        lambda service, file_path=None, include_render_secret=False: purge_calls.append((service, file_path))
+        or {"db_deleted": True, "file_deleted": True, "fallback_deleted": False, "render_secret_deleted": False},
+    )
+
+    result = cv.validate_facebook(headless=False, check_timeout_seconds=1)
+
+    assert result["valid"] is True
+    assert purge_calls == [("facebook", str(tmp_path / "facebook_auth.json"))]
+    assert _DummyScraper.created == 2
 
 
 def test_validate_instagram_logs_headless_state(monkeypatch, caplog):

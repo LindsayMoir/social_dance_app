@@ -34,16 +34,18 @@ Usage:
 
 import asyncio
 import copy
-from contextlib import contextmanager
 import csv
-from datetime import datetime
 import logging
 import os
 import random
 import time
+from contextlib import contextmanager
+from datetime import datetime
+
 import yaml
 
 from config_runtime import get_config_path, load_config, write_config
+
 
 # Load configuration
 config = load_config()
@@ -316,163 +318,200 @@ def validate_facebook(headless=False, check_timeout_seconds=60):
 
     try:
         from fb import FacebookEventScraper
+        from secret_paths import purge_auth_artifacts
 
         logging.info("validate_facebook(): Attempting to authenticate Facebook...")
         start_time = datetime.now()
+        stale_auth_retried = False
 
-        with _temporary_headless_config(headless):
-            # Create Facebook scraper - this automatically calls login_to_facebook()
-            # which will open browser if session is invalid
-            fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
-            actual_headless = bool(getattr(fb_scraper, "config", {}).get("crawling", {}).get("headless", True))
-            logging.info("validate_facebook(): Facebook scraper launched with headless=%s", actual_headless)
-            if not actual_headless:
-                try:
-                    fb_scraper.page.bring_to_front()
-                    fb_scraper.page.wait_for_timeout(750)
-                except Exception as front_error:
-                    logging.warning("validate_facebook(): Could not bring Facebook page to front: %s", front_error)
-
-            # Check if login was successful by navigating to Facebook
+        while True:
+            fb_scraper = None
             try:
-                fb_scraper.page.goto("https://www.facebook.com/", timeout=15000)
-                logged_in = "login" not in fb_scraper.page.url.lower()
-            except Exception as nav_error:
-                logging.warning(f"validate_facebook(): Error checking login status: {nav_error}")
-                logged_in = False
+                with _temporary_headless_config(headless):
+                    # Create Facebook scraper - this automatically calls login_to_facebook()
+                    # which will open browser if session is invalid
+                    fb_scraper = FacebookEventScraper(config_path='config/config.yaml')
+                    actual_headless = bool(getattr(fb_scraper, "config", {}).get("crawling", {}).get("headless", True))
+                    logging.info("validate_facebook(): Facebook scraper launched with headless=%s", actual_headless)
+                    if not actual_headless:
+                        try:
+                            fb_scraper.page.bring_to_front()
+                            fb_scraper.page.wait_for_timeout(750)
+                        except Exception as front_error:
+                            logging.warning(
+                                "validate_facebook(): Could not bring Facebook page to front: %s",
+                                front_error,
+                            )
 
-            # Validate access to whitelisted Facebook groups as part of credential check.
-            group_probe_limit = int(
-                config.get('testing', {})
-                .get('validation', {})
-                .get('scraping', {})
-                .get('facebook_group_probe_limit', 5)
-            )
-            group_probe_max_failures = int(
-                config.get('testing', {})
-                .get('validation', {})
-                .get('scraping', {})
-                .get('facebook_group_probe_max_failures', 0)
-            )
-            group_probe_enforce = bool(
-                config.get('testing', {})
-                .get('validation', {})
-                .get('scraping', {})
-                .get('facebook_group_probe_enforce', False)
-            )
-            group_probe_retry_once = bool(
-                config.get('testing', {})
-                .get('validation', {})
-                .get('scraping', {})
-                .get('facebook_group_probe_retry_once', True)
-            )
-            manual_review_enabled = bool(
-                config.get('testing', {})
-                .get('validation', {})
-                .get('scraping', {})
-                .get('facebook_group_manual_review', True)
-            )
-            manual_review_max_urls = int(
-                config.get('testing', {})
-                .get('validation', {})
-                .get('scraping', {})
-                .get('facebook_group_manual_review_max_urls', 3)
-            )
-            group_urls = _load_facebook_group_probe_urls(config, limit=group_probe_limit)
-            failed_group_urls: list[str] = []
-            if logged_in and group_urls:
-                for group_url in group_urls:
+                    # Check if login was successful by navigating to Facebook
                     try:
-                        # Single-attempt probe for speed: avoid retry-heavy auth loops here.
-                        if not fb_scraper.navigate_and_maybe_login(group_url, max_attempts=1):
-                            failed_group_urls.append(group_url)
-                    except Exception as probe_error:
-                        logging.warning(
-                            "validate_facebook(): Group probe exception for %s: %s",
-                            group_url,
-                            probe_error,
-                        )
-                        failed_group_urls.append(group_url)
-                    if group_probe_max_failures > 0 and len(failed_group_urls) >= group_probe_max_failures:
-                        logging.error(
-                            "validate_facebook(): Reached fail-fast threshold (%s failed group probes), stopping probe loop early.",
-                            group_probe_max_failures,
-                        )
-                        break
+                        fb_scraper.page.goto("https://www.facebook.com/", timeout=15000)
+                        logged_in = "login" not in fb_scraper.page.url.lower()
+                    except Exception as nav_error:
+                        logging.warning(f"validate_facebook(): Error checking login status: {nav_error}")
+                        logged_in = False
 
-            if logged_in and failed_group_urls and not headless and manual_review_enabled:
-                logging.info(
-                    "validate_facebook(): Starting manual group review for %s failed probe(s).",
-                    len(failed_group_urls),
-                )
-                failed_group_urls = _manual_facebook_group_review(
-                    fb_scraper=fb_scraper,
-                    failed_group_urls=failed_group_urls,
-                    max_urls=manual_review_max_urls,
-                )
+                    if not logged_in:
+                        if not headless and getattr(fb_scraper, "login_success", False) and not stale_auth_retried:
+                            logging.warning(
+                                "validate_facebook(): Facebook session appears stale; "
+                                "purging auth artifacts and retrying manual login."
+                            )
+                            purge_auth_artifacts(
+                                "facebook",
+                                file_path=getattr(fb_scraper, "facebook_auth_path", None),
+                            )
+                            stale_auth_retried = True
+                            continue
+                        logging.error("validate_facebook(): Facebook authentication failed")
+                        return {'valid': False, 'error': 'Facebook login failed - still on login page'}
 
-            if logged_in and failed_group_urls and group_probe_retry_once:
-                logging.info(
-                    "validate_facebook(): Retrying %s failed group probe(s) once before final decision.",
-                    len(failed_group_urls),
-                )
-                time.sleep(1.0)
-                still_failed: list[str] = []
-                for group_url in failed_group_urls:
-                    try:
-                        if not fb_scraper.navigate_and_maybe_login(group_url, max_attempts=1):
-                            still_failed.append(group_url)
-                    except Exception as retry_error:
-                        logging.warning(
-                            "validate_facebook(): Retry probe exception for %s: %s",
-                            group_url,
-                            retry_error,
-                        )
-                        still_failed.append(group_url)
-                recovered = len(failed_group_urls) - len(still_failed)
-                if recovered > 0:
-                    logging.info(
-                        "validate_facebook(): Retry recovered %s group probe(s). Remaining failures: %s",
-                        recovered,
-                        len(still_failed),
+                    # Validate access to whitelisted Facebook groups as part of credential check.
+                    group_probe_limit = int(
+                        config.get('testing', {})
+                        .get('validation', {})
+                        .get('scraping', {})
+                        .get('facebook_group_probe_limit', 5)
                     )
-                failed_group_urls = still_failed
+                    group_probe_max_failures = int(
+                        config.get('testing', {})
+                        .get('validation', {})
+                        .get('scraping', {})
+                        .get('facebook_group_probe_max_failures', 0)
+                    )
+                    group_probe_enforce = bool(
+                        config.get('testing', {})
+                        .get('validation', {})
+                        .get('scraping', {})
+                        .get('facebook_group_probe_enforce', False)
+                    )
+                    group_probe_retry_once = bool(
+                        config.get('testing', {})
+                        .get('validation', {})
+                        .get('scraping', {})
+                        .get('facebook_group_probe_retry_once', True)
+                    )
+                    manual_review_enabled = bool(
+                        config.get('testing', {})
+                        .get('validation', {})
+                        .get('scraping', {})
+                        .get('facebook_group_manual_review', True)
+                    )
+                    manual_review_max_urls = int(
+                        config.get('testing', {})
+                        .get('validation', {})
+                        .get('scraping', {})
+                        .get('facebook_group_manual_review_max_urls', 3)
+                    )
+                    group_urls = _load_facebook_group_probe_urls(config, limit=group_probe_limit)
+                    failed_group_urls: list[str] = []
+                    if group_urls:
+                        for group_url in group_urls:
+                            try:
+                                # Single-attempt probe for speed: avoid retry-heavy auth loops here.
+                                if not fb_scraper.navigate_and_maybe_login(group_url, max_attempts=1):
+                                    failed_group_urls.append(group_url)
+                            except Exception as probe_error:
+                                logging.warning(
+                                    "validate_facebook(): Group probe exception for %s: %s",
+                                    group_url,
+                                    probe_error,
+                                )
+                                failed_group_urls.append(group_url)
+                            if group_probe_max_failures > 0 and len(failed_group_urls) >= group_probe_max_failures:
+                                logging.error(
+                                    "validate_facebook(): Reached fail-fast threshold "
+                                    "(%s failed group probes), stopping probe loop early.",
+                                    group_probe_max_failures,
+                                )
+                                break
 
-            # Clean up browser
-            fb_scraper.browser.close()
-            fb_scraper.playwright.stop()
+                    if failed_group_urls and not headless and manual_review_enabled:
+                        logging.info(
+                            "validate_facebook(): Starting manual group review for %s failed probe(s).",
+                            len(failed_group_urls),
+                        )
+                        failed_group_urls = _manual_facebook_group_review(
+                            fb_scraper=fb_scraper,
+                            failed_group_urls=failed_group_urls,
+                            max_urls=manual_review_max_urls,
+                        )
 
-        elapsed = (datetime.now() - start_time).total_seconds()
+                    if failed_group_urls and group_probe_retry_once:
+                        logging.info(
+                            "validate_facebook(): Retrying %s failed group probe(s) once before final decision.",
+                            len(failed_group_urls),
+                        )
+                        time.sleep(1.0)
+                        still_failed: list[str] = []
+                        for group_url in failed_group_urls:
+                            try:
+                                if not fb_scraper.navigate_and_maybe_login(group_url, max_attempts=1):
+                                    still_failed.append(group_url)
+                            except Exception as retry_error:
+                                logging.warning(
+                                    "validate_facebook(): Retry probe exception for %s: %s",
+                                    group_url,
+                                    retry_error,
+                                )
+                                still_failed.append(group_url)
+                        recovered = len(failed_group_urls) - len(still_failed)
+                        if recovered > 0:
+                            logging.info(
+                                "validate_facebook(): Retry recovered %s group probe(s). Remaining failures: %s",
+                                recovered,
+                                len(still_failed),
+                            )
+                        failed_group_urls = still_failed
 
-        if logged_in and not failed_group_urls:
-            logging.info(f"validate_facebook(): Facebook authenticated successfully ({elapsed:.1f}s)")
-            return {'valid': True, 'error': None}
-        if logged_in and failed_group_urls:
-            sample = ", ".join(failed_group_urls[:3])
-            log_fn = logging.error if group_probe_enforce else logging.warning
-            log_fn(
-                "validate_facebook(): Facebook login succeeded, but %s/%s group probes failed (enforce=%s). Examples: %s",
-                len(failed_group_urls),
-                len(group_urls),
-                group_probe_enforce,
-                sample,
-            )
-            if not group_probe_enforce:
-                return {
-                    'valid': True,
-                    'error': None,
-                    'warning': (
-                        f'Facebook group probes had {len(failed_group_urls)} failure(s) '
-                        f'out of {len(group_urls)}; proceeding because enforcement is disabled.'
-                    ),
-                }
-            return {
-                'valid': False,
-                'error': f'Facebook group access failed for {len(failed_group_urls)} of {len(group_urls)} probe URLs'
-            }
-        else:
-            logging.error("validate_facebook(): Facebook authentication failed")
-            return {'valid': False, 'error': 'Facebook login failed - still on login page'}
+                    elapsed = (datetime.now() - start_time).total_seconds()
+
+                    if not failed_group_urls:
+                        logging.info(f"validate_facebook(): Facebook authenticated successfully ({elapsed:.1f}s)")
+                        return {'valid': True, 'error': None}
+
+                    sample = ", ".join(failed_group_urls[:3])
+                    log_fn = logging.error if group_probe_enforce else logging.warning
+                    log_fn(
+                        "validate_facebook(): Facebook login succeeded, but %s/%s "
+                        "group probes failed (enforce=%s). Examples: %s",
+                        len(failed_group_urls),
+                        len(group_urls),
+                        group_probe_enforce,
+                        sample,
+                    )
+                    if not group_probe_enforce:
+                        return {
+                            'valid': True,
+                            'error': None,
+                            'warning': (
+                                f'Facebook group probes had {len(failed_group_urls)} failure(s) '
+                                f'out of {len(group_urls)}; proceeding because enforcement is disabled.'
+                            ),
+                        }
+                    return {
+                        'valid': False,
+                        'error': (
+                            f'Facebook group access failed for {len(failed_group_urls)} '
+                            f'of {len(group_urls)} probe URLs'
+                        ),
+                    }
+            finally:
+                if fb_scraper is not None:
+                    try:
+                        fb_scraper.browser.close()
+                    except Exception:
+                        logging.warning(
+                            "validate_facebook(): Failed to close Facebook browser cleanly",
+                            exc_info=True,
+                        )
+                    try:
+                        fb_scraper.playwright.stop()
+                    except Exception:
+                        logging.warning(
+                            "validate_facebook(): Failed to stop Facebook Playwright cleanly",
+                            exc_info=True,
+                        )
 
     except Exception as e:
         logging.error(f"validate_facebook(): Error during Facebook validation: {e}")
