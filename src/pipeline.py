@@ -607,23 +607,28 @@ def _scorecard_evaluation_deltas_allow(action: str) -> bool:
     return False
 
 
-def _log_copy_dev_to_prod_evaluation_warnings() -> None:
-    """Log evaluation warnings for explicit dev-to-prod copies without blocking the copy."""
+def _log_copy_dev_to_prod_evaluation_warnings() -> bool:
+    """Log evaluation warnings and return True only when all checks pass."""
+    allowed = True
     if not _scorecard_guardrails_allow("copy_dev_to_prod"):
         logger.warning(
             "_log_copy_dev_to_prod_evaluation_warnings(): proceeding with explicit copy_dev_to_prod "
             "despite failing or unavailable guardrails"
         )
+        allowed = False
     if not _scorecard_has_required_evaluation_scope("copy_dev_to_prod"):
         logger.warning(
             "_log_copy_dev_to_prod_evaluation_warnings(): proceeding with explicit copy_dev_to_prod "
             "without complete dev/holdout evaluation scope"
         )
+        allowed = False
     if not _scorecard_evaluation_deltas_allow("copy_dev_to_prod"):
         logger.warning(
             "_log_copy_dev_to_prod_evaluation_warnings(): proceeding with explicit copy_dev_to_prod "
             "despite dev/holdout regression or missing comparison data"
         )
+        allowed = False
+    return allowed
 
 # Define common configuration updates for all pipeline steps
 COMMON_CONFIG_UPDATES = {
