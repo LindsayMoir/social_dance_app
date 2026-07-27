@@ -280,6 +280,36 @@ def test_pipeline_steps_refresh_manual_coverage_audit_after_copy_dev_to_prod() -
     assert step_names[copy_index + 1] == "refresh_manual_coverage_audit"
 
 
+def test_database_accuracy_manual_review_gate_allows_explicit_skip(monkeypatch) -> None:
+    incomplete_status = {
+        "complete": False,
+        "path": "review.csv",
+        "rows_completed": 0,
+        "rows_total": 10,
+        "rows_missing_label": 10,
+        "false_rows_missing_truth": 0,
+    }
+
+    monkeypatch.setattr(
+        pipeline,
+        "_database_event_accuracy_manual_review_status",
+        lambda: incomplete_status,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_database_accuracy_manual_review_status",
+        lambda path: incomplete_status,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_chatbot_evaluation_manual_review_status",
+        lambda: incomplete_status,
+    )
+    monkeypatch.setattr("builtins.input", lambda prompt: "SKIP")
+
+    assert pipeline.database_accuracy_manual_review_gate_step() is True
+
+
 def test_pipeline_steps_manual_review_gate_after_copy_log_files() -> None:
     step_names = [name for name, _ in pipeline.PIPELINE_STEPS]
     copy_index = step_names.index("copy_log_files")

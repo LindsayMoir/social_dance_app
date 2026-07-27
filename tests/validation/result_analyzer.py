@@ -16,10 +16,11 @@ import logging
 import os
 import sys
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Optional
 
 import pandas as pd
 import yaml
+
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
@@ -98,7 +99,65 @@ class ResultAnalyzer:
 
         df = pd.read_csv(results_file)
         logging.info(f"Loaded {len(df)} test results from {results_file}")
-        return df
+        return self._normalize_results_frame(df)
+
+    def _normalize_results_frame(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normalize a chatbot results frame so downstream analysis can handle
+        both raw execution results and manually scored review exports.
+
+        Args:
+            df (pd.DataFrame): Input results frame
+
+        Returns:
+            pd.DataFrame: Normalized copy with optional analysis columns present
+        """
+        normalized = df.copy()
+
+        if 'execution_success' in normalized.columns:
+            normalized['execution_success'] = normalized['execution_success'].map(self._coerce_bool_value)
+        else:
+            normalized['execution_success'] = False
+
+        if 'evaluation_score' in normalized.columns:
+            normalized['evaluation_score'] = pd.to_numeric(normalized['evaluation_score'], errors='coerce')
+        else:
+            normalized['evaluation_score'] = pd.Series(
+                [pd.NA] * len(normalized),
+                index=normalized.index,
+                dtype='Float64',
+            )
+
+        if 'evaluation_reasoning' not in normalized.columns:
+            normalized['evaluation_reasoning'] = ''
+        else:
+            normalized['evaluation_reasoning'] = normalized['evaluation_reasoning'].fillna('')
+
+        return normalized
+
+    @staticmethod
+    def _has_score_data(df: pd.DataFrame) -> bool:
+        return 'evaluation_score' in df.columns and pd.notna(df['evaluation_score']).any()
+
+    @staticmethod
+    def _coerce_bool_value(value: object) -> bool:
+        if pd.isna(value):
+            return False
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        text = str(value).strip().lower()
+        if text in {'true', '1', 'yes', 'y', 't'}:
+            return True
+        if text in {'false', '0', 'no', 'n', 'f', ''}:
+            return False
+        return bool(value)
+
+    def _problematic_mask(self, df: pd.DataFrame) -> pd.Series:
+        if self._has_score_data(df):
+            return (df['evaluation_score'] < 70) | (~df['execution_success'])
+        return ~df['execution_success']
 
     def prepare_results_summary(self, df: pd.DataFrame) -> str:
         """
@@ -110,36 +169,61 @@ class ResultAnalyzer:
         Returns:
             str: Formatted summary for LLM
         """
+        df = self._normalize_results_frame(df)
         summary_parts = []
+        has_score_data = self._has_score_data(df)
 
         # Overall statistics
-        summary_parts.append(f"OVERALL STATISTICS:")
+        summary_parts.append("OVERALL STATISTICS:")
         summary_parts.append(f"Total tests: {len(df)}")
-        summary_parts.append(f"Average score: {df['evaluation_score'].mean():.1f}")
+        if has_score_data:
+            summary_parts.append(f"Average score: {df['evaluation_score'].mean():.1f}")
+        else:
+            summary_parts.append("Average score: unavailable (no evaluation_score column)")
         summary_parts.append(f"Execution success rate: {df['execution_success'].mean():.1%}")
         summary_parts.append("")
 
         # Score distribution
-        summary_parts.append(f"SCORE DISTRIBUTION:")
-        summary_parts.append(f"Excellent (90-100): {len(df[df['evaluation_score'] >= 90])}")
-        summary_parts.append(f"Good (70-89): {len(df[(df['evaluation_score'] >= 70) & (df['evaluation_score'] < 90)])}")
-        summary_parts.append(f"Fair (50-69): {len(df[(df['evaluation_score'] >= 50) & (df['evaluation_score'] < 70)])}")
-        summary_parts.append(f"Poor (<50): {len(df[df['evaluation_score'] < 50])}")
+        summary_parts.append("SCORE DISTRIBUTION:")
+        if has_score_data:
+            excellent = len(df[df['evaluation_score'] >= 90])
+            good = len(df[(df['evaluation_score'] >= 70) & (df['evaluation_score'] < 90)])
+            fair = len(df[(df['evaluation_score'] >= 50) & (df['evaluation_score'] < 70)])
+            poor = len(df[df['evaluation_score'] < 50])
+            summary_parts.append(f"Excellent (90-100): {excellent}")
+            summary_parts.append(f"Good (70-89): {good}")
+            summary_parts.append(f"Fair (50-69): {fair}")
+            summary_parts.append(f"Poor (<50): {poor}")
+        else:
+            summary_parts.append("Score data unavailable in this results file")
         summary_parts.append("")
 
         # Category breakdown
-        summary_parts.append(f"CATEGORY BREAKDOWN:")
-        category_stats = df.groupby('category').agg({
-            'evaluation_score': 'mean',
-            'execution_success': 'mean'
-        }).round(1)
+        summary_parts.append("CATEGORY BREAKDOWN:")
+        if has_score_data:
+            category_stats = df.groupby('category').agg({
+                'evaluation_score': 'mean',
+                'execution_success': 'mean'
+            }).round(1)
+        else:
+            category_stats = df.groupby('category').agg({
+                'execution_success': 'mean'
+            }).round(1)
         for category, row in category_stats.iterrows():
             count = len(df[df['category'] == category])
-            summary_parts.append(f"  {category}: {count} tests, avg score {row['evaluation_score']:.1f}, success rate {row['execution_success']:.1%}")
+            if has_score_data:
+                avg_score = row['evaluation_score']
+                success_rate = row['execution_success']
+                summary_parts.append(
+                    f"  {category}: {count} tests, avg score {avg_score:.1f}, "
+                    f"success rate {success_rate:.1%}"
+                )
+            else:
+                summary_parts.append(f"  {category}: {count} tests, success rate {row['execution_success']:.1%}")
         summary_parts.append("")
 
         # Problematic tests (score < 70 or execution failed)
-        problematic = df[(df['evaluation_score'] < 70) | (~df['execution_success'])]
+        problematic = df[self._problematic_mask(df)]
 
         if len(problematic) > 0:
             summary_parts.append(f"PROBLEMATIC TESTS ({len(problematic)} tests):")
@@ -153,9 +237,11 @@ class ResultAnalyzer:
                 # Show up to 5 examples per category
                 for idx, row in category_problems.head(5).iterrows():
                     summary_parts.append(f"  - Question: {row['question']}")
-                    summary_parts.append(f"    Score: {row['evaluation_score']}")
+                    if has_score_data and pd.notna(row['evaluation_score']):
+                        summary_parts.append(f"    Score: {row['evaluation_score']}")
                     summary_parts.append(f"    Execution success: {row['execution_success']}")
-                    summary_parts.append(f"    Reasoning: {row['evaluation_reasoning']}")
+                    if row['evaluation_reasoning']:
+                        summary_parts.append(f"    Reasoning: {row['evaluation_reasoning']}")
 
                     # Include SQL snippet if available
                     if pd.notna(row['sql_query']):
@@ -234,20 +320,32 @@ class ResultAnalyzer:
         """
         logging.warning("Using fallback rule-based analysis")
 
-        problematic = df[df['evaluation_score'] < 70]
+        df = self._normalize_results_frame(df)
+        has_score_data = self._has_score_data(df)
+        problematic = df[self._problematic_mask(df)]
+        critical_problematic = df[df['evaluation_score'] < 50] if has_score_data else df.iloc[0:0]
+        high_priority_problematic = (
+            df[(df['evaluation_score'] >= 50) & (df['evaluation_score'] < 70)]
+            if has_score_data
+            else df.iloc[0:0]
+        )
 
         return {
             "summary": {
                 "total_issues_identified": len(problematic),
-                "critical_issues": len(df[df['evaluation_score'] < 50]),
-                "high_priority_issues": len(df[(df['evaluation_score'] >= 50) & (df['evaluation_score'] < 70)]),
+                "critical_issues": len(critical_problematic),
+                "high_priority_issues": len(high_priority_problematic),
                 "medium_priority_issues": 0,
                 "low_priority_issues": 0
             },
             "recurring_patterns": [
                 {
                     "pattern_name": "Low scoring tests",
-                    "description": f"{len(problematic)} tests scored below 70",
+                    "description": (
+                        f"{len(problematic)} tests scored below 70"
+                        if has_score_data
+                        else f"{len(problematic)} tests failed execution"
+                    ),
                     "affected_tests": len(problematic),
                     "affected_categories": problematic['category'].unique().tolist(),
                     "root_cause": "Unable to determine - LLM analysis failed",
@@ -320,15 +418,19 @@ class ResultAnalyzer:
             )
 
             for i, pattern in enumerate(patterns_sorted, 1):
-                report_lines.append(f"{i}. {pattern.get('pattern_name', 'Unknown')} [{pattern.get('severity', 'Unknown')}]")
+                pattern_name = pattern.get('pattern_name', 'Unknown')
+                severity = pattern.get('severity', 'Unknown')
+                report_lines.append(f"{i}. {pattern_name} [{severity}]")
                 report_lines.append(f"   Description: {pattern.get('description', 'N/A')}")
                 report_lines.append(f"   Affected tests: {pattern.get('affected_tests', 0)}")
-                report_lines.append(f"   Categories: {', '.join(pattern.get('affected_categories', []))}")
+                report_lines.append(
+                    f"   Categories: {', '.join(pattern.get('affected_categories', []))}"
+                )
                 report_lines.append(f"   Root cause: {pattern.get('root_cause', 'N/A')}")
 
                 examples = pattern.get('example_questions', [])
                 if examples:
-                    report_lines.append(f"   Examples:")
+                    report_lines.append("   Examples:")
                     for example in examples[:3]:
                         report_lines.append(f"     - {example}")
 
@@ -371,20 +473,6 @@ def main():
         format='%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-
-    # Resolve output directory from config to align with validation reports
-    try:
-        with open('config/config.yaml', 'r') as f:
-            cfg = yaml.safe_load(f)
-        output_dir = (
-            cfg.get('testing', {})
-               .get('validation', {})
-               .get('reporting', {})
-               .get('output_dir', 'output')
-        )
-    except Exception:
-        # Fallback to previous default if config missing/unreadable
-        output_dir = 'output'
 
     # Paths
     results_file = chatbot_path('chatbot_test_results.csv')

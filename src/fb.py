@@ -2373,7 +2373,9 @@ class FacebookEventScraper():
                     break
 
             logging.info(
-                "process_new_social_delta_urls(): delta_social_rows=%d fb_candidates=%d fb_processed=%d ig_detected=%d",
+                "process_new_social_delta_urls(): final delta pass summary "
+                "(new URLs since run start only; fb_processed is delta-pass processed URLs, not total FB writes): "
+                "delta_social_rows=%d fb_candidates=%d fb_processed=%d ig_detected=%d",
                 len(delta_df),
                 fb_candidates,
                 fb_processed,

@@ -293,7 +293,8 @@ class ChatbotTestExecutor:
             intent="search",
             entities=str(question_dict.get('parameters', {})),
             current_date=current_date,
-            current_day_of_week=current_day_of_week
+            current_day_of_week=current_day_of_week,
+            query_for_interpretation=current_question,
         )
         prompt += f"\n\nCurrent User Question: \"{current_question}\""
         return prompt

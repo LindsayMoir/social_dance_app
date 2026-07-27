@@ -956,9 +956,16 @@ def database_accuracy_manual_review_gate_step():
             f"missing human_label: {chatbot_status.get('rows_missing_label', 0)}"
         )
         acknowledgment = input(
-            "Complete the required CSVs, then type COMPLETE to re-check: "
+            "Complete the required CSVs, then type COMPLETE to re-check, or type SKIP to continue without the audit: "
         ).strip()
-        if acknowledgment.upper() != "COMPLETE":
+        acknowledgment_upper = acknowledgment.upper()
+        if acknowledgment_upper == "SKIP":
+            logger.warning(
+                "database_accuracy_manual_review_gate_step(): Manual review audit explicitly skipped by operator; continuing pipeline without completed review CSVs."
+            )
+            print("Manual review audit skipped. Continuing pipeline run.")
+            return True
+        if acknowledgment_upper != "COMPLETE":
             print("Acknowledgment not received. The pipeline will continue waiting.")
 
 # ------------------------

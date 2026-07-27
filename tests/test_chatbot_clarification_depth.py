@@ -1,5 +1,9 @@
-import random
+"""Regression tests for chatbot clarification depth."""
+
+# ruff: noqa: I001
+
 import sys
+import random
 
 sys.path.insert(0, "src")
 sys.path.insert(0, "tests/validation")
@@ -99,3 +103,37 @@ def test_clarification_depth_range_randomized_and_sql_path_keeps_metadata():
     assert int(result["clarification_depth_target"]) == 2
     assert int(result["clarification_depth_achieved"]) == 1
     assert "clarification_chain" in result
+
+
+def test_execute_test_question_accepts_query_for_interpretation_prompt_field():
+    random.seed(11)
+    executor = _build_executor(
+        responses=[
+            "CLARIFICATION: Which date range should I use?",
+            "SELECT event_name FROM events WHERE 1=1",
+        ],
+        chatbot_cfg={
+            "clarification_min_depth": 2,
+            "clarification_max_depth": 2,
+            "max_clarification_turns": 3,
+        },
+    )
+    executor.sql_prompt_template = (
+        "Conversation History:\n{conversation_history}\n"
+        "Current Date: {current_date}\n"
+        "Current Day: {current_day_of_week}\n"
+        "Intent: {intent}\n"
+        "Current User Question: {query_for_interpretation}\n"
+    )
+
+    result = executor.execute_test_question(
+        {
+            "question": "Show me salsa events tonight",
+            "category": "single_dance_style",
+            "expected_criteria": {},
+        }
+    )
+
+    assert result["sql_syntax_valid"] is True
+    assert result["execution_success"] is True
+    assert result["interpretation"] == "test interpretation"
