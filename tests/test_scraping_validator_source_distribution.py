@@ -15,6 +15,7 @@ class _FakeDbHandler:
             assert statement_timeout_ms == 15000
             return [
                 ("Salsa Caliente", 20),
+                ("Victoria Summer Music", 9),
                 ("Victoria Latin Dance Association", 15),
                 ("WCS Lessons, Social Dances, and Conventions – BC Swing Dance", 12),
                 ("Red Hot Swing", 8),
@@ -24,11 +25,11 @@ class _FakeDbHandler:
         return []
 
 
-def test_check_source_distribution_excludes_inactive_seasonal_pdf_sources(tmp_path) -> None:
+def test_check_source_distribution_accepts_two_column_pdf_sources_csv(tmp_path) -> None:
     pdf_sources = tmp_path / "pdfs.csv"
     pdf_sources.write_text(
-        "pdf_url,parent_url,source,keywords,enabled,active_start_date,active_end_date\n"
-        "https://example.com/vsm.pdf,https://example.com/vsm,Victoria Summer Music,\"dance, live music\",true,2026-06-01,2026-09-30\n",
+        "source,parent_url\n"
+        "Victoria Summer Music,https://example.com/vsm\n",
         encoding="utf-8",
     )
 

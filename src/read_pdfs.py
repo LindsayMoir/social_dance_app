@@ -2,7 +2,9 @@
 import os
 import io
 import logging
+import re
 from datetime import date, datetime
+from urllib.parse import urljoin
 
 import pandas as pd
 import pdfplumber
@@ -44,6 +46,16 @@ def get_db_handler() -> DatabaseHandler:
 
 # ── 4) Parser registry decorator ───────────────────────────────────────────────
 PARSER_REGISTRY = {}
+DEFAULT_REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/138.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+BUTCHART_SOURCE_NAME = "The Butchart Gardens Outdoor Summer Concerts"
+DOWNLOAD_LINK_TEXT_PATTERN = re.compile(r"download|calendar", re.IGNORECASE)
 
 
 def _coerce_bool(value: object, default: bool = True) -> bool:
@@ -142,6 +154,119 @@ class ReadPDFs:
             return False, "after_active_end_date"
         return True, "active"
 
+    @staticmethod
+    def resolve_parent_page_assets(
+        source: str,
+        parent_url: str,
+        fallback_pdf_url: str = "",
+        fallback_image_url: str = "",
+    ) -> dict[str, str]:
+        """
+        Resolve the current PDF and optional preview image from a stable parent page.
+
+        Falls back to legacy URLs when the parent page cannot be fetched or its markup changes.
+        """
+        resolved = {
+            "parent_url": parent_url,
+            "pdf_url": fallback_pdf_url or "",
+            "image_url": fallback_image_url or "",
+        }
+        if not parent_url:
+            return resolved
+
+        try:
+            response = requests.get(
+                parent_url,
+                headers=DEFAULT_REQUEST_HEADERS,
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            logging.warning(
+                "resolve_butchart_calendar_assets(): Failed fetching parent page %s: %s. Using fallback URLs.",
+                parent_url,
+                exc,
+            )
+            return resolved
+
+        html = response.text or ""
+        anchor_pattern = re.compile(
+            r'<a[^>]+href=["\'](?P<href>[^"\']+)["\'][^>]*>(?P<text>.*?)</a>',
+            re.IGNORECASE | re.DOTALL,
+        )
+        anchor_matches: list[tuple[str, str]] = []
+        for match in anchor_pattern.finditer(html):
+            href = match.group("href")
+            text = re.sub(r"<[^>]+>", " ", match.group("text"))
+            anchor_matches.append((href, " ".join(text.split())))
+
+        prioritized_pdf_href = ""
+        fallback_pdf_href = ""
+        for href, text in anchor_matches:
+            if ".pdf" not in href.lower():
+                continue
+            if not fallback_pdf_href:
+                fallback_pdf_href = href
+            if DOWNLOAD_LINK_TEXT_PATTERN.search(text):
+                prioritized_pdf_href = href
+                break
+
+        pdf_href = prioritized_pdf_href or fallback_pdf_href
+        if pdf_href:
+            resolved["pdf_url"] = urljoin(parent_url, pdf_href)
+
+        if source == BUTCHART_SOURCE_NAME:
+            image_match = re.search(
+                r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](?P<content>[^"\']+)["\']',
+                html,
+                re.IGNORECASE,
+            )
+            if not image_match:
+                image_match = re.search(
+                    r'(?P<image>https?://[^"\']+Entertainment-calendar[^"\']+\.(?:png|jpg|jpeg))',
+                    html,
+                    re.IGNORECASE,
+                )
+            if image_match:
+                image_value = image_match.groupdict().get("content") or image_match.groupdict().get("image")
+                if image_value:
+                    resolved["image_url"] = urljoin(parent_url, image_value)
+
+        return resolved
+
+    def resolve_source_urls(self, row: pd.Series) -> dict[str, str | None]:
+        """Normalize source URLs, resolving the live PDF from the parent page when possible."""
+        source = str(row.get("source", "") or "")
+        parent_url = str(row.get("parent_url", "") or "")
+        pdf_url = str(row.get("pdf_url", "") or "")
+        keywords = row.get("keywords", None)
+        resolved: dict[str, str | None] = {
+            "source": source,
+            "parent_url": parent_url,
+            "pdf_url": pdf_url,
+            "keywords": keywords,
+            "image_url": None,
+        }
+
+        if not parent_url:
+            return resolved
+
+        resolved_assets = self.resolve_parent_page_assets(
+            source=source,
+            parent_url=parent_url,
+            fallback_pdf_url=pdf_url,
+        )
+        resolved["parent_url"] = resolved_assets["parent_url"] or parent_url
+        resolved["pdf_url"] = resolved_assets["pdf_url"] or pdf_url
+        resolved["image_url"] = resolved_assets["image_url"] or None
+        if resolved["pdf_url"] != pdf_url:
+            logging.info(
+                "resolve_source_urls(): Resolved current PDF URL for '%s' from parent page: %s",
+                source,
+                resolved["pdf_url"],
+            )
+        return resolved
+
 
     def read_write_pdf(self) -> pd.DataFrame:
         file_name = os.path.basename(__file__)
@@ -151,10 +276,17 @@ class ReadPDFs:
         all_events = []
 
         for idx, row in sources.iterrows():
-            source     = row.get('source', '')
-            pdf_url    = row.get('pdf_url', '')
-            parent_url = row.get('parent_url', '')
-            keywords   = row.get('keywords', None)
+            resolved_source = self.resolve_source_urls(row)
+            source = str(resolved_source.get('source', '') or '')
+            pdf_url = str(resolved_source.get('pdf_url', '') or '')
+            parent_url = str(resolved_source.get('parent_url', '') or '')
+            keywords = resolved_source.get('keywords', None)
+            parser_context = {
+                "source": source,
+                "pdf_url": pdf_url,
+                "parent_url": parent_url,
+                "image_url": resolved_source.get("image_url"),
+            }
 
             logging.info(f"read_write_pdf(): [{idx}] source={source}, pdf_url={pdf_url}")
 
@@ -165,6 +297,14 @@ class ReadPDFs:
                     source,
                     active_reason,
                     pdf_url,
+                )
+                continue
+
+            if not pdf_url:
+                logging.warning(
+                    "read_write_pdf(): Could not resolve a PDF URL for '%s' from parent page: %s",
+                    source,
+                    parent_url,
                 )
                 continue
 
@@ -192,14 +332,32 @@ class ReadPDFs:
                 continue
 
             # Download and parse
-            resp = requests.get(pdf_url, timeout=30)
+            try:
+                resp = requests.get(pdf_url, headers=DEFAULT_REQUEST_HEADERS, timeout=30)
+            except requests.RequestException as exc:
+                logging.warning(
+                    "read_write_pdf(): Request failed for '%s' PDF %s: %s",
+                    source,
+                    pdf_url,
+                    exc,
+                )
+                continue
             if resp.status_code == 404:
                 logging.warning(f"read_write_pdf(): PDF not found (404) for '{source}': {pdf_url}")
                 continue
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except requests.HTTPError as exc:
+                logging.warning(
+                    "read_write_pdf(): HTTP failure for '%s' PDF %s: %s",
+                    source,
+                    pdf_url,
+                    exc,
+                )
+                continue
             pdf_file = io.BytesIO(resp.content)
 
-            df = parser(pdf_file)
+            df = parser(pdf_file, parser_context=parser_context)
             if df is None or df.empty:
                 logging.warning(f"read_write_pdf(): Parser returned no events for '{source}'")
                 continue
@@ -243,7 +401,7 @@ class ReadPDFs:
 
 # ── 6) PDF parsers ─────────────────────────────────────────────────────────────
 @register_parser("Victoria Summer Music")
-def parse_victoria_summer_music(pdf_file) -> pd.DataFrame:
+def parse_victoria_summer_music(pdf_file, parser_context: dict[str, str | None] | None = None) -> pd.DataFrame:
     logging.info("Parsing Victoria Summer Music PDF…")
     cols = ['Mth','Day','Date','Location','Time','Event','Description']
     rows = []
@@ -308,19 +466,35 @@ def dump_pdf_text(pdf_file) -> str:
     return "\n".join(pages)
 
 @register_parser("The Butchart Gardens Outdoor Summer Concerts")
-def parse_butchart_gardens_concerts(pdf_file) -> pd.DataFrame:
+def parse_butchart_gardens_concerts(
+    pdf_file,
+    parser_context: dict[str, str | None] | None = None,
+) -> pd.DataFrame:
     logging.info("Parsing Butchart Gardens concerts PDF…")
     text = dump_pdf_text(pdf_file)
     llm_handler = get_llm_handler()
+    parser_context = parser_context or {}
+    image_url = (
+        parser_context.get("image_url")
+        or None
+    )
+    pdf_url = str(
+        parser_context.get("pdf_url")
+        or parser_context.get("parent_url")
+        or ""
+    )
     prompt, schema_type = llm_handler.generate_prompt(pdf_file, text, 'images')
     if len(prompt) > config['crawling']['prompt_max_length']:
-            logging.warning(f"def process_llm_response: Prompt for URL {url} exceeds maximum length. Skipping LLM query.")
+            logging.warning(
+                "parse_butchart_gardens_concerts(): Prompt for URL %s exceeds maximum length. Skipping LLM query.",
+                pdf_url,
+            )
             return None
     
     llm_response = llm_handler.query_openai(
         prompt=prompt,
         model=config['llm']['openai_model'],
-        image_url=config['input']['butchart_image_url'],
+        image_url=image_url,
         schema_type=schema_type
     )
 
@@ -329,7 +503,7 @@ def parse_butchart_gardens_concerts(pdf_file) -> pd.DataFrame:
         return None
 
     parsed = llm_handler.extract_and_parse_json(llm_response,
-                                                config['input']['butchart_pdf_url'], schema_type)
+                                                pdf_url, schema_type)
     if not parsed:
         logging.error("Failed to parse JSON from LLM response.")
         return None
@@ -337,7 +511,7 @@ def parse_butchart_gardens_concerts(pdf_file) -> pd.DataFrame:
     df = pd.DataFrame(parsed)
     df['dance_style'] = 'ballroom, swing, wcs, west coast swing'
     df['event_type']  = 'social dance, live music'
-    df['url']         = config['input']['butchart_pdf_url']
+    df['url']         = pdf_url
     return df
 
 # ── 7) Entry point ─────────────────────────────────────────────────────────────
