@@ -31,6 +31,7 @@ from urllib.parse import urlparse
 import sys
 import yaml
 import warnings
+from zoneinfo import ZoneInfo
 
 from config_runtime import load_config
 # Import database configuration utility
@@ -52,6 +53,7 @@ _US_STATE_OR_TERRITORY_CODES: Final[frozenset[str]] = frozenset(
 
 _BLOCKED_EVENT_URL_DOMAINS: Final[frozenset[str]] = frozenset({"example.com"})
 _EVENT_URL_REACHABILITY_TIMEOUT_SECONDS: Final[float] = 6.0
+_EVENT_LOCAL_TIMEZONE: Final[ZoneInfo] = ZoneInfo("America/Los_Angeles")
 _LOCAL_EVENT_TEXT_MARKERS: Final[tuple[str, ...]] = (
     "victoria",
     "british columbia",
@@ -4260,10 +4262,44 @@ class DatabaseHandler():
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             for col in ['start_date', 'end_date']:
-                df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
+                df[col] = df[col].apply(self._coerce_event_date_value)
             for col in ['start_time', 'end_time']:
-                df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
+                df[col] = df[col].apply(self._coerce_event_time_value)
             warnings.resetwarnings()
+
+    @staticmethod
+    def _parse_event_datetime_value(value: Any) -> Optional[pd.Timestamp]:
+        """Parse one date/time value and localize timezone-aware timestamps to Pacific."""
+        if value is None or value is pd.NA:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        try:
+            parsed = pd.to_datetime(value, errors="coerce")
+        except Exception:
+            return None
+        if pd.isna(parsed):
+            return None
+        if not isinstance(parsed, pd.Timestamp):
+            return None
+        if parsed.tzinfo is not None:
+            try:
+                parsed = parsed.tz_convert(_EVENT_LOCAL_TIMEZONE)
+            except Exception:
+                return None
+        return parsed
+
+    def _coerce_event_date_value(self, value: Any) -> Optional[date]:
+        """Coerce one raw event date value to a Pacific-local calendar date."""
+        parsed = self._parse_event_datetime_value(value)
+        return parsed.date() if parsed is not None else None
+
+    def _coerce_event_time_value(self, value: Any):
+        """Coerce one raw event time value to a Pacific-local wall-clock time."""
+        parsed = self._parse_event_datetime_value(value)
+        if parsed is None:
+            return None
+        return parsed.to_pydatetime().time().replace(tzinfo=None)
 
     def _normalize_overnight_end_dates(self, df: pd.DataFrame) -> pd.DataFrame:
         """Roll end_date forward for overnight events whose end_time crosses midnight."""
@@ -4573,10 +4609,13 @@ class DatabaseHandler():
 
     def _drop_old_events_by_date(self, df: pd.DataFrame, context: str = "default") -> pd.DataFrame:
         """
-        Drop events whose end_date is older than the configured cutoff.
+        Drop events whose effective event date is older than the configured cutoff.
+
+        Prefer `end_date` when present, but fall back to `start_date` for single-day
+        events or partial rows that do not carry an explicit `end_date`.
         """
-        if 'end_date' not in df.columns:
-            logging.warning("_drop_old_events_by_date(%s): Missing 'end_date' column.", context)
+        if 'end_date' not in df.columns and 'start_date' not in df.columns:
+            logging.warning("_drop_old_events_by_date(%s): Missing both 'end_date' and 'start_date' columns.", context)
             return df
 
         old_days = int(self.config.get('clean_up', {}).get('old_events', 0) or 0)
@@ -4584,10 +4623,16 @@ class DatabaseHandler():
             return df
 
         working_df = df.copy()
-        working_df['end_date'] = pd.to_datetime(working_df['end_date'], errors='coerce')
+        end_dates = pd.to_datetime(working_df.get('end_date'), errors='coerce')
+        start_dates = pd.to_datetime(working_df.get('start_date'), errors='coerce')
+        working_df['_effective_event_date'] = end_dates.where(end_dates.notna(), start_dates)
         cutoff = pd.Timestamp.now() - pd.Timedelta(days=old_days)
         rows_before = len(working_df)
-        filtered_df = working_df[working_df['end_date'] >= cutoff].reset_index(drop=True)
+        filtered_df = (
+            working_df[working_df['_effective_event_date'] >= cutoff]
+            .drop(columns=['_effective_event_date'])
+            .reset_index(drop=True)
+        )
         dropped = rows_before - len(filtered_df)
         if dropped:
             logging.info(

@@ -1,5 +1,6 @@
 import pandas as pd
 import sys
+from datetime import date, time
 
 sys.path.insert(0, "src")
 
@@ -48,3 +49,22 @@ def test_convert_datetime_fields_handles_missing_canonical_columns():
     assert "end_date" in df.columns
     assert "start_time" in df.columns
     assert "end_time" in df.columns
+
+
+def test_convert_datetime_fields_localizes_utc_timestamps_to_pacific():
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    df = pd.DataFrame(
+        {
+            "start_date": ["2026-07-28T01:00:00.000Z"],
+            "end_date": ["2026-07-28T03:00:00.000Z"],
+            "start_time": ["2026-07-28T01:00:00.000Z"],
+            "end_time": ["2026-07-28T03:00:00.000Z"],
+        }
+    )
+
+    handler._convert_datetime_fields(df)
+
+    assert df.loc[0, "start_date"] == date(2026, 7, 27)
+    assert df.loc[0, "end_date"] == date(2026, 7, 27)
+    assert df.loc[0, "start_time"] == time(18, 0)
+    assert df.loc[0, "end_time"] == time(20, 0)

@@ -33,6 +33,26 @@ def test_drop_old_events_by_date_removes_old_rows():
     assert out.iloc[0]["description"] == "new"
 
 
+def test_drop_old_events_by_date_keeps_future_rows_with_missing_end_date():
+    handler = _make_handler(old_days=30)
+    now = datetime.now().date()
+    df = pd.DataFrame(
+        {
+            "end_date": [pd.NaT, now - timedelta(days=45)],
+            "start_date": [now + timedelta(days=30), now - timedelta(days=45)],
+            "start_time": ["19:00", "20:00"],
+            "end_time": ["21:00", "22:00"],
+            "location": ["The Coda", "Old Venue"],
+            "description": ["future single-day event", "old event"],
+        }
+    )
+
+    out = handler._drop_old_events_by_date(df, context="test")
+
+    assert len(out) == 1
+    assert out.iloc[0]["description"] == "future single-day event"
+
+
 def test_filter_events_can_skip_date_filter_when_requested():
     handler = _make_handler(old_days=30)
     now = datetime.now().date()
