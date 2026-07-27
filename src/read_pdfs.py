@@ -357,7 +357,16 @@ class ReadPDFs:
                 continue
             pdf_file = io.BytesIO(resp.content)
 
-            df = parser(pdf_file, parser_context=parser_context)
+            try:
+                df = parser(pdf_file, parser_context=parser_context)
+            except Exception as exc:
+                logging.warning(
+                    "read_write_pdf(): Parser for '%s' failed for PDF %s: %s",
+                    source,
+                    pdf_url,
+                    exc,
+                )
+                continue
             if df is None or df.empty:
                 logging.warning(f"read_write_pdf(): Parser returned no events for '{source}'")
                 continue
@@ -491,12 +500,20 @@ def parse_butchart_gardens_concerts(
             )
             return None
     
-    llm_response = llm_handler.query_openai(
-        prompt=prompt,
-        model=config['llm']['openai_model'],
-        image_url=image_url,
-        schema_type=schema_type
-    )
+    try:
+        llm_response = llm_handler.query_openai(
+            prompt=prompt,
+            model=config['llm']['openai_model'],
+            image_url=image_url,
+            schema_type=schema_type
+        )
+    except Exception as exc:
+        logging.warning(
+            "parse_butchart_gardens_concerts(): LLM query failed for %s: %s",
+            pdf_url,
+            exc,
+        )
+        return None
 
     if not llm_response:
         logging.error("No response from LLM for Butchart parser.")

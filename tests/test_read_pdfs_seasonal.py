@@ -200,3 +200,23 @@ def test_resolve_source_urls_handles_two_column_victoria_summer_music_csv(monkey
     assert resolved["parent_url"] == "https://ellaquinceier.wixsite.com/victoriasummermusic"
     assert resolved["pdf_url"] == "https://files.example.com/current-vsm-calendar.pdf"
     assert resolved["image_url"] is None
+
+
+def test_parse_butchart_gardens_concerts_returns_none_when_llm_query_fails(monkeypatch) -> None:
+    fake_handler = SimpleNamespace(
+        generate_prompt=lambda *_args, **_kwargs: ("prompt", "event_extraction"),
+        query_openai=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("insufficient_quota")),
+    )
+
+    monkeypatch.setattr(read_pdfs, "dump_pdf_text", lambda _pdf_file: "calendar text")
+    monkeypatch.setattr(read_pdfs, "get_llm_handler", lambda: fake_handler)
+
+    result = read_pdfs.parse_butchart_gardens_concerts(
+        pdf_file=object(),
+        parser_context={
+            "pdf_url": "https://butchartgardens.com/wp-content/uploads/2026/05/calendar.pdf",
+            "image_url": "https://butchartgardens.com/wp-content/uploads/2026/05/calendar.png",
+        },
+    )
+
+    assert result is None
