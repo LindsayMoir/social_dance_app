@@ -1164,6 +1164,39 @@ def test_send_email_notification_attaches_only_comprehensive_report(tmp_path, mo
     assert sent_payload["test_type"] == "Pre-Commit Validation"
 
 
+def test_send_email_notification_preserves_missing_chatbot_average_score(tmp_path, monkeypatch) -> None:
+    runner = _build_runner()
+    runner.validation_config = {"reporting": {"output_dir": str(tmp_path)}}
+
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    html_report = reports_dir / "comprehensive_test_report.html"
+    html_report.write_text("<html>report</html>", encoding="utf-8")
+
+    sent_payload: dict = {}
+
+    def _fake_send_report_email(report_summary, attachment_paths, test_type):  # type: ignore[no-untyped-def]
+        sent_payload["report_summary"] = report_summary
+        sent_payload["attachment_paths"] = attachment_paths
+        sent_payload["test_type"] = test_type
+        return True
+
+    monkeypatch.setattr(validation_test_runner, "send_report_email", _fake_send_report_email)
+    monkeypatch.setattr(validation_test_runner, "reports_path", lambda name: str(html_report))
+
+    runner._send_email_notification(
+        {
+            "overall_status": "FAIL",
+            "timestamp": "2026-07-27T02:55:15",
+            "chatbot_testing": {"summary": {"total_tests": 10, "execution_success_rate": 1.0, "average_score": None}},
+            "scraping_validation": {"summary": {"total_failures": 34, "whitelist_failures": 2}},
+        }
+    )
+
+    assert sent_payload["report_summary"]["average_score"] is None
+    assert sent_payload["attachment_paths"] == [str(html_report)]
+
+
 def test_summarize_fb_block_health_includes_private_unavailable_triage(tmp_path, monkeypatch) -> None:
     runner = _build_runner()
     runner._load_coverage_watchlist_rows = lambda: ([{"source_url": "https://www.facebook.com/groups/cubansalsaclub/"}], "test")  # type: ignore[method-assign]

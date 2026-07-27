@@ -6754,7 +6754,7 @@ class ValidationTestRunner:
             "openai_cost_usd": openai_cost_usd,
             "accuracy_replay_coverage_pct": replay_coverage_pct,
             "accuracy_url_score": round(url_level_score, 1),
-            "accuracy_chatbot_score": round(chatbot_avg_score, 1),
+            "accuracy_chatbot_score": round(chatbot_avg_score, 1) if chatbot_avg_score is not None else None,
             "completeness_event_yield_rate": float(event_yield_rate) if event_yield_rate is not None else None,
             "completeness_urls_with_events": int(fb_ig_funnel.get("urls_with_events", 0) or 0),
             "completeness_urls_passed_for_scraping": int(fb_ig_funnel.get("urls_passed_for_scraping", 0) or 0),

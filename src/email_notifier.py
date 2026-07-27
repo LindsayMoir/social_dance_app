@@ -148,8 +148,17 @@ class EmailNotifier:
         """
         # Check for common status indicators
         if 'execution_success_rate' in report_summary:
-            exec_rate = report_summary['execution_success_rate']
-            avg_score = report_summary.get('average_score', 0)
+            exec_rate = self._safe_float(report_summary.get('execution_success_rate'))
+            avg_score = self._safe_float(report_summary.get('average_score'))
+
+            if exec_rate is None:
+                return "INFO"
+            if avg_score is None:
+                if exec_rate >= 0.95:
+                    return "⚠ WARNING"
+                if exec_rate >= 0.90:
+                    return "⚠ WARNING"
+                return "✗ FAIL"
 
             if exec_rate >= 0.95 and avg_score >= 75:
                 return "✓ PASS"
@@ -276,6 +285,16 @@ class EmailNotifier:
 
         # Default
         return "value"
+
+    @staticmethod
+    def _safe_float(value: object) -> float | None:
+        """Convert numeric-like values to float and preserve missing values as None."""
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
 
 # Convenience function for quick email sending
