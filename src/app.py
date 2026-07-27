@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 # Setup centralized logging
 from logging_config import setup_logging
+from chatbot_ui_state import ensure_pending_confirmation_message
 setup_logging('app')
 logging.info("app.py: Streamlit app starting...")
 
@@ -95,6 +96,9 @@ if "pending_confirmation" not in st.session_state:
 
 if "pending_interpretation" not in st.session_state:
     st.session_state["pending_interpretation"] = None
+
+if ensure_pending_confirmation_message(st.session_state):
+    logging.warning("app.py: Rehydrated missing assistant confirmation message from pending state.")
 
 # Load chatbot instructions from config (strict: must exist)
 if 'prompts' not in config or 'chatbot_instructions' not in config['prompts']:
