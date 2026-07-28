@@ -11,6 +11,8 @@ from rd_ext import (
     _derive_rd_ext_effective_keywords,
     _get_login_probe_url,
     _is_embedded_event_iframe_url,
+    _is_bard_and_banker_calendar_url,
+    _is_bard_and_banker_event_detail_url,
     _looks_like_calendar_detail_cta,
     _looks_like_event_iframe_text,
     _looks_like_clickable_calendar_box_label,
@@ -195,6 +197,20 @@ def test_looks_like_calendar_detail_cta_identifies_detail_navigation() -> None:
     assert _looks_like_calendar_detail_cta("", "https://www.bardandbanker.com/live-music/miguelito-valdes")
     assert not _looks_like_calendar_detail_cta("Buy tickets", "https://example.com/tickets")
     assert not _looks_like_calendar_detail_cta("Add to Calendar", "https://calendar.google.com")
+
+
+def test_bard_and_banker_final_detail_url_guard_rejects_calendar_layers() -> None:
+    assert _is_bard_and_banker_calendar_url("https://www.bardandbanker.com/live-music")
+    assert not _is_bard_and_banker_calendar_url(
+        "https://www.bardandbanker.com/event-details/miguelito-valdes-band-830pm-2026-07-28-20-30"
+    )
+    assert _is_bard_and_banker_event_detail_url(
+        "https://www.bardandbanker.com/event-details/miguelito-valdes-band-830pm-2026-07-28-20-30"
+    )
+    assert not _is_bard_and_banker_event_detail_url("https://www.bardandbanker.com/live-music")
+    assert not _is_bard_and_banker_event_detail_url(
+        "https://www.bardandbanker.com/live-music?calendar_click=event"
+    )
 
 
 def test_extract_candidate_calendar_detail_cta_urls_prefers_detail_links() -> None:

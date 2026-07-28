@@ -418,6 +418,27 @@ def _build_synthetic_calendar_detail_url(calendar_url: str, event_label: str, in
     return f"{calendar_url}{separator}calendar_click={digest}#{normalized_label}"
 
 
+def _is_bard_and_banker_calendar_url(url: str) -> bool:
+    """Return True when *url* is the Bard & Banker live-music calendar."""
+    try:
+        parsed = urlparse(str(url or "").strip())
+    except Exception:
+        return False
+    host = (parsed.netloc or "").lower().removeprefix("www.")
+    return host == "bardandbanker.com" and (parsed.path or "").rstrip("/") == "/live-music"
+
+
+def _is_bard_and_banker_event_detail_url(url: str) -> bool:
+    """Return True only for Bard & Banker's final event-detail pages."""
+    try:
+        parsed = urlparse(str(url or "").strip())
+    except Exception:
+        return False
+    host = (parsed.netloc or "").lower().removeprefix("www.")
+    path = (parsed.path or "").rstrip("/")
+    return host == "bardandbanker.com" and path.startswith("/event-details/") and path != "/event-details"
+
+
 def _extract_candidate_calendar_detail_cta_urls(
     html: str,
     base_url: str,
@@ -1374,6 +1395,7 @@ class ReadExtract:
             list: List of tuples (event_url, event_text, discovery_depth) for each event found
         """
         event_data = []
+        requires_final_detail_page = _is_bard_and_banker_calendar_url(calendar_url)
 
         try:
             logging.info(f"extract_calendar_events({venue_name}): Starting extraction from {calendar_url}")
@@ -1417,6 +1439,13 @@ class ReadExtract:
                             href,
                         )
                         continue
+                    if requires_final_detail_page and not _is_bard_and_banker_event_detail_url(href):
+                        logging.info(
+                            "extract_calendar_events(%s): Skipping Bard & Banker calendar/intermediate URL: %s",
+                            venue_name,
+                            href,
+                        )
+                        continue
                     if ('/show/' in href or '/event' in href.lower() or '/events/' in href) and href != calendar_url:
                         unique_urls.add(href)
 
@@ -1451,6 +1480,15 @@ class ReadExtract:
                     # Navigate to the event page
                     await self.page.goto(event_url, timeout=10000)
                     await self.page.wait_for_load_state("domcontentloaded")
+                    if requires_final_detail_page and not _is_bard_and_banker_event_detail_url(
+                        str(getattr(self.page, "url", "") or "")
+                    ):
+                        logging.warning(
+                            "extract_calendar_events(%s): Final Bard & Banker event-detail URL redirected to %s; skipping",
+                            venue_name,
+                            str(getattr(self.page, "url", "") or ""),
+                        )
+                        continue
 
                     # Extract text from event page
                     content = await self.page.content()
@@ -1463,7 +1501,7 @@ class ReadExtract:
                     event_text = ' '.join(soup.stripped_strings)
 
                     if event_text:
-                        event_data.append((event_url, event_text, 2))
+                        event_data.append((event_url, event_text, 3 if requires_final_detail_page else 2))
                         logging.info(f"extract_calendar_events({venue_name}): Extracted {len(event_text)} chars from event {idx}")
                     else:
                         logging.warning(f"extract_calendar_events({venue_name}): No text extracted from {event_url}")
@@ -1485,6 +1523,7 @@ class ReadExtract:
     async def _extract_click_revealed_calendar_events(self, calendar_url: str, venue_name: str) -> list[tuple[str, str, int]]:
         """Extract event detail from clickable calendar entries when no child URLs are exposed."""
         event_data: list[tuple[str, str, int]] = []
+        requires_final_detail_page = _is_bard_and_banker_calendar_url(calendar_url)
         seen_keys: set[str] = set()
         candidate_selectors = (
             ".fc-event",
@@ -1559,11 +1598,19 @@ class ReadExtract:
             )
             if revealed_blocks:
                 for block_index, block in enumerate(revealed_blocks, start=1):
+                    detail_url = str(block.get("detail_url") or "").strip()
+                    if requires_final_detail_page and not _is_bard_and_banker_event_detail_url(detail_url):
+                        logging.info(
+                            "_extract_click_revealed_calendar_events(%s): skipping intermediate calendar layer without final event-detail URL: %s",
+                            venue_name,
+                            detail_url or "missing URL",
+                        )
+                        continue
                     detail_text, output_url = await self._follow_revealed_calendar_event_block(
                         calendar_url=calendar_url,
                         fallback_label=str(block.get("label") or label),
                         fallback_index=(index * 100) + block_index,
-                        detail_url=str(block.get("detail_url") or "").strip(),
+                        detail_url=detail_url,
                     )
                     if not detail_text or output_url in seen_output_urls:
                         continue
@@ -1572,6 +1619,15 @@ class ReadExtract:
                 continue
 
             await self._follow_click_revealed_detail_cta(calendar_url=calendar_url)
+
+            if requires_final_detail_page and not _is_bard_and_banker_event_detail_url(
+                str(getattr(self.page, "url", "") or "")
+            ):
+                logging.info(
+                    "_extract_click_revealed_calendar_events(%s): final event-detail page was not reached after calendar click",
+                    venue_name,
+                )
+                continue
 
             detail_text = await self._extract_click_revealed_event_detail_text(
                 calendar_url=calendar_url,
@@ -1651,6 +1707,12 @@ class ReadExtract:
         detail_url: str,
     ) -> tuple[str, str]:
         """Follow one revealed event block to its detail page when possible and return extracted text."""
+        requires_final_detail_page = _is_bard_and_banker_calendar_url(calendar_url)
+        if requires_final_detail_page and not _is_bard_and_banker_event_detail_url(detail_url):
+            logging.info(
+                "_follow_revealed_calendar_event_block(): refusing Bard & Banker intermediate layer without final event-detail URL",
+            )
+            return "", ""
         if detail_url:
             if not _should_follow_layered_calendar_detail_url(detail_url):
                 logging.info(
@@ -1671,6 +1733,13 @@ class ReadExtract:
                         detail_url,
                         exc,
                     )
+        if requires_final_detail_page and not _is_bard_and_banker_event_detail_url(
+            str(getattr(self.page, "url", "") or "")
+        ):
+            logging.info(
+                "_follow_revealed_calendar_event_block(): Bard & Banker navigation did not reach a final event-detail page",
+            )
+            return "", ""
         if not detail_url:
             try:
                 await self._follow_click_revealed_detail_cta(calendar_url=calendar_url)
@@ -1729,6 +1798,12 @@ class ReadExtract:
                     require_explicit_text=True,
                 )
                 for target_url in candidate_urls:
+                    if _is_bard_and_banker_calendar_url(calendar_url) and not _is_bard_and_banker_event_detail_url(target_url):
+                        logging.info(
+                            "_follow_click_revealed_detail_cta(): skipping Bard & Banker intermediate CTA target %s",
+                            target_url,
+                        )
+                        continue
                     if not _should_follow_layered_calendar_detail_url(target_url):
                         logging.info(
                             "_follow_click_revealed_detail_cta(): refusing layered calendar CTA target from %s to %s based on shared URL filters",
