@@ -5,6 +5,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from rd_ext import (
+    _calendar_click_candidate_selectors,
     _extract_candidate_calendar_detail_cta_urls,
     _extract_revealed_calendar_event_blocks,
     _build_synthetic_calendar_detail_url,
@@ -211,6 +212,22 @@ def test_bard_and_banker_final_detail_url_guard_rejects_calendar_layers() -> Non
     assert not _is_bard_and_banker_event_detail_url(
         "https://www.bardandbanker.com/live-music?calendar_click=event"
     )
+
+
+def test_bard_and_banker_calendar_clicks_individual_wix_event_tiles_first() -> None:
+    selectors = _calendar_click_candidate_selectors(
+        "https://www.bardandbanker.com/live-music"
+    )
+
+    assert selectors[0] == ".V0dKtH > .ExCBIq"
+    assert selectors == (".V0dKtH > .ExCBIq",)
+
+
+def test_generic_calendar_clicks_keep_existing_selector_order() -> None:
+    selectors = _calendar_click_candidate_selectors("https://example.com/events")
+
+    assert ".V0dKtH > .ExCBIq" not in selectors
+    assert selectors[-1] == "[role='button']"
 
 
 def test_extract_candidate_calendar_detail_cta_urls_prefers_detail_links() -> None:

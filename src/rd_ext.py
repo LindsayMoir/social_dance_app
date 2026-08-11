@@ -439,6 +439,29 @@ def _is_bard_and_banker_event_detail_url(url: str) -> bool:
     return host == "bardandbanker.com" and path.startswith("/event-details/") and path != "/event-details"
 
 
+def _calendar_click_candidate_selectors(calendar_url: str) -> tuple[str, ...]:
+    """Return ordered selectors for interactive calendar event entries.
+
+    Bard & Banker uses a Wix Events calendar. Its individual event titles are
+    rendered as ``.ExCBIq`` elements within a calendar row, while the generic
+    ``[role='button']`` selector targets the day cell and does not reveal the
+    event-detail CTA.
+    """
+    generic_selectors = (
+        ".fc-event",
+        ".fc-daygrid-event",
+        ".fc-daygrid-event-harness a",
+        ".tribe-events-calendar-month__calendar-event",
+        ".tribe-events-calendar-month__multiday-event-wrapper a",
+        "[data-event-id]",
+        "[data-mecid]",
+        "[role='button']",
+    )
+    if _is_bard_and_banker_calendar_url(calendar_url):
+        return (".V0dKtH > .ExCBIq",)
+    return generic_selectors
+
+
 def _extract_candidate_calendar_detail_cta_urls(
     html: str,
     base_url: str,
@@ -1525,16 +1548,7 @@ class ReadExtract:
         event_data: list[tuple[str, str, int]] = []
         requires_final_detail_page = _is_bard_and_banker_calendar_url(calendar_url)
         seen_keys: set[str] = set()
-        candidate_selectors = (
-            ".fc-event",
-            ".fc-daygrid-event",
-            ".fc-daygrid-event-harness a",
-            ".tribe-events-calendar-month__calendar-event",
-            ".tribe-events-calendar-month__multiday-event-wrapper a",
-            "[data-event-id]",
-            "[data-mecid]",
-            "[role='button']",
-        )
+        candidate_selectors = _calendar_click_candidate_selectors(calendar_url)
         discovered_candidates: list[tuple[str, int, str]] = []
 
         for selector in candidate_selectors:
@@ -1577,7 +1591,19 @@ class ReadExtract:
             try:
                 await self.page.goto(calendar_url, timeout=15000)
                 await self.page.wait_for_load_state("domcontentloaded")
-                locator = self.page.locator(selector).nth(index)
+                if requires_final_detail_page:
+                    locator = self.page.locator(selector).filter(
+                        has_text=re.compile(rf"^{re.escape(label)}$")
+                    ).first
+                    await locator.wait_for(
+                        state="visible",
+                        timeout=5000,
+                    )
+                    # Wix renders the event-detail overlay asynchronously after
+                    # a calendar reload; wait briefly before clicking the tile.
+                    await self.page.wait_for_timeout(1500)
+                else:
+                    locator = self.page.locator(selector).nth(index)
                 await locator.scroll_into_view_if_needed(timeout=3000)
                 await locator.click(timeout=5000, force=True)
                 await self.page.wait_for_timeout(800)
