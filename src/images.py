@@ -35,6 +35,7 @@ from browser_extraction import (
     AriaSnapshotResult,
     capture_aria_snapshot_async,
     choose_extraction_text,
+    reduce_instagram_aria_snapshot,
     snapshot_settings,
     write_snapshot_diagnostic,
 )
@@ -90,6 +91,7 @@ _INSTAGRAM_DEGRADED_SHELL_TOKENS = (
 _VISION_MODEL = "gpt-4.1-mini"
 _VISION_REQUEST_TIMEOUT_SECONDS = 12
 _INSTAGRAM_MANUAL_RECOVERY_TIMEOUT_SECONDS = 180
+_DEFAULT_INSTAGRAM_SESSION_PROBE_URL = "https://www.instagram.com/p/DVn5jSriOv9/"
 _IMAGE_REPLAY_FRAGMENT_KEY = "image"
 _INSTAGRAM_DYNAMIC_MEDIA_QUERY_PARAMS = frozenset(
     {
@@ -606,6 +608,22 @@ def _looks_like_authenticated_instagram_profile(page_url: str, text: str) -> boo
     return not _is_degraded_instagram_profile_text(text)
 
 
+def _looks_like_authenticated_instagram_page(page_url: str, text: str) -> bool:
+    """Return whether an Instagram page is usable without an anonymous login shell."""
+    if not _looks_like_authenticated_instagram_profile(page_url, text):
+        return False
+    if not is_instagram_post_detail_url(page_url):
+        return True
+
+    normalized_text = " ".join(str(text or "").lower().split())
+    anonymous_post_markers = (
+        "sign up for instagram to stay in the loop",
+        "log in to like or comment",
+        " log in sign up ",
+    )
+    return not any(marker in f" {normalized_text} " for marker in anonymous_post_markers)
+
+
 def _extract_rankable_image_urls(rendered_html: str, page_url: str) -> list[str]:
     """Extract image-like URLs from rendered HTML, excluding obvious Instagram UI assets."""
     if not rendered_html:
@@ -728,13 +746,17 @@ class ImageScraper:
             await self.read_extract.page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
             await self.read_extract.page.wait_for_timeout(2500)
             snapshot_config = snapshot_settings(getattr(self, "config", {}))
+            snapshot_enabled = bool(snapshot_config["instagram_enabled"])
             snapshot = AriaSnapshotResult(text=None, reason="aria_snapshot_disabled")
-            if snapshot_config["enabled"] or snapshot_config["debug_enabled"]:
+            if snapshot_enabled or snapshot_config["debug_enabled"]:
                 snapshot = await capture_aria_snapshot_async(
                     self.read_extract.page,
                     timeout_ms=int(snapshot_config["timeout_ms"]),
                     max_chars=int(snapshot_config["max_chars"]),
                 )
+                reduced_snapshot = reduce_instagram_aria_snapshot(snapshot.text)
+                if reduced_snapshot:
+                    snapshot = AriaSnapshotResult(text=reduced_snapshot, reason=snapshot.reason)
             content = await self.read_extract.page.content()
         except Exception as e:
             self.logger.warning("_extract_page_text_playwright(): failed for %s: %s", page_url, e)
@@ -747,7 +769,7 @@ class ImageScraper:
         text, representation = choose_extraction_text(
             fallback_text,
             snapshot,
-            enabled=bool(snapshot_config["enabled"]),
+            enabled=snapshot_enabled,
             min_chars=int(snapshot_config["min_chars"]),
         )
         if snapshot_config["debug_enabled"]:
@@ -1148,7 +1170,7 @@ class ImageScraper:
                 tag.decompose()
             rendered_text = " ".join(soup.get_text(separator=" ").split())
 
-            if _looks_like_authenticated_instagram_profile(current_url, rendered_text):
+            if _looks_like_authenticated_instagram_page(current_url, rendered_text):
                 self.logger.info(
                     "_verify_instagram_session(): Instagram session verified successfully via %s",
                     current_url,
@@ -1275,7 +1297,17 @@ class ImageScraper:
             self.logger.error("_login_to_instagram(): Fresh login attempt failed")
             return False
 
-        probe_url = "https://www.instagram.com/bachatavictoria/"
+        probe_url = str(
+            self.config.get("crawling", {}).get(
+                "instagram_session_probe_url", _DEFAULT_INSTAGRAM_SESSION_PROBE_URL
+            )
+            or _DEFAULT_INSTAGRAM_SESSION_PROBE_URL
+        ).strip()
+        if not is_instagram_post_detail_url(probe_url):
+            self.logger.warning(
+                "_login_to_instagram(): Invalid direct-post session probe URL; using the default."
+            )
+            probe_url = _DEFAULT_INSTAGRAM_SESSION_PROBE_URL
         if not await self._verify_instagram_session(probe_url):
             if await self._attempt_manual_instagram_recovery(probe_url):
                 self.logger.info("_login_to_instagram(): Manual Instagram recovery succeeded")

@@ -7,6 +7,7 @@ import json
 import os
 import sys
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from browser_extraction import (
@@ -14,6 +15,7 @@ from browser_extraction import (
     capture_aria_snapshot_async,
     capture_aria_snapshot_sync,
     choose_extraction_text,
+    reduce_instagram_aria_snapshot,
     snapshot_settings,
     write_snapshot_diagnostic,
 )
@@ -92,11 +94,35 @@ def test_choose_extraction_text_uses_sufficient_enabled_snapshot() -> None:
     )
 
 
+def test_reduce_instagram_aria_snapshot_keeps_post_and_excludes_comments() -> None:
+    snapshot = """- link \"Instagram\":
+- main:
+  - link \"danceclub\":
+  - time: April 22, 2025
+  - text: \"Country swing workshop at 8 PM\"
+  - link \"commenter\":
+  - text: Great event!
+- contentinfo:
+  - link \"Meta\":"""
+
+    reduced = reduce_instagram_aria_snapshot(snapshot)
+
+    assert reduced is not None
+    assert "Country swing workshop" in reduced
+    assert "commenter" not in reduced
+    assert "contentinfo" not in reduced
+
+
+def test_reduce_instagram_aria_snapshot_returns_none_without_caption_shape() -> None:
+    assert reduce_instagram_aria_snapshot("- main:\n  - heading \"No post\"") is None
+
+
 def test_snapshot_settings_coerces_invalid_values() -> None:
     settings = snapshot_settings(
         {
             "crawling": {
                 "aria_snapshot_enabled": "yes",
+                "aria_snapshot_instagram_enabled": "true",
                 "aria_snapshot_timeout_ms": "invalid",
                 "aria_snapshot_min_chars": 0,
             }
@@ -104,6 +130,7 @@ def test_snapshot_settings_coerces_invalid_values() -> None:
     )
 
     assert settings["enabled"] is True
+    assert settings["instagram_enabled"] is True
     assert settings["timeout_ms"] == 5_000
     assert settings["min_chars"] == 1
 

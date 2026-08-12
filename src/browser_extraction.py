@@ -6,11 +6,11 @@ They do not navigate, authenticate, scroll, or otherwise change browser behavior
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
-import json
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,7 @@ def snapshot_settings(config: dict[str, Any]) -> dict[str, int | bool | str]:
 
     return {
         "enabled": _as_bool(crawling.get("aria_snapshot_enabled", False)),
+        "instagram_enabled": _as_bool(crawling.get("aria_snapshot_instagram_enabled", False)),
         "debug_enabled": _as_bool(crawling.get("aria_snapshot_debug_enabled", False)),
         "timeout_ms": _positive_int(
             crawling.get("aria_snapshot_timeout_ms"), DEFAULT_SNAPSHOT_TIMEOUT_MS
@@ -107,6 +108,35 @@ def choose_extraction_text(
     if enabled and snapshot_text and len(snapshot_text) >= max(1, min_chars):
         return snapshot_text, "aria_snapshot"
     return fallback, "dom_text"
+
+
+def reduce_instagram_aria_snapshot(snapshot_text: str | None) -> str | None:
+    """Return the canonical Instagram post block from a Playwright ARIA snapshot.
+
+    The accessibility tree places the post inside ``main`` and typically follows
+    it with comment, recommendation, footer, and messaging subtrees. This
+    reducer keeps only the main subtree through the first caption text node.
+    It returns ``None`` when that stable shape is not present so callers can use
+    the original snapshot unchanged.
+    """
+    lines = str(snapshot_text or "").splitlines()
+    main_index = next((index for index, line in enumerate(lines) if line == "- main:"), None)
+    if main_index is None:
+        return None
+
+    reduced = [lines[main_index]]
+    saw_timestamp = False
+    for line in lines[main_index + 1 :]:
+        indentation = len(line) - len(line.lstrip(" "))
+        if indentation == 0:
+            break
+        reduced.append(line)
+        if indentation == 2 and line.lstrip().startswith("- time:"):
+            saw_timestamp = True
+            continue
+        if saw_timestamp and indentation == 2 and line.lstrip().startswith("- text:"):
+            return "\n".join(reduced).strip()
+    return None
 
 
 def write_snapshot_diagnostic(

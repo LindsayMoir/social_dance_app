@@ -22,6 +22,7 @@ from images import (
     _is_degraded_instagram_profile_text,
     _is_instagram_login_redirect_url,
     _is_ignored_instagram_ui_asset,
+    _looks_like_authenticated_instagram_page,
     _looks_like_authenticated_instagram_profile,
     _safe_screenshot_stem,
     _score_image_candidate,
@@ -183,6 +184,15 @@ def test_authenticated_instagram_profile_detection() -> None:
     assert _looks_like_authenticated_instagram_profile(
         "https://www.instagram.com/accounts/login/?next=%2Fbachatavictoria%2F&source=omni_redirect",
         "See everyday moments from your close friends. Continue Use another profile Create new account.",
+    ) is False
+
+
+def test_authenticated_instagram_post_detection_rejects_anonymous_shell() -> None:
+    post_url = "https://www.instagram.com/p/DVn5jSriOv9/"
+    assert _looks_like_authenticated_instagram_page(post_url, "Salsa social tonight") is True
+    assert _looks_like_authenticated_instagram_page(
+        post_url,
+        "Log In Sign Up Sign up for Instagram to stay in the loop. Log in to like or comment.",
     ) is False
 
 

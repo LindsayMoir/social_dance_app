@@ -46,11 +46,14 @@ crawling:
   scraper_playwright_timeout_ms: 35000
   # Experimental rendered-page extraction representation. Acquisition/navigation is unchanged.
   aria_snapshot_enabled: false
+  # Enabled only for authenticated Instagram post extraction; other sources remain on DOM text.
+  aria_snapshot_instagram_enabled: true
   aria_snapshot_debug_enabled: false
   aria_snapshot_timeout_ms: 5000
   aria_snapshot_min_chars: 80
   aria_snapshot_max_chars: 40000
   aria_snapshot_debug_dir: debug/aria_snapshots
+  instagram_session_probe_url: https://www.instagram.com/p/DVn5jSriOv9/
   scraper_post_load_wait_ms: 1000
   scraper_priority_download_timeout_seconds: 90
   scraper_priority_retry_times: 3
