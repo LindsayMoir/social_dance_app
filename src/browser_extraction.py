@@ -115,7 +115,8 @@ def reduce_instagram_aria_snapshot(snapshot_text: str | None) -> str | None:
 
     The accessibility tree places the post inside ``main`` and typically follows
     it with comment, recommendation, footer, and messaging subtrees. This
-    reducer keeps only the main subtree through the first caption text node.
+    reducer keeps only the main subtree through the first caption text node,
+    including useful post-image alt text.
     It returns ``None`` when that stable shape is not present so callers can use
     the original snapshot unchanged.
     """
@@ -130,13 +131,44 @@ def reduce_instagram_aria_snapshot(snapshot_text: str | None) -> str | None:
         indentation = len(line) - len(line.lstrip(" "))
         if indentation == 0:
             break
+        stripped_line = line.lstrip()
+        if stripped_line.startswith("- img"):
+            image_description = _aria_image_description(stripped_line)
+            if image_description:
+                reduced.append(f"{' ' * indentation}- text: Image description: {image_description}")
+            continue
         reduced.append(line)
-        if indentation == 2 and line.lstrip().startswith("- time:"):
+        if indentation == 2 and stripped_line.startswith("- time:"):
             saw_timestamp = True
             continue
-        if saw_timestamp and indentation == 2 and line.lstrip().startswith("- text:"):
+        if saw_timestamp and indentation == 2 and stripped_line.startswith("- text:"):
             return "\n".join(reduced).strip()
     return None
+
+
+def _aria_image_description(line: str) -> str | None:
+    """Return useful Instagram post image alt text, excluding decorative images."""
+    if not line.startswith('- img "') or not line.endswith('"'):
+        return None
+    description = line[len('- img "') : -1].strip()
+    if not description:
+        return None
+    normalized_description = description.lower()
+    ignored_descriptions = {
+        "instagram",
+        "tags",
+        "more options",
+        "like",
+        "comment",
+        "share",
+        "save",
+    }
+    if (
+        normalized_description in ignored_descriptions
+        or "profile picture" in normalized_description
+    ):
+        return None
+    return description
 
 
 def write_snapshot_diagnostic(

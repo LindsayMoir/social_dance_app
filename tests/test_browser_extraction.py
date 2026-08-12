@@ -98,6 +98,9 @@ def test_reduce_instagram_aria_snapshot_keeps_post_and_excludes_comments() -> No
     snapshot = """- link \"Instagram\":
 - main:
   - link \"danceclub\":
+  - img \"danceclub's profile picture\"
+  - img \"Photo by danceclub. May be an image of text that says Salsa Social 8 PM\"
+  - img \"Tags\"
   - time: April 22, 2025
   - text: \"Country swing workshop at 8 PM\"
   - link \"commenter\":
@@ -109,6 +112,9 @@ def test_reduce_instagram_aria_snapshot_keeps_post_and_excludes_comments() -> No
 
     assert reduced is not None
     assert "Country swing workshop" in reduced
+    assert "Image description: Photo by danceclub" in reduced
+    assert "Image description: Tags" not in reduced
+    assert "profile picture" not in reduced
     assert "commenter" not in reduced
     assert "contentinfo" not in reduced
 
