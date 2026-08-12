@@ -772,3 +772,18 @@ The objective is:
 Do not perform a wholesale scraper rewrite.
 
 Implement this as a measured enhancement with comparative testing, fallback paths and gradual rollout.
+
+---
+
+## Implementation Notes (2026-08-11)
+
+The installed Playwright version is `1.52.0`. Its supported Python API for this
+feature is `page.locator("body").aria_snapshot()`; `Page.aria_snapshot(mode="ai")`
+is not available in this version.
+
+The initial implementation is deliberately opt-in through the `crawling`
+configuration keys `aria_snapshot_enabled` and `aria_snapshot_debug_enabled`.
+When disabled (the default), DOM text extraction remains unchanged. When enabled,
+the system uses a sufficient ARIA snapshot and otherwise falls back to the
+existing DOM representation. Debug mode records bounded JSON capture artifacts
+under `debug/aria_snapshots`; by itself, it does not change extraction selection.

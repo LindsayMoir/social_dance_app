@@ -83,6 +83,13 @@ import yaml
 # Import other classes
 from credentials import get_credentials
 from config_runtime import get_config_path, load_config
+from browser_extraction import (
+    AriaSnapshotResult,
+    capture_aria_snapshot_sync,
+    choose_extraction_text,
+    snapshot_settings,
+    write_snapshot_diagnostic,
+)
 from db import DatabaseHandler
 from llm import LLMHandler
 from logging_utils import log_extracted_text
@@ -1546,11 +1553,41 @@ class FacebookEventScraper():
                 break
 
         page.wait_for_timeout(self.fb_final_wait_ms)
+        snapshot_config = snapshot_settings(self.config)
+        snapshot = AriaSnapshotResult(text=None, reason="aria_snapshot_disabled")
+        if snapshot_config["enabled"] or snapshot_config["debug_enabled"]:
+            snapshot = capture_aria_snapshot_sync(
+                page,
+                timeout_ms=int(snapshot_config["timeout_ms"]),
+                max_chars=int(snapshot_config["max_chars"]),
+            )
         html = page.content()
         soup = BeautifulSoup(html, 'html.parser')
         full_text = ' '.join(soup.stripped_strings)
         if is_facebook_event_detail_url(link):
             full_text = sanitize_facebook_event_text_for_extraction(full_text)
+        fallback_text_length = len(full_text)
+        full_text, representation = choose_extraction_text(
+            full_text,
+            snapshot,
+            enabled=bool(snapshot_config["enabled"]),
+            min_chars=int(snapshot_config["min_chars"]),
+        )
+        if snapshot_config["debug_enabled"]:
+            write_snapshot_diagnostic(
+                debug_dir=str(snapshot_config["debug_dir"]),
+                source="facebook",
+                url=link,
+                snapshot=snapshot,
+                selected_representation=representation,
+                fallback_text_length=fallback_text_length,
+            )
+        logging.info(
+            "extract_event_text: representation=%s snapshot_reason=%s url=%s",
+            representation,
+            snapshot.reason or "available",
+            link,
+        )
         if not full_text:
             logging.warning(f"extract_event_text: no text from {link}")
             return None

@@ -31,6 +31,13 @@ from scrapy import Selector
 from sqlalchemy import text
 import yaml
 from config_runtime import get_config_path, load_config
+from browser_extraction import (
+    AriaSnapshotResult,
+    capture_aria_snapshot_async,
+    choose_extraction_text,
+    snapshot_settings,
+    write_snapshot_diagnostic,
+)
 
 try:
     from paddleocr import PaddleOCR
@@ -720,6 +727,14 @@ class ImageScraper:
         try:
             await self.read_extract.page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
             await self.read_extract.page.wait_for_timeout(2500)
+            snapshot_config = snapshot_settings(getattr(self, "config", {}))
+            snapshot = AriaSnapshotResult(text=None, reason="aria_snapshot_disabled")
+            if snapshot_config["enabled"] or snapshot_config["debug_enabled"]:
+                snapshot = await capture_aria_snapshot_async(
+                    self.read_extract.page,
+                    timeout_ms=int(snapshot_config["timeout_ms"]),
+                    max_chars=int(snapshot_config["max_chars"]),
+                )
             content = await self.read_extract.page.content()
         except Exception as e:
             self.logger.warning("_extract_page_text_playwright(): failed for %s: %s", page_url, e)
@@ -728,8 +743,29 @@ class ImageScraper:
         soup = BeautifulSoup(content, "html.parser")
         for tag in soup(["script", "style"]):
             tag.decompose()
-        text = " ".join(soup.get_text(separator=" ").split())
-        return text or None
+        fallback_text = " ".join(soup.get_text(separator=" ").split())
+        text, representation = choose_extraction_text(
+            fallback_text,
+            snapshot,
+            enabled=bool(snapshot_config["enabled"]),
+            min_chars=int(snapshot_config["min_chars"]),
+        )
+        if snapshot_config["debug_enabled"]:
+            write_snapshot_diagnostic(
+                debug_dir=str(snapshot_config["debug_dir"]),
+                source="instagram",
+                url=page_url,
+                snapshot=snapshot,
+                selected_representation=representation,
+                fallback_text_length=len(fallback_text),
+            )
+        self.logger.info(
+            "_extract_page_text_playwright(): representation=%s snapshot_reason=%s url=%s",
+            representation,
+            snapshot.reason or "available",
+            page_url,
+        )
+        return text
 
     def _get_processed_image_identities(self) -> set[str]:
         """Return the in-run set of already-processed image identities."""

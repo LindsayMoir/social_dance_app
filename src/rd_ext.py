@@ -38,6 +38,13 @@ from urllib.parse import parse_qs, unquote
 import yaml
 
 from config_runtime import get_config_path, load_config
+from browser_extraction import (
+    AriaSnapshotResult,
+    capture_aria_snapshot_async,
+    choose_extraction_text,
+    snapshot_settings,
+    write_snapshot_diagnostic,
+)
 from db import DatabaseHandler
 from llm import LLMHandler
 from credentials import get_credentials  # Import the utility function
@@ -1097,15 +1104,46 @@ class ReadExtract:
 
                 await self._attempt_content_reveal_click(link)
 
-                # Pull the page HTML and parse
+                snapshot_config = snapshot_settings(self.config)
+                snapshot = AriaSnapshotResult(text=None, reason="aria_snapshot_disabled")
+                if snapshot_config["enabled"] or snapshot_config["debug_enabled"]:
+                    snapshot = await capture_aria_snapshot_async(
+                        self.page,
+                        timeout_ms=int(snapshot_config["timeout_ms"]),
+                        max_chars=int(snapshot_config["max_chars"]),
+                    )
+
+                # Pull the page HTML and parse as the deterministic fallback.
                 content = await self.page.content()
                 soup = BeautifulSoup(content, "html.parser")
                 text = " ".join(soup.stripped_strings)
                 iframe_text = await self._extract_embedded_iframe_text()
                 if len(iframe_text.strip()) > len(text.strip()):
                     text = iframe_text
+                fallback_text_length = len(text)
+                text, representation = choose_extraction_text(
+                    text,
+                    snapshot,
+                    enabled=bool(snapshot_config["enabled"]),
+                    min_chars=int(snapshot_config["min_chars"]),
+                )
+                if snapshot_config["debug_enabled"]:
+                    write_snapshot_diagnostic(
+                        debug_dir=str(snapshot_config["debug_dir"]),
+                        source="rd_ext",
+                        url=str(link),
+                        snapshot=snapshot,
+                        selected_representation=representation,
+                        fallback_text_length=fallback_text_length,
+                    )
+                logging.info(
+                    "extract_event_text: representation=%s snapshot_reason=%s url=%s",
+                    representation,
+                    snapshot.reason or "available",
+                    link,
+                )
 
-                if text.strip():
+                if text and text.strip():
                     logging.info(f"extract_event_text: Success on attempt {attempt} for {link}")
                     return text
                 else:
