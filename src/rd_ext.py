@@ -29,7 +29,9 @@ import logging
 import pandas as pd
 import os
 import re
+import requests
 import time
+from typing import Final
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 import random
@@ -53,6 +55,61 @@ from secret_paths import get_auth_file
 
 # Module-level handler that will be initialized when needed
 db_handler = None
+
+
+DUKE_SALOON_CALENDAR_FEED_URL: Final = "https://thedukesaloon.com/events/?ical=1"
+_DUKE_SALOON_REQUEST_HEADERS: Final = {
+    "Accept": "text/calendar, text/plain;q=0.9, */*;q=0.8",
+    "User-Agent": "social-dance-app/1.0 (+https://github.com/LindsayMoir/social_dance_app)",
+}
+
+
+def _unfold_ical_lines(ical_text: str) -> list[str]:
+    """Return RFC 5545 content lines with folded continuations restored."""
+    unfolded: list[str] = []
+    for line in str(ical_text or "").replace("\r\n", "\n").split("\n"):
+        if line.startswith((" ", "\t")) and unfolded:
+            unfolded[-1] += line[1:]
+        else:
+            unfolded.append(line)
+    return unfolded
+
+
+def _parse_ical_events(ical_text: str) -> list[dict[str, str]]:
+    """Parse the event fields needed for downstream LLM extraction without dependencies."""
+    events: list[dict[str, str]] = []
+    event: dict[str, str] | None = None
+    for line in _unfold_ical_lines(ical_text):
+        if line == "BEGIN:VEVENT":
+            event = {}
+            continue
+        if line == "END:VEVENT":
+            if event:
+                events.append(event)
+            event = None
+            continue
+        if event is None or ":" not in line:
+            continue
+        raw_name, value = line.split(":", 1)
+        name = raw_name.split(";", 1)[0].upper()
+        if name in {"UID", "SUMMARY", "DTSTART", "DTEND", "DESCRIPTION", "LOCATION", "URL"}:
+            event[name] = value.replace("\\n", "\n").replace("\\,", ",").replace("\\;", ";").strip()
+    return events
+
+
+def _format_ical_event_text(event: dict[str, str]) -> str:
+    """Format a parsed iCalendar event as compact, labeled LLM input."""
+    fields = (
+        ("Event", "SUMMARY"),
+        ("Start", "DTSTART"),
+        ("End", "DTEND"),
+        ("Location", "LOCATION"),
+        ("Description", "DESCRIPTION"),
+        ("Event URL", "URL"),
+    )
+    return "\n".join(
+        f"{label}: {event[key]}" for label, key in fields if str(event.get(key) or "").strip()
+    )
 
 
 def is_calendar_export_url(url: str) -> bool:
@@ -1456,6 +1513,8 @@ class ReadExtract:
             list: List of tuples (event_url, event_text, discovery_depth) for each event found
         """
         event_data = []
+        if venue_name == "The Duke Saloon":
+            return await self._extract_duke_saloon_calendar_feed()
         requires_final_detail_page = _is_bard_and_banker_calendar_url(calendar_url)
 
         try:
@@ -1580,6 +1639,46 @@ class ReadExtract:
         except Exception as e:
             logging.error(f"extract_calendar_events({venue_name}): Failed to extract events: {e}")
             return event_data
+
+    async def _extract_duke_saloon_calendar_feed(self) -> list[tuple[str, str, int]]:
+        """Fetch Duke Saloon events from its published iCalendar feed.
+
+        The venue's Cloudflare/WordPress response does not consistently reach a
+        usable Playwright document state, while its native feed is fast and
+        contains the same individual event data.
+        """
+        try:
+            response = await asyncio.to_thread(
+                requests.get,
+                DUKE_SALOON_CALENDAR_FEED_URL,
+                headers=_DUKE_SALOON_REQUEST_HEADERS,
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            logging.error("_extract_duke_saloon_calendar_feed(): feed request failed: %s", exc)
+            return []
+
+        event_data: list[tuple[str, str, int]] = []
+        seen_urls: set[str] = set()
+        for index, event in enumerate(_parse_ical_events(response.text), start=1):
+            event_text = _format_ical_event_text(event)
+            if not event_text:
+                continue
+            event_url = str(event.get("URL") or "").strip()
+            if not event_url.startswith(("http://", "https://")):
+                event_url = f"{DUKE_SALOON_CALENDAR_FEED_URL}#event-{index}"
+            if event_url in seen_urls:
+                continue
+            seen_urls.add(event_url)
+            event_data.append((event_url, event_text, 2))
+
+        logging.info(
+            "_extract_duke_saloon_calendar_feed(): extracted %d event(s) from %s",
+            len(event_data),
+            DUKE_SALOON_CALENDAR_FEED_URL,
+        )
+        return event_data
 
     async def _extract_click_revealed_calendar_events(self, calendar_url: str, venue_name: str) -> list[tuple[str, str, int]]:
         """Extract event detail from clickable calendar entries when no child URLs are exposed."""

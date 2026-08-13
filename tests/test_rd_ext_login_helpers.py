@@ -5,6 +5,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from rd_ext import (
+    _format_ical_event_text,
+    _parse_ical_events,
     _calendar_click_candidate_selectors,
     _extract_candidate_calendar_detail_cta_urls,
     _extract_revealed_calendar_event_blocks,
@@ -96,6 +98,74 @@ def test_wait_for_login_completion_fails_when_login_controls_persist() -> None:
     )
 
     assert result is False
+
+
+def test_parse_ical_events_unfolds_lines_and_preserves_event_details() -> None:
+    events = _parse_ical_events(
+        """BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:duke-1
+SUMMARY:Backcountry Fridays
+DTSTART;TZID=America/Vancouver:20260814T210000
+DTEND;TZID=America/Vancouver:20260815T020000
+LOCATION:The Duke Saloon\\, 502 Discovery Street\\, Victoria
+DESCRIPTION:Country swing night\\nDoors at 9 PM
+URL:https://thedukesaloon.com/event/backcountry-fridays/2026-08-14/
+END:VEVENT
+END:VCALENDAR"""
+    )
+
+    assert events == [
+        {
+            "UID": "duke-1",
+            "SUMMARY": "Backcountry Fridays",
+            "DTSTART": "20260814T210000",
+            "DTEND": "20260815T020000",
+            "LOCATION": "The Duke Saloon, 502 Discovery Street, Victoria",
+            "DESCRIPTION": "Country swing night\nDoors at 9 PM",
+            "URL": "https://thedukesaloon.com/event/backcountry-fridays/2026-08-14/",
+        }
+    ]
+    formatted = _format_ical_event_text(events[0])
+    assert "Event: Backcountry Fridays" in formatted
+    assert "Country swing night" in formatted
+
+
+def test_duke_saloon_calendar_feed_uses_native_ical_endpoint(monkeypatch) -> None:
+    class _FakeResponse:
+        text = """BEGIN:VCALENDAR
+BEGIN:VEVENT
+SUMMARY:Outlaw Saturdays
+DTSTART:20260815T210000
+URL:https://thedukesaloon.com/event/outlaw-saturdays-2/2026-08-15/
+END:VEVENT
+END:VCALENDAR"""
+
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+    requested: list[tuple[str, int]] = []
+
+    def _fake_get(url: str, *, headers: dict[str, str], timeout: int) -> _FakeResponse:
+        assert headers["Accept"].startswith("text/calendar")
+        requested.append((url, timeout))
+        return _FakeResponse()
+
+    monkeypatch.setattr("rd_ext.requests.get", _fake_get)
+    extractor = ReadExtract.__new__(ReadExtract)
+
+    events = asyncio.run(extractor.extract_calendar_events("https://thedukesaloon.com/events/", "The Duke Saloon"))
+
+    assert requested == [("https://thedukesaloon.com/events/?ical=1", 30)]
+    assert events == [
+        (
+            "https://thedukesaloon.com/event/outlaw-saturdays-2/2026-08-15/",
+            "Event: Outlaw Saturdays\nStart: 20260815T210000\n"
+            "Event URL: https://thedukesaloon.com/event/outlaw-saturdays-2/2026-08-15/",
+            2,
+        )
+    ]
 
 
 def test_get_login_probe_url_uses_authenticated_eventbrite_target() -> None:
