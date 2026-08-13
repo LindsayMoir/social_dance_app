@@ -44,3 +44,38 @@ def test_apply_event_overrides_sets_event_type() -> None:
 
     assert len(out) == 1
     assert out.iloc[0]["event_type"] == "social dance, live music"
+
+
+def test_apply_event_overrides_can_target_one_calendar_event_name() -> None:
+    handler = _build_handler_for_unit_test()
+    handler.event_overrides = [
+        {
+            "name": "uvic_cuban_salsa_calendar_source_url",
+            "match": {
+                "url_contains": "vlda.ca/resources",
+                "event_name_equals": "Cuban Salsa Club",
+            },
+            "set": {"url": "https://www.facebook.com/groups/cubansalsaclub/"},
+        }
+    ]
+    df = pd.DataFrame(
+        [
+            {
+                "event_name": "Cuban Salsa Club",
+                "url": "https://www.google.com/calendar/event?eid=uvic",
+            },
+            {
+                "event_name": "West Coast Swing practice and social dance",
+                "url": "https://www.google.com/calendar/event?eid=wcs",
+            },
+        ]
+    )
+
+    out = handler._apply_event_overrides(
+        df=df,
+        url="calendar-id@group.calendar.google.com",
+        parent_url="https://vlda.ca/resources/",
+    )
+
+    assert out.iloc[0]["url"] == "https://www.facebook.com/groups/cubansalsaclub/"
+    assert out.iloc[1]["url"] == "https://www.google.com/calendar/event?eid=wcs"

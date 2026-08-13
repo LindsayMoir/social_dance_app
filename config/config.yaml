@@ -44,9 +44,7 @@ crawling:
   scraper_concurrent_requests_per_domain: 8
   scraper_download_timeout_seconds: 35
   scraper_playwright_timeout_ms: 35000
-  # Experimental rendered-page extraction representation. Acquisition/navigation is unchanged.
   aria_snapshot_enabled: false
-  # Enabled only for authenticated Instagram post extraction; other sources remain on DOM text.
   aria_snapshot_instagram_enabled: true
   aria_snapshot_debug_enabled: false
   aria_snapshot_timeout_ms: 5000
@@ -219,6 +217,12 @@ normalization:
     name: debrhymer_shows_event_type
     set:
       event_type: social dance, live music
+  - match:
+      event_name_equals: Cuban Salsa Club
+      url_contains: vlda.ca/resources
+    name: uvic_cuban_salsa_calendar_source_url
+    set:
+      url: https://www.facebook.com/groups/cubansalsaclub/
   source_score_penalties:
   - match:
       source_equals: Victoria Latin Dance Association

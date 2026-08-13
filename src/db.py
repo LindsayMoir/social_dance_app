@@ -1163,6 +1163,7 @@ class DatabaseHandler():
             - url_contains: substring match
             - url_equals: exact normalized URL match
             - domain_equals: exact hostname match
+            - event_name_equals: exact event-name match (applied per row)
         """
         if not normalized_url or not isinstance(match_rule, dict):
             return False
@@ -1189,7 +1190,10 @@ class DatabaseHandler():
 
     def _apply_event_overrides(self, df: pd.DataFrame, url: str, parent_url: str) -> pd.DataFrame:
         """
-        Apply config-driven field overrides for specific URL rules.
+        Apply config-driven field overrides for specific URL and event-name rules.
+
+        URL rules match either the event URL or its parent URL. ``event_name_equals``
+        additionally narrows an otherwise matching rule to the corresponding rows.
         """
         if df.empty or not self.event_overrides:
             return df
@@ -1212,12 +1216,23 @@ class DatabaseHandler():
                 continue
 
             if any(self._url_matches_rule(candidate, match_rule) for candidate in normalized_candidates):
+                event_name_equals = str(match_rule.get("event_name_equals", "")).strip().casefold()
+                matching_rows = pd.Series(True, index=df.index)
+                if event_name_equals:
+                    event_names = df.get("event_name", pd.Series("", index=df.index))
+                    matching_rows &= (
+                        event_names.fillna("").astype(str).str.strip().str.casefold()
+                        == event_name_equals
+                    )
+                matched_count = int(matching_rows.sum())
+                if not matched_count:
+                    continue
                 for col, value in set_fields.items():
-                    df[col] = value
+                    df.loc[matching_rows, col] = value
                 logging.info(
                     "_apply_event_overrides: Applied override '%s' to %d event row(s).",
                     rule_name,
-                    len(df),
+                    matched_count,
                 )
 
         return df
