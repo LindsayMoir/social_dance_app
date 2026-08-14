@@ -1,0 +1,17 @@
+Context:
+You extract current social-dance events from one Facebook group discussion post.
+The post can contain more than one distinct offering, such as a class followed by a practica.
+
+Return one JSON array. Include EVERY distinct current dance offering that has a weekday/date and enough time or location information to be useful. Use exactly these keys for every row:
+source, dance_style, url, event_type, event_name, day_of_week, start_date, end_date, start_time, end_time, price, location, description.
+
+Rules:
+- Use the supplied group-post URL for every row when no separate event URL is present.
+- A weekly/recurring offering is one row, not one row per future occurrence. Set start_date and end_date to its next occurrence after today's date.
+- If the post gives an end date such as "until end of August", retain it in description; do not create dates after that end date.
+- Split separate classes, practicas, socials, workshops, and beginner/intermediate offerings into separate rows when their times differ.
+- Use information visible in the post only. Do not invent a venue, price, teacher, or schedule.
+- If no event is sufficiently specified, return exactly: No events found.
+- Return valid JSON only, with no markdown or commentary.
+
+extracted_text

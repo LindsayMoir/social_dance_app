@@ -22,6 +22,9 @@ crawling:
   fb_block_state_max_scopes: 800
   fb_block_state_ttl_days: 45
   fb_event_links_per_base_limit: 5
+  facebook_group_feed_scroll_depth: 2
+  facebook_group_images_per_post: 2
+  facebook_group_posts_per_run: 5
   fb_final_wait_ms: 1500
   fb_inter_request_wait_max_ms: 15000
   fb_inter_request_wait_min_ms: 5000
@@ -308,6 +311,9 @@ prompts:
     schema: address_extraction
   fb:
     file: prompts/fb_prompt.txt
+    schema: event_extraction
+  fb_group_post:
+    file: prompts/fb_group_post.txt
     schema: event_extraction
   fix_dup_addresses_semantic_clustering:
     file: prompts/fix_dup_addresses.txt

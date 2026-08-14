@@ -1756,16 +1756,16 @@ class ImageScraper:
         df_csv = pd.read_csv(csv_path)
 
         # Parameterized query using sqlalchemy.text for safe ILIKE
-        # Only get Instagram URLs from the last 24 hours to avoid stale CDN tokens
+        # Get Instagram and Facebook CDN URLs from the last 24 hours to avoid stale CDN tokens.
         query = text("""
             SELECT link, parent_url, source, keywords, relevant, crawl_try, time_stamp
             FROM urls
-            WHERE link ILIKE :link_pattern
+            WHERE (link ILIKE :instagram_pattern OR link ILIKE :facebook_cdn_pattern)
               AND time_stamp >= (CURRENT_TIMESTAMP - INTERVAL '24 hours')
         """ )
-        params = {'link_pattern': '%instagram%'}
+        params = {'instagram_pattern': '%instagram%', 'facebook_cdn_pattern': '%fbcdn.net%'}
         df_db = pd.read_sql(query, self.db_handler.conn, params=params)
-        self.logger.info(f"get_image_links(): Retrieved {df_db.shape[0]} Instagram URLs from the database (filtered to last 24 hours).")
+        self.logger.info(f"get_image_links(): Retrieved {df_db.shape[0]} social image URLs from the database (filtered to last 24 hours).")
 
         # Combine CSV and DB results
         df = pd.concat([df_csv, df_db], ignore_index=True)

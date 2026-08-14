@@ -64,7 +64,9 @@ Note:
 
 
 from bs4 import BeautifulSoup
+from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha256
 import json
 from rapidfuzz import fuzz
 import logging
@@ -418,6 +420,42 @@ def is_facebook_event_detail_url(url: str) -> bool:
     Return True when URL points to a concrete Facebook event detail page (/events/<id>/...).
     """
     return classifier_is_facebook_event_detail_url(url)
+
+
+def is_facebook_group_url(url: str) -> bool:
+    """Return True when *url* is a Facebook group page or group subpage."""
+    parsed = urlparse(url or "")
+    return "facebook.com" in (parsed.netloc or "").lower() and "/groups/" in (
+        parsed.path or ""
+    ).lower()
+
+
+@dataclass(frozen=True)
+class FacebookGroupPost:
+    """One bounded Facebook group discussion candidate and its poster images."""
+
+    url: str
+    text: str
+    image_urls: tuple[str, ...]
+
+
+def _facebook_group_post_identity(
+    group_url: str,
+    post_href: str | None,
+    post_text: str,
+) -> str:
+    """Return a stable URL identity for a group post, even without a permalink."""
+    candidate = urljoin(group_url, str(post_href or "").strip())
+    parsed = urlparse(candidate)
+    path = (parsed.path or "").lower()
+    if "facebook.com" in (parsed.netloc or "").lower() and (
+        "/posts/" in path or "/permalink/" in path
+    ):
+        return f"https://www.facebook.com{parsed.path.rstrip('/')}/"
+
+    normalized_text = " ".join(str(post_text or "").split()).lower()
+    digest = sha256(normalized_text.encode("utf-8")).hexdigest()[:20]
+    return f"{group_url.rstrip('/')}/#discussion-post={digest}"
 
 
 def diagnose_facebook_access(current_url: str, page_content: str) -> tuple[str, str]:
@@ -1554,8 +1592,13 @@ class FacebookEventScraper():
 
         page.wait_for_timeout(self.fb_final_wait_ms)
         snapshot_config = snapshot_settings(self.config)
+        is_group_page = is_facebook_group_url(link)
         snapshot = AriaSnapshotResult(text=None, reason="aria_snapshot_disabled")
-        if snapshot_config["enabled"] or snapshot_config["debug_enabled"]:
+        # Facebook can omit visible group discussion posts from page.content(),
+        # while the rendered accessibility tree includes them. Always request a
+        # snapshot for groups, but retain the DOM-text fallback if unavailable.
+        snapshot_enabled = bool(snapshot_config["enabled"]) or is_group_page
+        if snapshot_enabled or snapshot_config["debug_enabled"]:
             snapshot = capture_aria_snapshot_sync(
                 page,
                 timeout_ms=int(snapshot_config["timeout_ms"]),
@@ -1570,7 +1613,7 @@ class FacebookEventScraper():
         full_text, representation = choose_extraction_text(
             full_text,
             snapshot,
-            enabled=bool(snapshot_config["enabled"]),
+            enabled=snapshot_enabled,
             min_chars=int(snapshot_config["min_chars"]),
         )
         if snapshot_config["debug_enabled"]:
@@ -1595,6 +1638,137 @@ class FacebookEventScraper():
 
         return full_text
 
+    def extract_facebook_group_posts(self, group_url: str) -> list[FacebookGroupPost]:
+        """Extract a bounded set of current discussion posts from a rendered group page."""
+        if not is_facebook_group_url(group_url) or not self.logged_in_page:
+            return []
+
+        page = self.logged_in_page
+        crawling_config = self.config.get("crawling", {})
+        scroll_depth = max(0, int(crawling_config.get("facebook_group_feed_scroll_depth", 2) or 0))
+        post_limit = max(1, int(crawling_config.get("facebook_group_posts_per_run", 5) or 1))
+        images_per_post = max(0, int(crawling_config.get("facebook_group_images_per_post", 2) or 0))
+
+        for _ in range(scroll_depth):
+            try:
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(self.fb_post_expand_wait_ms)
+            except Exception as exc:
+                logging.info("extract_facebook_group_posts: feed scroll failed for %s: %s", group_url, exc)
+                break
+
+        candidates: list[FacebookGroupPost] = []
+        seen_urls: set[str] = set()
+        for article in page.query_selector_all('[role="article"]'):
+            try:
+                for button in article.query_selector_all("text=/See more/i"):
+                    try:
+                        button.click()
+                    except Exception:
+                        continue
+                text = str(article.inner_text() or "").strip()
+            except Exception:
+                continue
+            if len(text) < 40:
+                continue
+
+            post_href = None
+            for selector in ('a[href*="/posts/"]', 'a[href*="/permalink/"]'):
+                link_node = article.query_selector(selector)
+                if link_node:
+                    post_href = link_node.get_attribute("href")
+                    if post_href:
+                        break
+            post_url = _facebook_group_post_identity(group_url, post_href, text)
+            if post_url in seen_urls:
+                continue
+
+            image_candidates: list[tuple[float, str]] = []
+            if images_per_post:
+                for image in article.query_selector_all("img"):
+                    image_url = str(image.get_attribute("src") or "").strip()
+                    if "fbcdn.net" not in urlparse(image_url).netloc.lower():
+                        continue
+                    try:
+                        bounds = image.bounding_box() or {}
+                        area = float(bounds.get("width", 0) or 0) * float(bounds.get("height", 0) or 0)
+                    except Exception:
+                        area = 0.0
+                    image_candidates.append((area, image_url))
+            image_urls = [
+                image_url
+                for _, image_url in sorted(image_candidates, reverse=True)
+                if image_url
+            ]
+            image_urls = list(dict.fromkeys(image_urls))[:images_per_post]
+
+            seen_urls.add(post_url)
+            candidates.append(FacebookGroupPost(post_url, text, tuple(image_urls)))
+            if len(candidates) >= post_limit:
+                break
+
+        logging.info(
+            "extract_facebook_group_posts: extracted %d discussion post(s) from %s",
+            len(candidates),
+            group_url,
+        )
+        return candidates
+
+    def process_facebook_group_posts(
+        self,
+        group_url: str,
+        source: str,
+        keywords: str,
+        posts: list[FacebookGroupPost] | None = None,
+    ) -> int:
+        """Process current group posts independently and queue their poster images."""
+        events_written = 0
+        for post in posts if posts is not None else self.extract_facebook_group_posts(group_url):
+            if not db_handler.should_process_url(post.url):
+                decision_reason = db_handler.get_should_process_decision_reason(post.url) or "group_post_skip"
+                db_handler.write_url_to_db(
+                    [post.url, group_url, source, keywords, False, 1, datetime.now(), decision_reason]
+                )
+                continue
+            # Posters can carry the dance and schedule details even when the
+            # surrounding caption has no keyword, so queue them independently.
+            for image_url in post.image_urls:
+                db_handler.write_url_to_db(
+                    [image_url, post.url, source, keywords, False, 1, datetime.now(), "group_post_poster"]
+                )
+            found_keywords = [keyword for keyword in self.keywords_list if keyword in post.text.lower()]
+            if not found_keywords:
+                db_handler.write_url_to_db(
+                    [post.url, group_url, source, keywords, False, 1, datetime.now(), "group_post_no_keywords"]
+                )
+                continue
+
+            result = llm_handler.process_llm_response(
+                post.url,
+                group_url,
+                post.text,
+                source,
+                found_keywords,
+                "fb_group_post",
+            )
+            post_events_written = int(getattr(result, "events_written", 0) or 0)
+            events_written += post_events_written
+            self.events_written_to_db += post_events_written
+            db_handler.write_url_to_db(
+                [
+                    post.url,
+                    group_url,
+                    source,
+                    keywords,
+                    post_events_written > 0,
+                    1,
+                    datetime.now(),
+                    "group_post_llm_success" if post_events_written else "group_post_llm_no_events",
+                ]
+            )
+
+        return events_written
+
     
     def extract_relevant_text(self, content: str, link: str) -> str | None:
         """
@@ -1615,6 +1789,12 @@ class FacebookEventScraper():
             or "Guests See All") are not found in the expected positions within the content.
         """
         logging.info(f"def extract_relevant_text(): Extracting relevant text from {link}.")
+
+        # Group discussions do not share the event-page headings used below.
+        # Preserve their rendered text for the existing keyword and LLM stages;
+        # the LLM prompt already supports recurring events with no explicit date.
+        if is_facebook_group_url(link):
+            return content.strip() or None
 
         # Step 1: Find the first occurrence of "More About Discussion" (case-insensitive)
         mad_pattern = re.compile(r"More About Discussion", re.IGNORECASE)
@@ -1882,10 +2062,17 @@ class FacebookEventScraper():
         # Initialize tracking
         self.total_url_attempts += 1
 
-        # 1) Extract text: full event page vs relevant snippet
+        # 1) Extract text: group discussions, full event page, or relevant snippet.
+        if is_facebook_group_url(url):
+            full_text = self.extract_event_text(url, assume_navigated=True)
+            group_posts = self.extract_facebook_group_posts(url)
+            self.process_facebook_group_posts(url, source, keywords, group_posts)
+            if group_posts:
+                return
+            extracted_text = full_text
         if classifier_is_facebook_event_detail_url(url):
             extracted_text = self.extract_event_text(url, assume_navigated=True)
-        else:
+        elif not is_facebook_group_url(url):
             full_text = self.extract_event_text(url, assume_navigated=True)
             extracted_text = self.extract_relevant_text(full_text, url) if full_text else None
 
