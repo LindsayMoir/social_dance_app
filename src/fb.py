@@ -431,21 +431,21 @@ def is_facebook_group_url(url: str) -> bool:
 
 
 @dataclass(frozen=True)
-class FacebookGroupPost:
-    """One bounded Facebook group discussion candidate and its poster images."""
+class FacebookFeedPost:
+    """One bounded Facebook group or page-feed candidate and its poster images."""
 
     url: str
     text: str
     image_urls: tuple[str, ...]
 
 
-def _facebook_group_post_identity(
-    group_url: str,
+def _facebook_feed_post_identity(
+    feed_url: str,
     post_href: str | None,
     post_text: str,
 ) -> str:
-    """Return a stable URL identity for a group post, even without a permalink."""
-    candidate = urljoin(group_url, str(post_href or "").strip())
+    """Return a stable URL identity for a Facebook feed post without a permalink."""
+    candidate = urljoin(feed_url, str(post_href or "").strip())
     parsed = urlparse(candidate)
     path = (parsed.path or "").lower()
     if "facebook.com" in (parsed.netloc or "").lower() and (
@@ -455,7 +455,29 @@ def _facebook_group_post_identity(
 
     normalized_text = " ".join(str(post_text or "").split()).lower()
     digest = sha256(normalized_text.encode("utf-8")).hexdigest()[:20]
-    return f"{group_url.rstrip('/')}/#discussion-post={digest}"
+    return f"{feed_url.rstrip('/')}/#discussion-post={digest}"
+
+
+# Backward-compatible aliases for existing integrations and tests. New callers
+# should use the feed-neutral names above.
+FacebookGroupPost = FacebookFeedPost
+_facebook_group_post_identity = _facebook_feed_post_identity
+
+
+def is_configured_facebook_page_feed_url(config: dict, url: str) -> bool:
+    """Return whether an exact Facebook page URL is opted in to bounded feed crawling."""
+    if is_facebook_group_url(url) or is_facebook_event_detail_url(url):
+        return False
+
+    configured_urls = config.get("crawling", {}).get("facebook_page_feed_urls", [])
+    if not isinstance(configured_urls, list):
+        return False
+
+    normalized_url = str(url or "").rstrip("/").lower()
+    return any(
+        normalized_url == str(candidate or "").strip().rstrip("/").lower()
+        for candidate in configured_urls
+    )
 
 
 def diagnose_facebook_access(current_url: str, page_content: str) -> tuple[str, str]:
@@ -1643,21 +1665,59 @@ class FacebookEventScraper():
         if not is_facebook_group_url(group_url) or not self.logged_in_page:
             return []
 
-        page = self.logged_in_page
         crawling_config = self.config.get("crawling", {})
         scroll_depth = max(0, int(crawling_config.get("facebook_group_feed_scroll_depth", 2) or 0))
         post_limit = max(1, int(crawling_config.get("facebook_group_posts_per_run", 5) or 1))
         images_per_post = max(0, int(crawling_config.get("facebook_group_images_per_post", 2) or 0))
+        return self._extract_facebook_feed_posts(
+            group_url,
+            scroll_depth=scroll_depth,
+            post_limit=post_limit,
+            images_per_post=images_per_post,
+            feed_label="group discussion",
+        )
+
+    def extract_configured_facebook_page_posts(self, page_url: str) -> list[FacebookFeedPost]:
+        """Extract posts for an explicitly configured Facebook page feed only."""
+        if not self.logged_in_page or not is_configured_facebook_page_feed_url(self.config, page_url):
+            return []
+
+        crawling_config = self.config.get("crawling", {})
+        scroll_depth = max(0, int(crawling_config.get("facebook_page_feed_scroll_depth", 2) or 0))
+        post_limit = max(1, int(crawling_config.get("facebook_page_posts_per_run", 5) or 1))
+        images_per_post = max(0, int(crawling_config.get("facebook_page_images_per_post", 2) or 0))
+        return self._extract_facebook_feed_posts(
+            page_url,
+            scroll_depth=scroll_depth,
+            post_limit=post_limit,
+            images_per_post=images_per_post,
+            feed_label="page feed",
+        )
+
+    def _extract_facebook_feed_posts(
+        self,
+        feed_url: str,
+        *,
+        scroll_depth: int,
+        post_limit: int,
+        images_per_post: int,
+        feed_label: str,
+    ) -> list[FacebookFeedPost]:
+        """Extract a bounded set of rendered Facebook feed posts and attached posters."""
+        if not self.logged_in_page:
+            return []
+
+        page = self.logged_in_page
 
         for _ in range(scroll_depth):
             try:
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 page.wait_for_timeout(self.fb_post_expand_wait_ms)
             except Exception as exc:
-                logging.info("extract_facebook_group_posts: feed scroll failed for %s: %s", group_url, exc)
+                logging.info("_extract_facebook_feed_posts: %s scroll failed for %s: %s", feed_label, feed_url, exc)
                 break
 
-        candidates: list[FacebookGroupPost] = []
+        candidates: list[FacebookFeedPost] = []
         seen_urls: set[str] = set()
         for article in page.query_selector_all('[role="article"]'):
             try:
@@ -1679,7 +1739,7 @@ class FacebookEventScraper():
                     post_href = link_node.get_attribute("href")
                     if post_href:
                         break
-            post_url = _facebook_group_post_identity(group_url, post_href, text)
+            post_url = _facebook_feed_post_identity(feed_url, post_href, text)
             if post_url in seen_urls:
                 continue
 
@@ -1703,14 +1763,15 @@ class FacebookEventScraper():
             image_urls = list(dict.fromkeys(image_urls))[:images_per_post]
 
             seen_urls.add(post_url)
-            candidates.append(FacebookGroupPost(post_url, text, tuple(image_urls)))
+            candidates.append(FacebookFeedPost(post_url, text, tuple(image_urls)))
             if len(candidates) >= post_limit:
                 break
 
         logging.info(
-            "extract_facebook_group_posts: extracted %d discussion post(s) from %s",
+            "_extract_facebook_feed_posts: extracted %d %s post(s) from %s",
             len(candidates),
-            group_url,
+            feed_label,
+            feed_url,
         )
         return candidates
 
@@ -1722,30 +1783,64 @@ class FacebookEventScraper():
         posts: list[FacebookGroupPost] | None = None,
     ) -> int:
         """Process current group posts independently and queue their poster images."""
+        return self._process_facebook_feed_posts(
+            group_url,
+            source,
+            keywords,
+            posts if posts is not None else self.extract_facebook_group_posts(group_url),
+            decision_prefix="group_post",
+        )
+
+    def process_configured_facebook_page_posts(
+        self,
+        page_url: str,
+        source: str,
+        keywords: str,
+        posts: list[FacebookFeedPost] | None = None,
+    ) -> int:
+        """Process an opted-in page's current feed posts and queue their posters."""
+        return self._process_facebook_feed_posts(
+            page_url,
+            source,
+            keywords,
+            posts if posts is not None else self.extract_configured_facebook_page_posts(page_url),
+            decision_prefix="page_feed_post",
+        )
+
+    def _process_facebook_feed_posts(
+        self,
+        feed_url: str,
+        source: str,
+        keywords: str,
+        posts: list[FacebookFeedPost],
+        *,
+        decision_prefix: str,
+    ) -> int:
+        """Process bounded Facebook feed posts through the existing LLM and image paths."""
         events_written = 0
-        for post in posts if posts is not None else self.extract_facebook_group_posts(group_url):
+        for post in posts:
             if not db_handler.should_process_url(post.url):
-                decision_reason = db_handler.get_should_process_decision_reason(post.url) or "group_post_skip"
+                decision_reason = db_handler.get_should_process_decision_reason(post.url) or f"{decision_prefix}_skip"
                 db_handler.write_url_to_db(
-                    [post.url, group_url, source, keywords, False, 1, datetime.now(), decision_reason]
+                    [post.url, feed_url, source, keywords, False, 1, datetime.now(), decision_reason]
                 )
                 continue
             # Posters can carry the dance and schedule details even when the
             # surrounding caption has no keyword, so queue them independently.
             for image_url in post.image_urls:
                 db_handler.write_url_to_db(
-                    [image_url, post.url, source, keywords, False, 1, datetime.now(), "group_post_poster"]
+                    [image_url, post.url, source, keywords, False, 1, datetime.now(), f"{decision_prefix}_poster"]
                 )
             found_keywords = [keyword for keyword in self.keywords_list if keyword in post.text.lower()]
             if not found_keywords:
                 db_handler.write_url_to_db(
-                    [post.url, group_url, source, keywords, False, 1, datetime.now(), "group_post_no_keywords"]
+                    [post.url, feed_url, source, keywords, False, 1, datetime.now(), f"{decision_prefix}_no_keywords"]
                 )
                 continue
 
             result = llm_handler.process_llm_response(
                 post.url,
-                group_url,
+                feed_url,
                 post.text,
                 source,
                 found_keywords,
@@ -1757,13 +1852,13 @@ class FacebookEventScraper():
             db_handler.write_url_to_db(
                 [
                     post.url,
-                    group_url,
+                    feed_url,
                     source,
                     keywords,
                     post_events_written > 0,
                     1,
                     datetime.now(),
-                    "group_post_llm_success" if post_events_written else "group_post_llm_no_events",
+                    f"{decision_prefix}_llm_success" if post_events_written else f"{decision_prefix}_llm_no_events",
                 ]
             )
 
@@ -2062,7 +2157,7 @@ class FacebookEventScraper():
         # Initialize tracking
         self.total_url_attempts += 1
 
-        # 1) Extract text: group discussions, full event page, or relevant snippet.
+        # 1) Extract text: opted-in feeds, full event page, or relevant snippet.
         if is_facebook_group_url(url):
             full_text = self.extract_event_text(url, assume_navigated=True)
             group_posts = self.extract_facebook_group_posts(url)
@@ -2070,6 +2165,11 @@ class FacebookEventScraper():
             if group_posts:
                 return
             extracted_text = full_text
+        elif is_configured_facebook_page_feed_url(self.config, url):
+            page_posts = self.extract_configured_facebook_page_posts(url)
+            self.process_configured_facebook_page_posts(url, source, keywords, page_posts)
+            if page_posts:
+                return
         if classifier_is_facebook_event_detail_url(url):
             extracted_text = self.extract_event_text(url, assume_navigated=True)
         elif not is_facebook_group_url(url):

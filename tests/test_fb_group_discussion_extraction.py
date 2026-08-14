@@ -9,10 +9,17 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import fb as fb_module
-from fb import FacebookEventScraper, FacebookGroupPost, _facebook_group_post_identity
+from fb import (
+    FacebookEventScraper,
+    FacebookFeedPost,
+    FacebookGroupPost,
+    _facebook_group_post_identity,
+    is_configured_facebook_page_feed_url,
+)
 
 
 GROUP_URL = "https://www.facebook.com/groups/895697871649474/"
+PAGE_URL = "https://www.facebook.com/p/Sebastian-y-Hannah-61574884540532/"
 DISCUSSION_TEXT = (
     "Victoria Zouk Collective Group. "
     "Hello! Are you all still dancing on Wednesdays at White Eagle Hall? "
@@ -154,6 +161,35 @@ def test_group_post_identity_uses_content_hash_when_no_permalink_exists() -> Non
     assert identity.startswith(f"{GROUP_URL.rstrip('/')}/#discussion-post=")
 
 
+def test_configured_page_feed_requires_exact_opt_in() -> None:
+    config = {"crawling": {"facebook_page_feed_urls": [PAGE_URL]}}
+
+    assert is_configured_facebook_page_feed_url(config, PAGE_URL)
+    assert is_configured_facebook_page_feed_url(config, PAGE_URL.rstrip("/"))
+    assert not is_configured_facebook_page_feed_url(config, "https://www.facebook.com/p/Other-Page-123/")
+    assert not is_configured_facebook_page_feed_url(config, GROUP_URL)
+
+
+def test_configured_page_post_collection_uses_same_bounded_feed_extractor() -> None:
+    scraper = _group_scraper()
+    scraper.logged_in_page = _DiscussionPage()
+    scraper.config["crawling"].update(
+        {
+            "facebook_page_feed_urls": [PAGE_URL],
+            "facebook_page_feed_scroll_depth": 1,
+            "facebook_page_posts_per_run": 3,
+            "facebook_page_images_per_post": 2,
+        }
+    )
+
+    posts = scraper.extract_configured_facebook_page_posts(PAGE_URL)
+
+    assert len(posts) == 1
+    assert isinstance(posts[0], FacebookFeedPost)
+    assert "Wednesdays 6:30pm" in posts[0].text
+    assert posts[0].image_urls == ("https://scontent.xx.fbcdn.net/v/t39.30808-6/poster.jpg",)
+
+
 def test_group_post_queues_poster_when_caption_has_no_dance_keyword(monkeypatch) -> None:
     class _Db:
         def __init__(self) -> None:
@@ -183,3 +219,38 @@ def test_group_post_queues_poster_when_caption_has_no_dance_keyword(monkeypatch)
     assert written == 0
     assert any(row[0] == "https://scontent.xx.fbcdn.net/v/t39.30808-6/poster.jpg" for row in db.rows)
     assert any(row[-1] == "group_post_no_keywords" for row in db.rows)
+
+
+def test_page_post_queues_poster_when_caption_has_no_dance_keyword(monkeypatch) -> None:
+    class _Db:
+        def __init__(self) -> None:
+            self.rows: list[list[object]] = []
+
+        def should_process_url(self, _url: str) -> bool:
+            return True
+
+        def write_url_to_db(self, row: list[object]) -> None:
+            self.rows.append(row)
+
+    scraper = FacebookEventScraper.__new__(FacebookEventScraper)
+    scraper.keywords_list = ["bachata"]
+    scraper.events_written_to_db = 0
+    db = _Db()
+    monkeypatch.setattr(fb_module, "db_handler", db)
+
+    written = scraper.process_configured_facebook_page_posts(
+        PAGE_URL,
+        "Sebastian y Hannah",
+        "bachata",
+        [
+            FacebookFeedPost(
+                url="https://www.facebook.com/p/Sebastian-y-Hannah-61574884540532/posts/123456789/",
+                text="New schedule posted. See the attached image for details.",
+                image_urls=("https://scontent.xx.fbcdn.net/v/t39.30808-6/poster.jpg",),
+            )
+        ],
+    )
+
+    assert written == 0
+    assert any(row[0] == "https://scontent.xx.fbcdn.net/v/t39.30808-6/poster.jpg" for row in db.rows)
+    assert any(row[-1] == "page_feed_post_no_keywords" for row in db.rows)

@@ -25,6 +25,12 @@ crawling:
   facebook_group_feed_scroll_depth: 2
   facebook_group_images_per_post: 2
   facebook_group_posts_per_run: 5
+  # Page feeds are opt-in: unrestricted Facebook page scanning is intentionally avoided.
+  facebook_page_feed_urls:
+    - https://www.facebook.com/p/Sebastian-y-Hannah-61574884540532/
+  facebook_page_feed_scroll_depth: 2
+  facebook_page_images_per_post: 2
+  facebook_page_posts_per_run: 5
   fb_final_wait_ms: 1500
   fb_inter_request_wait_max_ms: 15000
   fb_inter_request_wait_min_ms: 5000
