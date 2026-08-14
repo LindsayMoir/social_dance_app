@@ -3253,7 +3253,7 @@ class LLMHandler:
                                     "properties": {
                                         "group_id": {"type": "integer"},
                                         "event_id": {"type": "integer"},
-                                        "Label": {"type": "integer"}
+                                        "Label": {"type": "integer", "enum": [0, 1]}
                                     },
                                     "required": ["group_id", "event_id", "Label"],
                                     "additionalProperties": False
@@ -3364,7 +3364,7 @@ class LLMHandler:
                             "properties": {
                                 "group_id": {"type": "integer"},
                                 "event_id": {"type": "integer"},
-                                "Label": {"type": "integer"}
+                                "Label": {"type": "integer", "enum": [0, 1]}
                             },
                             "required": ["group_id", "event_id", "Label"],
                             "additionalProperties": False

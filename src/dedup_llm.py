@@ -47,6 +47,10 @@ from llm import LLMHandler
 from db import DatabaseHandler
 
 
+class InvalidDeduplicationResponseError(ValueError):
+    """Raised when an LLM deduplication response contains unsafe labels."""
+
+
 class DeduplicationHandler:
     def __init__(self, config_path='config/config.yaml'):
         """
@@ -345,6 +349,8 @@ class DeduplicationHandler:
 
             return self.parse_llm_response(response_chunk, chunk_index=chunk_index)
 
+        except InvalidDeduplicationResponseError:
+            raise
         except Exception as e:
             logging.error(f"def process_chunk_with_llm(): Error processing chunk {chunk_index}: {e}")
             return None
@@ -392,8 +398,11 @@ class DeduplicationHandler:
                     df = pd.DataFrame(parsed)
                 required = {"group_id", "event_id", "Label"}
                 if required.issubset(df.columns):
+                    df = self._normalize_dedup_labels(df, chunk_index=chunk_index)
                     logging.info(f"def clean_response(): Parsed {len(df)} rows via schema-aware parser.")
                     return df
+        except InvalidDeduplicationResponseError:
+            raise
         except Exception as e:
             logging.warning(f"def clean_response(): schema-aware parse failed, falling back. Error: {e}")
 
@@ -466,8 +475,11 @@ class DeduplicationHandler:
                     chunk_index=chunk_index,
                 )
                 return pd.DataFrame()
+            df = self._normalize_dedup_labels(df, chunk_index=chunk_index)
             logging.info(f"def clean_response(): Successfully extracted {len(df)} rows from fallback parser.")
             return df
+        except InvalidDeduplicationResponseError:
+            raise
         except Exception as e:
             logging.error(f"def clean_response(): Error parsing LLM response to JSON: {e}")
             self._write_dedup_parse_artifact(
@@ -476,6 +488,51 @@ class DeduplicationHandler:
                 chunk_index=chunk_index,
             )
             return pd.DataFrame()
+
+    def _normalize_dedup_labels(
+        self,
+        response_df: pd.DataFrame,
+        *,
+        chunk_index: Optional[int],
+    ) -> pd.DataFrame:
+        """Normalize the known no-duplicate sentinel and reject unsafe labels.
+
+        Some non-OpenAI providers emit ``-1`` for a record that does not belong
+        to a duplicate cluster. In this binary deduplication contract, that has
+        the same safe meaning as ``0`` (keep). All other non-binary values are
+        rejected before results can be persisted or events deleted.
+        """
+        normalized_df = response_df.copy()
+        raw_labels = normalized_df["Label"]
+        numeric_labels = pd.to_numeric(raw_labels, errors="coerce")
+        sentinel_mask = numeric_labels.eq(-1)
+        if sentinel_mask.any():
+            event_ids = normalized_df.loc[sentinel_mask, "event_id"].tolist()
+            logging.warning(
+                "def clean_response(): Normalized Label=-1 to Label=0 for "
+                "non-duplicate event_id(s) %s in chunk %s.",
+                event_ids,
+                chunk_index,
+            )
+            numeric_labels = numeric_labels.mask(sentinel_mask, 0)
+
+        invalid_mask = numeric_labels.isna() | ~numeric_labels.isin([0, 1])
+        if invalid_mask.any():
+            invalid_rows = normalized_df.loc[
+                invalid_mask, ["event_id", "Label"]
+            ].to_dict(orient="records")
+            self._write_dedup_parse_artifact(
+                reason=f"invalid_binary_labels:{invalid_rows}",
+                response_chunk="",
+                chunk_index=chunk_index,
+            )
+            raise InvalidDeduplicationResponseError(
+                "Deduplication response contains labels outside the allowed "
+                f"values 0 and 1: {invalid_rows}"
+            )
+
+        normalized_df["Label"] = numeric_labels.astype(int)
+        return normalized_df
 
     def merge_and_save_results(self, df, response_dfs):
         """
