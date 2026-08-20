@@ -966,6 +966,12 @@ class EventSpider(scrapy.Spider):
             url,
             confidence=class_decision.confidence,
         )
+        is_calendar_root = is_calendar_candidate(url, self.calendar_urls_set)
+        if is_calendar_root and not extract_parent_page:
+            # Explicit calendar seeds are authoritative event sources.  Their
+            # layout may look like a generic page, but they must still receive
+            # direct extraction rather than relying on child-link discovery.
+            extract_parent_page = True
         logging.info(
             "def parse(): page_archetype=%s confidence=%.2f stage=%s extract_parent_page=%s url=%s",
             page_archetype,
@@ -1040,7 +1046,7 @@ class EventSpider(scrapy.Spider):
                 extract_parent_page
                 and (
                     is_whitelisted_origin
-                    or is_calendar_candidate(url, self.calendar_urls_set)
+                    or is_calendar_root
                     or has_event_signal(extracted_text)
                 )
             )
@@ -1097,11 +1103,18 @@ class EventSpider(scrapy.Spider):
             if extracted_ids:
                 calendar_ids.update(extracted_ids)
                 continue
-            events_written += self.fetch_google_calendar_events(cal_url, url, source, keywords)
+            events_written += int(
+                self.fetch_google_calendar_events(cal_url, url, source, keywords) or 0
+            )
 
         if calendar_ids:
             for calendar_id in sorted(calendar_ids):
-                events_written += self.process_calendar_id(calendar_id, response.url, url, source, keywords)
+                events_written += int(
+                    self.process_calendar_id(
+                        calendar_id, response.url, url, source, keywords
+                    )
+                    or 0
+                )
 
         if calendar_sources or calendar_ids:
             # mark the page itself as relevant if calendar events fetched
