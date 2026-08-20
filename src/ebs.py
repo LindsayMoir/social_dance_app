@@ -56,7 +56,7 @@ import random
 import re
 from sqlalchemy import text
 import sys
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 import yaml
 
 from config_runtime import get_config_path, load_config
@@ -65,6 +65,46 @@ from llm import LLMHandler
 from logging_config import setup_logging
 from page_classifier import evaluate_step_ownership, resolve_prompt_type
 from rd_ext import ReadExtract
+
+
+_EVENTBRITE_RESULT_LINK_SELECTOR = "a[href*='tickets-']"
+_EVENTBRITE_EVENT_PATH_PATTERN = re.compile(r"/e/[^/?#]+-tickets-(\d+)(?:[/?#]|$)", re.IGNORECASE)
+
+
+def canonicalize_eventbrite_event_url(href: str) -> str | None:
+    """Return an absolute Eventbrite event URL, or None for non-event links."""
+    raw_href = str(href or "").strip()
+    if not raw_href:
+        return None
+    if raw_href.startswith("/"):
+        raw_href = f"https://www.eventbrite.com{raw_href}"
+
+    parsed = urlparse(raw_href)
+    host = (parsed.netloc or "").lower()
+    match = _EVENTBRITE_EVENT_PATH_PATTERN.search(parsed.path or "")
+    if not host.endswith("eventbrite.com") and not host.endswith("eventbrite.ca"):
+        return None
+    if not match:
+        return None
+    # Preserve the search query because URLs history already stores Eventbrite's
+    # ``aff`` parameters. Removing it would evade the historical relevance gate.
+    return urlunparse((parsed.scheme or "https", host, parsed.path, "", parsed.query, ""))
+
+
+def ordered_eventbrite_result_urls(hrefs: list[str], limit: int) -> list[str]:
+    """De-duplicate Eventbrite search links while preserving result-card order."""
+    result_urls: list[str] = []
+    seen_event_ids: set[str] = set()
+    for href in hrefs:
+        event_url = canonicalize_eventbrite_event_url(href)
+        event_id = _EVENTBRITE_EVENT_PATH_PATTERN.search(urlparse(event_url or "").path or "")
+        if not event_url or not event_id or event_id.group(1) in seen_event_ids:
+            continue
+        seen_event_ids.add(event_id.group(1))
+        result_urls.append(event_url)
+        if limit > 0 and len(result_urls) >= limit:
+            break
+    return result_urls
 
 
 class EventbriteScraper:
@@ -238,7 +278,9 @@ class EventbriteScraper:
         # Perform the search and extract URLs
         try:
             await self.perform_search(query)
-            event_urls = await self.extract_event_urls()
+            event_urls = await self.extract_event_urls(
+                limit=int(self.config['crawling']['max_website_urls'])
+            )
             logging.info(f"def eventbrite_search(): Total unique event URLs found: {len(event_urls)}")
         except Exception as e:
             logging.error(f"def eventbrite_search(): Error during search/extraction: {e}")
@@ -413,32 +455,46 @@ class EventbriteScraper:
         return  # or return False
     
 
-    async def extract_event_urls(self):
-        """ Extracts unique event URLs from the search results.
+    async def extract_event_urls(self, limit: int):
+        """Extract the first ``limit`` unique Eventbrite result URLs in page order.
 
         Returns:
-            set: A set of unique event URLs.
+            list: Canonical event URLs, preserving the current results order.
         """
-        event_urls = set()
+        event_urls: list[str] = []
         try:
-            event_link = await self.read_extract.page.query_selector_all("a[href*='/e/']")
+            try:
+                await self.read_extract.page.wait_for_selector(
+                    _EVENTBRITE_RESULT_LINK_SELECTOR,
+                    state="attached",
+                    timeout=20_000,
+                )
+            except PlaywrightTimeoutError:
+                logging.warning(
+                    "extract_event_urls(): No Eventbrite ticket links appeared within 20 seconds (url=%s).",
+                    self.read_extract.page.url,
+                )
 
-            for link in event_link:
-                href = await link.get_attribute("href")
-                if href:
-                    href = self.ensure_absolute_url(href)
-                    unique_id = self.extract_unique_id(href)
-                    if unique_id:
-                        event_urls.add(href)
-                        logging.debug(f"def extract_event_urls(): Found event URL: {href} with ID: {unique_id}")
-                    else:
-                        logging.debug(f"def extract_event_urls(): URL does not match the expected pattern: {href}")
+            event_links = await self.read_extract.page.query_selector_all(_EVENTBRITE_RESULT_LINK_SELECTOR)
+            hrefs = [
+                href
+                for link in event_links
+                if (href := await link.get_attribute("href"))
+            ]
+            event_urls = ordered_eventbrite_result_urls(hrefs, limit)
+            logging.info(
+                "extract_event_urls(): Found %d ticket links and retained first %d unique event result(s).",
+                len(hrefs),
+                len(event_urls),
+            )
 
-                if len(self.visited_urls) >= self.config['crawling']['urls_run_limit']:
-                    logging.info(f"def extract_event_urls(): Reached the maximum limit of {self.config['crawling']['max_website_urls']}"
-                                 f" event URLs or {self.config['crawling']['urls_run_limit']} visited URLs."
-                                 f"\nurls are: {event_urls}")
-
+            if not event_urls:
+                page_text = (await self.read_extract.page.locator("body").inner_text()).replace("\n", " ")
+                logging.warning(
+                    "extract_event_urls(): No canonical Eventbrite events found (url=%s, page_text=%r).",
+                    self.read_extract.page.url,
+                    page_text[:500],
+                )
             return event_urls
         
         except Exception as e:
@@ -456,9 +512,7 @@ class EventbriteScraper:
         Returns:
             str: Absolute URL.
         """
-        if not href.startswith("http"):
-            href = f"https://www.eventbrite.com{href}"
-        return href
+        return canonicalize_eventbrite_event_url(href) or href
     
 
     def extract_unique_id(self, url):
@@ -471,8 +525,7 @@ class EventbriteScraper:
         Returns:
             str or None: Unique identifier if pattern matches, else None.
         """
-        pattern = r'/e/[^/]+-tickets-(\d+)(?:\?|$)'
-        match = re.search(pattern, url)
+        match = _EVENTBRITE_EVENT_PATH_PATTERN.search(urlparse(url).path or "")
         return match.group(1) if match else None
         
 
