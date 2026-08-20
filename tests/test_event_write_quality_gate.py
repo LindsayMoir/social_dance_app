@@ -92,6 +92,34 @@ def test_event_write_quality_gate_keeps_social_image_with_local_venue_signal() -
     assert reason is None
 
 
+def test_event_write_quality_gate_keeps_social_image_with_metro_vancouver_signal() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+    df = pd.DataFrame(
+        [
+            {
+                "event_name": "BC Swing Dance Social",
+                "start_date": "2026-08-29",
+                "start_time": "20:00",
+                "location": "Bonsor Recreation Complex, Burnaby, BC",
+                "description": "West Coast Swing social dance.",
+                "source": "instagram_keyword_search",
+                "url": "https://www.instagram.com/p/example/#image=burnaby",
+            }
+        ]
+    )
+
+    filtered, reason = handler._filter_event_rows_for_write_quality(
+        df,
+        source="instagram_keyword_search",
+        url="https://www.instagram.com/p/example/#image=burnaby",
+        parent_url="https://www.instagram.com/p/example/",
+        context="test",
+    )
+
+    assert len(filtered) == 1
+    assert reason is None
+
+
 def test_event_write_quality_gate_drops_rows_without_minimum_event_data() -> None:
     handler = DatabaseHandler.__new__(DatabaseHandler)
     df = pd.DataFrame(

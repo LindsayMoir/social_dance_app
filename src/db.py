@@ -54,7 +54,7 @@ _US_STATE_OR_TERRITORY_CODES: Final[frozenset[str]] = frozenset(
 _BLOCKED_EVENT_URL_DOMAINS: Final[frozenset[str]] = frozenset({"example.com"})
 _EVENT_URL_REACHABILITY_TIMEOUT_SECONDS: Final[float] = 6.0
 _EVENT_LOCAL_TIMEZONE: Final[ZoneInfo] = ZoneInfo("America/Los_Angeles")
-_LOCAL_EVENT_TEXT_MARKERS: Final[tuple[str, ...]] = (
+_GREATER_VICTORIA_EVENT_TEXT_MARKERS: Final[tuple[str, ...]] = (
     "victoria",
     "british columbia",
     " v8",
@@ -81,6 +81,37 @@ _LOCAL_EVENT_TEXT_MARKERS: Final[tuple[str, ...]] = (
     "loft pub",
     "coda",
     "wicket hall",
+)
+_GREATER_VANCOUVER_EVENT_TEXT_MARKERS: Final[tuple[str, ...]] = (
+    # Metro Vancouver's 21 municipal members.
+    "anmore",
+    "belcarra",
+    "bowen island",
+    "burnaby",
+    "coquitlam",
+    "delta",
+    "langley",
+    "lions bay",
+    "maple ridge",
+    "new westminster",
+    "north vancouver",
+    "pitt meadows",
+    "port coquitlam",
+    "port moody",
+    "richmond",
+    "surrey",
+    "vancouver",
+    "west vancouver",
+    "white rock",
+    # Metro Vancouver's Electoral Area A and treaty First Nation member.
+    "university of british columbia",
+    "university endowment lands",
+    "tsawwassen first nation",
+    "tsawwassen",
+)
+_LOCAL_EVENT_TEXT_MARKERS: Final[tuple[str, ...]] = (
+    *_GREATER_VICTORIA_EVENT_TEXT_MARKERS,
+    *_GREATER_VANCOUVER_EVENT_TEXT_MARKERS,
 )
 _NONLOCAL_EVENT_TEXT_MARKERS: Final[tuple[str, ...]] = (
     "poland",
@@ -3030,7 +3061,7 @@ class DatabaseHandler():
 
     @classmethod
     def _has_local_event_signal(cls, text_value: str) -> bool:
-        """Return True when text contains a Greater Victoria / BC locality signal."""
+        """Return True when text contains a Greater Victoria or Metro Vancouver signal."""
         normalized_text = f" {cls._normalize_event_quality_text(text_value)} "
         if re.search(r"\b(?:bc|b\.c\.)\b", normalized_text):
             return True
@@ -4680,7 +4711,12 @@ class DatabaseHandler():
         if missing_cols:
             logging.warning(f"_filter_events: Missing important columns: {missing_cols}")
         
-        df[important_cols] = df[important_cols].replace(r'^\s*$', pd.NA, regex=True).infer_objects(copy=False)
+        # ``replace`` currently downcasts object columns containing dates/numbers,
+        # but pandas is removing that implicit behavior. Opt into the future mode
+        # locally, then retain today's explicit inferred dtypes without a warning.
+        with pd.option_context("future.no_silent_downcasting", True):
+            cleaned_important_values = df[important_cols].replace(r'^\s*$', pd.NA, regex=True)
+        df[important_cols] = cleaned_important_values.infer_objects(copy=False)
         rows_before_dropna = len(df)
         df = df.dropna(subset=important_cols, how='all')
         rows_after_dropna = len(df)

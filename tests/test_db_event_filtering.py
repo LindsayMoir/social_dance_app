@@ -1,4 +1,5 @@
 import sys
+import warnings
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -69,6 +70,27 @@ def test_filter_events_can_skip_date_filter_when_requested():
 
     out = handler._filter_events(df, apply_date_filter=False)
     assert len(out) == 2
+
+
+def test_filter_events_handles_object_date_columns_without_downcasting_warning() -> None:
+    handler = _make_handler(old_days=30)
+    df = pd.DataFrame(
+        {
+            "end_date": pd.Series([datetime.now(), datetime.now()], dtype=object),
+            "start_date": pd.Series([datetime.now(), datetime.now()], dtype=object),
+            "start_time": ["19:00", "20:00"],
+            "end_time": ["21:00", "22:00"],
+            "location": ["A", "B"],
+            "description": ["first", "second"],
+        }
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", FutureWarning)
+        out = handler._filter_events(df, apply_date_filter=False)
+
+    assert len(out) == 2
+    assert not any("Downcasting behavior in `replace` is deprecated" in str(w.message) for w in caught)
 
 
 def test_write_events_to_db_logs_old_facebook_event_detail_rejection_reason(monkeypatch):
