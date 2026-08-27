@@ -12,6 +12,23 @@ import secret_paths
 from credential_validator import _load_facebook_group_probe_urls
 
 
+def test_get_headful_browser_readiness_error_allows_wslg_without_shared_memory(monkeypatch):
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.delenv("DISPLAY", raising=False)
+
+    assert cv.get_headful_browser_readiness_error() is None
+
+
+def test_get_headful_browser_readiness_error_requires_display(monkeypatch):
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("DISPLAY", raising=False)
+
+    error = cv.get_headful_browser_readiness_error()
+
+    assert error is not None
+    assert "WAYLAND_DISPLAY or DISPLAY" in error
+
+
 def test_load_facebook_group_probe_urls_filters_and_limits(tmp_path):
     whitelist = tmp_path / "aaa_urls.csv"
     gs_urls = tmp_path / "gs_urls.csv"

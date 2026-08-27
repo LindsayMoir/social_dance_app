@@ -51,6 +51,27 @@ from config_runtime import get_config_path, load_config, write_config
 config = load_config()
 
 
+def get_headful_browser_readiness_error() -> str | None:
+    """Return an error only when no interactive display is configured."""
+    display_available = bool(os.getenv("WAYLAND_DISPLAY") or os.getenv("DISPLAY"))
+
+    if display_available:
+        return None
+
+    return (
+        "No interactive display is configured. Set WAYLAND_DISPLAY or DISPLAY before "
+        "running headful credential validation, or run from a WSLg session with GUI "
+        "applications enabled."
+    )
+
+
+def ensure_headful_browser_ready() -> None:
+    """Fail before authentication when no interactive display is available."""
+    error = get_headful_browser_readiness_error()
+    if error:
+        raise RuntimeError(error)
+
+
 @contextmanager
 def _temporary_headless_config(headless: bool):
     """
@@ -609,6 +630,9 @@ def validate_credentials(headless=False, check_timeout_seconds=60):
             'instagram': {'valid': bool, 'error': str or None}
         }
     """
+    if not headless:
+        ensure_headful_browser_ready()
+
     results = {}
     start_time = datetime.now()
 
