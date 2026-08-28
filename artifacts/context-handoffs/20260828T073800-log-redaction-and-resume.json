@@ -1,0 +1,28 @@
+{
+  "handoff_id": "20260828T073800-log-redaction-and-resume",
+  "context_status": "active",
+  "scope": "social_dance_app logging security and interrupted-pipeline resume",
+  "sources": [
+    "src/logging_config.py",
+    "tests/test_logging_config.py",
+    "logs/scraper_log.txt",
+    "active background crawler processes"
+  ],
+  "material_decisions": [
+    "Configured logging handlers redact key, api_key, and apikey query parameter values.",
+    "The background resume runs only scraper.py, fb.py, and images.py before resuming the normal pipeline at read_pdfs.",
+    "Commit the current pipeline data outputs together with the logging fix at the user's request."
+  ],
+  "validation": [
+    "pytest -q tests/test_logging_config.py tests/test_credential_validator.py: 12 passed",
+    "python -m py_compile src/logging_config.py",
+    "git diff --check"
+  ],
+  "open_questions": [
+    "The active crawler processes must be restarted before they load the new logging filter."
+  ],
+  "recommended_next_step": "Monitor the detached sda_resume tmux session until the crawler group and downstream pipeline finish.",
+  "supersedes": [
+    "20260827T164300-credential-validation-wslg"
+  ]
+}

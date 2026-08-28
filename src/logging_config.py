@@ -24,10 +24,38 @@ Features:
 
 import logging
 import os
+import re
 import sys
 
 
-def setup_logging(script_name: str, level=logging.INFO):
+_SENSITIVE_QUERY_PARAMETER_PATTERN = re.compile(
+    r"([?&](?:api_?)?key=)[^&#\s\"']+",
+    flags=re.IGNORECASE,
+)
+
+
+def redact_sensitive_query_parameters(message: str) -> str:
+    """Mask API-key query parameter values before they are written to logs."""
+    return _SENSITIVE_QUERY_PARAMETER_PATTERN.sub(r"\1<redacted>", message)
+
+
+class SensitiveQueryParameterFilter(logging.Filter):
+    """Redact sensitive URL query parameters from formatted log records."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Sanitize the fully formatted log message in place."""
+        record.msg = redact_sensitive_query_parameters(record.getMessage())
+        record.args = ()
+        return True
+
+
+def _install_sensitive_query_parameter_filter() -> None:
+    """Attach query-parameter redaction to every configured root handler."""
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(SensitiveQueryParameterFilter())
+
+
+def setup_logging(script_name: str, level: int = logging.INFO) -> None:
     """
     Configure logging based on execution environment.
 
@@ -81,6 +109,8 @@ def setup_logging(script_name: str, level=logging.INFO):
             force=True  # Override any existing configuration
         )
         logging.info(f"Logging configured for local development (file: {log_file})")
+
+    _install_sensitive_query_parameter_filter()
 
     # Suppress verbose HTTP logging from third-party libraries
     # This prevents DEBUG logs from httpx, httpcore, and openai from cluttering logs
