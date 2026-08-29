@@ -1,0 +1,21 @@
+{
+  "handoff_id": "20260829T075023-manual-coverage-audit",
+  "context_status": "active",
+  "scope": "social_dance_app pipeline output snapshot",
+  "sources": [
+    "data/evaluation/manual_coverage_audit.csv",
+    "git status"
+  ],
+  "material_decisions": [
+    "Commit the regenerated manual coverage audit at the user's request."
+  ],
+  "validation": [
+    "git diff --check",
+    "JSON validation with python -m json.tool"
+  ],
+  "open_questions": [],
+  "recommended_next_step": "Review the regenerated audit contents if event coverage needs manual validation.",
+  "supersedes": [
+    "20260828T073800-log-redaction-and-resume"
+  ]
+}
