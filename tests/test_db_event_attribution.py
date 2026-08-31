@@ -187,7 +187,47 @@ def test_normalize_delete_reason_code_handles_dynamic_old_event_reason() -> None
 
     assert normalized["delete_reason_code"] == "end_date_older_than_days"
     assert normalized["raw_delete_reason"] == "end_date_older_than_30_days"
+
+
+def test_normalize_delete_reason_code_accepts_manual_blacklisted_domain_cleanup() -> None:
+    handler = _make_handler()
+
+    normalized = handler._normalize_delete_reason_code("manual_delete_by_blacklisted_domain")
+
+    assert normalized == {
+        "delete_reason_code": "manual_delete_by_blacklisted_domain",
+        "raw_delete_reason": "manual_delete_by_blacklisted_domain",
+        "reason_registered": True,
+    }
     assert normalized["reason_registered"] is True
+
+
+def test_delete_events_with_audit_handles_sqlalchemy_row_payloads() -> None:
+    class _Row:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+            self._mapping = {"deleted_event": payload}
+
+        def __getitem__(self, index: int) -> dict[str, object]:
+            assert index == 0
+            return self._payload
+
+    handler = _make_handler()
+    handler.execute_query = lambda _query, _params: [_Row({"event_id": 123, "url": "https://example.com"})]
+    audit_calls: list[dict[str, object]] = []
+    handler._write_deleted_event_audit_record = lambda **kwargs: audit_calls.append(kwargs)
+    handler._write_deleted_event_to_history = lambda _event: None
+    handler._write_event_delete_attribution = lambda **_kwargs: None
+
+    deleted_events = handler._delete_events_with_audit(
+        "DELETE FROM events WHERE event_id = :event_id",
+        {"event_id": 123},
+        "test",
+        "manual_delete_by_blacklisted_domain",
+    )
+
+    assert deleted_events == [{"event_id": 123, "url": "https://example.com"}]
+    assert len(audit_calls) == 1
 
 
 def test_write_events_to_db_records_canonical_write_attribution(monkeypatch) -> None:

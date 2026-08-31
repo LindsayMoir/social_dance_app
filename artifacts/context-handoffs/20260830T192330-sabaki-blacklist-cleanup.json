@@ -1,0 +1,27 @@
+{
+  "handoff_id": "20260830T192330-sabaki-blacklist-cleanup",
+  "context_status": "active",
+  "scope": "sabaki.dance blacklist and local database source-data cleanup",
+  "sources": [
+    "data/other/black_list_domains.csv",
+    "src/db.py",
+    "tests/test_db_event_attribution.py",
+    "local PostgreSQL database"
+  ],
+  "material_decisions": [
+    "Added sabaki.dance to the configured domain blacklist.",
+    "Removed matching event, URL, crawl, attribution, history, source-count, and validation-artifact references from the local database.",
+    "Registered the manual blacklisted-domain deletion reason and fixed SQLAlchemy Row payload handling in the audited event deletion helper."
+  ],
+  "validation": [
+    "Focused attribution tests: 3 passed.",
+    "python -m py_compile src/db.py",
+    "git diff --check",
+    "Post-cleanup database scan found zero sabaki.dance matches in text-bearing tables."
+  ],
+  "open_questions": [],
+  "recommended_next_step": "Run the pipeline normally; the blacklist prevents future sabaki.dance ingestion.",
+  "supersedes": [
+    "20260829T075023-manual-coverage-audit"
+  ]
+}

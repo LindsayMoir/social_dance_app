@@ -291,6 +291,7 @@ class DatabaseHandler():
         "outside_canada_filter": "outside_canada_filter",
         "empty_dance_style_url_other_no_location_description": "empty_dance_style_url_other_no_location_description",
         "manual_delete_by_name_and_start_date": "manual_delete_by_name_and_start_date",
+        "manual_delete_by_blacklisted_domain": "manual_delete_by_blacklisted_domain",
         "null_start_date_start_time_or_null_start_end_time": "null_start_date_start_time_or_null_start_end_time",
     }
     _SHOULD_PROCESS_MIN_HIT_RATIO = 0.5
@@ -2239,7 +2240,12 @@ class DatabaseHandler():
         deleted_events: List[Dict[str, Any]] = []
         for row in rows:
             # row shape is typically tuple(dict,) from SQLAlchemy fetchall()
-            payload = row[0] if isinstance(row, tuple) else row
+            if isinstance(row, tuple):
+                payload = row[0]
+            elif hasattr(row, "_mapping"):
+                payload = row._mapping.get("deleted_event", row[0])
+            else:
+                payload = row
             if isinstance(payload, str):
                 try:
                     payload = json.loads(payload)
