@@ -48,6 +48,8 @@ from logging_config import setup_logging
 # Load environment variables from .env
 load_dotenv()
 
+_EMAIL_NEWSLETTER_PROMPT_TYPE = "email_newsletter"
+
 
 class GmailProcessor:
     def __init__(self, llm_handler=None):
@@ -215,6 +217,13 @@ class GmailProcessor:
         """
         logging.info(f"def _process_from_gmail(): Processing emails from CSV: {csv_path}")
         df = pd.read_csv(csv_path)
+        required_columns = {"email", "source", "keywords"}
+        missing_columns = required_columns.difference(df.columns)
+        if missing_columns:
+            raise ValueError(
+                "Email configuration is missing required columns: "
+                + ", ".join(sorted(missing_columns))
+            )
 
         # Track results per email
         email_results = {}
@@ -224,8 +233,10 @@ class GmailProcessor:
         # Track total events before processing
         total_events_before = db_handler.execute_query("SELECT COUNT(*) FROM events")[0][0]
 
-        for idx, row in df.iterrows():
-            email, source, keywords, prompt_type = row
+        for email, source, keywords in df[["email", "source", "keywords"]].itertuples(
+            index=False,
+            name=None,
+        ):
 
             # Get event count before processing this email
             events_before = db_handler.execute_query("SELECT COUNT(*) FROM events")[0][0]
@@ -247,7 +258,7 @@ class GmailProcessor:
                     extracted_text,
                     source,
                     keywords,
-                    prompt_type,
+                    _EMAIL_NEWSLETTER_PROMPT_TYPE,
                 )
 
                 # Get event count after processing this email

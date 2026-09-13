@@ -1,0 +1,30 @@
+{
+  "handoff_id": "20260913T092000-email-newsletter-unification",
+  "context_status": "active",
+  "scope": "Unified resilient newsletter extraction for all configured email senders",
+  "sources": [
+    "data/other/emails.csv",
+    "data/other/emails_originals.csv",
+    "src/emails.py",
+    "config/config.yaml",
+    "prompts/email_newsletter.txt"
+  ],
+  "material_decisions": [
+    "Removed per-sender prompt configuration from email source CSV files.",
+    "Routes every configured email through the common email_newsletter prompt.",
+    "Removed the unused DJ Dancing Dean-specific prompt and configuration.",
+    "The common prompt requires a complete inventory of dated newsletter items while excluding explicitly unscheduled entries."
+  ],
+  "validation": [
+    "Focused tests: 46 passed.",
+    "python -m py_compile src/emails.py passed.",
+    "Configuration and CSV preflight confirmed all three sources use email_newsletter.",
+    "git diff --check passed.",
+    "Read-only replay of Dean's latest email produced eight parsed events with the common prompt."
+  ],
+  "open_questions": [],
+  "recommended_next_step": "Run the next normal email pipeline step and review its event-count metrics by sender.",
+  "supersedes": [
+    "20260913T085000-bard-wix-calendar-repair"
+  ]
+}

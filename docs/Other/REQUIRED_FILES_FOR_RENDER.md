@@ -66,7 +66,6 @@ All `.txt` files in the prompts directory are required:
 | `dedup_llm_address.txt` | Address deduplication logic |
 | `dedup_prompt.txt` | Event deduplication logic |
 | `default.txt` | Default event extraction prompt |
-| `djdancingdean_prompt.txt` | Site-specific extraction (DJ Dancing Dean) |
 | `event_name_location_fix.txt` | Fix event names and locations |
 | `fb_prompt.txt` | Facebook event extraction |
 | `fix_dup_addresses.txt` | Fix duplicate addresses |

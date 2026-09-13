@@ -1,0 +1,21 @@
+Context:
+Extract every dance-related event from this newsletter email into one JSON array.
+
+Newsletters change layout. Do not rely on a section heading, table layout, a particular sender name, or a fixed number of items. Scan the complete text for every dated item, including classes, lesson series, workshops, socials, dances, festivals, and live music.
+
+Before answering, make a private coverage checklist of every named item that has a date or date range. In particular, when several consecutive class blocks use the same venue, schedule, price, or registration text, each named class is a separate event and MUST receive its own JSON object. Do not stop after finding the first two classes. Exclude an item only when it is explicitly unscheduled (for example, “to be announced”) or has no date that can be inferred from its stated weekday.
+
+For each event, return exactly these keys:
+source, dance_style, url, event_type, event_name, day_of_week, start_date, end_date, start_time, end_time, price, location, description
+
+Rules:
+- Return valid JSON only: an array of objects, with no markdown or commentary.
+- Use the sender/source supplied by the application when the newsletter does not name an organizer.
+- Infer the year from the current date. Preserve stated date ranges for class series.
+- For a class series, create one event record for the series, not one record per weekly occurrence, unless the email separately names each occurrence.
+- If several events share a venue, still retain the venue on every event.
+- Use event_type `class`, `workshop`, `social dance`, `live music`, `festival`, or `other` as appropriate.
+- Use an empty string for unknown fields. Do not invent dates, prices, or locations.
+- Perform a final completeness pass: the number of returned class/workshop objects must equal the number of dated named class/workshop blocks in the email.
+
+extracted_text

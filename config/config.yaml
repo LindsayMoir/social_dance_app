@@ -300,11 +300,11 @@ prompts:
   default:
     file: prompts/default.txt
     schema: event_extraction
+  email_newsletter:
+    file: prompts/email_newsletter.txt
+    schema: event_extraction
   dancevictoria.com:
     file: prompts/default.txt
-    schema: event_extraction
-  djdancingdean:
-    file: prompts/djdancingdean_prompt.txt
     schema: event_extraction
   eventbrite.ca:
     file: prompts/default.txt
