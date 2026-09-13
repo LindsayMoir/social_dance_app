@@ -31,7 +31,7 @@ import os
 import re
 import requests
 import time
-from typing import Final
+from typing import Any, Final
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 import random
@@ -501,6 +501,72 @@ def _is_bard_and_banker_event_detail_url(url: str) -> bool:
     host = (parsed.netloc or "").lower().removeprefix("www.")
     path = (parsed.path or "").rstrip("/")
     return host == "bardandbanker.com" and path.startswith("/event-details/") and path != "/event-details"
+
+
+def _iter_nested_dicts(value: Any):
+    """Yield every dictionary in a JSON-compatible nested value."""
+    if isinstance(value, dict):
+        yield value
+        for nested_value in value.values():
+            yield from _iter_nested_dicts(nested_value)
+    elif isinstance(value, list):
+        for nested_value in value:
+            yield from _iter_nested_dicts(nested_value)
+
+
+def _extract_bard_wix_calendar_events(page_html: str, calendar_url: str) -> list[tuple[str, str, int]]:
+    """Read the complete Wix calendar payload, including events hidden behind ``+ more``."""
+    soup = BeautifulSoup(page_html, "html.parser")
+    warmup_data = soup.find("script", id="wix-warmup-data")
+    if warmup_data is None or not warmup_data.string:
+        return []
+    try:
+        payload = json.loads(warmup_data.string)
+    except (TypeError, json.JSONDecodeError) as exc:
+        logging.info("_extract_bard_wix_calendar_events(): invalid Wix warmup data: %s", exc)
+        return []
+
+    events: list[tuple[str, str, int]] = []
+    seen_events: set[tuple[str, str, str]] = set()
+    for item in _iter_nested_dicts(payload):
+        scheduling = item.get("scheduling")
+        if not isinstance(scheduling, dict):
+            continue
+        config = scheduling.get("config")
+        title = str(item.get("title") or "").strip()
+        slug = str(item.get("slug") or "").strip()
+        if not isinstance(config, dict) or not title or not slug:
+            continue
+        start_date = str(config.get("startDate") or "").strip()
+        if not start_date:
+            continue
+        event_key = (title, start_date, slug)
+        if event_key in seen_events:
+            continue
+        seen_events.add(event_key)
+
+        location_data = item.get("location")
+        location = ""
+        if isinstance(location_data, dict):
+            location = str(location_data.get("address") or location_data.get("name") or "").strip()
+        formatted_date = str(scheduling.get("startDateFormatted") or start_date[:10]).strip()
+        formatted_time = str(scheduling.get("startTimeFormatted") or "").strip()
+        description = str(item.get("description") or "").strip()
+        event_text = "\n".join(
+            part for part in (
+                "Live Music at the Bard & Banker",
+                f"Event: {title}",
+                f"Date: {formatted_date}",
+                f"Time: {formatted_time}" if formatted_time else "",
+                f"Location: {location}" if location else "",
+                f"Description: {description}" if description else "",
+            ) if part
+        )
+        event_url = urljoin(calendar_url, f"/event-details/{slug}")
+        events.append((event_url, event_text, 2))
+
+    events.sort(key=lambda event: event[0])
+    return events
 
 
 def _calendar_click_candidate_selectors(calendar_url: str) -> tuple[str, ...]:
@@ -1528,6 +1594,19 @@ class ReadExtract:
             await self.page.goto(calendar_url, timeout=15000)
             await self.page.wait_for_load_state("domcontentloaded")
 
+            if requires_final_detail_page:
+                bard_events = _extract_bard_wix_calendar_events(
+                    await self.page.content(),
+                    calendar_url,
+                )
+                if bard_events:
+                    logging.info(
+                        "extract_calendar_events(%s): extracted %d event(s) from Wix warmup data",
+                        venue_name,
+                        len(bard_events),
+                    )
+                    return bard_events
+
             # Extract all event links from the page
             all_links = await self.page.query_selector_all("a")
             logging.info(f"extract_calendar_events({venue_name}): Found {len(all_links)} total links on page")
@@ -1686,7 +1765,8 @@ class ReadExtract:
         requires_final_detail_page = _is_bard_and_banker_calendar_url(calendar_url)
         seen_keys: set[str] = set()
         candidate_selectors = _calendar_click_candidate_selectors(calendar_url)
-        discovered_candidates: list[tuple[str, int, str]] = []
+        discovered_candidates: list[tuple[str, int, str, int]] = []
+        visible_label_occurrences: dict[tuple[str, str], int] = {}
 
         for selector in candidate_selectors:
             try:
@@ -1714,7 +1794,10 @@ class ReadExtract:
                 if candidate_key in seen_keys:
                     continue
                 seen_keys.add(candidate_key)
-                discovered_candidates.append((selector, index, label))
+                label_key = (selector, label.lower())
+                label_occurrence = visible_label_occurrences.get(label_key, 0)
+                visible_label_occurrences[label_key] = label_occurrence + 1
+                discovered_candidates.append((selector, index, label, label_occurrence))
 
         logging.info(
             "_extract_click_revealed_calendar_events(%s): discovered_candidates=%d url=%s",
@@ -1724,14 +1807,20 @@ class ReadExtract:
         )
 
         seen_output_urls: set[str] = set()
-        for selector, index, label in discovered_candidates:
+        for selector, index, label, label_occurrence in discovered_candidates:
             try:
                 await self.page.goto(calendar_url, timeout=15000)
                 await self.page.wait_for_load_state("domcontentloaded")
                 if requires_final_detail_page:
-                    locator = self.page.locator(selector).filter(
+                    # Wix changes raw DOM positions after a calendar reload and
+                    # reuses artist labels for recurring shows.  Re-find the
+                    # original visible occurrence, rather than trusting either
+                    # a stale raw index or the first matching label.  Using
+                    # Playwright's native visibility filter avoids waiting on
+                    # detached nodes from Wix's prior render.
+                    locator = self.page.locator(f"{selector}:visible").filter(
                         has_text=re.compile(rf"^{re.escape(label)}$")
-                    ).first
+                    ).nth(label_occurrence)
                     await locator.wait_for(
                         state="visible",
                         timeout=5000,
@@ -1762,13 +1851,6 @@ class ReadExtract:
             if revealed_blocks:
                 for block_index, block in enumerate(revealed_blocks, start=1):
                     detail_url = str(block.get("detail_url") or "").strip()
-                    if requires_final_detail_page and not _is_bard_and_banker_event_detail_url(detail_url):
-                        logging.info(
-                            "_extract_click_revealed_calendar_events(%s): skipping intermediate calendar layer without final event-detail URL: %s",
-                            venue_name,
-                            detail_url or "missing URL",
-                        )
-                        continue
                     detail_text, output_url = await self._follow_revealed_calendar_event_block(
                         calendar_url=calendar_url,
                         fallback_label=str(block.get("label") or label),
@@ -1783,14 +1865,12 @@ class ReadExtract:
 
             await self._follow_click_revealed_detail_cta(calendar_url=calendar_url)
 
-            if requires_final_detail_page and not _is_bard_and_banker_event_detail_url(
-                str(getattr(self.page, "url", "") or "")
-            ):
+            current_url = str(getattr(self.page, "url", "") or "")
+            if requires_final_detail_page and not _is_bard_and_banker_event_detail_url(current_url):
                 logging.info(
-                    "_extract_click_revealed_calendar_events(%s): final event-detail page was not reached after calendar click",
+                    "_extract_click_revealed_calendar_events(%s): final event-detail page was not reached; using revealed overlay text",
                     venue_name,
                 )
-                continue
 
             detail_text = await self._extract_click_revealed_event_detail_text(
                 calendar_url=calendar_url,
@@ -1870,12 +1950,6 @@ class ReadExtract:
         detail_url: str,
     ) -> tuple[str, str]:
         """Follow one revealed event block to its detail page when possible and return extracted text."""
-        requires_final_detail_page = _is_bard_and_banker_calendar_url(calendar_url)
-        if requires_final_detail_page and not _is_bard_and_banker_event_detail_url(detail_url):
-            logging.info(
-                "_follow_revealed_calendar_event_block(): refusing Bard & Banker intermediate layer without final event-detail URL",
-            )
-            return "", ""
         if detail_url:
             if not _should_follow_layered_calendar_detail_url(detail_url):
                 logging.info(
@@ -1896,13 +1970,6 @@ class ReadExtract:
                         detail_url,
                         exc,
                     )
-        if requires_final_detail_page and not _is_bard_and_banker_event_detail_url(
-            str(getattr(self.page, "url", "") or "")
-        ):
-            logging.info(
-                "_follow_revealed_calendar_event_block(): Bard & Banker navigation did not reach a final event-detail page",
-            )
-            return "", ""
         if not detail_url:
             try:
                 await self._follow_click_revealed_detail_cta(calendar_url=calendar_url)
@@ -2025,6 +2092,17 @@ class ReadExtract:
 
         if best_text:
             return best_text
+
+        # The Bard & Banker calendar stays at its listing URL after a tile click.
+        # Its full document contains the entire month, so using it as the detail
+        # payload for one tile causes the LLM to attribute other nights to that
+        # tile.  Only an actual revealed overlay is authoritative here.
+        if _is_bard_and_banker_calendar_url(calendar_url):
+            logging.info(
+                "_extract_click_revealed_event_detail_text(): no revealed overlay text for Bard & Banker entry %r",
+                fallback_label,
+            )
+            return ""
 
         try:
             content = await self.page.content()

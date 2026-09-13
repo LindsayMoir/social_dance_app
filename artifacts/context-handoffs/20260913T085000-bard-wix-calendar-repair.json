@@ -1,0 +1,29 @@
+{
+  "handoff_id": "20260913T085000-bard-wix-calendar-repair",
+  "context_status": "active",
+  "scope": "Bard & Banker Wix calendar extraction, source-label canonicalization, and September data repair",
+  "sources": [
+    "https://www.bardandbanker.com/live-music",
+    "src/rd_ext.py",
+    "src/db.py",
+    "data/urls/aaa_urls.csv",
+    "local PostgreSQL database"
+  ],
+  "material_decisions": [
+    "Whitelisted the recurring live-music listing so URL-history freshness logic cannot skip it.",
+    "Extracted Wix warmup calendar data directly, which includes events hidden behind + more controls and preserves separate same-night acts.",
+    "Prevented the calendar-wide page text from being treated as one clicked event detail.",
+    "Canonicalized Bard and Banker and Bard & Banker source labels to Bard & Banker."
+  ],
+  "validation": [
+    "Focused tests: 49 passed.",
+    "Live Wix warmup-data extraction returned 21 September event records, including two acts on September 18 and September 25.",
+    "Database verification confirmed 21 September records under source Bard & Banker.",
+    "git diff --check passed."
+  ],
+  "open_questions": [],
+  "recommended_next_step": "Run the regular pipeline; the Bard listing is now always eligible and uses structured Wix calendar data.",
+  "supersedes": [
+    "20260830T192330-sabaki-blacklist-cleanup"
+  ]
+}

@@ -12,6 +12,7 @@ from rd_ext import (
     _extract_revealed_calendar_event_blocks,
     _build_synthetic_calendar_detail_url,
     _derive_rd_ext_effective_keywords,
+    _extract_bard_wix_calendar_events,
     _get_login_probe_url,
     _is_embedded_event_iframe_url,
     _is_bard_and_banker_calendar_url,
@@ -394,6 +395,32 @@ def test_extract_revealed_calendar_event_blocks_keeps_sufficient_clicked_panel_w
     assert "Miguelito" in blocks[0]["label"]
 
 
+def test_extract_revealed_calendar_event_blocks_keeps_each_overlay_event_without_links() -> None:
+    html = """
+    <div class="fc-popover">
+      <div class="fc-event">
+        <div>Vinyl Wave</div>
+        <div>Friday, September 18 4:00 PM</div>
+        <div>Bard and Banker, 1022 Government St</div>
+      </div>
+      <div class="fc-event">
+        <div>The Rebels North</div>
+        <div>Friday, September 18 9:00 PM</div>
+        <div>Bard and Banker, 1022 Government St</div>
+      </div>
+    </div>
+    """
+
+    blocks = _extract_revealed_calendar_event_blocks(
+        html,
+        "https://www.bardandbanker.com/live-music",
+    )
+
+    assert len(blocks) == 2
+    assert {block["label"].split()[0] for block in blocks} == {"Vinyl", "The"}
+    assert all(block["detail_url"] == "" for block in blocks)
+
+
 def test_should_follow_layered_calendar_detail_url_uses_shared_url_filters(monkeypatch) -> None:
     class _FakeDb:
         @staticmethod
@@ -419,6 +446,89 @@ def test_build_synthetic_calendar_detail_url_is_stable_and_readable() -> None:
     )
     assert url.startswith("https://www.bardandbanker.com/live-music?calendar_click=")
     assert "#miguelito-valdes-band" in url
+
+
+def test_bard_overlay_without_detail_url_uses_synthetic_child_url() -> None:
+    class _OverlayPage:
+        url = "https://www.bardandbanker.com/live-music"
+
+        async def wait_for_timeout(self, _milliseconds: int) -> None:
+            return None
+
+    extractor = ReadExtract.__new__(ReadExtract)
+    extractor.page = _OverlayPage()
+
+    async def _extract_overlay_text(*, calendar_url: str, fallback_label: str) -> str:
+        assert calendar_url == "https://www.bardandbanker.com/live-music"
+        assert fallback_label == "Miguelito Valdes + band"
+        return "Miguelito Valdes + band Friday, September 22, 8:30 PM"
+
+    async def _follow_cta(*, calendar_url: str) -> None:
+        assert calendar_url == "https://www.bardandbanker.com/live-music"
+
+    extractor._extract_click_revealed_event_detail_text = _extract_overlay_text
+    extractor._follow_click_revealed_detail_cta = _follow_cta
+
+    detail_text, output_url = asyncio.run(
+        extractor._follow_revealed_calendar_event_block(
+            calendar_url="https://www.bardandbanker.com/live-music",
+            fallback_label="Miguelito Valdes + band",
+            fallback_index=2,
+            detail_url="",
+        )
+    )
+
+    assert detail_text == "Miguelito Valdes + band Friday, September 22, 8:30 PM"
+    assert output_url.startswith("https://www.bardandbanker.com/live-music?calendar_click=")
+
+
+def test_bard_calendar_never_uses_full_listing_as_one_event_detail() -> None:
+    class _EmptyLocator:
+        async def count(self) -> int:
+            return 0
+
+    class _ListingPage:
+        url = "https://www.bardandbanker.com/live-music"
+
+        def locator(self, _selector: str) -> _EmptyLocator:
+            return _EmptyLocator()
+
+        async def content(self) -> str:
+            return "<main>" + ("Miguelito Valdes + band September calendar entry " * 30) + "</main>"
+
+    extractor = ReadExtract.__new__(ReadExtract)
+    extractor.page = _ListingPage()
+
+    detail_text = asyncio.run(
+        extractor._extract_click_revealed_event_detail_text(
+            "https://www.bardandbanker.com/live-music",
+            "Miguelito Valdes + band",
+        )
+    )
+
+    assert detail_text == ""
+
+
+def test_bard_wix_warmup_data_includes_events_hidden_behind_more_link() -> None:
+    html = """
+    <script id="wix-warmup-data" type="application/json">
+    {"items":[
+      {"title":"Vinyl Wave","slug":"vinyl-wave-2026-09-18-16-00",
+       "location":{"address":"1022 Government St, Victoria, BC"},
+       "scheduling":{"config":{"startDate":"2026-09-18T23:00:00.000Z"},
+                     "startDateFormatted":"September 18, 2026","startTimeFormatted":"4:00 p.m."}},
+      {"title":"The Temps","slug":"the-temps-30",
+       "scheduling":{"config":{"startDate":"2026-09-19T04:00:00.000Z"},
+                     "startDateFormatted":"September 18, 2026","startTimeFormatted":"9:00 p.m."}}
+    ]}
+    </script>
+    """
+
+    events = _extract_bard_wix_calendar_events(html, "https://www.bardandbanker.com/live-music")
+
+    assert len(events) == 2
+    assert {"Vinyl Wave", "The Temps"} == {event[1].splitlines()[1].removeprefix("Event: ") for event in events}
+    assert all("Date: September 18, 2026" in event[1] for event in events)
 
 
 def test_extract_from_url_routes_bard_listing_to_calendar_event_extraction(monkeypatch) -> None:

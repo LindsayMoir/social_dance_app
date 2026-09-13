@@ -3911,6 +3911,16 @@ class DatabaseHandler():
             return False
         return source_norm == url_source_norm or source_norm in url_source_norm or url_source_norm in source_norm
 
+    @classmethod
+    def _canonical_source_label(cls, source: Any) -> str:
+        """Normalize known source-name variants without altering unrelated labels."""
+        source_text = "" if source is None else str(source).strip()
+        aliases = {
+            "bardandbanker": "Bard & Banker",
+            "thebardandbanker": "Bard & Banker",
+        }
+        return aliases.get(cls._normalize_source_url_affinity_text(source_text), source_text)
+
     def _resolve_event_source_label(self, source: Any, url: str, parent_url: str) -> str:
         """
         Resolve canonical source label for event writes.
@@ -3923,13 +3933,13 @@ class DatabaseHandler():
         """
         source_text = "" if source is None else str(source).strip()
         if not self._is_placeholder_source(source_text):
-            return source_text
+            return self._canonical_source_label(source_text)
         from_url = self._source_from_url(url)
         if from_url:
-            return from_url
+            return self._canonical_source_label(from_url)
         from_parent = self._source_from_url(parent_url)
         if from_parent:
-            return from_parent
+            return self._canonical_source_label(from_parent)
         return "unknown"
 
     def _enforce_event_source_values(self, df: pd.DataFrame, fallback_source: str) -> pd.DataFrame:
@@ -3950,7 +3960,7 @@ class DatabaseHandler():
                 normalized_source_values.append(fallback_source)
                 replacements += 1
             else:
-                normalized_source_values.append(str(raw_source).strip())
+                normalized_source_values.append(self._canonical_source_label(raw_source))
         working_df["source"] = normalized_source_values
         if replacements:
             logging.info(

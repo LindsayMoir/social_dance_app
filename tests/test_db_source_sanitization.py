@@ -17,6 +17,21 @@ def test_resolve_event_source_label_keeps_explicit_non_placeholder() -> None:
     assert out == "Victoria Latin Dance Association"
 
 
+def test_resolve_event_source_label_normalizes_bard_and_banker_variants() -> None:
+    handler = DatabaseHandler.__new__(DatabaseHandler)
+
+    assert handler._resolve_event_source_label(
+        source="Bard and Banker",
+        url="https://www.bardandbanker.com/live-music",
+        parent_url="",
+    ) == "Bard & Banker"
+    assert handler._resolve_event_source_label(
+        source="Bard & Banker",
+        url="https://www.bardandbanker.com/live-music",
+        parent_url="",
+    ) == "Bard & Banker"
+
+
 def test_resolve_event_source_label_falls_back_from_placeholder_to_url_host() -> None:
     handler = DatabaseHandler.__new__(DatabaseHandler)
     out = handler._resolve_event_source_label(

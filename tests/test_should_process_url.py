@@ -62,6 +62,20 @@ def test_whitelist_exact_match():
     assert db.should_process_url('https://vlda.ca/resources/') is True
 
 
+def test_whitelisted_recurring_listing_bypasses_event_history_freshness_gate():
+    db = DummyDB()
+    url = "https://www.bardandbanker.com/live-music"
+    normalized_url = db.normalize_url(url)
+    db._whitelist_set = {db._normalize_for_compare(url)}
+    db.urls_df = pd.DataFrame(
+        [{"link": normalized_url, "parent_url": "", "source": "Bard and Banker", "keywords": [], "relevant": True, "crawl_try": 10, "time_stamp": datetime.now()}]
+    )
+    db._history_start_dates[normalized_url] = datetime.now().date() + timedelta(days=30)
+
+    assert db.should_process_url(url) is True
+    assert db.get_should_process_decision_reason(url) == "process_whitelisted"
+
+
 def test_non_whitelisted_uses_history():
     db = DummyDB()
     assert db.should_process_url('https://example.com/page') is True
