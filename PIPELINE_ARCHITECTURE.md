@@ -455,3 +455,9 @@ Supporting modules typically include components for:
 - database updates
 
 These modules may evolve over time as the system grows.
+
+Email newsletters (`src/emails.py`) preserve plain-text and HTML body content,
+excluding attachments and identical alternatives, so events present only in HTML
+reach extraction. The shared `prompts/email_newsletter.txt` checks coverage of
+classes and social dances separately, retains separately timed after-lesson
+socials, and asks the LLM to deduplicate events repeated across body versions.

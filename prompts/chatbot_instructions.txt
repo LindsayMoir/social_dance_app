@@ -7,4 +7,11 @@ There are also a few events from greater Vancouver Island and Vancouver. We also
 - Enter your query below then click the **Send** button. 
 - You can refine your query by continuing the dialogue with DanceScoop. It's **very flexible!**.
 - This is a best efforts basis: (The information is as accurate as possible but … please double check before you book your flights.)
+
+#### Example Queries
+
+- Where can I dance tonight?
+- Where can I dance this weekend? Please include live music events.
+- When are salsa dance classes?
+
 ---

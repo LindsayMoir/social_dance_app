@@ -25,6 +25,7 @@ Usage:
     Run the script to initialize the GmailProcessor and process emails from a CSV file specified in the configuration.
 """
 import base64
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from email import message_from_bytes
 from google.auth.exceptions import RefreshError
@@ -118,7 +119,7 @@ class GmailProcessor:
         return build("gmail", "v1", credentials=creds)
 
 
-    def fetch_latest_email(self, email_regex):
+    def fetch_latest_email(self, email_regex: str) -> str | None:
         """
         Fetches the most recent email matching the given regex pattern.
 
@@ -137,16 +138,40 @@ class GmailProcessor:
         raw_email = base64.urlsafe_b64decode(message["raw"].encode("ASCII"))
         msg = message_from_bytes(raw_email)
 
-        if msg.is_multipart():
-            for part in msg.walk():
-                if part.get_content_type() == "text/plain":
-                    extracted_text = part.get_payload(decode=True).decode("utf-8", errors="ignore")
-                    return extracted_text
-        else:
-            extracted_text = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
-            return extracted_text
+        # Newsletter HTML can contain events missing from the plain-text version.
+        # Preserve both bodies, but exclude attachments and identical alternatives.
+        bodies: list[str] = []
+        seen_bodies: set[str] = set()
+        for part in msg.walk():
+            content_type = part.get_content_type()
+            if content_type not in {"text/plain", "text/html"}:
+                continue
+            if part.get_content_disposition() == "attachment":
+                continue
+            payload = part.get_payload(decode=True)
+            if not payload:
+                continue
+            charset = part.get_content_charset() or "utf-8"
+            try:
+                text = payload.decode(charset, errors="replace")
+            except LookupError:
+                logging.warning(
+                    "def fetch_latest_email(): Unknown charset %s from %s; using UTF-8",
+                    charset,
+                    email_regex,
+                )
+                text = payload.decode("utf-8", errors="replace")
+            if content_type == "text/html":
+                soup = BeautifulSoup(text, "html.parser")
+                for element in soup(["script", "style", "head"]):
+                    element.decompose()
+                text = soup.get_text(separator="\n", strip=True)
+            normalized_text = " ".join(text.split())
+            if normalized_text and normalized_text not in seen_bodies:
+                bodies.append(text.strip())
+                seen_bodies.add(normalized_text)
 
-        return None
+        return "\n\n".join(bodies) or None
 
 
     def driver(self, csv_path):

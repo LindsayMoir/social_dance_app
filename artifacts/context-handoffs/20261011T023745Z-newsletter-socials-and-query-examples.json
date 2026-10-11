@@ -1,0 +1,37 @@
+{
+  "handoff_id": "20261011T023745Z-newsletter-socials-and-query-examples",
+  "context_status": "active",
+  "scope": "Preserve newsletter social dance content and add three chatbot example queries",
+  "sources": [
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    "CODING_STANDARDS.md",
+    "PIPELINE_ARCHITECTURE.md",
+    "src/emails.py",
+    "src/llm.py",
+    "src/app.py",
+    "prompts/email_newsletter.txt",
+    "prompts/chatbot_instructions.txt",
+    "logs/emails_log.txt",
+    "artifacts/context-handoffs/20260913T092000-email-newsletter-unification.json"
+  ],
+  "material_decisions": [
+    "Preserve plain-text and HTML MIME bodies, exclude text attachments, deduplicate identical alternatives, and respect declared charsets with a UTF-8 fallback.",
+    "Strengthen the shared newsletter prompt to inventory social dances separately, retain after-lesson socials, and deduplicate events across body versions.",
+    "Add tonight, weekend including live music, and salsa class example queries to the existing chatbot instructions.",
+    "Leave five pre-existing CSV modifications outside this commit."
+  ],
+  "validation": [
+    "21 focused tests passed across email body extraction, newsletter prompt routing, prompt domain matching, and prompt truncation.",
+    "Python compilation passed for src/emails.py and tests/test_email_body_extraction.py.",
+    "git diff --check passed for changed implementation and documentation files.",
+    "Self-review and example query Markdown review completed."
+  ],
+  "open_questions": [
+    "Live validation against the latest Dean newsletter remains pending because the configured Gmail token is unavailable in this environment."
+  ],
+  "recommended_next_step": "Push the commit, then verify the next normal email pipeline run and deployed chatbot introduction.",
+  "supersedes": [
+    "20260913T092000-email-newsletter-unification"
+  ]
+}

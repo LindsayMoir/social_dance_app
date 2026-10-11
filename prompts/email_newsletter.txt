@@ -5,6 +5,8 @@ Newsletters change layout. Do not rely on a section heading, table layout, a par
 
 Before answering, make a private coverage checklist of every named item that has a date or date range. In particular, when several consecutive class blocks use the same venue, schedule, price, or registration text, each named class is a separate event and MUST receive its own JSON object. Do not stop after finding the first two classes. Exclude an item only when it is explicitly unscheduled (for example, “to be announced”) or has no date that can be inferred from its stated weekday.
 
+Make a separate coverage checklist for social dances. Include DJ dances, dance parties, open dancing, and social dancing after a lesson even when they appear in a short paragraph, footer, or shared schedule rather than a named event block. A social dance does not need a class name or registration link to qualify. Use dates, times, prices, and venues from the heading or surrounding text when they explicitly apply to that dance. Do not stop after extracting the classes.
+
 For each event, return exactly these keys:
 source, dance_style, url, event_type, event_name, day_of_week, start_date, end_date, start_time, end_time, price, location, description
 
@@ -13,9 +15,12 @@ Rules:
 - Use the sender/source supplied by the application when the newsletter does not name an organizer.
 - Infer the year from the current date. Preserve stated date ranges for class series.
 - For a class series, create one event record for the series, not one record per weekly occurrence, unless the email separately names each occurrence.
+- For social dances with multiple explicitly listed dates, create one social dance record per date; do not collapse them into a class series. Expand a recurring social only within an explicitly stated date range; do not invent an indefinite schedule.
+- When a lesson and subsequent social dancing have separate times, return separate class and social dance records, with the appropriate time for each. If they are advertised as one combined event without separate times, retain both categories in event_type (`class, social dance`).
+- The input may include both plain-text and HTML versions of the same newsletter. Extract each event only once, combining complementary details across versions.
 - If several events share a venue, still retain the venue on every event.
 - Use event_type `class`, `workshop`, `social dance`, `live music`, `festival`, or `other` as appropriate.
 - Use an empty string for unknown fields. Do not invent dates, prices, or locations.
-- Perform a final completeness pass: the number of returned class/workshop objects must equal the number of dated named class/workshop blocks in the email.
+- Perform a final completeness pass against BOTH checklists: every dated class/workshop block and every dated social dance must be represented. Check each explicitly listed social date and each separately timed social after a lesson. Deduplicate repeated mentions of the same event across the email body versions.
 
 extracted_text
