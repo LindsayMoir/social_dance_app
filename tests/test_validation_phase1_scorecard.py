@@ -2379,6 +2379,58 @@ def test_build_top_trend_dashboard_includes_fb_blocked_content_trend() -> None:
     assert "Unique Blocked URLs" in html
 
 
+def test_persist_fb_block_triage_records_absent_categories_as_zero() -> None:
+    runner = _build_runner()
+    fake_db = _FakeDbHandler()
+    runner.db_handler = fake_db
+    runner._persist_fb_block_triage("run-zero-details", {
+        "start_ts": "2026-10-18 10:59:36", "end_ts": "2026-10-18 19:07:00",
+        "private_unavailable_total_attempts": 5,
+        "private_unavailable_unique_urls": 5,
+        "private_unavailable_by_category": [{"category": "group_post_events_tab", "count": 5}],
+    })
+    counts = {call["metric_key"]: call["metric_value_numeric"] for call in fake_db.calls}
+    assert counts["fb_private_unavailable_event_detail_page_unique_urls"] == 0
+    assert counts["fb_private_unavailable_group_post_events_tab_unique_urls"] == 5
+    assert counts["fb_private_unavailable_facebook_group_unique_urls"] == 0
+    assert counts["fb_private_unavailable_other_facebook_blocked_url_unique_urls"] == 0
+    assert all(call["run_id"] == "run-zero-details" for call in fake_db.calls)
+
+
+def test_persist_fb_block_triage_records_all_zero_run() -> None:
+    runner = _build_runner()
+    runner.db_handler = _FakeDbHandler()
+    runner._persist_fb_block_triage("run-no-blocks", {
+        "private_unavailable_total_attempts": 0,
+        "private_unavailable_unique_urls": 0,
+        "private_unavailable_by_category": [],
+    })
+    assert len(runner.db_handler.calls) == 6
+    assert all(call["metric_value_numeric"] == 0 for call in runner.db_handler.calls)
+
+
+def test_persist_fb_block_triage_keeps_unavailable_data_missing() -> None:
+    runner = _build_runner()
+    runner.db_handler = _FakeDbHandler()
+    for summary in ({"error": "fb log not found"}, {}):
+        runner._persist_fb_block_triage("run-unavailable", summary)
+    assert runner.db_handler.calls == []
+
+
+def test_fb_blocked_trend_latest_point_includes_zero() -> None:
+    runner = _build_runner()
+    runner._load_metric_history = lambda metric_key, days=180: [  # type: ignore[method-assign]
+        {"timestamp": "2026-10-01T12:00:00", "value": 6.0},
+        {"timestamp": "2026-10-18T19:07:00", "value": 0.0},
+    ]
+    html = runner._build_multi_metric_trend_svg(
+        title="Facebook Blocked Content Trend", days=180, value_format="count",
+        series=[{"metric_key": "fb_private_unavailable_event_detail_page_unique_urls",
+                 "label": "Blocked Event Detail URLs", "color": "#ff7f0e"}],
+    )
+    assert "latest point is <strong>0</strong> on <strong>2026-10-18</strong>" in html
+
+
 def test_phase2_coverage_summary_uses_watchlist_and_manual_audit() -> None:
     runner = _build_runner()
 

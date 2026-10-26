@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -22,6 +24,81 @@ def _capture_write(writes: list[pd.DataFrame]):
 def test_event_write_result_bool_tracks_success() -> None:
     assert bool(EventWriteResult(success=True, events_written=3, decision_reason="ok")) is True
     assert bool(EventWriteResult(success=False, events_written=0, decision_reason="miss")) is False
+
+
+@pytest.mark.parametrize("recover", [True, False])
+@pytest.mark.parametrize("class_type", ["class", "class, social dance", "complete"])
+def test_newsletter_recovers_omitted_shared_schedule_socials(monkeypatch, recover: bool, class_type: str) -> None:
+    """Reproduce the September 29 Dean newsletter's missing Thursday socials."""
+    handler = LLMHandler.__new__(LLMHandler)
+    handler.config = {"crawling": {"prompt_max_length": 100000}}
+    writes: list[pd.DataFrame] = []
+    handler.db_handler = SimpleNamespace(write_events_to_db=_capture_write(writes))
+    text = (
+        "Thurs Oct 8 - West Coast Swing with Dean and Solange\n"
+        "Thurs Oct 15 - Night Club 2-Step with Dancing Dean\n"
+        "Thurs Oct 22 - Country 2-Step with Dancing Dean\n"
+        "Thurs Oct 29 - Shag with Dean and Jan\n"
+        "Classes are at the Pro Pat Legion on Gorge Road (411 Gorge Rd E)\n"
+        "7:30pm - 8:30pm - 1-Hour Beginner/Intermediate Class\n"
+        "8:30pm - 9:45pm - Social Dancing\n$12 Drop-In"
+    )
+    dates = [f"2026-10-{day:02d}" for day in (8, 15, 22, 29)]
+    classes = [
+        {"event_name": "Thursday class", "start_date": date, "event_type": "class" if class_type == "complete" else class_type,
+         "location": "411 Gorge Rd E", "start_time": "19:30", "end_time": "21:45"}
+        for date in dates
+    ]
+    socials = [
+        {
+            "event_name": "Thursday social", "start_date": date, "event_type": "social dance",
+            "start_time": "20:30", "end_time": "21:45", "location": "411 Gorge Rd E",
+        }
+        for date in dates
+    ]
+    prompts: list[str] = []
+
+    def query(url, prompt, schema_type, return_metadata=True):
+        prompts.append(prompt)
+        events = classes if len(prompts) == 1 else socials if recover else classes
+        if class_type == "complete":
+            events = classes + socials
+        return json.dumps(events), {"provider": "test", "model": "fake"}
+
+    monkeypatch.setattr(handler, "generate_prompt", lambda *args: (text, "event_extraction"))
+    monkeypatch.setattr(handler, "_inventory_newsletter_socials", lambda *args: [
+        dict(social, separate=True, evidence=["8:30pm - 9:45pm - Social Dancing"])
+        for social in socials
+    ])
+    monkeypatch.setattr(handler, "query_llm", query)
+    monkeypatch.setattr(handler, "extract_and_parse_json", lambda response, *args: json.loads(response))
+
+    result = handler.process_llm_response(
+        "newsletter@example.com", "email inbox", text, "DJ Dancing Dean", [], "email_newsletter"
+    )
+
+    assert len(prompts) == (1 if class_type == "complete" else 2)
+    if class_type != "complete":
+        assert text in prompts[1]
+        assert "SOCIAL COVERAGE RECOVERY" in prompts[1]
+    if recover or class_type == "complete":
+        assert result.events_written == 8
+        assert len(writes) == 1
+        recovered = writes[0][writes[0].event_type == "social dance"]
+        assert set(recovered.start_date) == set(dates)
+        assert set(recovered.start_time) == {"20:30"}
+        assert set(recovered.end_time) == {"21:45"}
+        if "social" in class_type:
+            assert set(writes[0][writes[0].event_type == "class"].end_time) == {"20:30"}
+    else:
+        assert not result
+        assert result.decision_reason == "newsletter_social_coverage_missing"
+        assert writes == []
+
+
+@pytest.mark.parametrize("event_type", ["social dance", "Social Dancing"])
+def test_newsletter_social_category_recognition(event_type: str) -> None:
+    assert LLMHandler._is_social_dance_event({"event_type": event_type})
 
 
 def test_process_llm_response_returns_written_event_count(monkeypatch) -> None:

@@ -17,6 +17,7 @@ Rules:
 - For a class series, create one event record for the series, not one record per weekly occurrence, unless the email separately names each occurrence.
 - For social dances with multiple explicitly listed dates, create one social dance record per date; do not collapse them into a class series. Expand a recurring social only within an explicitly stated date range; do not invent an indefinite schedule.
 - When a lesson and subsequent social dancing have separate times, return separate class and social dance records, with the appropriate time for each. If they are advertised as one combined event without separate times, retain both categories in event_type (`class, social dance`).
+- A shared schedule below a list of dated classes applies to every listed date. For example, five Thursday classes followed by `7:30pm - 8:30pm Class; 8:30pm - 9:45pm Social Dancing` require five class records AND five social dance records. Inherit the shared venue and price on each social record.
 - The input may include both plain-text and HTML versions of the same newsletter. Extract each event only once, combining complementary details across versions.
 - If several events share a venue, still retain the venue on every event.
 - Use event_type `class`, `workshop`, `social dance`, `live music`, `festival`, or `other` as appropriate.

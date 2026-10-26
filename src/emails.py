@@ -137,6 +137,13 @@ class GmailProcessor:
         message = self.service.users().messages().get(userId="me", id=message_id, format="raw").execute()
         raw_email = base64.urlsafe_b64decode(message["raw"].encode("ASCII"))
         msg = message_from_bytes(raw_email)
+        logging.info(
+            "def fetch_latest_email(): Selected message id=%s date=%s subject=%s sender=%s",
+            message_id,
+            msg.get("Date", "unknown"),
+            msg.get("Subject", ""),
+            msg.get("From", email_regex),
+        )
 
         # Newsletter HTML can contain events missing from the plain-text version.
         # Preserve both bodies, but exclude attachments and identical alternatives.

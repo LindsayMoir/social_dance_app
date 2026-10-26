@@ -942,6 +942,17 @@ class LLMHandler:
             EventWriteResult: Structured outcome including whether extraction
             succeeded and how many event rows were written.
         """
+        # Inventory the complete source independently of the event extraction.
+        expected_socials: list[dict] = []
+        if prompt_type == "email_newsletter":
+            inventory = self._inventory_newsletter_socials(url, extracted_text)
+            if inventory is None:
+                return EventWriteResult(
+                    success=False, events_written=0,
+                    decision_reason="newsletter_social_inventory_failed",
+                )
+            expected_socials = inventory
+
         # Generate prompt, query LLM, and process the response.
         prompt_text, schema_type = self.generate_prompt(url, extracted_text, prompt_type)
         max_prompt_length = int(self.config['crawling']['prompt_max_length'])
@@ -1052,6 +1063,15 @@ class LLMHandler:
                     return EventWriteResult(success=False, events_written=0, decision_reason="schema_type_none")
 
                 parsed_result = self.extract_and_parse_json(llm_response, url, schema_type)
+                if isinstance(parsed_result, list) and expected_socials:
+                    parsed_result = self._ensure_newsletter_social_coverage(
+                        url, prompt_text, schema_type, parsed_result, expected_socials
+                    )
+                    if parsed_result is None:
+                        return EventWriteResult(
+                            success=False, events_written=0,
+                            decision_reason="newsletter_social_coverage_missing",
+                        )
                 if isinstance(parsed_result, list) and not parsed_result:
                     self._log_extraction_attempt_result(
                         url=url,
@@ -1098,6 +1118,18 @@ class LLMHandler:
                         url=url,
                         extracted_text=extracted_text,
                     )
+                    missing_after_normalization = self._missing_newsletter_socials(
+                        expected_socials, events_df.to_dict("records")
+                    ) if expected_socials else []
+                    if missing_after_normalization:
+                        logging.error(
+                            "Newsletter %s lost social slots during normalization: %s",
+                            url, json.dumps(missing_after_normalization),
+                        )
+                        return EventWriteResult(
+                            success=False, events_written=0,
+                            decision_reason="newsletter_social_coverage_missing",
+                        )
                     if events_df.empty:
                         logging.warning(
                             "def process_llm_response: URL %s dropped all parsed events after image/date normalization.",
@@ -1184,6 +1216,202 @@ class LLMHandler:
 
         logging.error(f"def process_llm_response: Failed to process LLM response for URL: {url}")
         return EventWriteResult(success=False, events_written=0, decision_reason="hard_failure")
+
+    @staticmethod
+    def _normalize_newsletter_time(value: object) -> str:
+        """Normalize explicit wall-clock times without inferring missing AM/PM."""
+        cleaned = re.sub(r"[\s.]", "", str(value or "")).upper()
+        for time_format in ("%H:%M", "%H:%M:%S", "%I:%M%p", "%I%p", "%I:%M:%S%p"):
+            try:
+                return datetime.strptime(cleaned, time_format).strftime("%H:%M:%S")
+            except ValueError:
+                continue
+        return ""
+
+    @staticmethod
+    def _normalize_newsletter_venue(value: object) -> str:
+        """Ignore punctuation and case when comparing source venue phrases."""
+        return "".join(char for char in str(value or "").casefold() if char.isalnum())
+
+    def _inventory_newsletter_socials(self, url: str, extracted_text: str) -> list[dict] | None:
+        """Inventory source-supported social slots independently of event extraction."""
+        prompt, _ = self.generate_prompt(url, extracted_text, "email_social_inventory")
+        if len(prompt) > int(self.config["crawling"]["prompt_max_length"]):
+            logging.error("Newsletter %s full source exceeds social inventory prompt budget", url)
+            return None
+        result = self.query_llm(url, prompt, None, return_metadata=True)
+        response, metadata = result or (None, {})
+        try:
+            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", (response or "").strip())
+            slots = json.loads(cleaned)
+            if not isinstance(slots, list):
+                raise ValueError("Inventory must be a JSON array")
+            source_text = " ".join(extracted_text.split()).casefold()
+            source_venue_text = self._normalize_newsletter_venue(extracted_text)
+            unique_slots: dict[tuple, dict] = {}
+            for slot in slots:
+                if not isinstance(slot, dict):
+                    raise ValueError("Invalid social slot")
+                for field in ("start_date", "start_time", "end_time", "location"):
+                    if not isinstance(slot.get(field), str):
+                        raise ValueError(f"Missing or invalid social slot field: {field}")
+                slot["start_date"] = datetime.strptime(slot["start_date"], "%Y-%m-%d").strftime("%Y-%m-%d")
+                if not isinstance(slot.get("separate"), bool):
+                    raise ValueError("Missing separate-social flag")
+                evidence = slot.get("evidence")
+                if not isinstance(evidence, list) or not evidence or not all(
+                    isinstance(quote, str) and quote.strip()
+                    and " ".join(quote.split()).casefold() in source_text
+                    for quote in evidence
+                ):
+                    raise ValueError("Social slot evidence is absent from the source")
+                for field in ("start_time", "end_time"):
+                    normalized = self._normalize_newsletter_time(slot[field])
+                    if slot[field] and not normalized:
+                        raise ValueError(f"Invalid social slot time: {field}")
+                    slot[field] = normalized
+                venue = self._normalize_newsletter_venue(slot["location"])
+                if venue and venue not in source_venue_text:
+                    raise ValueError("Social slot venue is absent from the source")
+                key = (slot["start_date"], slot["start_time"], slot["end_time"], venue, slot["separate"])
+                unique_slots.setdefault(key, slot)
+            inventory = list(unique_slots.values())
+        except (ValueError, TypeError) as error:
+            logging.error("Newsletter %s social inventory failed: %s", url, error)
+            inventory = None
+        self._log_extraction_attempt_result(
+            url=url, attempt=1,
+            provider=str((metadata or {}).get("provider", "unknown")),
+            model=str((metadata or {}).get("model", "unknown")),
+            outcome="newsletter_social_inventory" if inventory is not None else "newsletter_social_inventory_failed",
+            response_len=len(response or ""),
+        )
+        return inventory
+
+    @staticmethod
+    def _is_social_dance_event(event: dict) -> bool:
+        """Recognize a separately timed social, rather than a combined class."""
+        event_type = str(event.get("event_type") or "")
+        if re.search(r"\b(?:class(?:es)?|workshops?|lessons?)\b", event_type, re.IGNORECASE):
+            return False
+        return bool(re.search(
+            r"\bsocial\s+danc(?:e(?:s)?|ing)\b|\bopen\s+dancing\b",
+            event_type, re.IGNORECASE,
+        ))
+
+    def _newsletter_social_matches(self, slot: dict, event: dict) -> bool:
+        """Compare date, time and venue; event titles need not match."""
+        if slot["separate"] and not self._is_social_dance_event(event):
+            return False
+        if not slot["separate"] and not re.search(
+            r"social|open dancing", str(event.get("event_type") or ""), re.IGNORECASE
+        ):
+            return False
+        if self._normalize_iso_date_value(event.get("start_date")) != slot["start_date"]:
+            return False
+        for field in ("start_time", "end_time"):
+            if slot[field] and self._normalize_newsletter_time(event.get(field)) != self._normalize_newsletter_time(slot[field]):
+                return False
+        venue = self._normalize_newsletter_venue(slot["location"])
+        event_venue = self._normalize_newsletter_venue(event.get("location"))
+        return not venue or bool(event_venue and (
+            venue == event_venue or venue in event_venue
+            or (len(event_venue) >= 8 and event_venue in venue)
+        ))
+
+    def _missing_newsletter_socials(self, slots: list[dict], events: list[dict]) -> list[dict]:
+        """Find uncovered source slots, grouping records by date to limit comparisons."""
+        by_date: dict[str, list[tuple[int, dict]]] = {}
+        for index, event in enumerate(events):
+            date = self._normalize_iso_date_value(event.get("start_date"))
+            by_date.setdefault(date, []).append((index, event))
+        used: set[int] = set()
+        missing: list[dict] = []
+        # Match specific slots first so a slot with an unknown venue or time
+        # cannot consume the only record covering a fully specified slot.
+        for slot in sorted(slots, key=lambda item: sum(bool(item[key]) for key in (
+            "location", "start_time", "end_time"
+        )), reverse=True):
+            match = next((
+                index for index, event in by_date.get(slot["start_date"], [])
+                if index not in used and self._newsletter_social_matches(slot, event)
+            ), None)
+            if match is None:
+                missing.append(slot)
+            else:
+                used.add(match)
+        return missing
+
+    def _ensure_newsletter_social_coverage(
+        self, url: str, prompt_text: str, schema_type: str,
+        events: list[dict], expected: list[dict],
+    ) -> list[dict] | None:
+        """Recover only uncovered slots, then refuse unresolved partial coverage."""
+        missing = self._missing_newsletter_socials(expected, events)
+        merged = [dict(event) for event in events]
+        if missing:
+            logging.warning("Newsletter %s missing social slots: %s", url, json.dumps(missing))
+            recovered = self._recover_newsletter_socials(url, prompt_text, schema_type, missing)
+            # Accept one source-matching record per missing slot; ignore unrelated
+            # or repeated output rather than inserting it into the event batch.
+            for slot in missing:
+                match_index = next((
+                    index for index, event in enumerate(recovered)
+                    if self._newsletter_social_matches(slot, event)
+                ), None)
+                if match_index is not None:
+                    merged.append(dict(recovered.pop(match_index)))
+        remaining = self._missing_newsletter_socials(expected, merged)
+        if remaining:
+            logging.error("Newsletter %s unresolved social slots: %s", url, json.dumps(remaining))
+            return None
+        # Split combined records only where the source explicitly separates the
+        # lesson and social, retaining the original lesson start time.
+        by_date: dict[str, list[dict]] = {}
+        for slot in expected:
+            if slot["separate"] and slot["start_time"]:
+                by_date.setdefault(slot["start_date"], []).append(slot)
+        for event in merged:
+            category = str(event.get("event_type") or "")
+            if not ("class" in category.casefold() and "social" in category.casefold()):
+                continue
+            for slot in by_date.get(self._normalize_iso_date_value(event.get("start_date")), []):
+                # Ignore the combined record's earlier start when finding its social.
+                candidate = dict(event, event_type="social dance", start_time=slot["start_time"])
+                if self._newsletter_social_matches(slot, candidate):
+                    event["event_type"] = "class"
+                    event["end_time"] = slot["start_time"]
+                    break
+        return merged
+
+    def _recover_newsletter_socials(
+        self, url: str, prompt_text: str, schema_type: str, missing: list[dict]
+    ) -> list[dict]:
+        """Request only the source-supported social slots missing from extraction."""
+        instruction = (
+            "\n\nSOCIAL COVERAGE RECOVERY: Return ONLY records for these missing slots. "
+            "Use their source evidence and the newsletter for details. Do not return "
+            "other dates or already extracted records. Each separate=true slot needs "
+            "its own social dance record, with the listed social time rather than the "
+            "preceding lesson time. Use the same event JSON schema, without inventory "
+            "fields such as evidence or separate. Missing slots:\n" + json.dumps(missing)
+        )
+        max_length = int(self.config["crawling"]["prompt_max_length"])
+        if len(prompt_text) + len(instruction) > max_length:
+            logging.error("Newsletter %s has no prompt budget for social coverage recovery", url)
+            return []
+        result = self.query_llm(url, prompt_text + instruction, schema_type, return_metadata=True)
+        response, metadata = result or (None, {})
+        parsed = self.extract_and_parse_json(response, url, schema_type) if response else None
+        events = [event for event in parsed if isinstance(event, dict)] if isinstance(parsed, list) else []
+        self._log_extraction_attempt_result(
+            url=url, attempt=1,
+            provider=str((metadata or {}).get("provider", "unknown")),
+            model=str((metadata or {}).get("model", "unknown")),
+            outcome="newsletter_social_recovery" if events else "newsletter_social_coverage_missing",
+            response_len=len(response or ""),
+        )
+        return events
 
     @staticmethod
     def _looks_like_compact_json_payload(value: object) -> bool:

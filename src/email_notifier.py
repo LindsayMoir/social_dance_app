@@ -12,13 +12,16 @@ Dependencies:
 
 import logging
 import os
+import re
 import smtplib
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterator, List, Optional
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -67,6 +70,30 @@ class EmailNotifier:
             logging.info(f"Email notifications enabled. Will send to: {', '.join(self.to_emails)}")
 
 
+    @contextmanager
+    def _smtp_stage(self, stage: str) -> Iterator[None]:
+        """Log SMTP progress without exposing protocol payloads or credentials."""
+        started = time.monotonic()
+        logging.info("SMTP stage=%s started host=%s port=%s", stage, self.smtp_host, self.smtp_port)
+        try:
+            yield
+        except Exception as exc:
+            # Raw SMTP replies can echo addresses or message content. Retain only
+            # numeric status codes, including the RFC enhanced status if present.
+            reply = getattr(exc, 'smtp_error', b'')
+            if isinstance(reply, bytes):
+                reply = reply.decode('ascii', errors='replace')
+            enhanced = re.search(r'\b[245]\.\d{1,3}\.\d{1,3}\b', str(reply))
+            logging.error(
+                "SMTP stage=%s failed elapsed_seconds=%.3f error_type=%s "
+                "smtp_code=%s enhanced_status=%s errno=%s",
+                stage, time.monotonic() - started, type(exc).__name__,
+                getattr(exc, 'smtp_code', None),
+                enhanced.group() if enhanced else None, getattr(exc, 'errno', None),
+            )
+            raise
+        logging.info("SMTP stage=%s completed elapsed_seconds=%.3f", stage, time.monotonic() - started)
+
     def send_validation_report(
         self,
         report_summary: dict,
@@ -88,6 +115,8 @@ class EmailNotifier:
             logging.info("send_validation_report(): Email notifications disabled, skipping")
             return False
 
+        started = time.monotonic()
+        message_accepted = False
         try:
             # Build email subject
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
@@ -122,17 +151,46 @@ class EmailNotifier:
                     else:
                         logging.warning(f"send_validation_report(): Attachment not found: {file_path}")
 
-            # Send email
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
-                server.starttls()  # Enable TLS encryption
-                server.login(self.smtp_username, self.smtp_password)
-                server.send_message(msg)
+            logging.info(
+                "SMTP delivery starting host=%s port=%s timeout_seconds=30 recipient_count=%s",
+                self.smtp_host, self.smtp_port, len(self.to_emails),
+            )
+            with self._smtp_stage('connect'):
+                server = smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=30)
+            try:
+                with self._smtp_stage('greeting'):
+                    server.ehlo_or_helo_if_needed()
+                with self._smtp_stage('starttls'):
+                    server.starttls()
+                with self._smtp_stage('tls_greeting'):
+                    server.ehlo_or_helo_if_needed()
+                with self._smtp_stage('authenticate'):
+                    server.login(self.smtp_username, self.smtp_password)
+                with self._smtp_stage('send_message'):
+                    refused = server.send_message(msg)
+                    message_accepted = True
+                    logging.info(
+                        "SMTP message accepted by server refused_recipient_count=%s",
+                        len(refused),
+                    )
+                    if refused:
+                        logging.warning("SMTP delivery partially refused; some recipients were rejected")
+                with self._smtp_stage('quit'):
+                    code, reply = server.quit()
+                    if code != 221:
+                        raise smtplib.SMTPResponseException(code, reply)
+            finally:
+                server.close()
 
             logging.info(f"send_validation_report(): Email sent successfully to {', '.join(self.to_emails)}")
             return True
 
-        except Exception as e:
-            logging.error(f"send_validation_report(): Failed to send email: {e}")
+        except Exception as exc:
+            logging.error(
+                "send_validation_report(): Failed to send email error_type=%s "
+                "message_accepted=%s elapsed_seconds=%.3f",
+                type(exc).__name__, message_accepted, time.monotonic() - started,
+            )
             return False
 
 

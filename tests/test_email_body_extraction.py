@@ -1,6 +1,7 @@
 """Regression coverage for newsletter content passed to event extraction."""
 
 import base64
+import logging
 import os
 import sys
 from email.message import EmailMessage
@@ -84,3 +85,17 @@ def test_unknown_charset_falls_back_to_utf8() -> None:
     message.set_param("charset", "unknown-newsletter-charset")
 
     assert fetch_message(message) == "Social dance: October 10, 8 pm."
+
+
+def test_selected_newsletter_date_is_logged(caplog) -> None:
+    message = EmailMessage()
+    message["Date"] = "Tue, 29 Sep 2026 18:00:57 +0000"
+    message["Subject"] = "October dances"
+    message.set_content("Social dance: October 8, 8:30 pm.")
+
+    with caplog.at_level(logging.INFO):
+        fetch_message(message)
+
+    assert "id=newsletter" in caplog.text
+    assert "29 Sep 2026" in caplog.text
+    assert "subject=October dances" in caplog.text

@@ -442,6 +442,16 @@ Agents working in this repository should always:
 
 ## Implementation Notes
 
+Validation report email delivery (`src/email_notifier.py`) logs the SMTP host,
+port, recipient count, and each stage: connection, greeting, STARTTLS, greeting
+after TLS, authentication, message submission, and QUIT. Stage logs include elapsed
+seconds; failures include exception type, SMTP reply code, enhanced status code
+when available, and OS error number. Raw server replies, credentials, and message
+contents are excluded. SMTP socket operations have a 30-second timeout. A
+`message_accepted=True` failure means submission succeeded before a later error
+(for example during QUIT); acceptance does not guarantee inbox delivery. Partial
+recipient refusals are logged by count. Sending remains a single attempt.
+
 The pipeline is primarily orchestrated by:
 
 pipeline.py
@@ -461,3 +471,22 @@ excluding attachments and identical alternatives, so events present only in HTML
 reach extraction. The shared `prompts/email_newsletter.txt` checks coverage of
 classes and social dances separately, retains separately timed after-lesson
 socials, and asks the LLM to deduplicate events repeated across body versions.
+For every newsletter, `LLMHandler` first makes an independent social schedule
+inventory using `prompts/email_social_inventory.txt`. Each expected date/time/venue
+slot includes verbatim supporting quotes, validated against the complete source.
+The inventory expands explicitly bounded recurring schedules and dated classes
+with a shared after-lesson social, and excludes undated resource links.
+Extraction is compared with these slots using normalized dates, times, and venue
+phrases, without requiring matching event names. One recovery query targets only
+missing slots; duplicate and unrelated recovery output is ignored. Coverage is
+checked again after merging and normalization, before any database write. Combined
+class/social records are split when the source supplies a separate social time.
+An invalid or unavailable inventory reports `newsletter_social_inventory_failed`;
+unresolved slots report `newsletter_social_coverage_missing`, with their source
+evidence in the logs. Inventory uses one extra LLM query per newsletter and fails
+explicitly if the complete source cannot fit the prompt budget. Gmail selection
+logs include message ID, date, and subject to identify the selected newsletter.
+
+The validation report's Facebook blocked-content trends count private/unavailable
+blocks, not all attempted URLs. Valid run summaries persist explicit zero counts
+for known categories with no blocks; unavailable summaries remain missing data.

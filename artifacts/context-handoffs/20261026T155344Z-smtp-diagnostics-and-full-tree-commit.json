@@ -1,0 +1,42 @@
+{
+  "handoff_id": "20261026T155344Z-smtp-diagnostics-and-full-tree-commit",
+  "context_status": "active",
+  "scope": "SMTP validation report diagnostics and user-requested commit and push of the entire working tree",
+  "sources": [
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    "CODING_STANDARDS.md",
+    "PIPELINE_ARCHITECTURE.md",
+    "src/email_notifier.py",
+    "tests/test_email_notifier.py",
+    "logs/validation_tests_log.txt",
+    "src/emails.py",
+    "src/llm.py",
+    "tests/validation/test_runner.py",
+    "artifacts/context-handoffs/20261011T023745Z-newsletter-socials-and-query-examples.json"
+  ],
+  "live_systems": [
+    "Local Git working tree; SMTP was mocked in tests"
+  ],
+  "material_decisions": [
+    "October 24 report generation succeeded; SMTP sending logged a connection unexpectedly closed error.",
+    "Instrument individual SMTP stages with durations, exception types, numeric status codes and OS error numbers; omit raw replies, credentials and message bodies.",
+    "Use a 30-second SMTP socket timeout and record server acceptance before shutdown; sending remains a single attempt.",
+    "Include all current tracked changes and untracked non-ignored files per explicit user instruction, including newsletter coverage, validation metrics, data, configuration and debug image updates."
+  ],
+  "validation": [
+    "SMTP and logging tests: 16 passed.",
+    "Affected email, newsletter, logging and scorecard tests: 168 passed, 2 failed.",
+    "Failures: test_build_phase1_scorecard_html_includes_kpi_calculation_notes; test_phase3_holdout_domain_caps_and_guardrails. These concern scorecard explanatory text and expected guardrail violations.",
+    "git diff --check passed; Git reported CRLF normalization warnings for two CSV files.",
+    "SMTP implementation self-review completed; no live email was sent."
+  ],
+  "open_questions": [
+    "Resolve the two validation scorecard test failures; full repository test suite was not run."
+  ],
+  "blockers": [],
+  "recommended_next_step": "Inspect SMTP stage diagnostics on the next normal pipeline run and investigate the recorded scorecard test failures.",
+  "supersedes": [
+    "20261011T023745Z-newsletter-socials-and-query-examples"
+  ]
+}

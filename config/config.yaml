@@ -303,6 +303,9 @@ prompts:
   email_newsletter:
     file: prompts/email_newsletter.txt
     schema: event_extraction
+  email_social_inventory:
+    file: prompts/email_social_inventory.txt
+    schema: null
   dancevictoria.com:
     file: prompts/default.txt
     schema: event_extraction

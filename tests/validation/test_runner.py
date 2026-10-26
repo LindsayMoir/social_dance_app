@@ -8041,12 +8041,12 @@ class ValidationTestRunner:
                     },
                     {
                         "metric_key": "fb_private_unavailable_event_detail_page_unique_urls",
-                        "label": "Event Detail URLs",
+                        "label": "Blocked Event Detail URLs",
                         "color": "#ff7f0e",
                     },
                     {
                         "metric_key": "fb_private_unavailable_group_post_events_tab_unique_urls",
-                        "label": "Group Post /events/ URLs",
+                        "label": "Blocked Group Post /events/ URLs",
                         "color": "#2ca02c",
                     },
                 ],
@@ -10596,6 +10596,8 @@ class ValidationTestRunner:
         """Persist Facebook blocked-content triage aggregates and trend metrics."""
         if not isinstance(fb_block_summary, dict):
             return
+        if fb_block_summary.get("error") or "private_unavailable_total_attempts" not in fb_block_summary:
+            return
         if not getattr(self, "db_handler", None):
             return
         safe_run_id = str(run_id or "").strip()
@@ -10663,16 +10665,26 @@ class ValidationTestRunner:
                 window_end=window_end,
                 notes={"source": "fb_block_summary"},
             )
+            # Counter rollups omit absent categories. Persist measured zeros so
+            # a no-block run advances every category's trend to the current run.
+            category_counts: dict[str, int] = {
+                "event_detail_page": 0,
+                "group_post_events_tab": 0,
+                "facebook_group": 0,
+                "other_facebook_blocked_url": 0,
+            }
             for entry in list(fb_block_summary.get("private_unavailable_by_category", []) or []):
                 if not isinstance(entry, dict):
                     continue
                 category = str(entry.get("category", "") or "").strip()
                 if not category:
                     continue
+                category_counts[category] = int(entry.get("count", 0) or 0)
+            for category, count in category_counts.items():
                 self.db_handler.record_metric_observation(
                     run_id=safe_run_id,
                     metric_key=f"fb_private_unavailable_{category}_unique_urls",
-                    metric_value_numeric=float(entry.get("count", 0) or 0),
+                    metric_value_numeric=float(count),
                     metric_unit="count",
                     description=f"Unique Facebook URLs blocked as {category}",
                     higher_is_better=False,
